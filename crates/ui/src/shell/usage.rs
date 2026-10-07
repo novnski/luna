@@ -600,7 +600,7 @@ fn usage_chart(
                 }
             };
             let detail = format!(
-                "{label}\nCodex {}\nOpenCode Go {}\nClaude {}\nTotal {}",
+                "{label}\nCodex {}\nOpenCode {}\nClaude {}\nTotal {}",
                 format(values[0]),
                 format(values[1]),
                 format(values[2]),
@@ -960,7 +960,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 .child(
                     widgets::section_header(
                         theme,
-                        provider.label(),
+                        provider.limits_label(),
                         Some(
                             format!(
                                 "{} {}",
@@ -1055,7 +1055,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     let account = limit
                         .account_label
                         .clone()
-                        .unwrap_or_else(|| provider.label().into());
+                        .unwrap_or_else(|| provider.limits_label().into());
                     let detail = format!(
                         "{account} · {left:.0}% left · {} · {}",
                         limit.plan.as_deref().unwrap_or("Plan unknown"),
@@ -1065,7 +1065,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                         usage_meter(window.used_percent, theme)
                             .id(SharedString::from(format!(
                                 "usage-limit-{}-{window_id}-{}",
-                                provider.label(),
+                                provider.limits_label(),
                                 account
                             )))
                             .tooltip(crate::popover::text_tooltip(detail)),
@@ -1158,7 +1158,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     limit
                         .account_label
                         .clone()
-                        .unwrap_or_else(|| provider.label().to_string()),
+                        .unwrap_or_else(|| provider.limits_label().to_string()),
                     Some(detail.into()),
                 )),
             );
@@ -2397,7 +2397,7 @@ impl Shell {
                         };
                         let providers = [
                             ("Codex", values[0]),
-                            ("OpenCode Go", values[1]),
+                            ("OpenCode", values[1]),
                             ("Claude", values[2]),
                         ]
                         .into_iter()

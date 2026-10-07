@@ -43,8 +43,20 @@
 //!   never followed and walks honor depth, file-count and time bounds.
 //! - OCH-13 An unfinished read replaces good cached history. Reads cut short
 //!   by the scan deadline are never cached.
-//! - OCH-14 Non-assistant rows (user, compaction, model switches) count.
-//!   v2 rows need `type = 'assistant'`; v1 and legacy rows need no other role.
+//! - OCH-14 Rows without usage (user, model switches, a running compaction)
+//!   count. v2 rows need `type = 'assistant'` or `type = 'compaction'`; v1
+//!   and legacy rows need no other role.
+//! - OCH-16 A compaction's own model request goes uncounted. OpenCode 2
+//!   records it on the `compaction` row (`cost`, `tokens`, and `model` once
+//!   completed), apart from any assistant row. Those rows count like
+//!   assistant rows; a failed one without a model takes the session's latest
+//!   earlier assistant model. Compactions migrated from v1 carry no usage
+//!   (the v1 summary assistant row already counts), so nothing doubles.
+//! - OCH-17 A QA app reads the user's store. Roots come from the storage
+//!   environment of the OpenCode server LUNA would spawn
+//!   (`luna_harness::opencode::OpencodeStorage`), so a profile wrapper's
+//!   directories replace the user's, and a wrapper that cannot be evaluated
+//!   makes the source unavailable instead of falling back to the home store.
 //! - OCH-15 Duplicate or aliased roots count twice. Roots are canonicalized
 //!   and deduplicated in order.
 
@@ -54,6 +66,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use luna_harness::opencode::OpencodeStorage;
 use luna_proto::{UsageProvider, UsageSource, UsageSourceStatus, UsageTokens};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, ffi::ErrorCode};
@@ -71,27 +84,74 @@ const MAX_LEGACY_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const DATABASE_GUARD: &str = "opencode-database";
 const LEGACY_GUARD: &str = "opencode-legacy-message";
 
-/// OPENCODE_DATA_DIR entries as configured, for provider-home exclusion.
+/// OPENCODE_DATA_DIR entries and the OpenCode data, config and database
+/// directories the spawned server would use, for provider-home exclusion.
 pub(super) fn configured_roots() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME");
+    let storage = OpencodeStorage::current();
+    let home = storage.home().ok().flatten().map(OsString::from);
     let cwd = std::env::current_dir().ok();
-    split_roots(
-        std::env::var_os(DATA_DIR_VARIABLE),
+    let mut roots = split_roots(
+        storage.var(DATA_DIR_VARIABLE).ok().flatten(),
         home.as_ref(),
         cwd.as_deref(),
-    )
+    );
+    roots.extend(storage.data_dir().ok().flatten());
+    roots.extend(storage.config_dir().ok().flatten());
+    roots.extend(storage.global_config_dir().ok().flatten());
+    roots.extend(
+        storage
+            .database()
+            .ok()
+            .flatten()
+            .and_then(|db| db.parent().map(Path::to_path_buf)),
+    );
+    roots
 }
 
-/// T3's root resolution: OPENCODE_DATA_DIR (comma list), otherwise
-/// `$XDG_DATA_HOME/opencode` when absolute, otherwise
-/// `~/.local/share/opencode`. Canonical and deduplicated in order.
-pub(super) fn data_roots() -> Vec<PathBuf> {
-    resolve_roots(
-        std::env::var_os(DATA_DIR_VARIABLE),
-        std::env::var_os("XDG_DATA_HOME"),
-        std::env::var_os("HOME"),
-        std::env::current_dir().ok(),
-    )
+/// The OpenCode history roots the Usage page reads: those of the OpenCode
+/// server LUNA would spawn now, so a QA app whose executable is a profile
+/// wrapper reads the profile's store and never the user's (OCS-01).
+pub(super) fn data_roots() -> Result<Vec<PathBuf>, String> {
+    storage_roots(&OpencodeStorage::current())
+}
+
+/// T3's root resolution over the server's environment: OPENCODE_DATA_DIR
+/// (comma list), otherwise the server's data root (`$XDG_DATA_HOME/opencode`,
+/// else `~/.local/share/opencode`) plus the directory of an `OPENCODE_DB`
+/// kept outside it. Canonical and deduplicated in order. Err when the
+/// executable's wrapper moves storage in a way LUNA cannot evaluate.
+pub(crate) fn storage_roots(storage: &OpencodeStorage) -> Result<Vec<PathBuf>, String> {
+    let unknown = |_| {
+        "OpenCode data directory could not be determined: the OpenCode executable changes its \
+         storage environment in a way LUNA cannot evaluate"
+            .to_owned()
+    };
+    let home = storage.home().map_err(unknown)?.map(OsString::from);
+    let list = storage.var(DATA_DIR_VARIABLE).map_err(unknown)?;
+    let mut roots = split_roots(list, home.as_ref(), std::env::current_dir().ok().as_deref());
+    if roots.is_empty() {
+        let data = storage.data_dir().map_err(unknown)?;
+        roots.extend(data.clone());
+        if let Some(parent) = storage
+            .database()
+            .map_err(unknown)?
+            .filter(|db| {
+                db.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_database_name)
+            })
+            .and_then(|db| db.parent().map(Path::to_path_buf))
+            .filter(|parent| data.as_ref() != Some(parent))
+        {
+            roots.push(parent);
+        }
+    }
+    let mut seen = HashSet::new();
+    Ok(roots
+        .into_iter()
+        .map(|root| root.canonicalize().unwrap_or(root))
+        .filter(|root| seen.insert(root.clone()))
+        .collect())
 }
 
 fn split_roots(
@@ -120,28 +180,6 @@ fn split_roots(
                 cwd.map(|cwd| cwd.join(expanded))
             }
         })
-        .collect()
-}
-
-fn resolve_roots(
-    list: Option<OsString>,
-    xdg_data_home: Option<OsString>,
-    home: Option<OsString>,
-    cwd: Option<PathBuf>,
-) -> Vec<PathBuf> {
-    let mut roots = split_roots(list, home.as_ref(), cwd.as_deref());
-    if roots.is_empty() {
-        let data_home = xdg_data_home
-            .map(|value| PathBuf::from(value.to_string_lossy().trim()))
-            .filter(|path| path.is_absolute())
-            .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")));
-        roots.extend(data_home.map(|path| path.join("opencode")));
-    }
-    let mut seen = HashSet::new();
-    roots
-        .into_iter()
-        .map(|root| root.canonicalize().unwrap_or(root))
-        .filter(|root| seen.insert(root.clone()))
         .collect()
 }
 
@@ -317,8 +355,19 @@ fn read_database(
         let timed = present.contains("time_created");
         let mut predicates = vec!["json_valid(m.data)".to_owned()];
         if v2 {
-            predicates.push("m.type = 'assistant'".into());
+            predicates.push("m.type IN ('assistant', 'compaction')".into());
         }
+        // OCH-16: a failed compaction has usage but no model; it ran on the
+        // session's model, the latest earlier assistant row's.
+        let fallback_model = if v2 && timed && present.contains("session_id") {
+            "CASE WHEN m.type = 'compaction' AND json_extract(m.data, '$.model.id') IS NULL \
+             THEN (SELECT json_extract(a.data, '$.model.id') FROM session_message a \
+             WHERE a.session_id = m.session_id AND a.type = 'assistant' \
+             AND a.time_created <= m.time_created AND json_valid(a.data) \
+             ORDER BY a.time_created DESC LIMIT 1) END"
+        } else {
+            "NULL"
+        };
         if timed {
             predicates.push("m.time_created >= ?1".into());
         }
@@ -337,7 +386,8 @@ fn read_database(
              json_extract(m.data, '$.tokens.reasoning'), \
              json_extract(m.data, '$.tokens.cache.read'), \
              json_extract(m.data, '$.tokens.cache.write'), \
-             json_extract(m.data, '$.id'), json_extract(m.data, '$.sessionID') \
+             json_extract(m.data, '$.id'), json_extract(m.data, '$.sessionID'), \
+             {fallback_model} \
              FROM {table} m{join} WHERE {}",
             column("id"),
             column("session_id"),
@@ -369,7 +419,7 @@ fn read_database(
                 id: first_text(&[0, 14]),
                 session: first_text(&[1, 15]),
                 role: sql_text(value(3)),
-                model: first_text(&[4, 5, 6]),
+                model: first_text(&[4, 5, 6, 16]),
                 created_ms: sql_number(value(7)).or_else(|| sql_number(value(2))),
                 cost: sql_number(value(8)),
                 input: sql_number(value(9)),
@@ -596,6 +646,11 @@ fn scan_root(
     all: &mut Vec<(UsageProvider, Record)>,
     scan: &mut Scan,
 ) {
+    tracing::debug!(
+        target: "luna_engine::usage",
+        root = %root.display(),
+        "reading OpenCode history root"
+    );
     let mut processed = HashSet::new();
     let mut database_ids = HashSet::new();
     let paths = match databases(root) {

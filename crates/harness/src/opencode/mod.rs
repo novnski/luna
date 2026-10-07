@@ -38,6 +38,8 @@
 //! glob-imports each submodule, so names resolve crate-locally):
 //! - this file: [`OpencodeHarness`] and its `Harness` impl.
 //! - `resolve`: executable resolution (2.x only, version-probed).
+//! - `storage`: the data and config directories the spawned server sees
+//!   (through a QA profile wrapper too), for LUNA-process readers.
 //! - `server`: the `opencode serve` child, readiness, HTTP helpers.
 //! - `compat`: the boot-time OpenAPI contract and the pinned event set.
 //! - `wire_log`: the opt-in redacted QA wire log.
@@ -111,6 +113,7 @@ mod recovery;
 mod resolve;
 mod server;
 mod shell_tail;
+mod storage;
 mod subagents;
 mod tool_output;
 mod tools;
@@ -150,6 +153,7 @@ pub use inputs::{model_accepts_images, validate_inputs};
 pub use resolve::{
     OpencodeResolution, OpencodeSource, last_opencode_resolution, resolve_opencode_executable,
 };
+pub use storage::{OpencodeStorage, StorageIndeterminate};
 
 /// Effort ladder surfaced in the picker; applied per run by picking the
 /// first of these variant ids the chosen model actually advertises. Must

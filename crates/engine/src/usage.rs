@@ -1512,7 +1512,8 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
 /// Read selected provider transcripts without touching their credentials or
 /// writing into their homes. The cache is stored only in LUNA's data dir.
 /// OpenCode history comes from T3's data roots (`OPENCODE_DATA_DIR`, else
-/// `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`).
+/// `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`) as the OpenCode
+/// server LUNA would spawn sees them, through a QA profile wrapper too.
 pub fn snapshot_live(
     request: UsageRequest,
     codex_home: Option<PathBuf>,
@@ -1523,15 +1524,25 @@ pub fn snapshot_live(
     let opencode_roots = enabled
         .contains(&UsageProvider::OpenCodeGo)
         .then(opencode_history::data_roots)
-        .unwrap_or_default();
-    snapshot_live_with_opencode(
+        .unwrap_or_else(|| Ok(Vec::new()));
+    snapshot_impl(
         request,
-        codex_home,
-        claude_home,
-        opencode_roots,
-        data_dir,
-        enabled,
+        Some((codex_home, claude_home, data_dir)),
+        Some(opencode_roots),
+        Some(enabled),
     )
+}
+
+/// T3's comma-separated reader override for OpenCode data directories.
+pub(crate) const OPENCODE_DATA_DIR_VARIABLE: &str = opencode_history::DATA_DIR_VARIABLE;
+
+/// The OpenCode history roots for one storage environment (see
+/// `luna_harness::opencode::OpencodeStorage`); shared with the Go limits
+/// reader so both read the same store.
+pub(crate) fn opencode_storage_roots(
+    storage: &luna_harness::opencode::OpencodeStorage,
+) -> Result<Vec<PathBuf>, String> {
+    opencode_history::storage_roots(storage)
 }
 
 /// `snapshot_live` with explicit OpenCode data directories, each holding
@@ -1548,7 +1559,7 @@ pub fn snapshot_live_with_opencode(
     snapshot_impl(
         request,
         Some((codex_home, claude_home, data_dir)),
-        Some(opencode_roots),
+        Some(Ok(opencode_roots)),
         Some(enabled),
     )
 }
@@ -1556,7 +1567,7 @@ pub fn snapshot_live_with_opencode(
 fn snapshot_impl(
     request: UsageRequest,
     live: Option<(Option<PathBuf>, PathBuf, PathBuf)>,
-    opencode_roots: Option<Vec<PathBuf>>,
+    opencode_roots: Option<Result<Vec<PathBuf>, String>>,
     enabled: Option<Vec<UsageProvider>>,
 ) -> UsageSnapshot {
     static SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1618,7 +1629,7 @@ fn snapshot_impl(
         .is_none_or(|items| items.contains(&UsageProvider::OpenCodeGo))
         .then(|| {
             let roots = match opencode_roots {
-                Some(roots) => Ok(roots),
+                Some(roots) => roots,
                 None => safe_fixture_root(std::env::var_os("LUNA_USAGE_SYNTHETIC_OPENCODE_DATA"))
                     .map(|root| root.into_iter().collect()),
             };
@@ -1632,7 +1643,11 @@ fn snapshot_impl(
             );
             if live.is_some() {
                 source.environment_id = "local".into();
-                if source.status == UsageSourceStatus::Unsupported {
+                // Keep a specific reason (an unevaluable executable wrapper).
+                if source.status == UsageSourceStatus::Unsupported
+                    && source.detail.as_deref()
+                        == Some("No isolated synthetic OpenCode data directory configured")
+                {
                     source.detail = Some("OpenCode data directory is unavailable".into());
                 }
             }

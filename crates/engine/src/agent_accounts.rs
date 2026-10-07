@@ -483,17 +483,24 @@ impl AgentAccounts {
     }
 
     /// Provider-owned skill roots; no account or credential read is involved.
-    /// OpenCode has no account configuration in LUNA, so use its documented
-    /// process environment override or the standard XDG config location.
+    /// OpenCode has no account configuration in LUNA, so use the config root
+    /// the OpenCode server LUNA would spawn uses (`OPENCODE_CONFIG_DIR`, else
+    /// `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`), as a QA
+    /// profile wrapper sets it. When that wrapper cannot be evaluated the
+    /// root is empty, which the skill library refuses as not absolute rather
+    /// than falling back to the user's config.
     pub fn skill_config_dirs(&self) -> (PathBuf, PathBuf) {
-        let env_dir = |name: &str| {
-            std::env::var_os(name)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
+        let storage = luna_harness::opencode::OpencodeStorage::current();
+        let opencode = match storage.config_dir() {
+            Ok(Some(dir)) => dir,
+            Ok(None) => home_dir().join(".config/opencode"),
+            Err(_) => PathBuf::new(),
         };
-        let opencode = env_dir("OPENCODE_CONFIG_DIR")
-            .or_else(|| env_dir("XDG_CONFIG_HOME").map(|dir| dir.join("opencode")))
-            .unwrap_or_else(|| home_dir().join(".config/opencode"));
+        tracing::debug!(
+            target: "luna_engine::skills",
+            root = %opencode.display(),
+            "OpenCode skill config root"
+        );
         (self.inner.config.claude_config_dir.clone(), opencode)
     }
 
