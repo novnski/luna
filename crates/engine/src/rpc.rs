@@ -9435,6 +9435,7 @@ impl RpcService for EngineRpc {
                 if let Some((_, _, data_dir)) = homes.as_ref().filter(|_| {
                     enabled.contains(&luna_proto::UsageProvider::Codex)
                         || enabled.contains(&luna_proto::UsageProvider::Claude)
+                        || enabled.contains(&luna_proto::UsageProvider::OpenCodeGo)
                 }) {
                     crate::usage::refresh_live_prices(data_dir).await;
                 }
