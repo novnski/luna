@@ -75,8 +75,9 @@ pub(super) fn oc_tool_call(name: &str, input: &Value) -> ToolCall {
                 })
                 .collect(),
         },
-        // The genus-gated spawn naming every driver shares.
-        "task" => ToolCall::Unknown {
+        // The genus-gated spawn naming every driver shares (v2 `subagent`,
+        // v1 `task`).
+        "subagent" | "task" => ToolCall::Unknown {
             name: s(&["description"])
                 .map(|d| format!("Agent: {d}"))
                 .unwrap_or_else(|| "Agent".into()),

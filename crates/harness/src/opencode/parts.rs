@@ -30,7 +30,6 @@ pub(super) fn part_snapshot_events(
     feed: &mut SessionFeed,
     part: &Value,
     is_main: bool,
-    spawn_ctx: Option<SpawnCtx<'_>>,
 ) -> Vec<AgentEvent> {
     let Some(part_id) = part.get("id").and_then(Value::as_str) else {
         return Vec::new();
@@ -130,17 +129,14 @@ pub(super) fn part_snapshot_events(
                 .and_then(|s| s.get("input"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            // The task chip's stable id is the PART id (the completion and
-            // the child settle key on it); ordinary tools key on callID.
-            let call_id = if tool == "task" && is_main {
-                part_id.to_owned()
-            } else {
-                part.get("callID")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(part_id)
-                    .to_owned()
-            };
+            // Chips key on callID (the v2 `session:message:call` id, which
+            // a spawn's child binding and settlement key on as well).
+            let call_id = part
+                .get("callID")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(part_id)
+                .to_owned();
             let entry = feed
                 .parts
                 .entry(part_id.to_owned())
@@ -152,18 +148,13 @@ pub(super) fn part_snapshot_events(
             let has_input = input.as_object().is_some_and(|o| !o.is_empty());
             if !entry.tool_started && (has_input || matches!(status, "completed" | "error")) {
                 entry.tool_started = true;
+                // A spawn (`subagent`/`task`) registers with the child tree
+                // from the raw v2 observation of the same frame, in any
+                // session of the run (`subagents`).
                 events.push(AgentEvent::ToolCall {
                     id: call_id.clone(),
                     call: oc_tool_call(tool, &input),
                 });
-                // A task spawn on the MAIN feed registers a pending chip so
-                // the child's session.created (or its metadata) can bind.
-                if tool == "task"
-                    && is_main
-                    && let Some((children, pending, unbound)) = spawn_ctx
-                {
-                    register_spawn(children, pending, unbound, part, part_id, &input);
-                }
             }
             if entry.tool_started && !entry.tool_done && matches!(status, "completed" | "error") {
                 entry.tool_done = true;

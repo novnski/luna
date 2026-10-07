@@ -549,6 +549,7 @@ impl TurnWire {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_millis(50),
             known_commands: Some(vec![]),
+            live_runs: LiveRuns::default(),
         }));
         Self {
             bus,
@@ -1035,7 +1036,7 @@ fn reasoning_parts_stream_as_reasoning_deltas() {
         "id": "prt_r", "messageID": "msg_a", "sessionID": "ses_1",
         "type": "reasoning", "text": "",
     });
-    assert!(part_snapshot_events(&mut feed, &open, true, None).is_empty());
+    assert!(part_snapshot_events(&mut feed, &open, true).is_empty());
     // Deltas append as ReasoningDelta, not text.
     let props = json!({"sessionID": "ses_1", "messageID": "msg_a", "partID": "prt_r"});
     let events = part_delta_events(&mut feed, &props, "prt_r", "thinking hard");
@@ -1048,13 +1049,13 @@ fn reasoning_parts_stream_as_reasoning_deltas() {
         "id": "prt_r", "messageID": "msg_a", "sessionID": "ses_1",
         "type": "reasoning", "text": "thinking hard",
     });
-    assert!(part_snapshot_events(&mut feed, &close, true, None).is_empty());
+    assert!(part_snapshot_events(&mut feed, &close, true).is_empty());
     // A longer snapshot emits only the suffix.
     let more = json!({
         "id": "prt_r", "messageID": "msg_a", "sessionID": "ses_1",
         "type": "reasoning", "text": "thinking hard about it",
     });
-    let events = part_snapshot_events(&mut feed, &more, true, None);
+    let events = part_snapshot_events(&mut feed, &more, true);
     assert!(matches!(
         events.as_slice(),
         [AgentEvent::ReasoningDelta { text }] if text == " about it"
@@ -1068,7 +1069,7 @@ fn reasoning_ahead_of_its_message_role_is_held_and_replayed() {
         "id": "prt_r", "messageID": "msg_a", "sessionID": "ses_1",
         "type": "reasoning", "text": "early thought",
     });
-    assert!(part_snapshot_events(&mut feed, &part, true, None).is_empty());
+    assert!(part_snapshot_events(&mut feed, &part, true).is_empty());
     assert_eq!(feed.pending_parts.len(), 1);
     // The role lands; replay drains the held part.
     feed.assistant_messages.insert("msg_a".into(), true);
@@ -1089,17 +1090,17 @@ fn main_feed_user_text_is_the_prompt_echo_and_never_renders() {
         "id": "prt_u", "messageID": "msg_u", "sessionID": "ses_1",
         "type": "text", "text": "the prompt",
     });
-    assert!(part_snapshot_events(&mut feed, &part, true, None).is_empty());
+    assert!(part_snapshot_events(&mut feed, &part, true).is_empty());
     // On a CHILD feed the same shape is the message INTO the child.
     let mut child = SessionFeed::default();
     child.assistant_messages.insert("msg_u".into(), false);
-    let events = part_snapshot_events(&mut child, &part, false, None);
+    let events = part_snapshot_events(&mut child, &part, false);
     assert!(matches!(
         events.as_slice(),
         [AgentEvent::UserMessage { text }] if text == "the prompt"
     ));
     // Re-delivered snapshots don't double the entry.
-    assert!(part_snapshot_events(&mut child, &part, false, None).is_empty());
+    assert!(part_snapshot_events(&mut child, &part, false).is_empty());
 }
 
 #[test]
@@ -1110,19 +1111,19 @@ fn tool_parts_open_and_resolve_once() {
         "type": "tool", "tool": "bash", "callID": "call-1",
         "state": {"status": "running", "input": {"command": "echo ok"}},
     });
-    let events = part_snapshot_events(&mut feed, &running, true, None);
+    let events = part_snapshot_events(&mut feed, &running, true);
     assert!(matches!(
         events.as_slice(),
         [AgentEvent::ToolCall { id, call: ToolCall::Exec { command } }]
             if id == "call-1" && command == "echo ok"
     ));
-    assert!(part_snapshot_events(&mut feed, &running, true, None).is_empty());
+    assert!(part_snapshot_events(&mut feed, &running, true).is_empty());
     let done = json!({
         "id": "prt_t", "messageID": "msg_a", "sessionID": "ses_1",
         "type": "tool", "tool": "bash", "callID": "call-1",
         "state": {"status": "completed", "input": {"command": "echo ok"}, "output": "ok\n"},
     });
-    let events = part_snapshot_events(&mut feed, &done, true, None);
+    let events = part_snapshot_events(&mut feed, &done, true);
     assert!(matches!(
         events.as_slice(),
         [AgentEvent::ToolResult { id, is_error: false, output: Some(o), .. }]
@@ -1130,82 +1131,187 @@ fn tool_parts_open_and_resolve_once() {
     ));
 }
 
+/// Feed raw v2 frames through the normalizer into one child tree; returns
+/// the observation events (spawn chip ToolCalls come from the part path).
+fn observe_v2(
+    tree: &mut ChildTree,
+    names: &mut HashMap<V2ToolKey, String>,
+    root: &str,
+    kind: &str,
+    data: Value,
+) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    for payload in normalize_v2_frame(json!({"type": kind, "data": data}), names) {
+        let props = payload.get("properties").cloned().unwrap_or(Value::Null);
+        match payload.get("type").and_then(Value::as_str) {
+            Some(OBSERVE) => events.extend(tree.observe(root, &props, true).events),
+            Some("session.created") => {
+                let info = &props["info"];
+                events.extend(tree.on_session_created(
+                    root,
+                    info["id"].as_str().unwrap_or(""),
+                    info["parentID"].as_str().unwrap_or(""),
+                    info["title"].as_str().unwrap_or(""),
+                ));
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
 #[test]
 fn task_spawn_registers_child_by_metadata_and_completion_settles() {
-    let mut feed = feed_with_assistant("msg_a");
-    let mut children = HashMap::new();
-    let mut pending = VecDeque::new();
-    let mut unbound = HashMap::new();
-    let running = json!({
-        "id": "prt_task", "messageID": "msg_a", "sessionID": "ses_parent",
-        "type": "tool", "tool": "task",
-        "state": {
-            "status": "running",
-            "input": {"description": "Scan crates", "prompt": "scan", "subagent_type": "general"},
-            "metadata": {"sessionId": "ses_child", "parentSessionId": "ses_parent"},
-        },
-    });
-    let events = part_snapshot_events(
-        &mut feed,
-        &running,
-        true,
-        Some((&mut children, &mut pending, &mut unbound)),
+    let mut tree = ChildTree::default();
+    let mut names = HashMap::new();
+    let tool = |extra: Value| {
+        let mut data =
+            json!({"sessionID": "ses_parent", "assistantMessageID": "msg_a", "id": "call_1"});
+        data.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        data
+    };
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_parent",
+        "session.tool.input.started",
+        tool(json!({"name": "subagent"})),
     );
-    // Genus-gated spawn naming, keyed by the PART id.
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_parent",
+        "session.tool.called",
+        tool(
+            json!({"input": {"agent": "general", "description": "Scan crates", "prompt": "scan"}, "executed": true}),
+        ),
+    );
+    // Genus-gated spawn naming; the chip is the v2 call id.
+    let chip = "ses_parent:msg_a:call_1";
+    assert!(matches!(
+        oc_tool_call("subagent", &json!({"description": "Scan crates"})),
+        ToolCall::Unknown { name, .. } if name == "Agent: Scan crates"
+    ));
+    // The tool's own metadata binds the child and seeds its opening prompt.
+    let events = observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_parent",
+        "session.tool.progress",
+        tool(json!({"metadata": {"sessionID": "ses_child", "status": "running"}})),
+    );
+    assert_eq!(
+        tree.runs
+            .get("ses_child")
+            .expect("bound child")
+            .parent_tool_use_id,
+        chip
+    );
     assert!(matches!(
         events.as_slice(),
-        [AgentEvent::ToolCall { id, call: ToolCall::Unknown { name, .. } }]
-            if id == "prt_task" && name == "Agent: Scan crates"
+        [AgentEvent::Subagent { parent_tool_use_id, event }]
+            if parent_tool_use_id == chip
+                && matches!(event.as_ref(), AgentEvent::UserMessage { text } if text == "scan")
     ));
-    let child = children.get("ses_child").expect("bound child");
-    assert_eq!(child.parent_tool_use_id, "prt_task");
-
-    let completed = json!({
-        "id": "prt_task", "messageID": "msg_a", "sessionID": "ses_parent",
-        "type": "tool", "tool": "task",
-        "state": {
-            "status": "completed",
-            "input": {"description": "Scan crates"},
-            "output": "<task_result>done</task_result>",
-            "metadata": {"sessionId": "ses_child"},
-        },
-    });
-    assert_eq!(
-        task_completion(&completed),
-        Some(("ses_child".to_owned(), false))
+    // The foreground result settles the chip, once.
+    let completed = tool(json!({
+        "content": [{"type": "text", "text": "<subagent>done</subagent>"}],
+        "metadata": {"sessionID": "ses_child", "status": "completed"},
+        "executed": true,
+    }));
+    let events = observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_parent",
+        "session.tool.success",
+        completed.clone(),
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == chip
+                && matches!(event.as_ref(), AgentEvent::Done { status: DoneStatus::Completed, .. })
+    )));
+    assert!(
+        observe_v2(
+            &mut tree,
+            &mut names,
+            "ses_parent",
+            "session.tool.success",
+            completed
+        )
+        .is_empty()
     );
 }
 
 #[test]
 fn child_binding_falls_back_to_title_match() {
-    let mut children = HashMap::new();
-    let mut pending = VecDeque::new();
-    pending.push_back(PendingSpawn {
-        tool_part_id: "prt_1".into(),
-        description: "Scan crates".into(),
-    });
-    pending.push_back(PendingSpawn {
-        tool_part_id: "prt_2".into(),
-        description: "Write docs".into(),
-    });
-    assert!(bind_child(
-        &mut children,
-        &mut pending,
-        "ses_b",
-        "Write docs (@general subagent)"
-    ));
-    assert_eq!(children.get("ses_b").unwrap().parent_tool_use_id, "prt_2");
-    assert_eq!(pending.len(), 1);
+    let mut tree = ChildTree::default();
+    let mut names = HashMap::new();
+    for (call, description) in [("call_1", "Scan crates"), ("call_2", "Write docs")] {
+        let data = json!({"sessionID": "ses_root", "assistantMessageID": "msg_a", "id": call});
+        let mut started = data.clone();
+        started["name"] = json!("subagent");
+        observe_v2(
+            &mut tree,
+            &mut names,
+            "ses_root",
+            "session.tool.input.started",
+            started,
+        );
+        let mut called = data;
+        called["input"] = json!({"agent": "general", "description": description, "prompt": "p"});
+        observe_v2(
+            &mut tree,
+            &mut names,
+            "ses_root",
+            "session.tool.called",
+            called,
+        );
+    }
+    let created = |id: &str, parent: &str, title: &str| json!({"sessionID": id, "parentID": parent, "title": title, "slug": "s", "version": "2"});
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_root",
+        "session.created",
+        created("ses_b", "ses_root", "Write docs"),
+    );
+    assert_eq!(
+        tree.runs.get("ses_b").unwrap().parent_tool_use_id,
+        "ses_root:msg_a:call_2"
+    );
     // Unmatched title binds FIFO.
-    assert!(bind_child(&mut children, &mut pending, "ses_a", "mystery"));
-    assert_eq!(children.get("ses_a").unwrap().parent_tool_use_id, "prt_1");
-    // Nothing pending: no bind.
-    assert!(!bind_child(
-        &mut children,
-        &mut pending,
-        "ses_c",
-        "anything"
-    ));
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_root",
+        "session.created",
+        created("ses_a", "ses_root", "mystery"),
+    );
+    assert_eq!(
+        tree.runs.get("ses_a").unwrap().parent_tool_use_id,
+        "ses_root:msg_a:call_1"
+    );
+    // Nothing pending: no bind, and a foreign parent never joins the tree.
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_root",
+        "session.created",
+        created("ses_c", "ses_root", "anything"),
+    );
+    assert!(!tree.runs.contains_key("ses_c"));
+    observe_v2(
+        &mut tree,
+        &mut names,
+        "ses_root",
+        "session.created",
+        created("ses_x", "ses_foreign", "Scan crates"),
+    );
+    assert!(!tree.owns("ses_root", "ses_x"));
 }
 
 #[test]
@@ -1278,11 +1384,20 @@ fn directory_header_percent_encodes() {
     assert_eq!(encode_directory("/plain/path"), "/plain/path");
 }
 
+/// The family payloads of one v2 frame, without the child-tree observation
+/// that rides beside them.
+fn family_frames(event: Value, tools: &mut HashMap<V2ToolKey, String>) -> Vec<Value> {
+    normalize_v2_frame(event, tools)
+        .into_iter()
+        .filter(|payload| payload["type"] != OBSERVE)
+        .collect()
+}
+
 #[test]
 fn v2_frames_normalize_to_v1_payloads() {
     let mut tools = HashMap::new();
     // Lifecycle: busy on start, idle on the terminal frames.
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_1","type":"session.execution.started","data":{"sessionID":"ses_1"}}),
         &mut tools,
     );
@@ -1295,7 +1410,7 @@ fn v2_frames_normalize_to_v1_payloads() {
         "session.execution.succeeded",
         "session.execution.interrupted",
     ] {
-        let out = normalize_v2_frame(
+        let out = family_frames(
             json!({"id":"evt_2","type":kind,"data":{"sessionID":"ses_1"}}),
             &mut tools,
         );
@@ -1307,7 +1422,7 @@ fn v2_frames_normalize_to_v1_payloads() {
         );
     }
     // Terminal failure = error chip + idle (both shapes captured live).
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_3","type":"session.execution.failed","data":{
             "sessionID":"ses_1","error":{"type":"provider.auth","message":""}}}),
         &mut tools,
@@ -1322,7 +1437,7 @@ fn v2_frames_normalize_to_v1_payloads() {
     );
     // The interrupt's step-level echo is NOT a provider error.
     assert!(
-        normalize_v2_frame(
+        family_frames(
             json!({"id":"evt_4","type":"session.step.failed","data":{
             "sessionID":"ses_1","error":{"type":"aborted","message":"Step interrupted"}}}),
             &mut tools,
@@ -1331,7 +1446,7 @@ fn v2_frames_normalize_to_v1_payloads() {
     );
     // Streaming: the step registers its assistant message, then text flows
     // as a part delta keyed by message + kind + ordinal.
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_5","type":"session.step.started","data":{
             "sessionID":"ses_1","assistantMessageID":"msg_a"}}),
         &mut tools,
@@ -1341,7 +1456,7 @@ fn v2_frames_normalize_to_v1_payloads() {
         vec![json!({"type":"message.updated","properties":{
             "info":{"sessionID":"ses_1","id":"msg_a","role":"assistant"}}})]
     );
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_6","type":"session.text.delta","data":{
             "sessionID":"ses_1","assistantMessageID":"msg_a","ordinal":0,"delta":"hi"}}),
         &mut tools,
@@ -1353,12 +1468,12 @@ fn v2_frames_normalize_to_v1_payloads() {
             "field":"text","delta":"hi"}})]
     );
     // A tool: the NAME rides input.started; later frames carry only ids.
-    normalize_v2_frame(
+    family_frames(
         json!({"id":"evt_7","type":"session.tool.input.started","data":{
             "sessionID":"ses_1","assistantMessageID":"msg_a","id":"call_1","name":"read"}}),
         &mut tools,
     );
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_8","type":"session.tool.called","data":{
             "sessionID":"ses_1","assistantMessageID":"msg_a","id":"call_1",
             "input":{"path":"/tmp/x"}}}),
@@ -1372,7 +1487,7 @@ fn v2_frames_normalize_to_v1_payloads() {
             "state":{"status":"running","input":{"path":"/tmp/x"}}}}})]
     );
     // Usage totals reach the engine as an assistant message.updated.
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_9","type":"session.usage.updated","data":{
             "sessionID":"ses_1","cost":0,
             "tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":0,"write":0}}}}),
@@ -1387,7 +1502,7 @@ fn v2_frames_normalize_to_v1_payloads() {
     );
     // The permission ask keeps its 1.x name on 2.x (observed live when a
     // tool reaches outside the workspace); the permission bridge replies.
-    let out = normalize_v2_frame(
+    let out = family_frames(
         json!({"id":"evt_11","type":"permission.asked","data":{
             "id":"per_1","sessionID":"ses_1","action":"external_directory",
             "resources":["/tmp/*"]}}),
@@ -1400,7 +1515,7 @@ fn v2_frames_normalize_to_v1_payloads() {
     );
     // Boilerplate frames (catalog sync etc.) drop.
     assert!(
-        normalize_v2_frame(
+        family_frames(
             json!({"id":"evt_10","type":"catalog.updated","data":{}}),
             &mut tools,
         )

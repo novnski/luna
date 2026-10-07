@@ -31,12 +31,16 @@ pub(super) fn normalize_v2_frame(
 ) -> Vec<Value> {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     let data = event.get("data").cloned().unwrap_or(Value::Null);
+    // Native subagent and background-job observations (OC-11) ride beside
+    // the family payloads. Computed first: tool names are still pending, and
+    // shell jobs carry no top-level sessionID.
+    let observed = v2_observe_frame(kind, &data, tool_names);
     if data
         .get("sessionID")
         .and_then(Value::as_str)
         .is_none_or(str::is_empty)
     {
-        return Vec::new();
+        return observed;
     }
     if matches!(
         kind,
@@ -50,12 +54,14 @@ pub(super) fn normalize_v2_frame(
     }
     // One helper per event family, so each family evolves on its own. A
     // helper answers `None` for kinds outside its family.
-    v2_session_frames(kind, &data)
+    let mut frames = v2_session_frames(kind, &data)
         .or_else(|| v2_stream_frames(kind, &data))
         .or_else(|| v2_tool_frames(kind, &data, tool_names))
         .or_else(|| v2_request_frames(kind, &data))
         .or_else(|| v2_other_frames(kind, &data))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    frames.extend(observed);
+    frames
 }
 
 fn v2_session(data: &Value) -> Value {
@@ -68,8 +74,24 @@ fn v2_message(data: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// The chip id of a v2 tool frame: provider call ids can repeat across
+/// assistant messages and sessions (a child's call never collides with its
+/// parent's), so the id is `session:message:call`.
+pub(super) fn v2_tool_chip_id(data: &Value) -> String {
+    format!(
+        "{}:{}:{}",
+        data.get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        data.get("assistantMessageID")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        data.get("id").and_then(Value::as_str).unwrap_or_default()
+    )
+}
+
 /// Pending-tool key: session, assistant message and provider call id.
-fn v2_tool_key(data: &Value) -> V2ToolKey {
+pub(super) fn v2_tool_key(data: &Value) -> V2ToolKey {
     (
         data.get("sessionID")
             .and_then(Value::as_str)
@@ -355,18 +377,10 @@ pub(super) fn v2_stream_part(data: &Value, part_type: &str, text: Value) -> Valu
 }
 
 /// A tool frame in the 1.x tool-part shape (`callID` keys the chip).
-pub(super) fn v2_tool_part(data: &Value, id: &str, name: &str, state: &Value) -> Value {
+pub(super) fn v2_tool_part(data: &Value, _id: &str, name: &str, state: &Value) -> Value {
     // Provider call ids can repeat across assistant messages. Both the feed's
     // state key and the emitted chip id must keep those calls distinct.
-    let id = format!(
-        "{}:{}:{id}",
-        data.get("sessionID")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        data.get("assistantMessageID")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    );
+    let id = v2_tool_chip_id(data);
     json!({
         "type": "message.part.updated",
         "properties": { "part": {

@@ -12,6 +12,10 @@ pub(super) const STALL_HINT: &str = "The model provider is likely unreachable or
      Check the model/provider setup (`opencode auth list`, opencode.json) or the opencode \
      log (~/.local/share/opencode/log).";
 
+/// After the last background job of a parked run settles, how long the run
+/// waits for the root wake execution its completion starts.
+pub(super) const WAKE_GRACE: Duration = Duration::from_secs(10);
+
 pub(super) fn stall_bound() -> Option<Duration> {
     match std::env::var(STALL_ENV) {
         Ok(v) => match v.parse::<u64>() {
@@ -31,6 +35,8 @@ pub(super) struct Session {
     pub(super) interrupt_grace: Duration,
     pub(super) kill_grace: Duration,
     pub(super) known_commands: Option<Vec<SlashCommand>>,
+    /// Per-child Stop registry (`stop_native_child`).
+    pub(super) live_runs: LiveRuns,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -104,6 +110,7 @@ pub(super) async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         known_commands,
+        live_runs,
     } = session;
     let RunControls {
         request_input,
@@ -231,6 +238,10 @@ pub(super) async fn run_session(session: Session) {
         server.shutdown(kill_grace).await;
         return;
     }
+    // Per-child Stop reaches this loop through the run's registration under
+    // its root session (released when the run ends).
+    let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<ChildStopRequest>();
+    let _live = live_runs.register(&session_id, stop_tx);
 
     // Advertise slash commands (composer popup); a warm cache skips the call.
     let commands = match known_commands {
@@ -320,10 +331,16 @@ pub(super) async fn run_session(session: Session) {
 
     // ---- main loop --------------------------------------------------------
     let mut main_feed = SessionFeed::default();
-    let mut children: HashMap<String, ChildRun> = HashMap::new();
-    let mut pending_spawns: VecDeque<PendingSpawn> = VecDeque::new();
-    // Child sessions created before their spawn chip was seen (id → title).
-    let mut unbound_children: HashMap<String, String> = HashMap::new();
+    // Native child sessions (any depth) and background jobs.
+    let mut children = ChildTree::default();
+    // The root turn settled while background work runs: the run stays alive,
+    // like a persistent adapter, for that work's traffic and wake turns.
+    let mut parked = false;
+    // After a root Stop: a bounded wait for the children's own terminals.
+    let mut drain_deadline: Option<tokio::time::Instant> = None;
+    // A parked run's background work ended: the root wake its completion
+    // starts should follow within this deadline, else the run ends.
+    let mut wake_deadline: Option<tokio::time::Instant> = None;
     let mut queued_steers: VecDeque<String> = VecDeque::new();
     let mut steering_open = true;
     let mut interrupt_requested = false;
@@ -351,7 +368,15 @@ pub(super) async fn run_session(session: Session) {
                 break $label;
             }
             if interrupt_requested {
-                settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
+                // Children settle on their own terminals (a stopped child's
+                // execution.interrupted), never locally: wait a bounded grace.
+                // One that never reports stays open (the engine shows it
+                // unobserved).
+                if children.has_open() && drain_deadline.is_none() {
+                    abort_deadline = None;
+                    drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
+                    continue $label;
+                }
                 let _ = send(&event_tx, AgentEvent::Done {
                     status: DoneStatus::Interrupted,
                     result: None,
@@ -419,6 +444,12 @@ pub(super) async fn run_session(session: Session) {
                 session_id: Some(session_id.clone()),
             }).await;
             done_sent = true;
+            // Background subagents or shells outlive the root turn: stay for
+            // their traffic and the wake turn their completion starts.
+            if children.has_background_work() {
+                parked = true;
+                continue $label;
+            }
             break $label;
         }};
     }
@@ -428,11 +459,14 @@ pub(super) async fn run_session(session: Session) {
         // life; a running tool's silence never trips it (events already
         // proved the turn alive and disarmed it). Computed by value each
         // iteration so the future doesn't hold a borrow of `turn`.
-        let deadline = abort_deadline.or_else(|| {
-            (turn.active && !turn.saw_activity)
-                .then_some(turn.stall_deadline)
-                .flatten()
-        });
+        let deadline = drain_deadline
+            .or(abort_deadline)
+            .or(wake_deadline.filter(|_| parked && !turn.active))
+            .or_else(|| {
+                (turn.active && !turn.saw_activity)
+                    .then_some(turn.stall_deadline)
+                    .flatten()
+            });
         let stall_sleep = async {
             match deadline {
                 Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -445,6 +479,10 @@ pub(super) async fn run_session(session: Session) {
 
             _ = interrupt.cancelled(), if !interrupt_requested => {
                 interrupt_requested = true;
+                // Background children are independent of the root: stop each
+                // through the same per-child interrupt (foreground children
+                // stop natively with the root).
+                stop_background_children(&children, &server, dir);
                 if turn.active {
                     turn.idle_ready = true;
                     let abort = tokio::time::timeout(
@@ -472,6 +510,11 @@ pub(super) async fn run_session(session: Session) {
                     // finishes up. The grace guards a server that never
                     // delivers it.
                     abort_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
+                } else if children.has_open() {
+                    // Parked: wait for the stopped children's own terminals.
+                    parked = false;
+                    wake_deadline = None;
+                    drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
                 } else {
                     let _ = send(&event_tx, AgentEvent::Done {
                         status: DoneStatus::Interrupted,
@@ -522,14 +565,47 @@ pub(super) async fn run_session(session: Session) {
                             .is_ok()
                             {
                                 turn = TurnState::begin(stall);
+                                parked = false;
+                                wake_deadline = None;
                             }
                         }
                     }
-                    None => steering_open = false,
+                    None => {
+                        steering_open = false;
+                        // The engine retires an idle runtime by closing its
+                        // mailbox: a parked run ends instead of lingering.
+                        if parked && !turn.active {
+                            break 'main;
+                        }
+                    }
                 }
             }
 
+            Some(request) = stop_rx.recv() => {
+                answer_stop(request, &children, &server, dir);
+            }
+
             _ = stall_sleep => {
+                if drain_deadline.is_some() {
+                    // Children that never reported their terminal stay open.
+                    let _ = send(&event_tx, AgentEvent::Done {
+                        status: DoneStatus::Interrupted,
+                        result: None,
+                        error: None,
+                        session_id: Some(session_id.clone()),
+                    }).await;
+                    done_sent = true;
+                    break 'main;
+                }
+                if wake_deadline.is_some() && parked && !turn.active {
+                    wake_deadline = None;
+                    if children.has_background_work() {
+                        // Another background job is still running.
+                        continue 'main;
+                    }
+                    // No wake followed: nothing is left to observe.
+                    break 'main;
+                }
                 if abort_deadline.is_some() {
                     // Abort acknowledged nothing within the grace: hard stop.
                     settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
@@ -578,6 +654,11 @@ pub(super) async fn run_session(session: Session) {
                         }
                     }
                     BusMsg::Disconnected => {
+                        if parked && !turn.active {
+                            // A post-turn server death: every turn already
+                            // settled; open children stay unobserved.
+                            break 'main;
+                        }
                         let crashed = match server.child.as_mut() {
                             Some(child) => child.try_wait().ok().flatten(),
                             None => None,
@@ -628,8 +709,6 @@ pub(super) async fn run_session(session: Session) {
                             permission_policy: &permission_policy,
                             main_feed: &mut main_feed,
                             children: &mut children,
-                            pending_spawns: &mut pending_spawns,
-                            unbound_children: &mut unbound_children,
                             turn: &mut turn,
                             pending_usage: &mut pending_usage,
                             context_windows: &context_windows,
@@ -642,6 +721,45 @@ pub(super) async fn run_session(session: Session) {
                                 interrupt_requested = true;
                                 settle_idle!('main);
                             }
+                            BusOutcome::ProviderTurn if !interrupt_requested => {
+                                // A background completion's wake: a provider
+                                // turn, ending with its own Done.
+                                parked = false;
+                                wake_deadline = None;
+                                let turn_id =
+                                    format!("opencode-turn-{}", uuid::Uuid::new_v4().simple());
+                                if !send(&event_tx, AgentEvent::ProviderTurnStarted {
+                                    thread_id: session_id.clone(),
+                                    turn_id,
+                                }).await {
+                                    break 'main;
+                                }
+                                turn = TurnState::begin(None);
+                                turn.idle_ready = true;
+                                turn.note_activity();
+                            }
+                            BusOutcome::ProviderTurn => {}
+                        }
+                        if drain_deadline.is_some() && !children.has_open() {
+                            let _ = send(&event_tx, AgentEvent::Done {
+                                status: DoneStatus::Interrupted,
+                                result: None,
+                                error: None,
+                                session_id: Some(session_id.clone()),
+                            }).await;
+                            done_sent = true;
+                            break 'main;
+                        }
+                        if parked && !turn.active {
+                            // A completion reached the idle root, or the last
+                            // background job ended: its wake should follow.
+                            if children.take_wake_expected()
+                                || (wake_deadline.is_none() && !children.has_background_work())
+                            {
+                                wake_deadline = Some(tokio::time::Instant::now() + WAKE_GRACE);
+                            }
+                        } else {
+                            children.take_wake_expected();
                         }
                     }
                 }
