@@ -12327,54 +12327,49 @@ impl Composer {
                         )
                     }),
             )
-            .when_some(countdown, |el, (left_ms, labels)| {
-                let seconds = (left_ms + 999) / 1000;
-                el.child(
-                    div()
-                        .id("wizard-auto-answer")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap(crate::typography::ui_rems(8.0))
-                        .px(crate::typography::ui_rems(16.0))
-                        .pt(crate::typography::ui_rems(8.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.readable_muted(0.7))
-                                .child(SharedString::from(format!(
-                                    "LUNA picks {} in {seconds}s unless you answer",
-                                    labels.join(", ")
-                                ))),
-                        )
-                        .child(
-                            crate::popover::btn_ghost(
-                                &theme,
-                                "Keep waiting",
-                                "wizard-keep-waiting",
-                            )
-                            .id("wizard-keep-waiting")
-                            .on_click(cx.listener(|this, _, _, cx| this.hold_auto_answer(cx))),
-                        ),
-                )
-            })
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .justify_between()
                     .items_center()
+                    .gap(crate::typography::ui_rems(12.0))
                     .px(crate::typography::ui_rems(16.0))
                     .pb(crate::typography::ui_rems(16.0))
                     .pt(crate::typography::ui_rems(4.0))
                     .child(
                         div()
                             .flex()
+                            .flex_1()
+                            .min_w_0()
                             .items_center()
                             .gap(crate::typography::ui_rems(8.0))
+                            .when_some(countdown, |el, (left_ms, labels)| {
+                                let seconds = (left_ms + 999) / 1000;
+                                el.child(
+                                    div()
+                                        .id("wizard-auto-answer")
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(theme.readable_muted(0.7))
+                                        .child(SharedString::from(format!(
+                                            "LUNA picks {} in {seconds}s unless you answer",
+                                            labels.join(", ")
+                                        ))),
+                                )
+                                .child(
+                                    crate::popover::btn_ghost(
+                                        &theme,
+                                        "Keep waiting",
+                                        "wizard-keep-waiting",
+                                    )
+                                    .id("wizard-keep-waiting")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.hold_auto_answer(cx)),
+                                    ),
+                                )
+                            })
                             .when(page > 0, |el| {
                                 el.child(
                                     crate::popover::btn_ghost(&theme, "Back", "wizard-back")

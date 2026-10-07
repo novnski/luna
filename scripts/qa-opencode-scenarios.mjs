@@ -17,8 +17,12 @@
 //   root Done, parked follow-up and per-child Stop; S4X OpenCode server
 //   SIGSTOP/SIGCONT and SIGKILL with an approval or a form pending
 //   [--hold-ms] [--mock-url at T2]; S4S provider stall mid-turn (T2 mock with a long --slow-ms)
-//   [--stall-wait-ms]; S8X automatic compaction with a small-context mock
-//   model (T2) [--big-command].
+//   [--stall-wait-ms] (also checks the engine's Stalled notice; run the mock
+//   with --slow-ms above 120000); S9U unattended answers: recommended option
+//   auto-picked, Keep waiting, taste questions wait (T3, both providers; set
+//   the QA data dir ui-settings.json unattendedAnswerSeconds to match
+//   [--unattended-ms], default 15000); S8X automatic compaction with a
+//   small-context mock model (T2) [--big-command].
 //
 // Scenarios (validation-plan.md §4): S1 OCE-16/05 approvals and questions;
 // S2 OCE-01/21 subagent attribution and background work; S3 OCE-18 LUNA tool

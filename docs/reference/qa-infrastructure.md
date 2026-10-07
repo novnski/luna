@@ -515,6 +515,20 @@ with an excerpt) and `SendSideChat`, Review through `nativeReview`, plus
 | S7 | OCE-08, OCE-14, OCE-20 | full | image on the first turn, on a queued row and on a steered row (staged SHA-256 compared with `files[]` in the wire log); manual compaction then a `luna` call; project command discovery, `/qa-echo` and the generated title |
 | S8 | OCE-23 | full | Review of uncommitted changes, a commit and a base branch; goals readback |
 
+Live-only extras (never rehearsed) add S2X, S4X, S4S, S8X and S9U. S4S also
+checks the engine's provider-neutral Stalled notice: start the mock with a
+`--slow-ms` above 120000 so one streamed word is followed by a quiet stretch
+longer than the 120 s window; the notice must appear while the turn is still
+working and clear when the provider resumes. S9U (T3, run for both providers
+and diff) covers unattended answers: a question whose agent marked an option
+"(Recommended)" is answered with it after the delay, `holdInput` (the panel's
+Keep waiting) keeps the question open, and a question without a
+recommendation always waits. Set `unattendedAnswerSeconds` in the QA data
+directory's `ui-settings.json` to match `--unattended-ms` (default 15000)
+before launching the QA app. S1's cancel-turn step requires the unified
+cancel outcome for every provider: Idle, never Errored, with the entry
+stamped `aborted`.
+
 ```bash
 node scripts/qa-opencode-scenarios.mjs list
 node scripts/qa-opencode-scenarios.mjs dry-run S1 --provider opencode
