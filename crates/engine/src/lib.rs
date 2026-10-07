@@ -664,7 +664,7 @@ impl EngineCore {
         sessions.set_agent_accounts(agent_accounts.clone());
         let titles = TitleGenerator::new(workspace.clone(), registry.clone(), repos.clone());
         titles.set_task_identity(task_identity.clone());
-        sessions.set_titles(titles);
+        sessions.set_titles(titles.clone());
         let diff_sync = CheckoutDiffSync::start(repos.clone(), workspace.clone(), &device_id, edge);
         let checkpoints = GitCheckpoints::new(repos.clone());
         let github_pr = source_control::pull_requests::GitHubPullRequests::new(
@@ -689,6 +689,7 @@ impl EngineCore {
             registry.clone(),
             agent_accounts.clone(),
         ));
+        titles.set_model_cache(model_cache.clone());
         let chat_workbenches =
             chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
         let provider_defaults =
