@@ -731,7 +731,13 @@ impl ChildTree {
             .and_then(Value::as_str)
             .and_then(|m| bounded(m, MAX_ERROR_CHARS))
             .unwrap_or_else(|| "The agent failed".into());
-        let status = if message.contains("Subagent cancelled") {
+        // OpenCode's `aborted` class is a cancellation, never a failure: a
+        // Stop (the parent's tool settles before the child's own
+        // `execution.interrupted`), a shutdown or a declined call. Like
+        // Claude's stopped/killed/cancelled tasks it ends Interrupted; the
+        // tool's own result still carries OpenCode's wording.
+        let aborted = data.pointer("/error/type").and_then(Value::as_str) == Some("aborted");
+        let status = if aborted || message.contains("Subagent cancelled") {
             DoneStatus::Interrupted
         } else {
             DoneStatus::Errored
@@ -907,8 +913,14 @@ pub(super) fn v2_observe_frame(
             }
             let mut picked = pick(&["sessionID"]);
             picked["metadata"] = Value::Object(keys);
-            if let Some(message) = data.pointer("/error/message").and_then(Value::as_str) {
-                picked["error"] = json!({ "message": bounded(message, MAX_ERROR_CHARS) });
+            if let Some(error) = data.get("error").filter(|error| error.is_object()) {
+                picked["error"] = json!({
+                    "type": error.get("type").filter(|kind| kind.is_string()),
+                    "message": error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .and_then(|m| bounded(m, MAX_ERROR_CHARS)),
+                });
             }
             (picked, Some(v2_tool_chip_id(data)), None)
         }
