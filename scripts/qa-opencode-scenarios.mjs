@@ -47,6 +47,11 @@ import {
 import {Driver, forkInitialPermission, reviewLabel} from './qa-opencode-driver.mjs';
 
 const PROVIDERS = ['opencode', 'claude-code'];
+// Subagent prompts name the agent type: with a bare "subagent tool" request
+// gpt-6-luna picked OpenCode's read-only `explore` agent, whose own rules deny
+// shell, so the child never asked (e2e-paid-r2 S2X). Both providers have a
+// general-purpose type with a shell tool; the text stays provider-neutral.
+const SHELL_AGENT = 'Use the general-purpose subagent type (one that has a shell tool), not a read-only explore agent.';
 
 // ------------------------------------------------------------------ context
 class ScenarioContext {
@@ -359,9 +364,9 @@ const SCENARIOS = {
     title: 'Native subagent attribution and background work', validation: ['OCE-01', 'OCE-21'], parity: true, permissionMode: 'full', phases: ['run'],
     steps: ['subagents', 'background-shell', 'stop-with-running-child'],
     prompts: n => ({
-      subagents: `Use your subagent tool (the tool that starts a separate agent) to start two subagents. Subagent A runs in the foreground: tell it to run the shell command "echo CHILD-A-${n}" and report the output. Subagent B: start it in the background if your subagent tool supports background agents, otherwise in the foreground; tell it to run the shell command "echo CHILD-B-${n}" and report the output. Do not run either command yourself. When both have been started, reply with exactly ROOT-DONE-${n}.`,
+      subagents: `Use your subagent tool (the tool that starts a separate agent) to start two subagents. ${SHELL_AGENT} Subagent A runs in the foreground: tell it to run the shell command "echo CHILD-A-${n}" and report the output. Subagent B: start it in the background if your subagent tool supports background agents, otherwise in the foreground; tell it to run the shell command "echo CHILD-B-${n}" and report the output. Do not run either command yourself. When both have been started, reply with exactly ROOT-DONE-${n}.`,
       background: `Use your shell tool's background option to run this command in the background: sleep 8; echo BG-SHELL-${n}\nDo not wait for it to finish. Immediately reply with exactly BG-STARTED-${n}.`,
-      slow: `Use your subagent tool to start one subagent and tell it to run the shell command "sleep 45; echo CHILD-SLOW-${n}" and report the output. Wait for it, then reply with its output.`,
+      slow: `Use your subagent tool to start one subagent (${SHELL_AGENT}) and tell it to run the shell command "sleep 45; echo CHILD-SLOW-${n}" and report the output. Wait for it, then reply with its output.`,
     }),
     unverified: ['Grandchild visibility (experimental.subagent_depth 2) needs that profile setting; not set by this runner.'],
     async run(s, P) {
@@ -943,10 +948,10 @@ const SCENARIOS = {
     parity: true, extra: true, permissionMode: 'ask', phases: ['run'],
     steps: ['late-child-ask', 'follow-up-while-parked', 'foreground-child-stop'],
     prompts: n => ({
-      late: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Asking child" and this task: "First use your file read tool to read README.md, then use your file search (glob) tool to list the *.md files, then use your shell tool to run exactly this command and nothing else: python3 -c 'print("LATE-ASK-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly ROOT-DONE-${n} and end your turn.`,
-      parked: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Sleeping child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(45); print("PARKED-CHILD-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly PARKED-ROOT-${n} and end your turn.`,
+      late: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent. ${SHELL_AGENT} Give it the description "Asking child" and this task: "First use your file read tool to read README.md, then use your file search (glob) tool to list the *.md files, then use your shell tool to run exactly this command and nothing else: python3 -c 'print("LATE-ASK-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly ROOT-DONE-${n} and end your turn.`,
+      parked: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent. ${SHELL_AGENT} Give it the description "Sleeping child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(45); print("PARKED-CHILD-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly PARKED-ROOT-${n} and end your turn.`,
       followup: `Reply with exactly FOLLOWUP-${n}. Do not use tools.`,
-      fg: `Use your subagent tool to launch ONE subagent in the foreground (do not run it in the background) with the description "Foreground child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(90); print("FG-CHILD-${n}")'. Then reply with only the command output." Wait for the subagent to finish, then reply with exactly FG-ROOT-${n} followed by what the subagent reported.`,
+      fg: `Use your subagent tool to launch ONE subagent in the foreground (do not run it in the background). ${SHELL_AGENT} Give it the description "Foreground child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(90); print("FG-CHILD-${n}")'. Then reply with only the command output." Wait for the subagent to finish, then reply with exactly FG-ROOT-${n} followed by what the subagent reported.`,
     }),
     unverified: ['Whether the child asks after the root Done depends on model timing; an ask during the root turn is answered and recorded as early (ask-timing).',
       'Claude Code background agents may not raise host asks; the Claude run records what it does.'],
