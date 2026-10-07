@@ -263,6 +263,27 @@ starts it. The wrapper sets:
 | `OPENCODE_DISABLE_MODELS_FETCH` | `1` with `--offline` (T2) | Bundled models.dev snapshot, no network |
 | `OPENCODE_DISABLE_PROJECT_CONFIG` | `1` with `--no-project-config` | Scenarios that must ignore fixture project config |
 
+**QF-25 shared background service.** OpenCode 2's CLI commands attach to a
+shared background service unless they get `--standalone` or `--server`. The
+service is found through `$XDG_STATE_HOME/opencode/service.json` and spawned
+as a bare `opencode serve --service`, which runs outside the profile and
+opens the user's real `~/.local/share/opencode` database (observed in the
+first paid QA round with `auth`, `models`, `stats`, `session` and `run`).
+*Expected:* the wrapper appends `--standalone` (a private server inside the
+profile) to `auth`, `session`, `models`, `stats`, `run`, `api`, `reload`,
+`mini` and the bare TUI invocation, unless the caller already passed
+`--standalone` or `--server`. It refuses `service`, `pair`, `uninstall` and
+`upgrade`/`update` with exit 64, because they manage the shared service or
+the real installation. `serve` and `acp` (what LUNA and the T2 rig spawn) and
+the local `debug`, `mcp` and `plugin` commands, which have no server flag,
+pass through unchanged. No `export` or `exec` sits inside these blocks, so
+LUNA's storage replay still evaluates the wrapper. Regenerate an existing
+profile's wrapper in place with `scripts/qa-opencode-env.sh <profile>`; its
+data, credentials and config are kept. Check it with `<profile>/bin/opencode
+auth list` (a signed-in profile lists its integration as `stored`) while no
+`opencode serve --service` process appears. Older wrappers need
+`--standalone` passed by hand.
+
 `OPENCODE_CONFIG_DIR` plus `OPENCODE_DB` alone is **not** isolation. The data
 root (logs, the `auth.json` import), cache (provider npm installs) and state
 (locks) would still be the user's, so always use the four `XDG_*` roots. The
@@ -291,10 +312,11 @@ substitution, `source`, a conditional export) makes those readers report the
 OpenCode store as unavailable instead of falling back to `$HOME`. Explicit
 `XDG_*`, `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` and `OPENCODE_DATA_DIR` in the
 app environment are honored the same way. A new profile has no OpenCode Go
-credential, so the QA Usage page shows OpenCode history but no Go limits.
-After `opencode auth login` for OpenCode Go through the profile wrapper,
-OpenCode 2 saves the key in the profile database's `credential` table and the
-limits reader uses that key, as the spawned server does.
+credential, so the QA Usage page shows OpenCode history but no Go limits. Once
+the user signs the profile in themselves (`opencode auth login` for OpenCode
+Go through the profile wrapper), OpenCode 2 saves the key in the profile
+database's `credential` table and the limits reader uses that key, as the
+spawned server does.
 
 ### Real-model policy (PD-18)
 

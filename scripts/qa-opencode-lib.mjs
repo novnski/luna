@@ -264,7 +264,12 @@ export class TranscriptMirror extends EventEmitter {
     this.entries = result.entries;
     this.updates += 1;
     if (Array.isArray(frame.reset)) this.resets += 1;
-    for (const key of ['contextUsage', 'providerNotice', 'contextControl', 'checkpointed']) if (item && Object.hasOwn(item, key) && item[key] !== undefined) this.latest[key] = item[key];
+    for (const key of ['contextUsage', 'contextControl', 'checkpointed']) if (item && Object.hasOwn(item, key) && item[key] !== undefined) this.latest[key] = item[key];
+    // TranscriptUpdate skips a None provider_notice and every frame carries
+    // the doc's current notice, so an absent key means the notice cleared
+    // (the UI state does the same); keeping the old value showed a stale
+    // "retrying" notice after the turn completed.
+    if (item) this.latest.providerNotice = item.providerNotice ?? null;
     this.record({at: now(), chat: this.label, kind: Array.isArray(frame.reset) ? 'reset' : 'delta',
       entries: this.entries.length, upsert: frame.upsert?.length ?? 0, append: frame.append?.length ?? 0, remove: frame.remove?.length ?? 0,
       providerNotice: item?.providerNotice ?? null, contextUsage: item?.contextUsage ?? null, contextControl: item?.contextControl ?? null});
@@ -448,6 +453,8 @@ export function approvalDecision(question, action) {
 //   {pick: 'text'|['a','b']} choose options whose label contains the text
 //   (else the first option); {text: '...'} typed answer; {dismiss: true}
 //   empty answers; {mcp: 'Accept'|'Decline'|'Cancel', values: {field: v}}.
+export const acceptsTypedAnswer = question => !question.options?.length || !question.input || Boolean(question.input.allowOther);
+
 export function buildAnswers(questions, policy = {}) {
   if (policy.dismiss) return questions.map(q => ({questionId: q.id, labels: []}));
   return questions.map(question => {
@@ -466,7 +473,9 @@ export function buildAnswers(questions, policy = {}) {
       const value = wanted ?? schema.default ?? ({string: 'qa', integer: 1, number: 1, boolean: true})[schema.valueType];
       return {questionId: question.id, labels: value == null ? [] : [typeof value === 'string' ? value : JSON.stringify(value)]};
     }
-    if (policy.text != null && (!question.options?.length || question.input?.allowOther)) return {questionId: question.id, labels: [policy.text]};
+    // UserInputQuestion::accepts_typed_answer: no options, no provider input
+    // policy (legacy: typed answer always offered) or an explicit allowOther.
+    if (policy.text != null && acceptsTypedAnswer(question)) return {questionId: question.id, labels: [policy.text]};
     const options = question.options ?? [];
     if (!options.length) return {questionId: question.id, labels: [policy.text ?? 'qa answer']};
     const wanted = [].concat(policy.pick ?? []).map(s => String(s).toLowerCase());
