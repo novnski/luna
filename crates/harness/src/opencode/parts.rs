@@ -189,6 +189,29 @@ pub(super) fn part_snapshot_events(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(part_id)
                 .to_owned();
+            // A call first seen at its end, under an assistant message this
+            // run never saw start, belongs to a turn that already ended:
+            // OpenCode settles a killed server's dangling call
+            // (`session.tool.failed`, `aborted`) when the session next
+            // executes. That turn ended with its chip unresolved, as any run
+            // that dies mid-tool; the late settlement opens no nameless chip
+            // in the current turn (host-journal evidence only).
+            if is_main
+                && matches!(status, "completed" | "error")
+                && !feed.parts.contains_key(part_id)
+                && !feed.assistant_messages.contains_key(message_id)
+            {
+                let state = part.get("state").unwrap_or(&Value::Null);
+                return vec![receipt_evidence(
+                    "tool.late_settlement",
+                    Some(&call_id),
+                    json!({
+                        "status": status,
+                        "errorType": state.get("errorType"),
+                        "executed": state.get("executed"),
+                    }),
+                )];
+            }
             let entry = feed
                 .parts
                 .entry(part_id.to_owned())

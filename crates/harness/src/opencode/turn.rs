@@ -714,13 +714,7 @@ pub(super) async fn run_session(session: Session) {
     )
     .await
     {
-        let _ = send(
-            &event_tx,
-            AgentEvent::Error {
-                message: message.clone(),
-            },
-        )
-        .await;
+        // The refusal is the turn's terminal error: shown once, on Done.
         let _ = send(
             &event_tx,
             AgentEvent::Done {
@@ -743,9 +737,10 @@ pub(super) async fn run_session(session: Session) {
     // The root turn settled while background work runs: the run stays alive,
     // like a persistent adapter, for that work's traffic and wake turns.
     let mut parked = false;
-    // After a root Stop: a bounded wait for the children's own terminals
-    // (an interruption reason was already shown when the root settled).
+    // After a root Stop: a bounded wait for the children's own terminals,
+    // and the stop reason its final Done carries.
     let mut drain_deadline: Option<tokio::time::Instant> = None;
+    let mut drain_reason: Option<String> = None;
     // A parked run's background work ended: the root wake its completion
     // starts should follow within this deadline, else the run ends.
     let mut wake_deadline: Option<tokio::time::Instant> = None;
@@ -895,23 +890,22 @@ pub(super) async fn run_session(session: Session) {
                     .take()
                     .filter(|_| !user_stopped)
                     .and_then(|reason| interrupt_reason_message(&reason));
-                // Shown once, as its own row (Done carries no copy of it).
-                if let Some(reason) = reason {
-                    let _ = send(&event_tx, AgentEvent::Error { message: reason }).await;
-                }
+                // The reason is shown once, on the turn's Done (now or after
+                // the children drain), never as a separate Error as well.
                 // Children settle on their own terminals (a stopped child's
                 // execution.interrupted), never locally: wait a bounded grace.
                 // One that never reports stays open (the engine shows it
                 // unobserved).
                 if children.has_open() && drain_deadline.is_none() {
                     abort_deadline = None;
+                    drain_reason = reason;
                     drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
                     continue $label;
                 }
                 let _ = send(&event_tx, AgentEvent::Done {
                     status: DoneStatus::Interrupted,
                     result: None,
-                    error: None,
+                    error: reason,
                     session_id: Some(session_id.clone()),
                 }).await;
                 done_sent = true;
@@ -1122,15 +1116,18 @@ pub(super) async fn run_session(session: Session) {
                         &server.stderr_tail,
                     );
                     // A dead server lost the running execution: the turn
-                    // ends interrupted, with the reason shown.
+                    // ends interrupted, with the reason shown once, on Done
+                    // (as Codex and Claude report a process that died).
                     let lost = crashed.is_some();
                     let message = if lost && turn.active {
                         format!("{message} The running OpenCode turn was lost and is interrupted.")
                     } else {
                         message
                     };
-                    if turn.active {
-                        let _ = send(&event_tx, AgentEvent::Error { message: message.clone() }).await;
+                    // A provider interrupt still draining its children had
+                    // its reason waiting for this Done.
+                    if let Some(reason) = drain_reason.take() {
+                        let _ = send(&event_tx, AgentEvent::Error { message: reason }).await;
                     }
                     settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
                     let _ = send(&event_tx, AgentEvent::Done {
@@ -1140,7 +1137,7 @@ pub(super) async fn run_session(session: Session) {
                             DoneStatus::Errored
                         },
                         result: None,
-                        error: (!interrupt_requested).then_some(message),
+                        error: (turn.active || !interrupt_requested).then_some(message),
                         session_id: Some(session_id.clone()),
                     }).await;
                     done_sent = true;
@@ -1171,11 +1168,15 @@ pub(super) async fn run_session(session: Session) {
                 BusMsg::CommandFailed(message) => {
                     // A command that never started its execution would
                     // otherwise stall until the watchdog; one that did
-                    // start settles from its own terminal frame.
-                    if !send(&event_tx, AgentEvent::Error { message: message.clone() }).await {
+                    // start settles from its own terminal frame. A turn that
+                    // ends on the failure shows it once, on its Done.
+                    let settles = turn.active && !turn.saw_activity;
+                    if !(settles && !interrupt_requested && !provider_interrupted)
+                        && !send(&event_tx, AgentEvent::Error { message: message.clone() }).await
+                    {
                         break $label;
                     }
-                    if turn.active && !turn.saw_activity {
+                    if settles {
                         turn.error = Some(message);
                         settle_idle!($label);
                     }
@@ -1483,7 +1484,7 @@ pub(super) async fn run_session(session: Session) {
                         let _ = send(&event_tx, AgentEvent::Done {
                             status: DoneStatus::Interrupted,
                             result: None,
-                            error: None,
+                            error: drain_reason.take(),
                             session_id: Some(session_id.clone()),
                         }).await;
                         done_sent = true;
@@ -1798,7 +1799,7 @@ pub(super) async fn run_session(session: Session) {
                         let _ = send(&event_tx, AgentEvent::Done {
                             status: DoneStatus::Interrupted,
                             result: None,
-                            error: None,
+                            error: drain_reason.take(),
                             session_id: Some(session_id.clone()),
                         }).await;
                         done_sent = true;
@@ -1838,7 +1839,7 @@ pub(super) async fn run_session(session: Session) {
                                 activity_stall.unwrap_or(DEFAULT_ACTIVITY_STALL_BOUND).as_secs()
                             )
                         };
-                        let _ = send(&event_tx, AgentEvent::Error { message: message.clone() }).await;
+                        // Shown once, on the turn's Done.
                         let _ = server.interrupt_session(&session_id, dir).await;
                         settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
                         let _ = send(&event_tx, AgentEvent::Done {
