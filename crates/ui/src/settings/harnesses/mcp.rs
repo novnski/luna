@@ -1,10 +1,12 @@
-//! CC-11: Claude MCP rows in the shared "Skills and MCP" card.
+//! CC-11: Claude MCP rows in the shared "Skills and MCP" card, and the
+//! read-only OpenCode rows built on the same inventory details (OC-13).
 //!
 //! Renders the provider-reported details the engine attaches to an MCP
 //! inventory item (status, transport, per-launch-mode load, the selected
 //! chat's session report, MCP App tools) plus two owner-local actions:
 //! provider-owned per-project enable/disable, and inert inspection of a
 //! declared MCP Apps `ui://` resource. App views are never rendered here.
+//! OpenCode rows offer no action (the engine marks them unavailable).
 
 use gpui::{AnyElement, Context, IntoElement, SharedString, Task, div, prelude::*, px};
 use luna_proto::{
@@ -32,8 +34,17 @@ pub(super) struct McpPanel {
     task: Option<Task<()>>,
 }
 
-fn status_badge(theme: &Theme, status: ProviderMcpStatus) -> gpui::Div {
-    let label = format!("Claude: {}", status.label());
+/// Whose readback an MCP row shows.
+fn provider_label(provider: HarnessId) -> &'static str {
+    match provider {
+        HarnessId::Opencode => "OpenCode",
+        HarnessId::Codex => "Codex",
+        _ => "Claude",
+    }
+}
+
+fn status_badge(theme: &Theme, provider: HarnessId, status: ProviderMcpStatus) -> gpui::Div {
+    let label = format!("{}: {}", provider_label(provider), status.label());
     match status {
         ProviderMcpStatus::Connected => widgets::badge_active(theme, label),
         ProviderMcpStatus::Failed => widgets::badge(theme, label)
@@ -203,23 +214,27 @@ impl HarnessesPage {
     ) -> (Vec<AnyElement>, Vec<AnyElement>) {
         let identity = item.identity.clone().unwrap_or_default();
         let enabled = !self.mcp.busy && !identity.is_empty();
-        let mut badges = vec![status_badge(theme, details.status).into_any_element()];
+        let provider = self.integration_provider;
+        let mut badges = vec![status_badge(theme, provider, details.status).into_any_element()];
         if let Some(transport) = &details.transport {
             badges.push(widgets::badge(theme, transport.clone()).into_any_element());
         }
         if let Some(version) = &details.server_version {
             badges.push(widgets::badge(theme, version.clone()).into_any_element());
         }
-        badges.push(
-            widgets::badge(
-                theme,
-                match details.tool_count {
-                    1 => "1 tool".to_owned(),
-                    count => format!("{count} tools"),
-                },
-            )
-            .into_any_element(),
-        );
+        // OpenCode's status readback lists no per-server tools.
+        if provider != HarnessId::Opencode {
+            badges.push(
+                widgets::badge(
+                    theme,
+                    match details.tool_count {
+                        1 => "1 tool".to_owned(),
+                        count => format!("{count} tools"),
+                    },
+                )
+                .into_any_element(),
+            );
+        }
         if let Some(session) = &details.session {
             badges.push(
                 widgets::badge(theme, format!("This chat: {}", session.status.label()))
@@ -243,7 +258,8 @@ impl HarnessesPage {
                     .line_height(ui_rems(16.0))
                     .text_color(theme.readable_tone(theme.danger, 1.0))
                     .child(format!(
-                        "Claude error{}: {error}",
+                        "{} error{}: {error}",
+                        provider_label(provider),
                         details
                             .error_code
                             .as_deref()

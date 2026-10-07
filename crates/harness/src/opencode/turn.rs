@@ -331,8 +331,30 @@ pub(super) async fn run_session(session: Session) {
         .map(|policy| policy.effective_mode)
         .unwrap_or(luna_proto::PermissionMode::Ask);
 
+    // LUNA's contract (OC-13) compiles optimistically; verify it before the
+    // model can see a tool (PD-10). This server's boot contract may already
+    // have withdrawn delivery for its version.
+    let mut luna_warning: Option<String> = None;
+    if let Some(bridge) = luna.as_mut()
+        && bridge.attaches_tools()
+        && let Some(reason) = delivery_withdrawal(server.version.as_deref())
+    {
+        bridge.withdraw_tools();
+        luna_warning = Some(reason);
+    }
+
     // ---- session create/resume -------------------------------------------
     let setup = async {
+        // The attachment reads back (`luna` connected, catalog served) BEFORE
+        // any session rule allows a LUNA tool; until then the inline deny
+        // hides them all.
+        let attachment = match (&luna, luna_endpoint.as_ref()) {
+            (Some(bridge), Some(endpoint)) if bridge.attaches_tools() => {
+                Some(await_mcp_attachment(&server, dir, endpoint).await)
+            }
+            _ => None,
+        };
+        let allow_luna = matches!(attachment, Some(Ok(_)));
         // The LUNA mode compiles against the session agent's own rules, so
         // the user's configured denies stay final (`permissions`).
         let rule_set = SessionRuleSet::load(&server, dir, permission_mode).await;
@@ -355,8 +377,8 @@ pub(super) async fn run_session(session: Session) {
                 let mut rules =
                     rule_set.rules_for(info.get("agent").and_then(Value::as_str), RuleScope::Root);
                 // The attached LUNA tools, allowed for the root session only
-                // and appended last (OC-13).
-                if let Some(bridge) = &luna {
+                // and appended last, once verified (OC-13).
+                if let Some(bridge) = luna.as_ref().filter(|_| allow_luna) {
                     bridge.extend_rules(&mut rules);
                 }
                 // `session.update` (204): the resumed session takes this
@@ -372,7 +394,7 @@ pub(super) async fn run_session(session: Session) {
             }
             None => {
                 let mut rules = rule_set.rules_for(None, RuleScope::Root);
-                if let Some(bridge) = &luna {
+                if let Some(bridge) = luna.as_ref().filter(|_| allow_luna) {
                     bridge.extend_rules(&mut rules);
                 }
                 (create_session(&server, dir, &rules).await?, rules)
@@ -419,9 +441,10 @@ pub(super) async fn run_session(session: Session) {
             permission_rules,
             previous_model,
             requested,
+            attachment,
         ))
     };
-    let (session_id, providers, rule_set, permission_rules, previous_model, requested) = tokio::select! {
+    let (session_id, providers, rule_set, permission_rules, previous_model, requested, attachment) = tokio::select! {
         res = setup => match res {
             Ok(v) => v,
             Err(e) => {
@@ -446,6 +469,21 @@ pub(super) async fn run_session(session: Session) {
             return;
         }
     };
+
+    // A failed attachment readback withdraws delivery for this version (the
+    // next contracts compile `Unsupported`) and this run's tools. A verified
+    // one says when OpenCode will have registered the tools for the model.
+    let luna_tools_ready_at = match &attachment {
+        Some(Ok(at)) => Some(*at),
+        _ => None,
+    };
+    if let Some(Err(reason)) = attachment {
+        record_delivery_failure(server.version.as_deref(), &reason);
+        if let Some(bridge) = luna.as_mut() {
+            bridge.withdraw_tools();
+        }
+        luna_warning = Some(reason);
+    }
 
     // Context windows per model, the step model and the turn's accounting.
     let mut usage = UsageState::new(&providers);
@@ -485,18 +523,30 @@ pub(super) async fn run_session(session: Session) {
     let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<ChildStopRequest>();
     let _live = live_runs.register(&session_id, stop_tx);
 
-    // LUNA's contract (OC-13): read the MCP attachment back and deliver the
-    // instructions before the first prompt. A failure withdraws delivery for
-    // this OpenCode version and warns; the turn itself goes ahead.
+    // LUNA's contract (OC-13): deliver the instructions before the first
+    // prompt (the attachment was verified before the rules). A failure
+    // withdraws delivery for this OpenCode version and warns; the turn itself
+    // goes ahead. A resumed session that gets no contract this run loses the
+    // `luna` entry an earlier run left.
     if let Some(bridge) = luna.as_mut() {
         bridge.bind_session(&session_id);
-        if let Err(reason) = bridge.deliver(&server, dir, luna_endpoint.as_ref()).await {
+        let warned = luna_warning.is_some();
+        if let Some(reason) = luna_warning.take()
+            && !send(&event_tx, delivery_notice(&reason)).await
+        {
+            server.shutdown(kill_grace).await;
+            return;
+        }
+        if let Err(reason) = bridge.deliver_instructions(&server, dir).await {
             record_delivery_failure(server.version.as_deref(), &reason);
-            if !send(&event_tx, delivery_notice(&reason)).await {
+            // One warning per run: the first failure already said why.
+            if !warned && !send(&event_tx, delivery_notice(&reason)).await {
                 server.shutdown(kill_grace).await;
                 return;
             }
         }
+    } else if request.resume.is_some() {
+        retire_instructions(&server, &session_id, dir).await;
     }
     // The session's own MCP readback (inventory evidence, OC-14).
     if let Ok(servers) = server.mcp_servers(dir).await
@@ -606,6 +656,11 @@ pub(super) async fn run_session(session: Session) {
         bus_handle.abort();
         server.shutdown(kill_grace).await;
         return;
+    }
+    // The model must not take a step before OpenCode registered the LUNA
+    // tools (see `TOOL_REGISTRATION_SETTLE`).
+    if let Some(at) = luna_tools_ready_at {
+        tokio::time::sleep_until(at).await;
     }
     let posted_ms = unix_ms();
     let first_outcome = post_prompt(

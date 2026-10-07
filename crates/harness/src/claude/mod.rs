@@ -63,6 +63,8 @@ mod turns;
 mod wire;
 
 pub use input::validate_inputs;
+/// Shared with the OpenCode MCP readback (provider errors echo URLs/paths).
+pub(crate) use mcp::redact_provider_text;
 
 use std::path::PathBuf;
 use std::sync::Arc;
