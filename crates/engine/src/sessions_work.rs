@@ -93,6 +93,16 @@ impl SessionsEngine {
 }
 
 impl Inner {
+    /// Native work of this run is still live: an unsettled native child
+    /// (subagent chip) or an active native task. After the root turn's Done
+    /// this is background work, whose own requests are real.
+    pub(super) fn has_live_native_work(&self, chat: &str, run_id: &str) -> bool {
+        lock(&self.runs)
+            .get(chat)
+            .filter(|run| run.run_id == run_id)
+            .is_some_and(|run| !run.work_observations.is_empty())
+    }
+
     pub(super) fn note_work_observation(
         &self,
         chat: &str,
