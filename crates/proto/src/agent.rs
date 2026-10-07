@@ -865,9 +865,87 @@ pub struct UserInputDetails {
     /// `isSecret`: mask the typed answer while it is entered.
     #[serde(default)]
     pub secret: bool,
+    /// LUNA's unattended-answer plan, stamped by the engine that owns the
+    /// run when the question is shown. Never set by a provider adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_select: Option<AutoSelect>,
+}
+
+/// When the agent marked a recommended answer and nobody answers in time,
+/// the engine sends `labels` for the user. Same for every provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoSelect {
+    /// Epoch millis when LUNA answers.
+    pub at_ms: i64,
+    /// The exact option labels LUNA sends.
+    pub labels: Vec<String>,
+    /// LUNA sent `labels` because nobody answered before `at_ms`.
+    #[serde(default)]
+    pub fired: bool,
+}
+
+/// Whether an option label carries the agent's "(Recommended)" marker, the
+/// convention Claude's AskUserQuestion, Codex's request_user_input and
+/// OpenCode's question tool all document.
+pub fn is_recommended_label(label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    lower.contains("(recommended)") || lower.contains("[recommended]")
+}
+
+/// The answers LUNA may send for an unattended question set: every question
+/// must be a plain choice with at least one recommended option. Approvals,
+/// MCP forms and secret questions always wait for the user, and so does a
+/// question whose options carry no recommendation (a matter of taste).
+pub fn unattended_answers(questions: &[UserInputQuestion]) -> Option<Vec<UserInputAnswer>> {
+    if questions.is_empty() {
+        return None;
+    }
+    questions
+        .iter()
+        .map(|question| {
+            if question.approval.is_some() || question.mcp.is_some() || question.is_secret() {
+                return None;
+            }
+            let mut recommended = question
+                .options
+                .iter()
+                .filter(|label| is_recommended_label(label))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !question.multi_select {
+                recommended.truncate(1);
+            }
+            (!recommended.is_empty()).then(|| UserInputAnswer {
+                question_id: question.id.clone(),
+                labels: recommended,
+            })
+        })
+        .collect()
 }
 
 impl UserInputQuestion {
+    /// LUNA's unattended-answer plan for this question, if any.
+    pub fn auto_select(&self) -> Option<&AutoSelect> {
+        self.input.as_ref()?.auto_select.as_ref()
+    }
+
+    /// Stamp LUNA's unattended-answer plan without changing how the question
+    /// accepts typed answers (an absent policy means "typed answers allowed").
+    pub fn set_auto_select(&mut self, plan: Option<AutoSelect>) {
+        match (&mut self.input, plan) {
+            (Some(input), plan) => input.auto_select = plan,
+            (None, Some(plan)) => {
+                self.input = Some(UserInputDetails {
+                    allow_other: true,
+                    auto_select: Some(plan),
+                    ..Default::default()
+                });
+            }
+            (None, None) => {}
+        }
+    }
+
     /// Whether a typed answer is offered. Questions without options always
     /// take text; provider policy decides when options exist.
     pub fn accepts_typed_answer(&self) -> bool {
@@ -943,6 +1021,10 @@ pub enum ProviderNoticeKind {
     Retrying,
     /// An informational provider warning (e.g. Codex `warning`).
     Warning,
+    /// Engine-detected: the running turn has shown no activity for a while.
+    /// `at_ms` is the last activity, so clients can show how long it has
+    /// been quiet. Cleared by the next provider event; never ends the turn.
+    Stalled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

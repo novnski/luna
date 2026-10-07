@@ -249,6 +249,7 @@ fn crash_left_secret_card(core: &EngineCore, chat: &str) -> (String, String) {
             option_descriptions: Vec::new(),
             allow_other: true,
             secret: true,
+            auto_select: None,
         }),
     };
     let writer = luna_doc::SegmentWriter::begin(

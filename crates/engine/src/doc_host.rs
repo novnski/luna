@@ -7866,6 +7866,15 @@ impl DocHost {
                 self.interrupt_and_pause_queue(sessions, handle).await?;
                 Ok((SessionCommandStatus::Applied, None))
             }
+            SessionCommandPayload::HoldInput { request_id } => {
+                // Idempotent: a hold that races the automatic answer, or
+                // targets a question without one, has nothing left to stop.
+                let held = sessions.hold_input(chat_id, request_id);
+                Ok((
+                    SessionCommandStatus::Applied,
+                    (!held).then(|| "no automatic answer was pending".into()),
+                ))
+            }
             SessionCommandPayload::RespondApproval {
                 request_id,
                 decision,

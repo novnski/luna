@@ -3408,6 +3408,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                         .collect(),
                     allow_other: flag(["isOther", "is_other"]),
                     secret: flag(["isSecret", "is_secret"]),
+                    auto_select: None,
                 }),
             };
             (wire_id, question)

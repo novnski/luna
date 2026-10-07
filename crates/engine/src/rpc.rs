@@ -622,6 +622,7 @@ impl TaskCommandIntent {
                 SessionCommandPayload::RespondInput { .. } => "respondInput",
                 SessionCommandPayload::RespondAsyncQuestion { .. } => "respondAsyncQuestion",
                 SessionCommandPayload::RespondApproval { .. } => "respondApproval",
+                SessionCommandPayload::HoldInput { .. } => "holdInput",
             },
             Self::NativeReview { .. } => "nativeReview",
             Self::Rename { .. } => "rename",

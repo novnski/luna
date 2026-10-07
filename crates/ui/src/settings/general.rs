@@ -12,6 +12,7 @@ pub enum GeneralEvent {
     ComposerSendBehaviorChanged(ComposerSendBehavior),
     FollowUpBehaviorChanged(FollowUpBehavior),
     AutomaticRetriesChanged(bool),
+    UnattendedAnswerChanged(u64),
     ShowContextUsageChanged(bool),
     OpenWebLinksInLunaChanged(bool),
     KeepAwakeWhileRunningChanged(bool),
@@ -32,6 +33,7 @@ pub struct GeneralPage {
     composer_send_behavior: ComposerSendBehavior,
     follow_up_behavior: FollowUpBehavior,
     automatic_retries_enabled: bool,
+    unattended_answer_seconds: u64,
     show_context_usage: bool,
     open_web_links_in_luna: bool,
     keep_awake_while_running: bool,
@@ -49,6 +51,7 @@ impl GeneralPage {
             composer_send_behavior: settings.composer_send_behavior,
             follow_up_behavior: settings.follow_up_behavior,
             automatic_retries_enabled: settings.automatic_retries_enabled,
+            unattended_answer_seconds: settings.unattended_answer_seconds,
             show_context_usage: settings.show_context_usage,
             open_web_links_in_luna: settings.open_web_links_in_luna,
             keep_awake_while_running: settings.keep_awake_while_running,
@@ -99,6 +102,14 @@ impl GeneralPage {
         if self.automatic_retries_enabled != enabled {
             self.automatic_retries_enabled = enabled;
             cx.emit(GeneralEvent::AutomaticRetriesChanged(enabled));
+            cx.notify();
+        }
+    }
+
+    fn set_unattended_answer(&mut self, seconds: u64, cx: &mut Context<Self>) {
+        if self.unattended_answer_seconds != seconds {
+            self.unattended_answer_seconds = seconds;
+            cx.emit(GeneralEvent::UnattendedAnswerChanged(seconds));
             cx.notify();
         }
     }
@@ -296,6 +307,35 @@ impl Render for GeneralPage {
         )
         .aria_label("Follow-up behavior");
 
+        let unattended_choice = crate::settings::UNATTENDED_ANSWER_CHOICES
+            .iter()
+            .position(|seconds| *seconds == self.unattended_answer_seconds)
+            .unwrap_or(2);
+        let unattended = crate::button::segmented(
+            "general-unattended-answer",
+            crate::settings::UNATTENDED_ANSWER_CHOICES
+                .iter()
+                .map(|seconds| {
+                    let label = match *seconds {
+                        0 => "Off".to_owned(),
+                        s if s < 60 => format!("{s}s"),
+                        s => format!("{}m", s / 60),
+                    };
+                    crate::button::Segment::new(format!("unattended-{seconds}"), label)
+                })
+                .collect(),
+            unattended_choice,
+            CHOICE_WIDTH + 56.0,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|this, ix: &usize, _, cx| {
+                if let Some(seconds) = crate::settings::UNATTENDED_ANSWER_CHOICES.get(*ix) {
+                    this.set_unattended_answer(*seconds, cx);
+                }
+            }),
+        )
+        .aria_label("Answer for me after");
+
         let composer = widgets::section_card(&theme)
             .child(widgets::section_header(
                 &theme,
@@ -341,6 +381,12 @@ impl Render for GeneralPage {
                 Vec::new(),
             ))
             .child(self.switch_row(&theme, GeneralToggle::AutomaticRetries, cx))
+            .child(setting_row(
+                &theme,
+                "Answer for me after",
+                "When an agent marks one answer as recommended and you don't reply in time, LUNA picks it so the agent can keep going. Approvals and questions without a recommendation always wait for you.",
+                unattended.into_any_element(),
+            ))
             .when(cfg!(target_os = "macos"), |card| {
                 card.child(self.switch_row(&theme, GeneralToggle::KeepAwake, cx))
             });

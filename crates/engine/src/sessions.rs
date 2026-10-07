@@ -162,6 +162,9 @@ struct PendingInput {
     kind: PendingInputKind,
     questions: Vec<UserInputQuestion>,
     resolver: oneshot::Sender<Vec<UserInputAnswer>>,
+    /// The recommended answers LUNA sends if nobody answers in time. `None`
+    /// once the user holds the question (or when it never qualified).
+    unattended: Option<Vec<UserInputAnswer>>,
 }
 
 #[derive(Debug)]
@@ -676,6 +679,111 @@ pub enum LunaApprovalOutcome {
 
 type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
 
+/// Cross-task facts a run's event loop reads that originate outside the
+/// harness stream (answers and timers run on other tasks).
+#[derive(Default)]
+struct RunSignals {
+    /// The user chose "Cancel turn" on one of this turn's approvals. With a
+    /// local Stop, it makes the turn end Interrupted for every provider.
+    user_cancel: AtomicBool,
+    /// Requests LUNA answered with the recommended option because nobody
+    /// answered in time; the loop stamps them `fired` on their card.
+    auto_answered: Mutex<HashSet<String>>,
+}
+
+impl RunSignals {
+    fn take_auto_answered(&self, request_id: &str) -> bool {
+        lock(&self.auto_answered).remove(request_id)
+    }
+}
+
+/// The approval choice every adapter labels "Cancel turn" stops the turn.
+fn answers_cancel_turn(questions: &[UserInputQuestion], answers: &[UserInputAnswer]) -> bool {
+    answers.iter().any(|answer| {
+        answer.labels.iter().any(|label| label == "Cancel turn")
+            && questions
+                .iter()
+                .any(|question| question.id == answer.question_id && question.approval.is_some())
+    })
+}
+
+/// How long LUNA waits before sending an agent's recommended answer.
+/// `LUNA_UNATTENDED_ANSWER_MS` overrides the user setting (0 disables).
+fn unattended_answer_delay(settings_path: Option<&std::path::Path>) -> Option<std::time::Duration> {
+    if let Some(ms) = std::env::var("LUNA_UNATTENDED_ANSWER_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return (ms > 0).then(|| std::time::Duration::from_millis(ms));
+    }
+    let seconds = settings_path
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("unattendedAnswerSeconds")
+                .and_then(|v| v.as_u64())
+        })
+        .unwrap_or(DEFAULT_UNATTENDED_ANSWER_SECONDS);
+    (seconds > 0).then(|| std::time::Duration::from_secs(seconds))
+}
+
+const DEFAULT_UNATTENDED_ANSWER_SECONDS: u64 = 30;
+
+/// Send the recommended answers at `at_ms` unless the request was answered,
+/// withdrawn or held first. The answer takes the ordinary resolver path, so
+/// each adapter receives exactly what a user click would have sent.
+fn schedule_unattended_answer(
+    pending: PendingInputs,
+    engine_tx: mpsc::UnboundedSender<AgentEvent>,
+    signals: Arc<RunSignals>,
+    request_id: String,
+    at_ms: i64,
+) {
+    let pending = Arc::downgrade(&pending);
+    tokio::spawn(async move {
+        let delay_ms = at_ms.saturating_sub(now_ms()).max(0) as u64;
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        let Some(pending) = pending.upgrade() else {
+            return;
+        };
+        let taken = {
+            let mut map = lock(&pending);
+            let due = map
+                .get(&request_id)
+                .is_some_and(|input| input.unattended.is_some() && !input.resolver.is_closed());
+            if due { map.remove(&request_id) } else { None }
+        };
+        let Some(input) = taken else {
+            return;
+        };
+        let answers = input.unattended.unwrap_or_default();
+        lock(&signals.auto_answered).insert(request_id.clone());
+        tracing::info!(request = %request_id, "no answer in time; sending the agent's recommended answer");
+        let _ = input.resolver.send(answers);
+        let _ = engine_tx.send(AgentEvent::InputResolved { request_id });
+    });
+}
+
+/// Mark the auto-selected card so the transcript says LUNA chose for the user.
+fn mark_auto_select_fired(parts: &mut [MessagePart], request_id: &str) {
+    for part in parts {
+        if let MessagePart::Input {
+            request_id: id,
+            questions,
+            ..
+        } = part
+            && id == request_id
+        {
+            for question in questions.iter_mut() {
+                if let Some(plan) = question.input.as_mut().and_then(|i| i.auto_select.as_mut()) {
+                    plan.fired = true;
+                }
+            }
+        }
+    }
+}
+
 // Adapter cancellation closes the receiver. Remove the corresponding UI
 // prompt promptly, including when the provider finishes a turn, disconnects
 // or settles the request elsewhere (Codex `serverRequest/resolved`, an
@@ -1049,6 +1157,7 @@ struct RunHandle {
     /// fallback. Explicit native steers never replay: the run task converts
     /// any unconfirmed explicit entry to delivery-unknown at exit.
     routed_steers: Arc<Mutex<std::collections::VecDeque<RoutedSteer>>>,
+    signals: Arc<RunSignals>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2269,6 +2378,7 @@ impl SessionsEngine {
                         },
                         questions: vec![question.clone()],
                         resolver,
+                        unattended: None,
                     },
                 );
                 (pending, run.engine_tx.clone())
@@ -2594,6 +2704,7 @@ impl SessionsEngine {
                     },
                     questions: vec![question.clone()],
                     resolver,
+                    unattended: None,
                 },
             );
             (
@@ -2840,6 +2951,7 @@ impl SessionsEngine {
             kind,
             questions,
             resolver,
+            ..
         } = pending;
         let PendingInputKind::LunaProspectiveInterrupt {
             proposal, grant_tx, ..
@@ -4872,18 +4984,30 @@ impl SessionsEngine {
 
         // Input bridge: the harness asks questions; we mint the request id, park the
         // resolver for `respond_input`, and surface the event through the run pipeline.
+        let run_signals = Arc::new(RunSignals::default());
         let request_input = {
             let pending = pending_inputs.clone();
             let engine_tx = engine_tx.clone();
+            let signals = run_signals.clone();
+            let settings_path = lock(&self.inner.recovery_settings_path).clone();
             Box::new(move |questions: Vec<UserInputQuestion>| {
                 let (tx, rx) = oneshot::channel();
                 let request_id = new_id();
+                // Unattended answers (provider-neutral): a question whose
+                // agent marked a recommended option is answered with it when
+                // nobody answers in time. The plan rides on the visible card
+                // so every client can show the countdown.
+                let unattended = luna_proto::unattended_answers(&questions).and_then(|answers| {
+                    let delay = unattended_answer_delay(settings_path.as_deref())?;
+                    Some((answers, now_ms() + delay.as_millis() as i64))
+                });
                 lock(&pending).insert(
                     request_id.clone(),
                     PendingInput {
                         kind: PendingInputKind::Provider,
                         questions: questions.clone(),
                         resolver: tx,
+                        unattended: unattended.as_ref().map(|(answers, _)| answers.clone()),
                     },
                 );
                 // The full URL stays only in the live pending resolver. Strip
@@ -4893,6 +5017,27 @@ impl SessionsEngine {
                     if let Some(meta) = &mut question.mcp {
                         meta.launch_url = None;
                     }
+                    if let Some((answers, at_ms)) = &unattended {
+                        let labels = answers
+                            .iter()
+                            .find(|answer| answer.question_id == question.id)
+                            .map(|answer| answer.labels.clone())
+                            .unwrap_or_default();
+                        question.set_auto_select(Some(luna_proto::AutoSelect {
+                            at_ms: *at_ms,
+                            labels,
+                            fired: false,
+                        }));
+                    }
+                }
+                if let Some((_, at_ms)) = &unattended {
+                    schedule_unattended_answer(
+                        pending.clone(),
+                        engine_tx.clone(),
+                        signals.clone(),
+                        request_id.clone(),
+                        *at_ms,
+                    );
                 }
                 let _ = engine_tx.send(AgentEvent::InputRequested {
                     request_id: request_id.clone(),
@@ -5014,6 +5159,7 @@ impl SessionsEngine {
                 engine_tx,
                 pending_inputs,
                 routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                signals: run_signals,
             },
         );
         self.set_status(chat_id, SessionStatus::Working, true);
@@ -5432,11 +5578,29 @@ impl SessionsEngine {
         let Some(pending) = take_pending_ordinary_input(&handle.pending_inputs, request_id) else {
             return Ok(false);
         };
+        if answers_cancel_turn(&pending.questions, &answers) {
+            handle.signals.user_cancel.store(true, Ordering::Release);
+        }
         let delivered = pending.resolver.send(answers).is_ok();
         let _ = handle.engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
         Ok(delivered)
+    }
+
+    /// The user is answering this question themselves: cancel LUNA's pending
+    /// unattended answer. Returns `false` when none was pending (already
+    /// sent, answered, or the question never had a recommendation).
+    pub fn hold_input(&self, chat_id: &str, request_id: &str) -> bool {
+        let runs = lock(&self.inner.runs);
+        let Some(handle) = runs.get(chat_id) else {
+            return false;
+        };
+        let mut pending = lock(&handle.pending_inputs);
+        pending
+            .get_mut(request_id)
+            .and_then(|input| input.unattended.take())
+            .is_some()
     }
 
     /// Return the URL only for a live exact request. It is not a durable
@@ -5588,6 +5752,7 @@ impl SessionsEngine {
             kind,
             questions,
             resolver,
+            ..
         } = pending;
         let PendingInputKind::LunaCrossTask {
             proposal, grant_tx, ..
@@ -5733,10 +5898,14 @@ impl SessionsEngine {
         request_id: &str,
         decision: luna_proto::ApprovalDecision,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs)
-            .get(chat_id)
-            .map(|handle| (handle.pending_inputs.clone(), handle.engine_tx.clone()));
-        let Some((pending_inputs, engine_tx)) = target else {
+        let target = lock(&self.inner.runs).get(chat_id).map(|handle| {
+            (
+                handle.pending_inputs.clone(),
+                handle.engine_tx.clone(),
+                handle.signals.clone(),
+            )
+        });
+        let Some((pending_inputs, engine_tx, signals)) = target else {
             return Ok(false);
         };
         let (pending, answer) = {
@@ -5766,7 +5935,11 @@ impl SessionsEngine {
             };
             (pending, answer)
         };
-        let delivered = pending.resolver.send(vec![answer]).is_ok();
+        let answers = vec![answer];
+        if answers_cancel_turn(&pending.questions, &answers) {
+            signals.user_cancel.store(true, Ordering::Release);
+        }
+        let delivered = pending.resolver.send(answers).is_ok();
         let _ = engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
@@ -8494,6 +8667,27 @@ async fn drive_run(
     // turn's Done, each shown in its own finished entry and still waiting on
     // the user. They hold the idle reaper like an active turn's question.
     let mut parked_asks: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let signals = lock(&inner.runs)
+        .get(&chat_id)
+        .filter(|handle| handle.run_id == run_id)
+        .map(|handle| handle.signals.clone())
+        .unwrap_or_default();
+    // STALL NOTICE (provider-neutral). Not the rejected stall timeout: it
+    // never ends, errors or parks anything. A running turn with no provider
+    // event for the window, and nothing waiting on the user, gets a Stalled
+    // notice beside the working indicator; the next event clears it. A
+    // running tool or subagent may legitimately stay quiet longer, so its
+    // window is five times longer. `LUNA_STALL_NOTICE_MS` sets the quiet
+    // window; 0 disables.
+    let stall_after: Option<std::time::Duration> = match std::env::var("LUNA_STALL_NOTICE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(ms) => Some(std::time::Duration::from_millis(ms)),
+        None => Some(std::time::Duration::from_secs(120)),
+    };
+    let mut last_progress = tokio::time::Instant::now();
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
@@ -8598,6 +8792,42 @@ async fn drive_run(
                     }
                     continue;
                 }
+                // Stall notice (see the knob above): informational only.
+                _ = tokio::time::sleep_until({
+                    let window = stall_after.unwrap_or_default();
+                    let in_flight = folded.iter().any(|p| matches!(p,
+                        MessagePart::Tool { id, resolved: false, .. }
+                            if id != luna_proto::LIVE_PLAN_TOOL_ID));
+                    last_progress + if in_flight { window * 5 } else { window }
+                }), if stall_after.is_some()
+                    && idle_since.is_none()
+                    && !interrupted
+                    && parked_asks.is_empty()
+                    && !matches!(
+                        provider_notice,
+                        Some(luna_proto::ProviderNoticeKind::Retrying
+                            | luna_proto::ProviderNoticeKind::Stalled)
+                    )
+                    && !folded.iter().any(|p| matches!(p, MessagePart::Input { resolved: false, .. }))
+                    && inner.pending_input_status(&chat_id).is_none() =>
+                {
+                    let quiet = last_progress.elapsed();
+                    tracing::warn!(
+                        chat = %chat_id,
+                        quiet_ms = quiet.as_millis() as u64,
+                        "running turn has shown no provider activity; showing a stall notice"
+                    );
+                    let notice = luna_proto::ProviderNotice {
+                        kind: luna_proto::ProviderNoticeKind::Stalled,
+                        message: "No activity from the agent. It may be stuck; keep waiting or press Stop.".into(),
+                        at_ms: now_ms().saturating_sub(quiet.as_millis() as i64),
+                    };
+                    if let Err(err) = doc_ref.set_provider_notice(Some(&notice)) {
+                        tracing::warn!(%chat_id, error = %err, "stall notice write failed");
+                    }
+                    provider_notice = Some(notice.kind);
+                    continue;
+                }
                 // Turn-quiesce watchdog (see the knob above). Armed only when the
                 // fold says nothing is in flight: an unresolved tool part is a
                 // command still running (legitimately silent for minutes — the
@@ -8676,6 +8906,54 @@ async fn drive_run(
             };
             event
         };
+
+        // UNIFIED CANCEL OUTCOME. A turn the user stopped (local Stop, or a
+        // "Cancel turn" approval choice) ends Interrupted on every provider,
+        // whatever the adapter reports: Codex and OpenCode report the turn
+        // interrupted, while Claude ends a denied-with-interrupt tool call
+        // as an error result. User intent wins over the native wording, so
+        // the entry is stamped aborted, the chat goes Idle (not Errored) and
+        // follow-up work is held exactly like a Stop.
+        let event = match event {
+            AgentEvent::Done {
+                status: DoneStatus::Errored,
+                result,
+                error,
+                session_id,
+            } if idle_since.is_none()
+                && (interrupted || signals.user_cancel.load(Ordering::Acquire)) =>
+            {
+                tracing::info!(chat = %chat_id, run = %run_id, ?error,
+                    "user-cancelled turn ended as an error natively; recording it as interrupted");
+                AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    result,
+                    error: None,
+                    session_id,
+                }
+            }
+            event => event,
+        };
+        // A cancel answers one turn: it never carries into the next.
+        if idle_since.is_some() || matches!(&event, AgentEvent::Done { .. }) {
+            signals.user_cancel.store(false, Ordering::Release);
+        }
+        // Any provider event is activity: restart the stall window and lift
+        // a stall notice. Host-only evidence and accounting are not progress.
+        if !matches!(
+            &event,
+            AgentEvent::ProviderEvidence { .. } | AgentEvent::ProviderAccounting { .. }
+        ) {
+            last_progress = tokio::time::Instant::now();
+            if provider_notice == Some(luna_proto::ProviderNoticeKind::Stalled)
+                && !matches!(&event, AgentEvent::ProviderNotice { .. })
+            {
+                if let Err(err) = doc_ref.set_provider_notice(None) {
+                    tracing::warn!(%chat_id, error = %err, "stall notice clear failed");
+                }
+                provider_notice = None;
+            }
+        }
 
         // Native provider evidence is host-journal retention only: never a
         // transcript part, turn boundary, resume or liveness signal, so it
@@ -9455,7 +9733,12 @@ async fn drive_run(
                             journal_failure = Some(error);
                             break SessionStatus::Errored;
                         }
-                        if let Err(error) = doc_ref.resolve_input(request_id) {
+                        let resolved = if signals.take_auto_answered(request_id) {
+                            doc_ref.resolve_input_auto_selected(request_id)
+                        } else {
+                            doc_ref.resolve_input(request_id)
+                        };
+                        if let Err(error) = resolved {
                             tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
                         }
                         // The reaper window restarts from the answer, not
@@ -9832,6 +10115,9 @@ async fn drive_run(
             }
         }
 
+        // A card LUNA answered with the recommended option; stamped after
+        // the fold below resolves it.
+        let mut auto_selected_card: Option<String> = None;
         match &event {
             AgentEvent::SessionStarted {
                 session_id,
@@ -10040,12 +10326,20 @@ async fn drive_run(
                 );
             }
             AgentEvent::InputResolved { request_id } => {
+                let auto_selected = signals.take_auto_answered(request_id);
                 // A late ask carried into this turn lives in its own
                 // finished entry, outside the live fold.
-                if parked_asks.remove(request_id)
-                    && let Err(error) = doc_ref.resolve_input(request_id)
-                {
-                    tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
+                if parked_asks.remove(request_id) {
+                    let resolved = if auto_selected {
+                        doc_ref.resolve_input_auto_selected(request_id)
+                    } else {
+                        doc_ref.resolve_input(request_id)
+                    };
+                    if let Err(error) = resolved {
+                        tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
+                    }
+                } else if auto_selected {
+                    auto_selected_card = Some(request_id.clone());
                 }
                 // One completed form must not hide another concurrent prompt.
                 let status = inner
@@ -10109,6 +10403,9 @@ async fn drive_run(
             }
             let parts_before = folded.len();
             fold_event_into_parts(&mut folded, &event);
+            if let Some(request_id) = auto_selected_card.take() {
+                mark_auto_select_fired(&mut folded, &request_id);
+            }
             // The small output preview lives in the doc; an output ref points
             // back to the host journal for lazy full-text reads. No R2 upload.
             luna_doc::apply_journal_output_refs(&chat_id, &mut folded);
@@ -11557,6 +11854,7 @@ mod tests {
                 kind: PendingInputKind::Provider,
                 questions: Vec::new(),
                 resolver,
+                unattended: None,
             },
         );
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -11601,6 +11899,7 @@ mod tests {
                     input: None,
                 }],
                 resolver,
+                unattended: None,
             },
         );
 
@@ -11662,6 +11961,7 @@ mod tests {
                     luna_proto::ApprovalActionKind::Command,
                 )],
                 resolver: luna_tx,
+                unattended: None,
             },
         );
         let (provider_tx, provider_rx) = tokio::sync::oneshot::channel();
@@ -11674,6 +11974,7 @@ mod tests {
                     luna_proto::ApprovalActionKind::Tool,
                 )],
                 resolver: provider_tx,
+                unattended: None,
             },
         );
         let (forged_source_tx, mut forged_source_rx) = tokio::sync::oneshot::channel();
@@ -11686,6 +11987,7 @@ mod tests {
                     luna_proto::ApprovalActionKind::LunaCrossTask,
                 )],
                 resolver: forged_source_tx,
+                unattended: None,
             },
         );
         let (ordinary_tx, ordinary_rx) = tokio::sync::oneshot::channel();
@@ -11704,6 +12006,7 @@ mod tests {
                     input: None,
                 }],
                 resolver: ordinary_tx,
+                unattended: None,
             },
         );
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
@@ -11735,6 +12038,7 @@ mod tests {
                 engine_tx,
                 pending_inputs: pending.clone(),
                 routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                signals: Arc::default(),
             },
         );
 
@@ -11848,6 +12152,7 @@ mod tests {
                 engine_tx,
                 pending_inputs: pending.clone(),
                 routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                signals: Arc::default(),
             },
         );
         (root, sessions, pending, engine_rx)
@@ -11936,6 +12241,7 @@ mod tests {
                 engine_tx,
                 pending_inputs: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                signals: Arc::default(),
             },
         );
         (root, core, task_id)
@@ -14585,6 +14891,7 @@ mod tests {
                 kind: PendingInputKind::Provider,
                 questions: Vec::new(),
                 resolver,
+                unattended: None,
             },
         );
 
@@ -14885,6 +15192,7 @@ mod tests {
                     input: None,
                 }],
                 resolver: forged_tx,
+                unattended: None,
             },
         );
         assert_eq!(
@@ -15161,6 +15469,7 @@ mod tests {
                 },
                 questions: vec![question],
                 resolver,
+                unattended: None,
             },
         );
         (answer, grant)
@@ -16037,6 +16346,7 @@ mod tests {
                 engine_tx,
                 pending_inputs: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                signals: Arc::default(),
             },
         );
         let now = chrono::Utc::now();

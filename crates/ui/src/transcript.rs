@@ -1976,6 +1976,18 @@ pub fn rows_for_entry(
                         {
                             header.push_str(" · secret answer hidden");
                         }
+                        let picked = questions
+                            .iter()
+                            .filter_map(luna_proto::UserInputQuestion::auto_select)
+                            .filter(|plan| plan.fired)
+                            .flat_map(|plan| plan.labels.iter().cloned())
+                            .collect::<Vec<_>>();
+                        if !picked.is_empty() {
+                            header.push_str(&format!(
+                                " · no reply in time, LUNA picked {}",
+                                single_line(&picked.join(", "))
+                            ));
+                        }
                         let header: SharedString = header.into();
                         rows.push(Row {
                             id: format!("{}#{}", entry.id, part_id).into(),
@@ -2827,6 +2839,18 @@ pub fn sending_bridge(
 }
 
 /// "1m 32s"-style elapsed formatting.
+/// The status-line text for a provider notice. A stall notice counts the
+/// quiet time live from its last-activity stamp.
+fn provider_notice_label(notice: &luna_proto::ProviderNotice, now_ms: i64) -> String {
+    match notice.kind {
+        luna_proto::ProviderNoticeKind::Stalled => format!(
+            "No activity for {} · may be stuck",
+            format_elapsed(now_ms.saturating_sub(notice.at_ms).max(0) / 1000)
+        ),
+        _ => notice.message.clone(),
+    }
+}
+
 pub fn format_elapsed(secs: i64) -> String {
     let secs = secs.max(0);
     if secs < 60 {
@@ -7380,10 +7404,13 @@ impl Transcript {
             })
             .flatten()
             .filter(|notice| {
-                notice.kind == luna_proto::ProviderNoticeKind::Retrying
-                    || now.timestamp_millis().saturating_sub(notice.at_ms) < PROVIDER_WARNING_MS
+                matches!(
+                    notice.kind,
+                    luna_proto::ProviderNoticeKind::Retrying
+                        | luna_proto::ProviderNoticeKind::Stalled
+                ) || now.timestamp_millis().saturating_sub(notice.at_ms) < PROVIDER_WARNING_MS
             })
-            .map(|notice| notice.message);
+            .map(|notice| provider_notice_label(&notice, now.timestamp_millis()));
         let theme = Theme::of(cx).clone();
         // One line, three tones: the verb in secondary (with a slow shimmer
         // while live), the object in primary, the timer in tertiary with

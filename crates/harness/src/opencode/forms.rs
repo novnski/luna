@@ -617,6 +617,7 @@ pub(super) fn plan_form(
                             .collect(),
                         allow_other: custom || options.is_empty(),
                         secret: false,
+                        auto_select: None,
                     }),
                 }
             })

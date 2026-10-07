@@ -717,6 +717,22 @@ pub fn pending_input_request(
     })
 }
 
+/// LUNA's unattended-answer plan for a blocking question set: every question
+/// carries one and none has fired yet. Returns (deadline ms, labels).
+fn auto_answer_plan(wizard: &Wizard) -> Option<(i64, Vec<String>)> {
+    if wizard.source != QuestionSource::Blocking || wizard.questions.is_empty() {
+        return None;
+    }
+    let mut at_ms = i64::MAX;
+    let mut labels = Vec::new();
+    for question in &wizard.questions {
+        let plan = question.auto_select().filter(|plan| !plan.fired)?;
+        at_ms = at_ms.min(plan.at_ms);
+        labels.extend(plan.labels.iter().cloned());
+    }
+    Some((at_ms, labels))
+}
+
 fn approval_decision(
     question: &UserInputQuestion,
     answers: &[UserInputAnswer],
@@ -4963,6 +4979,11 @@ pub struct Composer {
     /// Requests already answered locally (suppresses the panel until the doc
     /// frame marks them resolved).
     answered_requests: HashSet<String>,
+    /// Questions whose unattended answer this composer asked the host to
+    /// cancel (the user started answering or chose to keep waiting).
+    held_auto_answers: HashSet<String>,
+    /// Repaints the question panel's countdown once a second while it runs.
+    countdown_task: Option<Task<()>>,
     /// Preserve the exact command id and payload across uncertain transport
     /// outcomes. Retry can ask the host about the same command without
     /// producing a second user steer.
@@ -5375,6 +5396,8 @@ impl Composer {
             pending_scan_deferred: false,
             wizard_focus: cx.focus_handle(),
             answered_requests: HashSet::new(),
+            held_auto_answers: HashSet::new(),
+            countdown_task: None,
             async_submissions: HashMap::new(),
             async_attempts: HashMap::new(),
             async_failure: None,
@@ -11382,6 +11405,9 @@ impl Composer {
         };
         let step = wizard.select(option_ix);
         let has_pick = wizard.page_has_pick();
+        if !matches!(step, WizardStep::Done(_)) {
+            self.hold_auto_answer(cx);
+        }
         self.answer_input.update(cx, |input, cx| {
             input.set_placeholder(
                 if has_pick {
@@ -11398,6 +11424,83 @@ impl Composer {
             WizardStep::Stay => {}
         }
         cx.notify();
+    }
+
+    /// The live countdown for the open question, if LUNA will answer it with
+    /// the agent's recommended option: (milliseconds left, labels).
+    fn auto_answer_countdown(&self, now_ms: i64) -> Option<(i64, Vec<String>)> {
+        let wizard = self.wizard.as_ref()?;
+        if self.held_auto_answers.contains(&wizard.request_id)
+            || self.answered_requests.contains(&wizard.request_id)
+        {
+            return None;
+        }
+        let (at_ms, labels) = auto_answer_plan(wizard)?;
+        let left = at_ms - now_ms;
+        (left > 0).then_some((left, labels))
+    }
+
+    /// The user is engaging with the question (or asked to keep waiting):
+    /// ask the host to cancel LUNA's unattended answer. Sent once per request.
+    fn hold_auto_answer(&mut self, cx: &mut Context<Self>) {
+        if self
+            .auto_answer_countdown(chrono::Utc::now().timestamp_millis())
+            .is_none()
+        {
+            return;
+        }
+        let Some(request_id) = self.wizard.as_ref().map(|wizard| wizard.request_id.clone()) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
+            return;
+        };
+        self.held_auto_answers.insert(request_id.clone());
+        let Ok(command) = serde_json::to_value(SessionCommandPayload::HoldInput { request_id })
+        else {
+            return;
+        };
+        let intent = serde_json::json!({ "kind": "session", "command": command });
+        cx.spawn(async move |_, _| {
+            if let Err(error) = crate::task_commands::execute(&engine, &chat_id, intent).await {
+                tracing::warn!(%error, "holding the unattended answer failed");
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn ensure_countdown_ticking(&mut self, cx: &mut Context<Self>) {
+        if self.countdown_task.is_some() {
+            return;
+        }
+        self.countdown_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let running = this
+                    .update(cx, |composer, cx| {
+                        cx.notify();
+                        let running = composer
+                            .auto_answer_countdown(chrono::Utc::now().timestamp_millis())
+                            .is_some();
+                        if !running {
+                            composer.countdown_task = None;
+                        }
+                        running
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
+        }));
     }
 
     fn schedule_auto_advance(&mut self, cx: &mut Context<Self>) {
@@ -11864,6 +11967,9 @@ impl Composer {
     }
 
     fn on_wizard_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        // Any key in the panel (including typing an answer) means the user
+        // is answering: LUNA must not answer for them.
+        self.hold_auto_answer(cx);
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
@@ -11912,6 +12018,10 @@ impl Composer {
         let last = page + 1 >= wizard.questions.len();
         let typed_empty = self.answer_input.read(cx).is_empty();
         let submitting = self.answered_requests.contains(&wizard.request_id);
+        let countdown = self.auto_answer_countdown(chrono::Utc::now().timestamp_millis());
+        if countdown.is_some() {
+            self.ensure_countdown_ticking(cx);
+        }
         let delivery_state = self
             .async_submissions
             .get(&(self.current_key.clone(), wizard.request_id.clone()))
@@ -12217,6 +12327,40 @@ impl Composer {
                         )
                     }),
             )
+            .when_some(countdown, |el, (left_ms, labels)| {
+                let seconds = (left_ms + 999) / 1000;
+                el.child(
+                    div()
+                        .id("wizard-auto-answer")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap(crate::typography::ui_rems(8.0))
+                        .px(crate::typography::ui_rems(16.0))
+                        .pt(crate::typography::ui_rems(8.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.readable_muted(0.7))
+                                .child(SharedString::from(format!(
+                                    "No reply in {seconds}s and LUNA picks {}",
+                                    labels.join(", ")
+                                ))),
+                        )
+                        .child(
+                            crate::popover::btn_ghost(
+                                &theme,
+                                "Keep waiting",
+                                "wizard-keep-waiting",
+                            )
+                            .id("wizard-keep-waiting")
+                            .on_click(cx.listener(|this, _, _, cx| this.hold_auto_answer(cx))),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()

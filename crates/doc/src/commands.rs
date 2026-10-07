@@ -23,6 +23,7 @@ pub enum SessionCommandKind {
     RespondInput,
     RespondAsyncQuestion,
     RespondApproval,
+    HoldInput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +73,12 @@ pub enum SessionCommandPayload {
         request_id: String,
         decision: ApprovalDecision,
     },
+    /// The user is answering a question themselves: cancel LUNA's pending
+    /// unattended answer for it. The question stays open.
+    #[serde(rename_all = "camelCase")]
+    HoldInput {
+        request_id: String,
+    },
 }
 
 impl SessionCommandPayload {
@@ -85,6 +92,7 @@ impl SessionCommandPayload {
                 SessionCommandKind::RespondAsyncQuestion
             }
             SessionCommandPayload::RespondApproval { .. } => SessionCommandKind::RespondApproval,
+            SessionCommandPayload::HoldInput { .. } => SessionCommandKind::HoldInput,
         }
     }
 }

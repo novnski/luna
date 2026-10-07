@@ -714,6 +714,12 @@ pub fn activity_combo_is_reserved(combo: &str) -> bool {
     )
 }
 
+/// Matches the engine's default when the settings file has no value.
+pub const DEFAULT_UNATTENDED_ANSWER_SECONDS: u64 = 30;
+
+/// The choices Settings offers for unattended answers (0 = off).
+pub const UNATTENDED_ANSWER_CHOICES: [u64; 5] = [0, 15, 30, 60, 120];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
@@ -729,6 +735,10 @@ pub struct UiSettings {
     /// automatic retries. Unknown delivery and action-required failures never
     /// retry regardless of this preference.
     pub automatic_retries_enabled: bool,
+    /// Seconds LUNA waits before answering an agent question with the option
+    /// the agent marked "(Recommended)"; 0 turns it off. The engine reads it
+    /// from this file when a question arrives. Approvals always wait.
+    pub unattended_answer_seconds: u64,
     /// Show the current context window indicator in the conversation composer.
     pub show_context_usage: bool,
     /// Hold a macOS idle-sleep assertion while any local task is working.
@@ -943,6 +953,7 @@ impl Default for UiSettings {
             composer_send_behavior: ComposerSendBehavior::default(),
             follow_up_behavior: luna_proto::FollowUpBehavior::default(),
             automatic_retries_enabled: true,
+            unattended_answer_seconds: DEFAULT_UNATTENDED_ANSWER_SECONDS,
             show_context_usage: true,
             keep_awake_while_running: false,
             appshots_enabled: false,
@@ -2537,6 +2548,7 @@ mod tests {
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             follow_up_behavior: luna_proto::FollowUpBehavior::Steer,
             automatic_retries_enabled: false,
+            unattended_answer_seconds: 60,
             show_context_usage: false,
             keep_awake_while_running: true,
             appshots_enabled: false,

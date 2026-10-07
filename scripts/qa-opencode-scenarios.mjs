@@ -291,10 +291,13 @@ const SCENARIOS = {
       await s.step('cancel-turn', async () => {
         const t = await s.turn(root, P.cancel, {mock: `tool-shell:echo ${s.m('S1-CANCEL')}`, answer: () => ({approval: 'cancel'})});
         s.check('cancel-sent', 'Cancel answered through respondApproval', t.wait.handled, t.wait.handled.some(h => h.status === 'applied'));
-        s.settled(t.wait, 'cancel-stops-turn', ['idle', 'errored']);
+        // Unified cancel outcome: every provider's cancelled turn ends Idle
+        // (never Errored) with its entry stamped aborted.
+        s.settled(t.wait, 'cancel-stops-turn', ['idle']);
         s.check('cancel-blocked-tool', 'no successful tool output with the cancelled marker', null, !markerInTools(s.toolsAfter(root, t.messageId), s.m('S1-CANCEL')));
         const last = s.after(root, t.messageId).filter(e => e.role === 'assistant').at(-1);
-        s.info('cancel-not-completed', 'the cancelled turn is not presented as a normal completion', last?.status ?? null, last?.status !== 'complete' || !t.reply.includes(s.m('S1-CANCEL')));
+        s.check('cancel-entry-aborted', 'the cancelled turn is stamped aborted, the same for every provider', last?.status ?? null, last?.status === 'aborted');
+        s.check('cancel-not-errored', 'no errored status was published for the cancelled turn', t.wait.statuses, !(t.wait.statuses ?? []).includes('errored'));
       });
       await s.step('question-single', async () => {
         let shown = null;
@@ -1243,7 +1246,8 @@ const SCENARIOS = {
       assert.equal(s.tier, 'T2', 'S4S needs the mock provider (T2) started with a long --slow-ms');
       const chatId = s.chatId('root');
       await s.step('stall-mid-turn', async () => {
-        const sent = await s.d.send(chatId, s.p(P.stall, 'slow'));
+        // One streamed word, then --slow-ms of silence, then the finish.
+        const sent = await s.d.send(chatId, s.p(P.stall, `slow:${s.m('STALL')}`));
         const started = Date.now();
         const limit = Number(s.opts['stall-wait-ms'] ?? 720000);
         let finished = false;
@@ -1255,6 +1259,19 @@ const SCENARIOS = {
         const firstText = rows.find(r => r.lastParts.includes('text'));
         s.info('stall-first-text', 'partial text reached the transcript before the stall', firstText?.at ?? null, Boolean(firstText));
         s.check('stall-ends-truthfully', 'the stalled turn ends (errored) instead of spinning Working forever', `${wait.result}:${wait.status} after ${Math.round(elapsed / 1000)} s`, wait.result === 'settled');
+        // Engine stall notice (provider-neutral): shown while the turn is
+        // still working and quiet, lifted by the next provider event.
+        const stalledRows = rows.filter(r => r.providerNotice?.kind === 'stalled');
+        const firstStalled = stalledRows[0] ?? null;
+        s.check('stall-notice-shown', 'a Stalled notice appeared while the quiet turn was still working', firstStalled ? {at: firstStalled.at, status: firstStalled.status, quietSince: firstStalled.providerNotice.atMs} : null,
+          Boolean(firstStalled && ['working'].includes(firstStalled.status)));
+        if (firstStalled) {
+          const quietMs = Date.parse(firstStalled.at) - firstStalled.providerNotice.atMs;
+          s.check('stall-notice-window', 'the notice names the last activity at least the 120 s quiet window before it appeared', quietMs, quietMs >= 115000);
+        }
+        const lastRow = rows.at(-1);
+        s.check('stall-notice-cleared', 'the notice is gone once the provider resumed and the turn ended', userView(s, 'root').providerNotice, userView(s, 'root').providerNotice?.kind !== 'stalled');
+        s.info('stall-last-row', 'last sampled view', lastRow, true);
         s.info('stall-user-view', 'what the user sees when the stall ends', userView(s, 'root'), true);
         if (wait.result !== 'settled') {
           const stopped = await s.d.stop(chatId);
@@ -1267,6 +1284,88 @@ const SCENARIOS = {
         const t = await s.turn('root', P.after, {mock: `text:${s.m('AFTER-STALL')}`});
         s.settled(t.wait);
         s.check('after-stall-reply', `the chat continues (AFTER-STALL-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(s.m('AFTER-STALL')));
+      });
+    },
+  },
+
+  S9U: {
+    title: 'Unattended answers: the recommended option is picked when nobody answers; Keep waiting; taste questions wait', validation: ['PD-14'],
+    parity: true, extra: true, permissionMode: 'full', phases: ['run'],
+    steps: ['recommended-auto-pick', 'hold-keeps-waiting', 'taste-question-waits'],
+    prompts: n => ({
+      auto: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which caching approach this project should use, with exactly two options labelled "In-memory cache (Recommended)" and "Redis cache". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly CACHE-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
+      hold: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which log format this project should use, with exactly two options labelled "Structured JSON logs (Recommended)" and "Plain text logs". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly LOGS-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
+      taste: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which accent colour I like, with exactly these options: red, green, blue. This is purely my taste, so do not mark any option as recommended. After I answer, reply with exactly ACCENT-${n}- followed by the colour I chose. Do not use any other tool.`,
+    }),
+    unverified: ['Needs the QA data dir ui-settings.json unattendedAnswerSeconds set to the --unattended-ms value (default 15 s).',
+      'Question steps need a real model (T3).'],
+    async run(s, P) {
+      const chatId = s.chatId('root');
+      const delayMs = Number(s.opts['unattended-ms'] ?? 15000);
+      const plan = q => q.input?.autoSelect ?? null;
+      const card = requestId => s.entries('root').flatMap(e => e.parts ?? []).find(p => p.kind === 'input' && p.requestId === requestId) ?? null;
+      const ask = async (prompt, label) => {
+        await s.d.waitIdle(chatId).catch(() => null);
+        const sent = await s.d.send(chatId, s.p(prompt), {label});
+        const first = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, timeoutMs: 180000,
+          answer: pending => (pending.questions.some(q => q.approval) ? {approval: 'allow-once'} : null)});
+        return {sent, pending: first.result === 'pending' ? first.pending : null, first, shownAt: Date.now()};
+      };
+      await s.step('recommended-auto-pick', async () => {
+        const {sent, pending, first, shownAt} = await ask(P.auto, 'auto-pick question');
+        s.check('auto-question-shown', 'the agent asked through the shared question panel', first.result, Boolean(pending));
+        if (!pending) return;
+        await s.d.holdForCapture('s9u-countdown');
+        s.d.capture('s9u-countdown');
+        const plans = pending.questions.map(plan);
+        s.check('auto-plan-on-card', 'the card carries LUNA\'s unattended-answer plan naming the recommended option', plans,
+          plans.length > 0 && plans.every(p => p && !p.fired && p.labels.length === 1 && /recommended/i.test(p.labels[0])));
+        const leftMs = plans.map(p => (p?.atMs ?? 0) - shownAt);
+        s.check('auto-plan-deadline', `the deadline is at most ${delayMs} ms after the card appeared`, leftMs, leftMs.every(ms => ms <= delayMs + 1000 && ms > -10000));
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, ignore: [pending.requestId], timeoutMs: delayMs + 180000,
+          answer: p => (p.questions.some(q => q.approval) ? {approval: 'allow-once'} : null)});
+        s.settled(wait, 'auto-picked-turn-settles', ['idle']);
+        const resolved = card(pending.requestId);
+        s.check('auto-picked-card', 'LUNA answered the card itself: resolved with its plan marked fired', resolved ? {resolved: resolved.resolved, fired: (resolved.questions ?? []).map(q => plan(q)?.fired ?? null)} : null,
+          Boolean(resolved?.resolved && (resolved.questions ?? []).every(q => plan(q)?.fired === true)));
+        s.check('auto-no-driver-answer', 'the driver sent no answer for this request', wait.handled.filter(h => h.requestId === pending.requestId), !wait.handled.some(h => h.requestId === pending.requestId));
+        const reply = s.replyAfter('root', sent.messageId);
+        s.modelCheck('auto-answer-consumed', `the agent continued with the recommended option (CACHE-${s.nonce}-in-memory)`, reply.slice(0, 200), reply.toLowerCase().includes(`cache-${s.nonce}-in`.toLowerCase()));
+        s.d.capture('s9u-auto-picked');
+      });
+      await s.step('hold-keeps-waiting', async () => {
+        const {sent, pending} = await ask(P.hold, 'held question');
+        s.check('hold-question-shown', 'the agent asked through the shared question panel', Boolean(pending), Boolean(pending));
+        if (!pending) return;
+        s.check('hold-plan-on-card', 'the card has an unattended-answer plan before the hold', pending.questions.map(plan), pending.questions.every(q => plan(q)));
+        const held = await s.d.holdInput(chatId, pending.requestId);
+        s.check('hold-applied', 'Keep waiting (holdInput) was applied by the host', {status: held.receipt?.status, reason: held.receipt?.reason ?? null}, held.receipt?.status === 'applied');
+        const quiet = await s.stays('root', () => Boolean(card(pending.requestId)?.resolved), delayMs + 10000);
+        s.check('hold-still-open', `the held question is still open ${Math.round((delayMs + 10000) / 1000)} s later`, quiet, quiet);
+        const {receipt} = await s.d.answer(chatId, pending, {pick: 'Plain text logs'});
+        s.check('hold-user-answer', 'the user\'s own answer is applied after holding', receipt?.status, receipt?.status === 'applied');
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, ignore: [pending.requestId], timeoutMs: 180000});
+        s.settled(wait, 'held-turn-settles', ['idle']);
+        const resolved = card(pending.requestId);
+        s.check('hold-not-fired', 'the card is resolved by the user, not marked as LUNA\'s pick', (resolved?.questions ?? []).map(q => plan(q)?.fired ?? null), Boolean(resolved?.resolved) && !(resolved?.questions ?? []).some(q => plan(q)?.fired));
+        const reply = s.replyAfter('root', sent.messageId);
+        s.modelCheck('hold-answer-consumed', `the agent used the user's pick (LOGS-${s.nonce}-plain)`, reply.slice(0, 200), reply.toLowerCase().includes(`logs-${s.nonce}-plain`.toLowerCase()));
+      });
+      await s.step('taste-question-waits', async () => {
+        const {sent, pending} = await ask(P.taste, 'taste question');
+        s.check('taste-question-shown', 'the agent asked through the shared question panel', Boolean(pending), Boolean(pending));
+        if (!pending) return;
+        s.modelCheck('taste-no-recommendation', 'the agent marked no option as recommended', pending.questions.map(q => q.options), !pending.questions.some(q => (q.options ?? []).some(o => /recommended/i.test(o))));
+        s.check('taste-no-plan', 'a question without a recommendation gets no unattended-answer plan', pending.questions.map(plan),
+          pending.questions.some(q => (q.options ?? []).some(o => /recommended/i.test(o))) || pending.questions.every(q => !plan(q)));
+        const quiet = await s.stays('root', () => Boolean(card(pending.requestId)?.resolved), delayMs + 10000);
+        s.check('taste-waits', `the question is still open ${Math.round((delayMs + 10000) / 1000)} s later`, quiet, quiet);
+        const {receipt} = await s.d.answer(chatId, pending, {pick: 'green'});
+        s.check('taste-user-answer', 'the user\'s answer is applied', receipt?.status, receipt?.status === 'applied');
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, ignore: [pending.requestId], timeoutMs: 180000});
+        s.settled(wait, 'taste-turn-settles', ['idle']);
+        const reply = s.replyAfter('root', sent.messageId);
+        s.modelCheck('taste-answer-consumed', `reply is ACCENT-${s.nonce}-green`, reply.slice(0, 200), reply.toLowerCase().includes(`accent-${s.nonce}-green`.toLowerCase()));
       });
     },
   },
@@ -1742,7 +1841,7 @@ const {values: opts, positionals} = parseArgs({
     provider: {type: 'string', default: 'opencode'}, tier: {type: 'string'}, model: {type: 'string'}, variant: {type: 'string'},
     'evidence-root': {type: 'string'}, 'turn-timeout': {type: 'string'}, 'allow-usage-store': {type: 'boolean', default: false},
     phase: {type: 'string'}, run: {type: 'string'}, 'fake-args': {type: 'string'}, 'rpc-timeout': {type: 'string'}, ax: {type: 'boolean', default: false},
-    'hold-ms': {type: 'string'}, 'capture-hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
+    'hold-ms': {type: 'string'}, 'capture-hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'unattended-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
   },
   allowPositionals: true,
 });

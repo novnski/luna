@@ -324,6 +324,14 @@ export class Driver {
       extra: {chatRole: chat?.role ?? null, requestId: pending.requestId, probe, ...detail}});
   }
 
+  // The question panel's "Keep waiting" (any panel interaction sends the
+  // same): cancel LUNA's unattended answer for this request
+  // (SessionCommandPayload::HoldInput, crates/ui/src/composer.rs).
+  async holdInput(chatId, requestId, {label = 'hold input'} = {}) {
+    return this.execute(chatId, {kind: 'session', command: {kind: 'holdInput', requestId}},
+      {label, sendKind: 'hold', extra: {chatRole: this.chats.get(chatId)?.role ?? null, requestId}});
+  }
+
   async stop(chatId, {label = 'stop'} = {}) {
     return this.execute(chatId, {kind: 'session', command: {kind: 'interrupt'}}, {label, sendKind: 'stop', extra: {chatRole: this.chats.get(chatId)?.role ?? null}});
   }

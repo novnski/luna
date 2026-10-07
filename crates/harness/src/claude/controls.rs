@@ -1027,6 +1027,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
                     option_descriptions,
                     allow_other: true,
                     secret: false,
+                    auto_select: None,
                 }),
             }
         })

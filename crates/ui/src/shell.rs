@@ -5299,6 +5299,9 @@ impl Shell {
                                 GeneralEvent::AutomaticRetriesChanged(enabled) => {
                                     this.settings.automatic_retries_enabled = *enabled;
                                 }
+                                GeneralEvent::UnattendedAnswerChanged(seconds) => {
+                                    this.settings.unattended_answer_seconds = *seconds;
+                                }
                                 GeneralEvent::ShowContextUsageChanged(enabled) => {
                                     this.settings.show_context_usage = *enabled;
                                     cx.refresh_windows();
@@ -5320,7 +5323,11 @@ impl Shell {
                                 }
                             }
                             this.schedule_save(cx);
-                            if matches!(event, GeneralEvent::AutomaticRetriesChanged(_)) {
+                            if matches!(
+                                event,
+                                GeneralEvent::AutomaticRetriesChanged(_)
+                                    | GeneralEvent::UnattendedAnswerChanged(_)
+                            ) {
                                 // The engine reads this flag from the settings file when a
                                 // failure arrives, so the change must not wait for debounce.
                                 settings::flush(cx);

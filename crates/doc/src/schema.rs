@@ -837,6 +837,63 @@ impl SessionDoc {
         self.resolve_question_part("input", request_id)
     }
 
+    /// Resolve a question card LUNA answered with the agent's recommended
+    /// option, stamping its auto-select plan `fired` so the transcript says
+    /// LUNA chose for the user. Behaves like `resolve_input` otherwise.
+    pub fn resolve_input_auto_selected(&self, request_id: &str) -> Result<bool, DocError> {
+        let messages = self.doc.get_list("messages");
+        for i in 0..messages.len() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            let Some(loro::ValueOrContainer::Container(loro::Container::List(parts))) =
+                entry.get("parts")
+            else {
+                continue;
+            };
+            for j in 0..parts.len() {
+                let Some(loro::ValueOrContainer::Container(loro::Container::Map(part))) =
+                    parts.get(j)
+                else {
+                    continue;
+                };
+                let is_input = matches!(
+                    part.get("kind"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == "input"
+                ) && matches!(
+                    part.get("id"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == request_id
+                );
+                if !is_input {
+                    continue;
+                }
+                if let Some(loro::ValueOrContainer::Value(value)) = part.get("questions")
+                    && let Ok(mut questions) = serde_json::from_value::<
+                        Vec<luna_proto::UserInputQuestion>,
+                    >(value.to_json_value())
+                {
+                    for question in &mut questions {
+                        if let Some(plan) =
+                            question.input.as_mut().and_then(|i| i.auto_select.as_mut())
+                        {
+                            plan.fired = true;
+                        }
+                    }
+                    part.insert(
+                        "questions",
+                        loro_value_from_json(&serde_json::to_value(&questions)?),
+                    )?;
+                }
+                part.insert("resolved", true)?;
+                self.doc.commit();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Dismiss an async answer card by its provider message id. This is a
     /// durable UI state change; the provider tool already returned earlier.
     pub fn resolve_async_question(&self, message_id: &str) -> Result<bool, DocError> {
