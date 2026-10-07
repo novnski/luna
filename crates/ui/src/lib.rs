@@ -80,6 +80,7 @@ pub mod theme;
 pub mod theme_library;
 pub mod transcript;
 pub mod typography;
+mod url_scheme;
 mod workspace_links;
 
 use std::path::PathBuf;
@@ -254,7 +255,11 @@ pub fn run_app(config: UiConfig) {
         appshots::set_enabled(config.synthetic_core.is_none() && ui_settings.appshots_enabled);
         terminal::panel::init(cx);
         app_menus::init(cx);
-        cx.register_url_scheme("luna").detach();
+        // Only a bundle that declares the scheme may claim it: QA and fixture
+        // bundles would otherwise rebind the user's luna:// handler.
+        if url_scheme::bundle_declares(url_scheme::SCHEME) {
+            cx.register_url_scheme(url_scheme::SCHEME).detach();
+        }
 
         let state = cx.new(|_| state::AppState::new());
         let url_state = state.clone();

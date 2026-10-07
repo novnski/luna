@@ -98,7 +98,11 @@ The primary app retains `LUNA Dev`, `com.novnski.luna.dev`, port 59777 and
 its existing data. A QA bundle uses the selected name throughout signing,
 replacement and rollback; graceful quit targets its exact executable/PID.
 QA bundles omit the release/dev URL schemes to avoid deep-link registration
-collisions. A stopped packaged peer still reserves its identity, port and
+collisions. LUNA claims `luna://` at startup only when its own Info.plist
+declares that scheme, so a QA bundle never rebinds the user's handler. A QA
+build from before that gate may have left `luna://` pointing at a QA bundle id
+(`lsregister -dump` shows it under `handlerpref id: luna`); the next `LUNA Dev`
+start claims it back. A stopped packaged peer still reserves its identity, port and
 data path. Assign distinct settings before any parallel packaging begins;
 the linked-bundle collision scan is not a global atomic identity registry.
 
