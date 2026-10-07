@@ -76,6 +76,8 @@ pub(super) struct Session {
     pub(super) live: LiveServers,
     /// LUNA's runtime contract and tools for this run (OC-13), if any.
     pub(super) luna: Option<LunaRun>,
+    /// The harness's "Allow for session" grants (OC-04).
+    pub(super) grants: SessionGrants,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -310,6 +312,7 @@ pub(super) async fn run_session(session: Session) {
         live_runs,
         live,
         luna,
+        grants,
     } = session;
     let (mut luna_endpoint, mut luna) = match luna {
         Some(run) => (run.endpoint, Some(run.bridge)),
@@ -361,7 +364,7 @@ pub(super) async fn run_session(session: Session) {
         // The model a resumed session last ran: a different request is a
         // mid-chat switch, read back as such.
         let mut previous_model = None;
-        let (session_id, permission_rules) = match &request.resume {
+        let (session_id, base_rules, permission_rules) = match &request.resume {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
                 // A failed lookup (including a transient server failure) is
@@ -374,13 +377,17 @@ pub(super) async fn run_session(session: Session) {
                     .and_then(Value::as_str)
                     .unwrap_or(resume)
                     .to_owned();
-                let mut rules =
+                let mut base =
                     rule_set.rules_for(info.get("agent").and_then(Value::as_str), RuleScope::Root);
                 // The attached LUNA tools, allowed for the root session only
                 // and appended last, once verified (OC-13).
                 if let Some(bridge) = luna.as_ref().filter(|_| allow_luna) {
-                    bridge.extend_rules(&mut rules);
+                    bridge.extend_rules(&mut base);
                 }
+                // The chat's "Allow for session" grants from earlier turns,
+                // while its permission mode is unchanged (OC-04).
+                let rules =
+                    with_session_grants(&base, &grants.current(&session_id, permission_mode));
                 // `session.update` (204): the resumed session takes this
                 // run's LUNA permission mode as its v2 ruleset.
                 server
@@ -390,14 +397,18 @@ pub(super) async fn run_session(session: Session) {
                         &json!({ "permissions": rules }),
                     )
                     .await?;
-                (session_id, rules)
+                (session_id, base, rules)
             }
             None => {
                 let mut rules = rule_set.rules_for(None, RuleScope::Root);
                 if let Some(bridge) = luna.as_ref().filter(|_| allow_luna) {
                     bridge.extend_rules(&mut rules);
                 }
-                (create_session(&server, dir, &rules).await?, rules)
+                (
+                    create_session(&server, dir, &rules).await?,
+                    rules.clone(),
+                    rules,
+                )
             }
         };
         // Readback before the first prompt: rules OpenCode dropped or
@@ -438,13 +449,21 @@ pub(super) async fn run_session(session: Session) {
             session_id,
             providers,
             rule_set,
-            permission_rules,
+            (base_rules, permission_rules),
             previous_model,
             requested,
             attachment,
         ))
     };
-    let (session_id, providers, rule_set, permission_rules, previous_model, requested, attachment) = tokio::select! {
+    let (
+        session_id,
+        providers,
+        rule_set,
+        (base_rules, permission_rules),
+        previous_model,
+        requested,
+        attachment,
+    ) = tokio::select! {
         res = setup => match res {
             Ok(v) => v,
             Err(e) => {
@@ -498,7 +517,9 @@ pub(super) async fn run_session(session: Session) {
         session_id.clone(),
         interrupt.child_token(),
         rule_set,
+        base_rules,
         permission_rules,
+        grants,
     );
 
     let mut assistant_message_id = new_message_id();
@@ -722,10 +743,9 @@ pub(super) async fn run_session(session: Session) {
     // The root turn settled while background work runs: the run stays alive,
     // like a persistent adapter, for that work's traffic and wake turns.
     let mut parked = false;
-    // After a root Stop: a bounded wait for the children's own terminals,
-    // and the stop reason its final Done carries.
+    // After a root Stop: a bounded wait for the children's own terminals
+    // (an interruption reason was already shown when the root settled).
     let mut drain_deadline: Option<tokio::time::Instant> = None;
-    let mut drain_reason: Option<String> = None;
     // A parked run's background work ended: the root wake its completion
     // starts should follow within this deadline, else the run ends.
     let mut wake_deadline: Option<tokio::time::Instant> = None;
@@ -816,6 +836,7 @@ pub(super) async fn run_session(session: Session) {
             {
                 Ok(()) => {
                     turn = next_turn;
+                    requests.begin_turn();
                     parked = false;
                     wake_deadline = None;
                     if let Some(id) = &turn.inbox_id {
@@ -864,12 +885,19 @@ pub(super) async fn run_session(session: Session) {
                 break $label;
             }
             if interrupt_requested || provider_interrupted {
+                // A Stop, or a "Cancel turn" LUNA answered, is the user's own
+                // interruption: whatever reason OpenCode reports for it
+                // (2.0.22 says `shutdown` after a reject without feedback)
+                // is not a failure to show.
+                let user_stopped = interrupt_requested || requests.turn_cancelled();
                 let reason = turn
                     .interrupt_reason
                     .take()
+                    .filter(|_| !user_stopped)
                     .and_then(|reason| interrupt_reason_message(&reason));
-                if let Some(reason) = &reason {
-                    let _ = send(&event_tx, AgentEvent::Error { message: reason.clone() }).await;
+                // Shown once, as its own row (Done carries no copy of it).
+                if let Some(reason) = reason {
+                    let _ = send(&event_tx, AgentEvent::Error { message: reason }).await;
                 }
                 // Children settle on their own terminals (a stopped child's
                 // execution.interrupted), never locally: wait a bounded grace.
@@ -877,14 +905,13 @@ pub(super) async fn run_session(session: Session) {
                 // unobserved).
                 if children.has_open() && drain_deadline.is_none() {
                     abort_deadline = None;
-                    drain_reason = reason;
                     drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
                     continue $label;
                 }
                 let _ = send(&event_tx, AgentEvent::Done {
                     status: DoneStatus::Interrupted,
                     result: None,
-                    error: reason,
+                    error: None,
                     session_id: Some(session_id.clone()),
                 }).await;
                 done_sent = true;
@@ -1445,6 +1472,7 @@ pub(super) async fn run_session(session: Session) {
                                 break $label;
                             }
                             turn = TurnState::begin(None);
+                            requests.begin_turn();
                             turn.idle_ready = true;
                             turn.wake = true;
                             turn.note_activity();
@@ -1455,7 +1483,7 @@ pub(super) async fn run_session(session: Session) {
                         let _ = send(&event_tx, AgentEvent::Done {
                             status: DoneStatus::Interrupted,
                             result: None,
-                            error: drain_reason.take(),
+                            error: None,
                             session_id: Some(session_id.clone()),
                         }).await;
                         done_sent = true;
@@ -1770,7 +1798,7 @@ pub(super) async fn run_session(session: Session) {
                         let _ = send(&event_tx, AgentEvent::Done {
                             status: DoneStatus::Interrupted,
                             result: None,
-                            error: drain_reason.take(),
+                            error: None,
                             session_id: Some(session_id.clone()),
                         }).await;
                         done_sent = true;

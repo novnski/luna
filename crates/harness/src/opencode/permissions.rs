@@ -34,9 +34,20 @@
 //! (PD-8): OpenCode 2 writes it as a project-wide saved rule. `reject` with a
 //! message is OpenCode's "decline with feedback" (the model continues);
 //! `reject` without one stops the execution.
+//!
+//! "Allow for session" (Claude's and Codex's session allowance) is a
+//! LUNA-owned session rule instead (OC-04): the request's own `save`
+//! patterns (what OpenCode's `always` would save project-wide) become
+//! `allow` rules on the asking session only, PATCHed and read back before
+//! the request is answered `once`. The harness keeps them per session and
+//! re-applies them at every run start while the chat's permission mode is
+//! unchanged ([`SessionGrants`]); a mode change or an engine restart ends
+//! them, as it ends Claude's and Codex's warm sessions. The agent's and the
+//! user's denies stay final ([`with_session_grants`]).
 
 use std::collections::HashSet;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::*;
 use crate::CancellationToken;
@@ -58,7 +69,16 @@ const ASK_MODE_AGENT_ACTIONS: &[&str] = &["read", "glob", "grep", "question", "s
 /// the engine: the stored options must equal these labels).
 pub(super) const CHOICE_DENY: &str = "Deny";
 pub(super) const CHOICE_ALLOW_ONCE: &str = "Allow once";
+pub(super) const CHOICE_ALLOW_SESSION: &str = "Allow for session";
 pub(super) const CHOICE_CANCEL_TURN: &str = "Cancel turn";
+
+/// Bounds on LUNA's session grants: patterns one answer may add, grant
+/// rules one session keeps, and sessions the harness remembers.
+const MAX_GRANT_PATTERNS: usize = 16;
+const MAX_SESSION_GRANT_RULES: usize = 64;
+const MAX_GRANT_SESSIONS: usize = 256;
+/// Rulesets remembered per owned session as LUNA's own (their echoes).
+const MAX_APPLIED_RULESETS: usize = 16;
 
 /// The feedback a Deny sends, so the model continues without the action.
 pub(super) const DENY_FEEDBACK: &str =
@@ -401,6 +421,298 @@ impl SessionRuleSet {
         let agent_rules = self.agents.as_ref().and_then(|agents| agents.get(agent));
         rules_json(&compile_permission_rules(self.mode, agent_rules, scope))
     }
+
+    pub(super) fn mode(&self) -> luna_proto::PermissionMode {
+        self.mode
+    }
+}
+
+/// The `allow` rules an "Allow for session" answer adds for a v2
+/// `permission.asked` request: OpenCode's own `save` patterns for it (what
+/// its `always` would save project-wide), scoped to the asking session.
+/// Empty — the choice is not offered — when OpenCode suggests nothing, the
+/// suggestion is malformed or oversized, or the action is one LUNA keeps
+/// denied (session moves) or engine-owned (LUNA tools).
+pub(super) fn session_grant_rules(props: &Value) -> Vec<Rule> {
+    let Some(action) = props
+        .get("action")
+        .and_then(Value::as_str)
+        .filter(|action| !action.is_empty() && action.len() <= 256)
+    else {
+        return Vec::new();
+    };
+    // A rule's action is itself a pattern: a wildcard here would grant more
+    // than the request's own action.
+    if action.contains(['*', '?'])
+        || action == SESSION_MOVE_ACTION
+        || wildcard_match(action, LUNA_TOOL_ACTION_PATTERN)
+    {
+        return Vec::new();
+    }
+    let Some(save) = props
+        .get("save")
+        .and_then(Value::as_array)
+        .filter(|save| !save.is_empty() && save.len() <= MAX_GRANT_PATTERNS)
+    else {
+        return Vec::new();
+    };
+    let mut rules = Vec::new();
+    for pattern in save {
+        let Some(pattern) = pattern
+            .as_str()
+            .filter(|pattern| !pattern.is_empty() && pattern.len() <= 1024)
+        else {
+            return Vec::new();
+        };
+        let rule = Rule::new(action, pattern, RuleEffect::Allow);
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
+    }
+    rules
+}
+
+/// `base` (LUNA's compiled rules for a session) with the session's grants.
+/// Last match wins, so the grants go last; then, for each granted action,
+/// the base's own rules for it from its first deny onward are replayed
+/// (narrowed to that action), so a deny — the agent's, the user's
+/// configured one, or LUNA's containment — stays final over a grant, and
+/// every other action evaluates exactly as in `base`. A base LUNA cannot
+/// read gets no grants (more asks, never fewer).
+pub(super) fn with_session_grants(base: &Value, grants: &[Rule]) -> Value {
+    if grants.is_empty() {
+        return base.clone();
+    }
+    let Some(base_rules) = base.as_array().and_then(|rules| {
+        rules
+            .iter()
+            .map(Rule::from_json)
+            .collect::<Option<Vec<_>>>()
+    }) else {
+        return base.clone();
+    };
+    let mut out = base_rules.clone();
+    out.extend(grants.iter().cloned());
+    let mut actions: Vec<&str> = Vec::new();
+    for grant in grants {
+        if !actions.contains(&grant.action.as_str()) {
+            actions.push(&grant.action);
+        }
+    }
+    for action in actions {
+        let applies = |rule: &Rule| wildcard_match(action, &rule.action);
+        let Some(first_deny) = base_rules
+            .iter()
+            .position(|rule| rule.effect == RuleEffect::Deny && applies(rule))
+        else {
+            continue;
+        };
+        out.extend(
+            base_rules[first_deny..]
+                .iter()
+                .filter(|rule| applies(rule))
+                .map(|rule| Rule::new(action, &rule.resource, rule.effect)),
+        );
+    }
+    rules_json(&out)
+}
+
+/// One session's grants and the permission mode they were made under.
+struct GrantSet {
+    mode: luna_proto::PermissionMode,
+    rules: Vec<Rule>,
+    /// Insertion order, for evicting the oldest session at the bound.
+    seq: u64,
+}
+
+/// LUNA-owned "Allow for session" grants by OpenCode session id, shared by
+/// every run of one harness (one engine): a chat's later turns, each its
+/// own run, keep them like Claude's and Codex's warm sessions do. Nothing
+/// is written to OpenCode's own config or saved rules.
+#[derive(Clone, Default)]
+pub(super) struct SessionGrants {
+    sets: Arc<Mutex<HashMap<String, GrantSet>>>,
+    seq: Arc<AtomicU64>,
+}
+
+impl SessionGrants {
+    /// The session's grants for a run in `mode`. Grants made under another
+    /// mode are dropped: a permission change ends the session allowance.
+    pub(super) fn current(&self, session: &str, mode: luna_proto::PermissionMode) -> Vec<Rule> {
+        let Ok(mut sets) = self.sets.lock() else {
+            return Vec::new();
+        };
+        match sets.get(session) {
+            Some(set) if set.mode == mode => set.rules.clone(),
+            Some(_) => {
+                sets.remove(session);
+                Vec::new()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Add `rules` to the session's grants: `(every grant, the newly added
+    /// ones)`, or `None` at the per-session bound.
+    fn add(
+        &self,
+        session: &str,
+        mode: luna_proto::PermissionMode,
+        rules: &[Rule],
+    ) -> Option<(Vec<Rule>, Vec<Rule>)> {
+        let mut sets = self.sets.lock().ok()?;
+        if !sets.contains_key(session)
+            && sets.len() >= MAX_GRANT_SESSIONS
+            && let Some(oldest) = sets
+                .iter()
+                .min_by_key(|(_, set)| set.seq)
+                .map(|(id, _)| id.clone())
+        {
+            sets.remove(&oldest);
+        }
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let set = sets.entry(session.to_owned()).or_insert_with(|| GrantSet {
+            mode,
+            rules: Vec::new(),
+            seq,
+        });
+        if set.mode != mode {
+            *set = GrantSet {
+                mode,
+                rules: Vec::new(),
+                seq,
+            };
+        }
+        let added: Vec<Rule> = rules
+            .iter()
+            .filter(|rule| !set.rules.contains(rule))
+            .cloned()
+            .collect();
+        if set.rules.len() + added.len() > MAX_SESSION_GRANT_RULES {
+            return None;
+        }
+        set.rules.extend(added.iter().cloned());
+        Some((set.rules.clone(), added))
+    }
+
+    /// Withdraw `rules` (a grant OpenCode did not apply).
+    fn remove(&self, session: &str, rules: &[Rule]) {
+        if let Ok(mut sets) = self.sets.lock()
+            && let Some(set) = sets.get_mut(session)
+        {
+            set.rules.retain(|rule| !rules.contains(rule));
+            if set.rules.is_empty() {
+                sets.remove(session);
+            }
+        }
+    }
+}
+
+/// The rules LUNA applied to one owned session in this run.
+struct AppliedRules {
+    /// LUNA's compiled rules without session grants.
+    base: Value,
+    /// Every ruleset LUNA applied, newest last: the `session.permissions`
+    /// echo of any of them is LUNA's own (a grant's PATCH can overtake the
+    /// echo of the one before it).
+    applied: VecDeque<Value>,
+}
+
+impl AppliedRules {
+    fn new(base: Value, applied: Value) -> Self {
+        Self {
+            base,
+            applied: VecDeque::from([applied]),
+        }
+    }
+
+    fn current(&self) -> Option<&Value> {
+        self.applied.back()
+    }
+
+    fn accept(&mut self, rules: Value) {
+        if self.applied.len() >= MAX_APPLIED_RULESETS {
+            self.applied.pop_front();
+        }
+        self.applied.push_back(rules);
+    }
+}
+
+/// Permission state a run shares with its reply tasks.
+pub(super) struct RuleState {
+    root: String,
+    mode: luna_proto::PermissionMode,
+    grants: SessionGrants,
+    sessions: Mutex<HashMap<String, AppliedRules>>,
+    /// Serializes session-grant rule changes (PATCH, readback).
+    apply: tokio::sync::Mutex<()>,
+    /// LUNA answered "Cancel turn" in the current turn: the interruption
+    /// that follows is the user's, not a provider failure.
+    turn_cancelled: AtomicBool,
+}
+
+impl RuleState {
+    /// Does LUNA know the rules of `session` (so it can add a grant)?
+    fn tracks(&self, session: &str) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|sessions| sessions.contains_key(session))
+    }
+
+    /// Keep `grant` on `session`: add it to the harness's grants, PATCH the
+    /// session's rules with every grant, and read them back. On failure the
+    /// grant is withdrawn and LUNA's previous rules are put back.
+    async fn grant(
+        &self,
+        server: &Server,
+        dir: Option<&str>,
+        session: &str,
+        grant: &[Rule],
+    ) -> Result<(), String> {
+        let _serial = self.apply.lock().await;
+        let Some((all, added)) = self.grants.add(session, self.mode, grant) else {
+            return Err(
+                "this OpenCode session already keeps the most session approvals LUNA \
+                        allows"
+                    .into(),
+            );
+        };
+        let rules = self.sessions.lock().ok().and_then(|mut sessions| {
+            let entry = sessions.get_mut(session)?;
+            let previous = entry.current()?.clone();
+            let rules = with_session_grants(&entry.base, &all);
+            entry.accept(rules.clone());
+            Some((previous, rules))
+        });
+        let Some((previous, rules)) = rules else {
+            self.grants.remove(session, &added);
+            return Err("LUNA no longer tracks this OpenCode session's rules".into());
+        };
+        let path = format!("/api/session/{session}");
+        let applied = match server
+            .patch_json(&path, dir, &json!({ "permissions": rules }))
+            .await
+        {
+            Ok(_) => match server.session_info(session, dir).await {
+                Ok(info) if info.get("permissions") == Some(&rules) => Ok(()),
+                Ok(_) => Err("OpenCode did not keep the rule on the session".to_owned()),
+                Err(error) => Err(format!("the rule could not be read back: {error}")),
+            },
+            Err(error) => Err(error.to_string()),
+        };
+        if applied.is_err() {
+            self.grants.remove(session, &added);
+            let _ = server
+                .patch_json(&path, dir, &json!({ "permissions": previous }))
+                .await;
+            if let Ok(mut sessions) = self.sessions.lock()
+                && let Some(entry) = sessions.get_mut(session)
+            {
+                entry.accept(previous);
+            }
+        }
+        applied
+    }
 }
 
 /// Read the session record back and require exactly LUNA's rules on it
@@ -423,15 +735,11 @@ pub(super) async fn verify_session_rules(
     )))
 }
 
-/// 2.x persists `always` grants into project-wide rules that outlive the
-/// task, so there is no task-scoped allowance to offer (PD-8).
-pub(super) fn opencode_supports_task_allowance() -> bool {
-    false
-}
-
-/// The card's choices, Claude's shape: Deny continues, Cancel turn stops.
-pub(super) fn opencode_approval_choices() -> Vec<luna_proto::ApprovalChoice> {
-    vec![
+/// The card's choices, Claude's shape: Deny continues, Cancel turn stops,
+/// and "Allow for session" appears when the request carries a session
+/// grant (`grant`, from [`session_grant_rules`]).
+pub(super) fn opencode_approval_choices(grant: &[Rule]) -> Vec<luna_proto::ApprovalChoice> {
+    let mut choices = vec![
         luna_proto::ApprovalChoice {
             label: CHOICE_DENY.into(),
             scope: "none".into(),
@@ -442,32 +750,63 @@ pub(super) fn opencode_approval_choices() -> Vec<luna_proto::ApprovalChoice> {
             scope: "request".into(),
             description: "Allow only this request.".into(),
         },
-        luna_proto::ApprovalChoice {
-            label: CHOICE_CANCEL_TURN.into(),
-            scope: "none".into(),
-            description: "Reject this request and stop OpenCode's turn.".into(),
-        },
-    ]
+    ];
+    if let Some(first) = grant.first() {
+        let patterns: Vec<&str> = grant.iter().map(|rule| rule.resource.as_str()).collect();
+        let covered = if patterns == ["*"] {
+            format!("every {} request", first.action)
+        } else {
+            format!("{} requests matching {}", first.action, patterns.join(", "))
+        };
+        let mut description = format!(
+            "Allow this request and {covered} in this OpenCode session until LUNA restarts or \
+             the chat's permission mode changes. LUNA keeps it as a session rule and does not \
+             save OpenCode rules."
+        );
+        if description.len() > 2048 {
+            let mut end = 2048;
+            while !description.is_char_boundary(end) {
+                end -= 1;
+            }
+            description.truncate(end);
+            description.push('…');
+        }
+        choices.push(luna_proto::ApprovalChoice {
+            label: CHOICE_ALLOW_SESSION.into(),
+            scope: "session".into(),
+            description,
+        });
+    }
+    choices.push(luna_proto::ApprovalChoice {
+        label: CHOICE_CANCEL_TURN.into(),
+        scope: "none".into(),
+        description: "Reject this request and stop OpenCode's turn.".into(),
+    });
+    choices
 }
 
-pub(super) fn opencode_approval_options() -> Vec<String> {
-    opencode_approval_choices()
-        .into_iter()
-        .map(|choice| choice.label)
-        .collect()
-}
-
-/// The v2 reply body for a LUNA answer. Only an exact "Allow once" allows;
-/// "Cancel turn" stops the execution; anything else — Deny, an empty
-/// (fail-closed) answer, a forged or stale "Allow for task" — rejects with
-/// feedback so the model continues.
-pub(super) fn opencode_permission_reply_body(decision: Option<&str>) -> Value {
+/// The v2 reply body for a LUNA answer. "Allow once" allows, and so does
+/// "Allow for session" on a card that offered it (`session_offered`; its
+/// rule is applied first, the reply is still `once`); "Cancel turn" stops
+/// the execution; anything else — Deny, an empty (fail-closed) answer, a
+/// forged or stale session/task allowance — rejects with feedback so the
+/// model continues.
+pub(super) fn opencode_permission_reply_body(
+    decision: Option<&str>,
+    session_offered: bool,
+) -> Value {
     match decision {
         Some(CHOICE_ALLOW_ONCE) => json!({ "decision": "once" }),
+        Some(CHOICE_ALLOW_SESSION) if session_offered => json!({ "decision": "once" }),
         Some(CHOICE_CANCEL_TURN) | Some("Cancel") => json!({ "decision": "reject" }),
         Some(_) => json!({ "decision": "reject", "message": DENY_FEEDBACK }),
         None => json!({ "decision": "reject", "message": UNANSWERED_FEEDBACK }),
     }
+}
+
+/// Does this answer cancel the turn?
+fn cancels_turn(decision: Option<&str>) -> bool {
+    matches!(decision, Some(CHOICE_CANCEL_TURN) | Some("Cancel"))
 }
 
 /// A session this run owns (its root, or a descendant subagent session).
@@ -489,8 +828,9 @@ pub(super) struct UserRequests {
     pub(super) token: CancellationToken,
     rules: SessionRuleSet,
     owned: HashMap<String, OwnedSession>,
-    /// The ruleset LUNA applied per owned session (readback).
-    expected: HashMap<String, Value>,
+    /// The rules LUNA applied per owned session (readback, grants) and the
+    /// turn's cancel mark, shared with reply tasks.
+    state: Arc<RuleState>,
     /// Native request id (`per_…` / `frm_…`) → its pending prompt.
     pub(super) pending: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Ids already answered or cancelled (resync must not re-show them).
@@ -504,25 +844,48 @@ impl Drop for UserRequests {
 }
 
 impl UserRequests {
+    /// `root_base` is LUNA's compiled root ruleset; `root_rules` what was
+    /// applied to the session (the base with the session's grants).
     pub(super) fn new(
         root: String,
         token: CancellationToken,
         rules: SessionRuleSet,
+        root_base: Value,
         root_rules: Value,
+        grants: SessionGrants,
     ) -> Self {
         let mut owned = HashMap::new();
         owned.insert(root.clone(), OwnedSession::default());
-        let mut expected = HashMap::new();
-        expected.insert(root.clone(), root_rules);
+        let mut sessions = HashMap::new();
+        sessions.insert(root.clone(), AppliedRules::new(root_base, root_rules));
+        let state = Arc::new(RuleState {
+            root: root.clone(),
+            mode: rules.mode(),
+            grants,
+            sessions: Mutex::new(sessions),
+            apply: tokio::sync::Mutex::new(()),
+            turn_cancelled: AtomicBool::new(false),
+        });
         Self {
             root,
             token,
             rules,
             owned,
-            expected,
+            state,
             pending: Arc::new(Mutex::new(HashMap::new())),
             settled: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// LUNA answered "Cancel turn" during the current turn.
+    pub(super) fn turn_cancelled(&self) -> bool {
+        self.state.turn_cancelled.load(Ordering::Acquire)
+    }
+
+    /// A new turn starts: an earlier Cancel turn no longer explains an
+    /// interruption.
+    pub(super) fn begin_turn(&self) {
+        self.state.turn_cancelled.store(false, Ordering::Release);
     }
 
     /// Is `session` this run's root or one of its descendants?
@@ -608,8 +971,11 @@ impl UserRequests {
                 label: Some(label.clone()),
             },
         );
-        let rules = self.rules.rules_for(agent, RuleScope::Subagent);
-        self.expected.insert(id.to_owned(), rules.clone());
+        let base = self.rules.rules_for(agent, RuleScope::Subagent);
+        let rules = with_session_grants(&base, &self.state.grants.current(id, self.state.mode));
+        if let Ok(mut sessions) = self.state.sessions.lock() {
+            sessions.insert(id.to_owned(), AppliedRules::new(base, rules.clone()));
+        }
         let server = server.detached();
         let dir = dir.map(str::to_owned);
         let failures = event_tx.clone();
@@ -639,8 +1005,8 @@ impl UserRequests {
     }
 
     /// `session.permissions` (the echo of every rules change): an owned
-    /// session whose rules differ from LUNA's was changed outside LUNA, so
-    /// its execution is stopped (fail closed).
+    /// session whose rules differ from every ruleset LUNA applied to it was
+    /// changed outside LUNA, so its execution is stopped (fail closed).
     pub(super) fn observe_session_permissions(
         &self,
         props: &Value,
@@ -651,10 +1017,18 @@ impl UserRequests {
         let Some(session) = props.get("sessionID").and_then(Value::as_str) else {
             return;
         };
-        let Some(expected) = self.expected.get(session) else {
-            return;
+        let lunas_own = {
+            let Ok(sessions) = self.state.sessions.lock() else {
+                return;
+            };
+            let Some(entry) = sessions.get(session) else {
+                return;
+            };
+            props
+                .get("permissions")
+                .is_some_and(|rules| entry.applied.contains(rules))
         };
-        if props.get("permissions") == Some(expected) {
+        if lunas_own {
             return;
         }
         let server = server.detached();
@@ -705,13 +1079,15 @@ pub(super) struct PermissionAsk<'a> {
 
 /// The shared approval card for a v2 `permission.asked` request:
 /// `{id, sessionID, action, resources[], save?, metadata?, source?: {type,
-/// messageID, id}, message?}`.
+/// messageID, id}, message?}`. `grant` is the session rule "Allow for
+/// session" would add (empty: not offered).
 pub(super) fn permission_question(
     props: &Value,
     session: &str,
     subagent: Option<String>,
     cwd: Option<&str>,
     policy: &luna_proto::PermissionPolicy,
+    grant: &[Rule],
 ) -> Option<UserInputQuestion> {
     let id = props.get("id").and_then(Value::as_str)?;
     let action = props
@@ -859,7 +1235,8 @@ pub(super) fn permission_question(
     if let Some(label) = &subagent {
         header.push_str(&format!(" · sub-agent {label}"));
     }
-    let choices = opencode_approval_choices();
+    let choices = opencode_approval_choices(grant);
+    let options = choices.iter().map(|choice| choice.label.clone()).collect();
     let details = luna_proto::ApprovalDetails {
         provider_thread_id: Some(session.to_owned()),
         item_id,
@@ -880,7 +1257,7 @@ pub(super) fn permission_question(
         id: format!("permission:{id}"),
         header,
         question: format!("{summary}. Target: {target}."),
-        options: opencode_approval_options(),
+        options,
         multi_select: false,
         mcp: None,
         approval: Some(luna_proto::ApprovalRequest {
@@ -898,7 +1275,7 @@ pub(super) fn permission_question(
             // until the user answers, OpenCode settles the request, Stop,
             // or the turn ends.
             expires_at_ms: luna_proto::APPROVAL_NO_EXPIRY,
-            supports_task_allowance: opencode_supports_task_allowance(),
+            supports_task_allowance: !grant.is_empty(),
             details: Some(details),
         }),
         input: None,
@@ -938,7 +1315,13 @@ pub(super) fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcome {
         return BusOutcome::Continue;
     }
     let subagent = requests.subagent_label(session);
-    let reply = PermissionReply {
+    // "Allow for session" needs the session's own LUNA rules to extend.
+    let grant = if auto_approve || !requests.state.tracks(session) {
+        Vec::new()
+    } else {
+        session_grant_rules(props)
+    };
+    let mut reply = PermissionReply {
         server: server.detached(),
         path: format!("/api/session/{session}/permission/{id}/reply"),
         dir: dir.map(str::to_owned),
@@ -946,6 +1329,9 @@ pub(super) fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcome {
         id: id.to_owned(),
         pending: Arc::clone(&requests.pending),
         settled: Arc::clone(&requests.settled),
+        session: session.to_owned(),
+        grant: Vec::new(),
+        state: Arc::clone(&requests.state),
     };
     if auto_approve {
         // Full: a stray ask (the compiled rules allow everything else) is
@@ -956,10 +1342,12 @@ pub(super) fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcome {
         });
         return BusOutcome::Continue;
     }
-    let Some(question) = permission_question(props, session, subagent, dir, permission_policy)
+    let Some(question) =
+        permission_question(props, session, subagent, dir, permission_policy, &grant)
     else {
         return BusOutcome::Continue;
     };
+    reply.grant = grant;
     let token = requests.track(id);
     let question_id = question.id.clone();
     let receiver = (request_input)(vec![question]);
@@ -995,6 +1383,11 @@ struct PermissionReply {
     id: String,
     pending: Arc<Mutex<HashMap<String, CancellationToken>>>,
     settled: Arc<Mutex<HashSet<String>>>,
+    /// The session that asked.
+    session: String,
+    /// The session rule "Allow for session" adds (empty: not offered).
+    grant: Vec<Rule>,
+    state: Arc<RuleState>,
 }
 
 impl PermissionReply {
@@ -1010,21 +1403,72 @@ impl PermissionReply {
         if token.is_cancelled() {
             return;
         }
-        let body = opencode_permission_reply_body(label);
-        let failure = match self
+        let session_offered = !self.grant.is_empty();
+        // "Allow for session": the session rule lands (and reads back)
+        // before the request is allowed, so the next matching request no
+        // longer asks. A rule that did not land still allows this request.
+        if label == Some(CHOICE_ALLOW_SESSION)
+            && session_offered
+            && let Err(detail) = self
+                .state
+                .grant(
+                    &self.server,
+                    self.dir.as_deref(),
+                    &self.session,
+                    &self.grant,
+                )
+                .await
+            && !token.is_cancelled()
+        {
+            let _ = self
+                .failures
+                .send(Ok(AgentEvent::Error {
+                    message: format!(
+                        "LUNA could not keep this approval for the OpenCode session ({detail}), \
+                         so only this request was allowed."
+                    ),
+                }))
+                .await;
+        }
+        if token.is_cancelled() {
+            return;
+        }
+        // Cancel turn: the interruption OpenCode reports next is the
+        // user's own (2.0.22 labels it `shutdown`), marked before the reply
+        // so the mark is never late.
+        let cancel = cancels_turn(label);
+        if cancel {
+            self.state.turn_cancelled.store(true, Ordering::Release);
+        }
+        let body = opencode_permission_reply_body(label, session_offered);
+        let (failure, rejected) = match self
             .server
             .post_json_raw(&self.path, self.dir.as_deref(), &body)
             .await
         {
-            Ok((status, _)) if status.is_success() => None,
+            Ok((status, _)) if status.is_success() => (None, true),
             // Already settled (a sibling reject, Stop, another client).
             Ok((status, _)) if status == reqwest::StatusCode::NOT_FOUND => {
                 tracing::debug!(target: "luna_harness::opencode", id = %self.id, "permission already settled");
-                None
+                (None, false)
             }
-            Ok((status, text)) => Some(post_error_message(&self.path, status, &text)),
-            Err(error) => Some(error.to_string()),
+            Ok((status, text)) => (Some(post_error_message(&self.path, status, &text)), false),
+            Err(error) => (Some(error.to_string()), false),
         };
+        if cancel {
+            if !rejected {
+                // The reject did not land, so it cancelled nothing.
+                self.state.turn_cancelled.store(false, Ordering::Release);
+            } else if self.session != self.state.root {
+                // A sub-agent's reject stops only that sub-agent; Cancel
+                // turn stops OpenCode's turn, as it does for Claude and
+                // Codex.
+                let _ = self
+                    .server
+                    .interrupt_session(&self.state.root, self.dir.as_deref())
+                    .await;
+            }
+        }
         // A failed reply leaves the native tool blocked: say so instead of
         // silently pretending the approval was delivered (OCF-151).
         if let Some(detail) = failure
