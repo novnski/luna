@@ -1338,7 +1338,10 @@ pub(super) fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcome {
         // allowed once, never parked on a LUNA card (OCF-53).
         let token = requests.track(id);
         tokio::spawn(async move {
-            reply.send(&token, Some(CHOICE_ALLOW_ONCE)).await;
+            if let Err(detail) = reply.send(&token, Some(CHOICE_ALLOW_ONCE)).await {
+                reply.settle();
+                reply.report(&detail).await;
+            }
         });
         return BusOutcome::Continue;
     }
@@ -1350,26 +1353,50 @@ pub(super) fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcome {
     reply.grant = grant;
     let token = requests.track(id);
     let question_id = question.id.clone();
-    let receiver = (request_input)(vec![question]);
+    let request_input = Arc::clone(request_input);
+    let mut receiver = (request_input)(vec![question.clone()]);
     tokio::spawn(async move {
-        let answers = tokio::select! {
-            biased;
-            // Stop, the end of the turn, or OpenCode settling it elsewhere.
-            _ = token.cancelled() => {
-                reply.forget();
+        loop {
+            let answers = tokio::select! {
+                biased;
+                // Stop, the end of the turn, or OpenCode settling it elsewhere.
+                _ = token.cancelled() => {
+                    reply.forget();
+                    return;
+                }
+                answers = &mut receiver => answers,
+            };
+            let answered = answers.is_ok();
+            let label = match answers {
+                Ok(answers) => answers
+                    .into_iter()
+                    .find(|answer| answer.question_id == question_id)
+                    .and_then(|answer| answer.labels.into_iter().next()),
+                // The engine dropped the request without an answer.
+                Err(_) => None,
+            };
+            let Err(detail) = reply.send(&token, label.as_deref()).await else {
+                return;
+            };
+            if !answered {
+                reply.settle();
+                reply.report(&detail).await;
                 return;
             }
-            answers = receiver => answers,
-        };
-        let label = match answers {
-            Ok(answers) => answers
-                .into_iter()
-                .find(|answer| answer.question_id == question_id)
-                .and_then(|answer| answer.labels.into_iter().next()),
-            // The engine dropped the request without an answer.
-            Err(_) => None,
-        };
-        reply.send(&token, label.as_deref()).await;
+            // OpenCode never got the answer and its tool still waits: show
+            // the card again so the turn never hangs on a request the user
+            // can no longer see.
+            let _ = reply
+                .failures
+                .send(Ok(AgentEvent::Error {
+                    message: format!(
+                        "LUNA could not deliver your answer to OpenCode's permission request \
+                         ({detail}). The request is shown again."
+                    ),
+                }))
+                .await;
+            receiver = (request_input)(vec![question.clone()]);
+        }
     });
     BusOutcome::Continue
 }
@@ -1397,11 +1424,34 @@ impl PermissionReply {
         }
     }
 
-    async fn send(self, token: &CancellationToken, label: Option<&str>) {
+    /// The request is settled for LUNA: no card, and a resync must not show
+    /// it again.
+    fn settle(&self) {
         self.forget();
         mark_settled(&self.settled, &self.id);
+    }
+
+    /// A reply that could not be delivered and will not be asked again
+    /// leaves the native tool blocked: say so instead of silently
+    /// pretending the approval was delivered (OCF-151).
+    async fn report(&self, detail: &str) {
+        let _ = self
+            .failures
+            .send(Ok(AgentEvent::Error {
+                message: format!("OpenCode did not accept the permission reply: {detail}"),
+            }))
+            .await;
+    }
+
+    /// Deliver the user's answer. `Err` = OpenCode never took it: the
+    /// request still waits upstream, so it stays pending here (a resync
+    /// shows no duplicate, a settle elsewhere still closes it) and the
+    /// caller shows the card again or reports it. Stop and the end of the
+    /// turn send nothing.
+    async fn send(&self, token: &CancellationToken, label: Option<&str>) -> Result<(), String> {
         if token.is_cancelled() {
-            return;
+            self.settle();
+            return Ok(());
         }
         let session_offered = !self.grant.is_empty();
         // "Allow for session": the session rule lands (and reads back)
@@ -1431,7 +1481,8 @@ impl PermissionReply {
                 .await;
         }
         if token.is_cancelled() {
-            return;
+            self.settle();
+            return Ok(());
         }
         // Cancel turn: the interruption OpenCode reports next is the
         // user's own (2.0.22 labels it `shutdown`), marked before the reply
@@ -1443,16 +1494,25 @@ impl PermissionReply {
         let body = opencode_permission_reply_body(label, session_offered);
         let (failure, rejected) = match self
             .server
-            .post_json_raw(&self.path, self.dir.as_deref(), &body)
+            .deliver(
+                reqwest::Method::POST,
+                &self.path,
+                self.dir.as_deref(),
+                Some(&body),
+            )
             .await
         {
-            Ok((status, _)) if status.is_success() => (None, true),
-            // Already settled (a sibling reject, Stop, another client).
-            Ok((status, _)) if status == reqwest::StatusCode::NOT_FOUND => {
+            Ok(sent) if sent.status.is_success() => (None, true),
+            // Already settled (a sibling reject, Stop, another client), or
+            // an earlier attempt of this same reply landed.
+            Ok(sent) if sent.status == reqwest::StatusCode::NOT_FOUND => {
                 tracing::debug!(target: "luna_harness::opencode", id = %self.id, "permission already settled");
-                (None, false)
+                (None, sent.retried)
             }
-            Ok((status, text)) => (Some(post_error_message(&self.path, status, &text)), false),
+            Ok(sent) => (
+                Some(post_error_message(&self.path, sent.status, &sent.body)),
+                false,
+            ),
             Err(error) => (Some(error.to_string()), false),
         };
         if cancel {
@@ -1469,17 +1529,13 @@ impl PermissionReply {
                     .await;
             }
         }
-        // A failed reply leaves the native tool blocked: say so instead of
-        // silently pretending the approval was delivered (OCF-151).
-        if let Some(detail) = failure
-            && !token.is_cancelled()
-        {
-            let _ = self
-                .failures
-                .send(Ok(AgentEvent::Error {
-                    message: format!("OpenCode did not accept the permission reply: {detail}"),
-                }))
-                .await;
+        match failure {
+            // Stop, or a settle elsewhere, overtook a failed reply.
+            Some(detail) if !token.is_cancelled() => Err(detail),
+            _ => {
+                self.settle();
+                Ok(())
+            }
         }
     }
 }

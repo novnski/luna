@@ -26,6 +26,29 @@ pub(super) const SHUTDOWN_INTERRUPT_BUDGET: Duration = Duration::from_secs(3);
 /// whole turn).
 pub(super) const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long a pooled keep-alive connection may sit idle before LUNA stops
+/// reusing it. `opencode serve` (2.0.22) advertises `Keep-Alive: timeout=5`
+/// and closes an idle connection at 6.00 s; a request written on it at that
+/// moment is reset, and hyper retries only requests it never wrote, so the
+/// request is lost (an answer to a question or approval included). Retiring
+/// connections well inside the advertised timeout means LUNA never writes
+/// on one the server is closing; a fresh loopback connection costs nothing.
+pub(super) const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Attempts for a settle-once delivery (see [`Server::deliver`]), and the
+/// pause before each retry.
+const DELIVERY_ATTEMPTS: u32 = 3;
+const DELIVERY_RETRY_PAUSE: Duration = Duration::from_millis(150);
+
+/// A settle-once delivery's answer (see [`Server::deliver`]).
+pub(super) struct Delivery {
+    pub(super) status: reqwest::StatusCode,
+    pub(super) body: String,
+    /// An earlier attempt failed in transport. It may still have reached
+    /// the server, so a "not pending" answer can be LUNA's own reply.
+    pub(super) retried: bool,
+}
+
 pub(super) fn startup_timeout() -> Duration {
     std::env::var(STARTUP_TIMEOUT_ENV)
         .ok()
@@ -358,6 +381,19 @@ impl Server {
         body: Option<&Value>,
         timeout: Option<Duration>,
     ) -> Result<(reqwest::StatusCode, String), HarnessError> {
+        self.exchange_once(method.clone(), path, directory, body, timeout)
+            .await
+            .map_err(|e| HarnessError::Protocol(format!("opencode {method} {path}: {e}")))
+    }
+
+    async fn exchange_once(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        directory: Option<&str>,
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<(reqwest::StatusCode, String), reqwest::Error> {
         let started = Instant::now();
         let mut req = self.request(method.clone(), path);
         if let Some(timeout) = timeout {
@@ -386,7 +422,53 @@ impl Server {
             response,
             started,
         });
-        outcome.map_err(|e| HarnessError::Protocol(format!("opencode {method} {path}: {e}")))
+        outcome
+    }
+
+    /// Send a settle-once request: a permission reply, or a form's answer or
+    /// cancellation. Such a route settles its request at most once, and a
+    /// repeat answers "not pending" (404/409), which every caller already
+    /// reads as settled. So a transport failure, where the request may never
+    /// have reached the server, is retried (the failed connection is never
+    /// reused) instead of losing the user's answer. A timeout is not
+    /// retried: the server took the request and did not answer in time.
+    pub(super) async fn deliver(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        directory: Option<&str>,
+        body: Option<&Value>,
+    ) -> Result<Delivery, HarnessError> {
+        let mut retried = false;
+        let mut attempt = 1;
+        loop {
+            match self
+                .exchange_once(method.clone(), path, directory, body, Some(CALL_TIMEOUT))
+                .await
+            {
+                Ok((status, body)) => {
+                    return Ok(Delivery {
+                        status,
+                        body,
+                        retried,
+                    });
+                }
+                Err(error) if attempt < DELIVERY_ATTEMPTS && !error.is_timeout() => {
+                    tracing::debug!(
+                        target: "luna_harness::opencode",
+                        "retrying {method} {path} after a transport failure: {error}"
+                    );
+                    retried = true;
+                    attempt += 1;
+                    tokio::time::sleep(DELIVERY_RETRY_PAUSE * attempt).await;
+                }
+                Err(error) => {
+                    return Err(HarnessError::Protocol(format!(
+                        "opencode {method} {path}: {error}"
+                    )));
+                }
+            }
+        }
     }
 
     /// GET with the session's directory scope (the server's per-request
@@ -647,6 +729,7 @@ impl Server {
 pub(super) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         // No global timeout: the SSE stream lives for the whole run and
         // sync calls are bounded per call site.
         .build()
