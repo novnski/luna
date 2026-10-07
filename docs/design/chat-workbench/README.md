@@ -82,10 +82,6 @@ central frame, rendering, drag hit testing and motion, keyboard/accessibility,
 Related chats reopening, and native UI E2E fixtures. Both work in the same
 checkout and must preserve each other's work. No subagents or worktrees.
 
-Existing unrelated work is under `docs/pending-tasks/README.md`,
-`docs/pending-tasks/agent-workspace-app-research/`, and
-`docs/pending-tasks/claude-code-feature-parity/`; do not modify or stage it.
-
 ## Validation status
 
 The shared model, profile-local atomic store, revision/command guards, desktop

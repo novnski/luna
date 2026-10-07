@@ -575,7 +575,7 @@ pub const CLAUDE_ADVANCED_LEDGER: &[LedgerRow] = &[
     LedgerRow {
         lane: "Stop a workflow",
         status: LaneStatus::Unsupported,
-        luna: "Claude has a stop_task control, but LUNA has no task-control channel yet.",
+        luna: "LUNA sends Claude's stop_task only for native agents, not workflow runs.",
     },
     LedgerRow {
         lane: "Pause, resume or restart workflow agents",

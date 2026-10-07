@@ -40,7 +40,7 @@ M0–M4 define the first release. Later rows remain part of the desired product 
 | RC18 | Mobile transcript polish | Virtualization, gesture anchoring, streaming/coalescing, keyboard and accessibility. | M4 |
 | RC19 | Terminals | Separate terminal grant and explicit session ownership/lifecycle. | M5 unless separately included in release scope |
 | RC20 | Rich source-control operations | Branch/worktree/commit/PR actions with owned backend contracts and separate destructive-action policy. | M5 |
-| RC21 | Fork, revert, review and imports | Current LUNA capabilities, irreversible-action semantics, exact history identity. | M5; coordinate existing parity backlog |
+| RC21 | Fork, revert, review and imports | Current LUNA capabilities, irreversible-action semantics, exact history identity. | M5; reuse the host's existing fork, rewind and review operations |
 | RC22 | Full provider/settings/usage workflows | Capability-specific metadata and host mutations; secrets and account administration stay local unless deliberately designed. | M5 |
 | RC23 | Audio/voice and additional media | Platform capture and format support, bounded upload, provider support. | M5 |
 | RC24 | Device preview, Computer Use or browser control | Explicit separate grants, host OS permission and visible ownership/readback. | M5, independently reviewed |
@@ -55,7 +55,7 @@ For each row, store the reference repository and commit, exact user trigger, scr
 
 Record whether behavior exists in LUNA today, is restricted by the remote policy, or needs a new backend operation. Separate source evidence, observed UI behavior, and proposed work. Do not mark a feature complete from a visible control, a successful socket, a static fixture, or a shared TypeScript/Rust schema alone.
 
-Link overlapping work to [the Codex parity backlog](../codex-feature-parity/README.md), [agent-created child threads](../agent-created-child-threads.md), and any current Claude parity task. This remote plan does not authorize implementing unrelated provider gaps. When a required operation is unavailable, show its absence through capability negotiation and preserve the backlog entry.
+Codex and Claude parity and persistent child chats are merged; expose their existing host operations instead of building remote-only versions. Link overlapping work to [OpenCode parity](../opencode-feature-parity/README.md) while it remains open. This remote plan does not authorize implementing unrelated provider gaps. When a required operation is unavailable, show its absence through capability negotiation and preserve the backlog entry.
 
 ## Native and browser compatibility
 

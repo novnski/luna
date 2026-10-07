@@ -17,11 +17,12 @@ shows a clickable parent link at the top. That link always follows the stored
 parent ID, never a presentation/docking association.
 
 Parents may create fresh children with another provider, model, reasoning level
-and supported model options. Child creation remains a parent-agent tool with
-the existing one-use approval; users do not create children directly. The
-approval must show the execution selection. Omitted execution choices retain
-legacy same-provider behavior; changing providers must not carry the parent's
-provider-specific model, reasoning, options or account into the new provider.
+and supported model options. Agents create them with the `create_thread` tool,
+which adds no app approval card; only a request above the parent's access
+ceiling needs an explicit grant. Users can also create one directly with New
+child chat. Omitted execution choices use the saved provider defaults; changing
+providers must not carry the parent's provider-specific model, reasoning,
+options or account into the new provider.
 
 ## Implementation plan
 
