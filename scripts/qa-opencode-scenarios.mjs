@@ -1,0 +1,1176 @@
+#!/usr/bin/env node
+// OpenCode in-app scenario runner: S1..S8 through the signed LUNA QA app's
+// RPC surface (the RPCs the UI uses), with a provider argument so the same
+// steps run against Claude Code for the PD-14 parity diff.
+//
+//   node scripts/qa-opencode-scenarios.mjs list
+//   node scripts/qa-opencode-scenarios.mjs dry-run <S#|all> [--provider P] [--tier T]
+//   node scripts/qa-opencode-scenarios.mjs self-check            (offline, no app)
+//   node scripts/qa-opencode-scenarios.mjs rehearse [<S#|all>]   (offline fake engine, tier R0)
+//   node scripts/qa-opencode-scenarios.mjs rehearse-faults       (offline: lost reply / unknown outcome, QF-17)
+//   node scripts/qa-opencode-scenarios.mjs run <S#> --provider opencode|claude-code
+//        --tier T2|T3 [--model <id>] [--variant <level>] [--evidence-root <dir>]
+//        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
+//
+// Scenarios (validation-plan.md §4): S1 OCE-16/05 approvals and questions;
+// S2 OCE-01/21 subagent attribution and background work; S3 OCE-18 LUNA tool
+// delivery; S4 OCE-04/05/09 restart with a pending approval and a queued row
+// (two phases; the QA operator restarts the app in between); S5 OCE-10/24
+// fork, edit, rewind and side chats; S6 OCE-13 models, variants and usage;
+// S7 OCE-08/14/20 images, compaction and discovery; S8 OCE-23 Review.
+//
+// Contract and failure cases QF-09..QF-24: docs/reference/qa-infrastructure.md.
+// Identity is asserted before any write; every send is in manifest.json before
+// its RPC and an unknown send is never replayed; the runner never builds,
+// launches or quits an app.
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {parseArgs} from 'node:util';
+import {
+  Evidence, NotAnswerable, Rpc, UnknownOutcome, applyTranscriptFrame, approvalDecision, assertQaIdentity,
+  assertRehearsalIdentity, buildAnswers, captureWireSlice, fileHashes, finishEvidence, isLunaCrossTask, lunaSource,
+  makeFixture, maskNonce, normalizeEntries, now, readJsonl, root, sha256, solidPng, spawnFakeEngine, taskCommandParams,
+  textOf, waitOn, wireOffsets,
+} from './qa-opencode-lib.mjs';
+import {Driver, forkInitialPermission, reviewLabel} from './qa-opencode-driver.mjs';
+
+const PROVIDERS = ['opencode', 'claude-code'];
+
+// ------------------------------------------------------------------ context
+class ScenarioContext {
+  constructor({driver, evidence, provider, tier, nonce, fixture, config, opts}) {
+    Object.assign(this, {d: driver, evidence, provider, tier, nonce, fixture, config, opts});
+    this.turnTimeout = Number(opts['turn-timeout'] ?? 240) * 1000;
+    this.ids = {};
+  }
+
+  m(name) { return `${name}-${this.nonce}`; }
+
+  // T2 OpenCode runs append the mock provider's marker; the prompt hash in the
+  // manifest masks the nonce, and the parity runs are T3 (QF-18).
+  p(text, mock) {
+    return this.tier === 'T2' && this.provider === 'opencode' && mock ? `${text} [[mock:${mock}]]` : text;
+  }
+
+  chatId(role) {
+    const chat = this.d.chatByRole(role);
+    assert.ok(chat, `no chat with role ${role}`);
+    return chat.id;
+  }
+
+  entries(role) { return this.d.chatByRole(role)?.mirror.entries ?? []; }
+
+  after(role, messageId) {
+    const entries = this.entries(role);
+    const at = entries.findIndex(e => e.id === messageId);
+    return at < 0 ? [] : entries.slice(at + 1);
+  }
+
+  replyAfter(role, messageId) {
+    return this.after(role, messageId).filter(e => e.role === 'assistant').map(textOf).join('\n').trim();
+  }
+
+  toolsAfter(role, messageId) {
+    return this.after(role, messageId).flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool'));
+  }
+
+  users(role) { return this.entries(role).filter(e => e.role === 'user'); }
+
+  step(label, fn) { return this.d.runStep(label, fn); }
+  check(...args) { return this.d.check(...args); }
+  info(...args) { return this.d.info(...args); }
+
+  // Marker checks are decisive at T3 only: a T2 mock does not follow prose.
+  modelCheck(criterion, expected, actual, passed) {
+    return this.tier === 'T3' ? this.check(criterion, expected, actual, passed) : this.info(criterion, expected, actual, passed);
+  }
+
+  settled(wait, label = 'turn-settled', statuses = ['idle']) {
+    return this.check(label, `the turn settles (${statuses.join('/')}) within the turn timeout`, `${wait.result}:${wait.status} via ${wait.statuses.join('>') || '-'}`,
+      wait.result === 'settled' && statuses.includes(wait.status));
+  }
+
+  async turn(role, text, {mock = null, answer = null, attachments = [], queue = null, timeoutMs = this.turnTimeout, label = 'message'} = {}) {
+    const chatId = this.chatId(role);
+    if (queue !== true) await this.d.waitIdle(chatId).catch(() => null);
+    const sent = await this.d.send(chatId, this.p(text, mock), {attachments, queue, label});
+    const wait = await this.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer, timeoutMs});
+    return {...sent, wait, reply: this.replyAfter(role, sent.messageId)};
+  }
+
+  async waitSideTurn(role, sent, {answer = null, timeoutMs = this.turnTimeout} = {}) {
+    const wait = await this.d.waitTurn(this.chatId(role), {mark: sent.mark, messageId: sent.messageId, answer, timeoutMs});
+    return {...sent, wait, reply: this.replyAfter(role, sent.messageId)};
+  }
+
+  // Waits on frames (no RPC) for `ms` and reports whether `bad()` became
+  // true meanwhile; used to show something does NOT happen.
+  async stays(role, bad, ms) {
+    const mirror = this.d.chatByRole(role).mirror;
+    try {
+      await mirror.waitFor(() => bad(mirror.entries), {timeoutMs: ms, label: 'unexpected change'});
+      return false;
+    } catch (error) {
+      if (error.timeout) return true;
+      throw error;
+    }
+  }
+}
+
+const markerInTools = (tools, marker) => tools.some(t => !t.isError && String(t.output ?? '').includes(marker));
+const SUBAGENT_TERMINAL = new Set(['done', 'failed', 'interrupted', 'unobserved']);
+const subagentParts = entries => entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool' && p.call?.kind === 'unknown' && /^Agent(:|$)/.test(p.call.name ?? '')));
+const lunaParts = entries => entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool' && p.call?.kind === 'mcp' && p.call.server === 'luna'));
+const allowAll = pending => (pending.questions.some(q => q.approval) ? {approval: 'allow-once'} : null);
+
+// Subscribes to the nested transcript of every spawn chip (after
+// `sinceMessageId` when given); an already attached child keeps its role.
+async function attachChildren(s, parentRole, prefix, sinceMessageId = null) {
+  const scope = sinceMessageId ? s.after(parentRole, sinceMessageId) : s.entries(parentRole);
+  const roles = [];
+  for (const part of subagentParts(scope)) {
+    if (!part.subagentRef) continue;
+    const existing = s.d.chats.get(part.subagentRef);
+    if (existing) {
+      roles.push(existing.role);
+      continue;
+    }
+    const role = `${prefix}-${[...s.d.chats.values()].filter(c => c.role.startsWith(`${prefix}-`)).length + 1}`;
+    const parent = s.d.chatByRole(parentRole);
+    s.d.attach(part.subagentRef, {role, config: parent.config, cwd: parent.cwd, spaceId: parent.spaceId});
+    await Promise.race([s.d.chatByRole(role).mirror.ready, new Promise(resolve => setTimeout(resolve, 10000))]);
+    roles.push(role);
+  }
+  return roles;
+}
+
+// ------------------------------------------------------------------ scenarios
+const SCENARIOS = {
+  S1: {
+    title: 'Approvals and questions', validation: ['OCE-16', 'OCE-05'], parity: true, permissionMode: 'ask', phases: ['run'],
+    steps: ['allow-once', 'deny-with-feedback', 'cancel-turn', 'question-single', 'question-multi', 'stale-answer-after-stop'],
+    prompts: n => ({
+      allow: `Use your shell tool to run exactly this command: echo S1-ALLOW-${n}\nThen reply with only the command's output. Do not run any other command.`,
+      deny: `Use your shell tool to run exactly this command: echo S1-DENY-${n}\nIf you are not allowed to run it, do not retry; reply with exactly S1-DENIED-${n}.`,
+      cancel: `Use your shell tool to run exactly this command: echo S1-CANCEL-${n}\nThen reply with only the command's output.`,
+      single: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly COLOR-${n}-<the color I chose>.`,
+      multi: `Use your tool for asking the user a multiple-choice question that allows multiple selections (do not ask in plain text). Ask me to choose one or more of these options: alpha, beta, gamma. After I answer, reply with exactly PICKED-${n}- followed by my choices joined with "+".`,
+      stale: `Use your shell tool to run exactly this command: echo S1-STALE-${n}\nThen reply with only the command's output.`,
+    }),
+    unverified: ['MCP elicitation forms need a mock MCP server fixture (not part of this runner); the answerer supports them (buildAnswers mcp policy).',
+      'Question steps at T2 need a scripted mock entry; run them at T3.'],
+    async run(s, P) {
+      const root = 'root';
+      await s.step('allow-once', async () => {
+        let card = null;
+        const t = await s.turn(root, P.allow, {mock: `tool-shell:echo ${s.m('S1-ALLOW')}`, answer: pending => {
+          card ??= pending;
+          s.d.capture('s1-approval-card');
+          return {approval: 'allow-once'};
+        }});
+        s.check('approval-shown', 'an approval card reached the shared panel', card ? card.questions.map(q => q.approval?.actionKind ?? 'question') : null, Boolean(card?.questions.some(q => q.approval)));
+        s.check('allow-once-sent', 'Allow once answered through respondApproval', t.wait.handled, t.wait.handled.some(h => h.status === 'applied'));
+        s.settled(t.wait);
+        const tools = s.toolsAfter(root, t.messageId);
+        s.check('tool-ran', 'a resolved, non-error tool part follows the approval', tools.map(x => `${x.call?.kind}:${x.resolved}:${x.isError}`), tools.some(x => x.resolved && !x.isError));
+        s.modelCheck('allow-output', `reply carries S1-ALLOW-${s.nonce}`, t.reply.slice(0, 200), t.reply.includes(s.m('S1-ALLOW')) || markerInTools(tools, s.m('S1-ALLOW')));
+      });
+      await s.step('deny-with-feedback', async () => {
+        const t = await s.turn(root, P.deny, {mock: `tool-shell:echo ${s.m('S1-DENY')}`, answer: () => ({approval: 'deny'})});
+        s.check('deny-sent', 'Deny answered through respondApproval', t.wait.handled, t.wait.handled.some(h => h.status === 'applied'));
+        s.settled(t.wait, 'deny-continues', ['idle']);
+        s.check('deny-blocked-tool', 'no successful tool output with the denied marker', null, !markerInTools(s.toolsAfter(root, t.messageId), s.m('S1-DENY')));
+        s.modelCheck('deny-feedback-reply', `the model continued and replied S1-DENIED-${s.nonce}`, t.reply.slice(0, 200), t.reply.includes(s.m('S1-DENIED')));
+      });
+      await s.step('cancel-turn', async () => {
+        const t = await s.turn(root, P.cancel, {mock: `tool-shell:echo ${s.m('S1-CANCEL')}`, answer: () => ({approval: 'cancel'})});
+        s.check('cancel-sent', 'Cancel answered through respondApproval', t.wait.handled, t.wait.handled.some(h => h.status === 'applied'));
+        s.settled(t.wait, 'cancel-stops-turn', ['idle', 'errored']);
+        s.check('cancel-blocked-tool', 'no successful tool output with the cancelled marker', null, !markerInTools(s.toolsAfter(root, t.messageId), s.m('S1-CANCEL')));
+        const last = s.after(root, t.messageId).filter(e => e.role === 'assistant').at(-1);
+        s.info('cancel-not-completed', 'the cancelled turn is not presented as a normal completion', last?.status ?? null, last?.status !== 'complete' || !t.reply.includes(s.m('S1-CANCEL')));
+      });
+      await s.step('question-single', async () => {
+        let shown = null;
+        const t = await s.turn(root, P.single, {answer: pending => {
+          if (pending.questions.some(q => q.approval)) return {approval: 'allow-once'};
+          shown ??= pending;
+          s.d.capture('s1-question-panel');
+          return {pick: 'green'};
+        }});
+        s.modelCheck('question-shown', 'the question reached the shared question panel (no approval)', shown?.questions.map(q => ({options: q.options, multi: q.multiSelect})) ?? null, Boolean(shown));
+        s.settled(t.wait);
+        s.modelCheck('question-answer-consumed', `reply is COLOR-${s.nonce}-green`, t.reply.slice(0, 200), t.reply.toLowerCase().includes(`color-${s.nonce}-green`.toLowerCase()));
+      });
+      await s.step('question-multi', async () => {
+        let shown = null;
+        const t = await s.turn(root, P.multi, {answer: pending => {
+          if (pending.questions.some(q => q.approval)) return {approval: 'allow-once'};
+          shown ??= pending;
+          return {pick: ['alpha', 'gamma']};
+        }});
+        s.modelCheck('multi-question-shown', 'the question reached the shared panel', shown?.questions.map(q => ({options: q.options, multi: q.multiSelect})) ?? null, Boolean(shown));
+        s.info('multi-select-flag', 'the provider marked the question multi-select', shown?.questions.map(q => q.multiSelect) ?? null, Boolean(shown?.questions.some(q => q.multiSelect)));
+        s.settled(t.wait);
+        s.modelCheck('multi-answer-consumed', `reply names alpha and gamma (PICKED-${s.nonce}-...)`, t.reply.slice(0, 200), /alpha/i.test(t.reply) && /gamma/i.test(t.reply));
+      });
+      await s.step('stale-answer-after-stop', async () => {
+        const chatId = s.chatId(root);
+        const sent = await s.d.send(chatId, s.p(P.stale, `tool-shell:echo ${s.m('S1-STALE')}`), {label: 'message'});
+        const pending = await s.d.waitPending(chatId);
+        s.check('stale-approval-shown', 'an approval is pending before Stop', pending.requestId, Boolean(pending.questions.some(q => q.approval)));
+        const stopped = await s.d.stop(chatId);
+        s.check('stop-applied', 'Stop receipt applied', stopped.receipt?.status, stopped.receipt?.status === 'applied');
+        const mirror = s.d.chatByRole(root).mirror;
+        await mirror.waitFor(() => mirror.inputResolved(pending.requestId) || !mirror.pendingInputs().some(p => p.requestId === pending.requestId),
+          {timeoutMs: 60000, label: 'approval closed by Stop'}).catch(() => null);
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: null, ignore: [pending.requestId], timeoutMs: 60000});
+        s.settled(wait, 'stopped-turn-settles', ['idle', 'errored']);
+        s.check('stale-card-closed', 'Stop closes the pending approval (resolved or gone)', {resolved: mirror.inputResolved(pending.requestId), stillPending: mirror.pendingInputs().some(p => p.requestId === pending.requestId), wait: wait.result},
+          mirror.inputResolved(pending.requestId) || !mirror.pendingInputs().some(p => p.requestId === pending.requestId));
+        let probe;
+        try {
+          probe = (await s.d.answer(chatId, pending, {approval: 'allow-once'}, {probe: true})).receipt;
+        } catch (error) {
+          probe = {status: error instanceof NotAnswerable ? 'not-answerable' : 'rpc-error', reason: {message: String(error.message ?? error)}};
+        }
+        s.info('stale-probe-receipt', 'the late answer is refused or has no effect (receipt recorded)', {status: probe?.status, reason: probe?.reason?.code ?? probe?.reason?.message ?? null}, probe?.status !== 'applied');
+        const quiet = await s.stays(root, entries => markerInTools(entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool')), s.m('S1-STALE')), 15000);
+        s.check('stale-answer-no-effect', 'no tool output with the stale marker appears in 15 s after the late answer (OCF-41/50)', quiet, quiet);
+        s.check('stale-not-working', 'the chat is not left working', s.d.sessions.status(chatId), !s.d.busy(chatId));
+      });
+    },
+  },
+
+  S2: {
+    title: 'Native subagent attribution and background work', validation: ['OCE-01', 'OCE-21'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['subagents', 'background-shell', 'stop-with-running-child'],
+    prompts: n => ({
+      subagents: `Use your subagent tool (the tool that starts a separate agent) to start two subagents. Subagent A runs in the foreground: tell it to run the shell command "echo CHILD-A-${n}" and report the output. Subagent B: start it in the background if your subagent tool supports background agents, otherwise in the foreground; tell it to run the shell command "echo CHILD-B-${n}" and report the output. Do not run either command yourself. When both have been started, reply with exactly ROOT-DONE-${n}.`,
+      background: `Use your shell tool's background option to run this command in the background: sleep 8; echo BG-SHELL-${n}\nDo not wait for it to finish. Immediately reply with exactly BG-STARTED-${n}.`,
+      slow: `Use your subagent tool to start one subagent and tell it to run the shell command "sleep 45; echo CHILD-SLOW-${n}" and report the output. Wait for it, then reply with its output.`,
+    }),
+    unverified: ['Grandchild visibility (experimental.subagent_depth 2) needs that profile setting; not set by this runner.'],
+    async run(s, P) {
+      await s.step('subagents', async () => {
+        const t = await s.turn('root', P.subagents, {mock: 'subagent', answer: allowAll});
+        s.settled(t.wait);
+        const rootChat = s.d.chatByRole('root');
+        // Background children may finish after the root turn: wait on frames.
+        await rootChat.mirror.waitFor(entries => subagentParts(entries).length && subagentParts(entries).every(p => SUBAGENT_TERMINAL.has(p.subagentStatus)),
+          {timeoutMs: 180000, label: 'subagents settled'}).catch(() => null);
+        const spawns = subagentParts(s.entries('root'));
+        s.check('spawns-in-root', 'root shows native subagent spawn chips (Agent: ...)', spawns.map(p => ({status: p.subagentStatus ?? null, ref: Boolean(p.subagentRef)})), spawns.length >= 1);
+        const children = await attachChildren(s, 'root', 'child');
+        s.check('child-docs', 'each spawn links a nested subagent transcript', children, children.length === spawns.length && children.length >= 1);
+        const childTools = children.flatMap(role => s.entries(role).flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool')));
+        const rootTools = s.entries('root').flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool'));
+        for (const marker of ['CHILD-A', 'CHILD-B']) {
+          s.modelCheck(`${marker.toLowerCase()}-in-child`, `${marker}-${s.nonce} output appears under a child transcript`, markerInTools(childTools, s.m(marker)), markerInTools(childTools, s.m(marker)));
+          s.check(`${marker.toLowerCase()}-not-in-root-tools`, 'no root tool output carries the child marker (OCF-21)', markerInTools(rootTools, s.m(marker)), !markerInTools(rootTools, s.m(marker)));
+        }
+        const ids = [...s.d.chats.values()].flatMap(c => c.mirror.entries.map(e => e.id));
+        s.check('entry-ids-unique', 'entry ids are unique across root and child documents (OCF-22)', `${ids.length} ids`, new Set(ids).size === ids.length);
+        s.modelCheck('root-done', `root replied ROOT-DONE-${s.nonce}`, t.reply.slice(0, 200), t.reply.includes(s.m('ROOT-DONE')));
+        const extraTurns = s.after('root', t.messageId).filter(e => e.role === 'assistant').length;
+        s.info('wake-turn', 'a background completion appears as a provider-owned turn (assistant entry without a user prompt)', extraTurns, extraTurns >= 1);
+        s.d.capture('s2-subagents');
+      });
+      await s.step('background-shell', async () => {
+        const t = await s.turn('root', P.background, {mock: 'tool-shell-background', answer: allowAll});
+        s.settled(t.wait);
+        const chat = s.d.chatByRole('root');
+        const shell = await waitOn([chat.nativeTasks], () => (chat.nativeTasks.latest?.tasks ?? []).find(task => task.kind === 'shell'), 90000, 'background shell row').catch(() => null);
+        s.check('background-shell-row', 'the background shell shows as the shared native-task row (NativeTaskChanged{Shell})', shell ? {kind: shell.kind, status: shell.status ?? shell.state ?? null} : null, Boolean(shell));
+        s.modelCheck('background-started-reply', `reply BG-STARTED-${s.nonce}`, t.reply.slice(0, 200), t.reply.includes(s.m('BG-STARTED')));
+      });
+      await s.step('stop-with-running-child', async () => {
+        const chatId = s.chatId('root');
+        const sent = await s.d.send(chatId, s.p(P.slow, 'subagent'));
+        const mirror = s.d.chatByRole('root').mirror;
+        const spawned = await mirror.waitFor(entries => {
+          const at = entries.findIndex(e => e.id === sent.messageId);
+          return at >= 0 && subagentParts(entries.slice(at + 1)).find(p => p.subagentStatus === 'running');
+        }, {timeoutMs: 120000, label: 'running subagent'}).catch(() => null);
+        s.check('child-running', 'a running subagent chip appears before Stop', spawned?.subagentStatus ?? null, Boolean(spawned));
+        const stopped = await s.d.stop(chatId);
+        s.check('stop-applied', 'Stop receipt applied', stopped.receipt?.status, stopped.receipt?.status === 'applied');
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, timeoutMs: 90000});
+        s.settled(wait, 'stopped-settles', ['idle', 'errored']);
+        const childRoles = await attachChildren(s, 'root', 'slow-child', sent.messageId);
+        const leaked = () => s.after('root', sent.messageId).some(e => e.role === 'assistant' && textOf(e).includes(s.m('CHILD-SLOW')))
+          || childRoles.some(role => markerInTools(s.entries(role).flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool')), s.m('CHILD-SLOW')));
+        const quiet = (await s.stays('root', leaked, 20000)) && !leaked();
+        s.check('child-stopped', 'the slow child marker never arrives after Stop (OCF-40)', quiet, quiet);
+        const chip = subagentParts(s.after('root', sent.messageId))[0];
+        s.info('child-chip-final', 'the child chip ends interrupted or terminal, not running', chip?.subagentStatus ?? null, SUBAGENT_TERMINAL.has(chip?.subagentStatus));
+      });
+    },
+  },
+
+  S3: {
+    title: 'LUNA tool delivery', validation: ['OCE-18'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['fresh-call', 'resumed-call', 'subagent-refused', 'forked-call', 'post-compaction-call', 'cross-project'],
+    prompts: n => ({
+      luna: `Call the get_workspace tool from the luna MCP server (the LUNA workspace tool). Then reply with exactly WS-${n}- followed by the project name it reports. Do not use any other tool.`,
+      child: 'Use your subagent tool to start one subagent. Tell it to call the get_workspace tool from the luna MCP server and to report whether the call succeeded or was refused. Do not call any luna tool yourself. Reply with the subagent\'s report.',
+      cross: `Using the luna MCP tools, try to read the workspace of a different LUNA project named does-not-exist-${n}. Report exactly whether the call was allowed or refused. Do not change anything.`,
+    }),
+    unverified: ['Instruction-entry readback (bootstrap size, instructions channel) needs native server readback; LUNA keeps the server password private.',
+      'Re-attachment after an OpenCode server restart is covered by S4 (app restart), not here.'],
+    async run(s, P) {
+      const lunaOk = (role, messageId) => lunaParts(s.after(role, messageId)).filter(p => p.call.tool === 'get_workspace');
+      await s.step('fresh-call', async () => {
+        const t = await s.turn('root', P.luna, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaOk('root', t.messageId);
+        s.modelCheck('luna-tool-fresh', 'mcp:luna/get_workspace resolved without error on a fresh session', calls.map(p => `${p.resolved}:${p.isError}`), calls.some(p => p.resolved && !p.isError));
+      });
+      await s.step('resumed-call', async () => {
+        const t = await s.turn('root', P.luna, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaOk('root', t.messageId);
+        s.modelCheck('luna-tool-resumed', 'mcp:luna/get_workspace resolved on the resumed session', calls.map(p => `${p.resolved}:${p.isError}`), calls.some(p => p.resolved && !p.isError));
+      });
+      await s.step('subagent-refused', async () => {
+        const t = await s.turn('root', P.child, {mock: 'subagent', answer: allowAll});
+        s.settled(t.wait);
+        await s.d.chatByRole('root').mirror.waitFor(entries => subagentParts(entries).every(p => SUBAGENT_TERMINAL.has(p.subagentStatus)), {timeoutMs: 120000, label: 'child settled'}).catch(() => null);
+        const children = await attachChildren(s, 'root', 'luna-child', t.messageId);
+        const childLuna = children.flatMap(role => lunaParts(s.entries(role)));
+        s.check('subagent-luna-refused', 'no successful luna tool call from a native subagent (root-only, OCF-121)', childLuna.map(p => `${p.call.tool}:${p.resolved}:${p.isError}`), !childLuna.some(p => p.resolved && !p.isError));
+        s.check('root-did-not-call', 'the root made no luna call in this step', lunaParts(s.after('root', t.messageId)).length, lunaParts(s.after('root', t.messageId)).length === 0);
+      });
+      await s.step('forked-call', async () => {
+        const fork = await s.d.fork(s.chatId('root'), {boundary: 'tip', role: 'fork-tip'});
+        s.check('fork-applied', 'tip fork applied', fork.receipt?.status, fork.receipt?.status === 'applied');
+        if (fork.receipt?.status !== 'applied') return;
+        const t = await s.turn('fork-tip', P.luna, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaOk('fork-tip', t.messageId);
+        s.modelCheck('luna-tool-forked', 'mcp:luna/get_workspace resolved in the forked session', calls.map(p => `${p.resolved}:${p.isError}`), calls.some(p => p.resolved && !p.isError));
+      });
+      await s.step('post-compaction-call', async () => {
+        const before = JSON.stringify(s.d.chatByRole('root').mirror.latest.contextControl ?? null);
+        const compact = await s.d.compact(s.chatId('root'));
+        s.check('compact-receipt', 'compactContext receipt applied (or a truthful refusal)', {status: compact.receipt?.status, reason: compact.receipt?.reason?.code ?? null}, ['applied', 'rejected'].includes(compact.receipt?.status));
+        const mirror = s.d.chatByRole('root').mirror;
+        await mirror.waitFor(() => JSON.stringify(mirror.latest.contextControl ?? null) !== before, {timeoutMs: 120000, label: 'context control change'}).catch(() => null);
+        s.info('compaction-lifecycle', 'the document context control changed after compaction', mirror.latest.contextControl, JSON.stringify(mirror.latest.contextControl ?? null) !== before);
+        const t = await s.turn('root', P.luna, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaOk('root', t.messageId);
+        s.modelCheck('luna-tool-post-compaction', 'LUNA tools survive compaction (OCF-111)', calls.map(p => `${p.resolved}:${p.isError}`), calls.some(p => p.resolved && !p.isError));
+      });
+      await s.step('cross-project', async () => {
+        const t = await s.turn('root', P.cross, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaParts(s.after('root', t.messageId));
+        s.info('cross-project-calls', 'luna calls in a cross-project attempt (refusals are errors)', calls.map(p => `${p.call.tool}:${p.isError}`), true);
+        s.modelCheck('cross-project-reported', 'the agent reports the cross-project request as refused', t.reply.slice(0, 200), /refus|denied|not allowed|unavailable|cannot|can't/i.test(t.reply));
+      });
+    },
+  },
+
+  S4: {
+    title: 'Restart with a pending approval and a queued row', validation: ['OCE-04', 'OCE-05', 'OCE-09'], parity: false, permissionMode: 'ask', phases: ['pre', 'post'],
+    steps: ['completed-turn', 'pending-approval', 'queued-row', '(operator restarts the QA app)', 'after-restart-readback', 'stale-or-live-answer', 'continue-after-restart'],
+    prompts: n => ({
+      before: `Reply with exactly S4-BEFORE-${n}. Do not use tools.`,
+      pending: `Use your shell tool to run exactly this command: echo S4-PENDING-${n}\nThen reply with only the command's output.`,
+      queued: `Reply with exactly S4-QUEUED-${n}. Do not use tools.`,
+      after: `Reply with exactly S4-AFTER-${n}. Do not use tools.`,
+    }),
+    unverified: ['SSE break and server restart mid-turn without an app restart (OCE-04 a-f) need a fault-injecting proxy; this scenario restarts the whole app.',
+      'Managed OpenCode service resume (OCE-09) needs a second OpenCode process on the isolated storage.'],
+    async pre(s, P) {
+      await s.step('completed-turn', async () => {
+        const t = await s.turn('root', P.before, {mock: `text:${s.m('S4-BEFORE')}`});
+        s.settled(t.wait);
+        s.modelCheck('before-reply', `reply S4-BEFORE-${s.nonce}`, t.reply.slice(0, 120), t.reply.includes(s.m('S4-BEFORE')));
+      });
+      await s.step('pending-approval', async () => {
+        const chatId = s.chatId('root');
+        const sent = await s.d.send(chatId, s.p(P.pending, `tool-shell:echo ${s.m('S4-PENDING')}`));
+        const pending = await s.d.waitPending(chatId);
+        s.ids.pending = {requestId: pending.requestId, messageId: sent.messageId, questions: pending.questions};
+        s.check('pending-approval', 'an approval is pending before the restart', pending.requestId, Boolean(pending.questions.some(q => q.approval)));
+        s.d.capture('s4-pending-before-restart');
+      });
+      await s.step('queued-row', async () => {
+        const chatId = s.chatId('root');
+        const sent = await s.d.send(chatId, s.p(P.queued, `text:${s.m('S4-QUEUED')}`), {queue: true});
+        s.ids.queued = {messageId: sent.messageId};
+        const queue = s.d.chatByRole('root').queue;
+        const row = await waitOn([queue], () => (queue.latest?.items ?? []).find(i => i.id === sent.messageId), 30000, 'queued row').catch(() => null);
+        s.check('queued-row', 'the queued row is visible in WatchQueue', row ? {id: row.id} : null, Boolean(row));
+      });
+      s.evidence.manifest.restart = {requiredAt: now(), previousPid: s.d.identity.pid, pending: s.ids.pending, queued: s.ids.queued};
+      s.evidence.save('restart-required.json', {
+        instructions: 'QA operator: let the QA app save and quit gracefully, relaunch the same QA bundle (never force-quit; never the primary LUNA Dev), then run this scenario with --phase post --run <this dir>.',
+        previousPid: s.d.identity.pid, pending: s.ids.pending, queued: s.ids.queued, at: now(),
+      });
+    },
+    async post(s, P) {
+      const previous = s.evidence.manifest.restart;
+      await s.step('after-restart-readback', async () => {
+        s.check('app-restarted', 'a different QA app pid than the pre phase (QF-24)', `${previous?.previousPid} -> ${s.d.identity.pid}`, previous?.previousPid && previous.previousPid !== s.d.identity.pid);
+        const entries = s.entries('root');
+        for (const send of s.evidence.manifest.sends.filter(x => x.kind === 'message' && x.messageId && x.phase === 'pre')) {
+          const count = entries.filter(e => e.id === send.messageId).length;
+          const queued = send.messageId === previous?.queued?.messageId;
+          s.check(`send-${send.index}-once`, queued ? 'the queued row is delivered at most once' : 'the user message survives restart exactly once', count, queued ? count <= 1 : count === 1);
+        }
+        const cards = entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'input' && p.requestId === previous?.pending?.requestId));
+        s.check('no-duplicate-approval', 'the pre-restart approval appears at most once (OCF-58)', cards.length, cards.length <= 1);
+        s.info('approval-after-restart', 'pre-restart approval state after restart (provider truth: re-shown once or closed)', cards.map(c => ({resolved: c.resolved})), true);
+        const queue = s.d.chatByRole('root').queue;
+        s.info('queue-after-restart', 'queued row state after restart (expected: paused, not auto-replayed)', (queue.latest?.items ?? []).map(i => i.id === previous?.queued?.messageId ? 'pre-restart-row' : 'other'), true);
+        s.d.capture('s4-after-restart');
+      });
+      await s.step('stale-or-live-answer', async () => {
+        const chatId = s.chatId('root');
+        const mirror = s.d.chatByRole('root').mirror;
+        const live = mirror.pendingInputs().find(p => p.requestId === previous?.pending?.requestId);
+        const pending = live ?? {requestId: previous?.pending?.requestId, questions: previous?.pending?.questions ?? []};
+        let receipt;
+        try {
+          receipt = (await s.d.answer(chatId, pending, {approval: 'allow-once'}, {probe: !live})).receipt;
+        } catch (error) {
+          receipt = {status: 'rpc-error', reason: {message: String(error.message ?? error)}};
+        }
+        s.info('answer-after-restart', live ? 'the re-shown approval is answerable once' : 'the stale approval answer is refused or has no effect', {live: Boolean(live), status: receipt?.status, reason: receipt?.reason?.code ?? receipt?.reason?.message ?? null}, live ? receipt?.status === 'applied' : receipt?.status !== 'applied');
+        if (!live) {
+          const quiet = await s.stays('root', entries => markerInTools(entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool')), s.m('S4-PENDING')), 15000);
+          s.check('stale-no-effect', 'no tool output with the pre-restart marker after the stale answer', quiet, quiet);
+        }
+      });
+      await s.step('continue-after-restart', async () => {
+        // turn() waits for any recovered or queued turn to finish first.
+        const t = await s.turn('root', P.after, {mock: `text:${s.m('S4-AFTER')}`, answer: allowAll});
+        s.settled(t.wait);
+        s.modelCheck('after-reply', `reply S4-AFTER-${s.nonce}`, t.reply.slice(0, 120), t.reply.includes(s.m('S4-AFTER')));
+        const queuedCount = s.entries('root').filter(e => e.id === previous?.queued?.messageId).length;
+        s.check('queued-once-overall', 'the pre-restart queued message is never duplicated', queuedCount, queuedCount <= 1);
+      });
+    },
+  },
+
+  S5: {
+    title: 'History: fork, edit, rewind and side chats', validation: ['OCE-10', 'OCE-24'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['three-marker-turns', 'fork-user-row', 'fork-assistant-row', 'fork-continuation', 'side-chat-native', 'side-chat-snapshot', 'edit-earlier-message', 'rewind', 'rewind-continuation', 'reopen-readback'],
+    prompts: n => ({
+      marker: i => `Remember this marker: M${i}-${n}. Reply with exactly M${i}-${n}. Do not use tools.`,
+      list: 'List every marker I asked you to remember in this conversation, separated by single spaces. Reply only with the markers. Do not use tools.',
+      sideRecall: 'Which marker did I ask you to remember in my second message? Reply with only that marker. Do not use tools.',
+      sideNative: `Reply with exactly SIDE-NATIVE-${n}. Do not use tools.`,
+      sideSnap: `Reply with exactly SIDE-SNAP-${n}. Do not use tools.`,
+      sideSeed: 'What text did I select when I opened this side chat? Reply with only that text. Do not use tools.',
+      edit: `Remember this marker: E2-${n}. Reply with exactly E2-${n}. Do not use tools.`,
+    }),
+    unverified: ['Native message-list readback for source and destination (LUNA keeps the server private); the wire log slice holds the fork/revert requests.',
+      'Import of a TUI-created session with the plan agent (OCE-10) needs an external OpenCode client on the isolated profile.'],
+    async run(s, P) {
+      const ids = {users: [], replies: []};
+      await s.step('three-marker-turns', async () => {
+        for (const i of [1, 2, 3]) {
+          const t = await s.turn('root', P.marker(i), {mock: `text:${s.m(`M${i}`)}`});
+          s.settled(t.wait, `marker-${i}-settled`);
+          s.modelCheck(`marker-${i}-reply`, `reply M${i}-${s.nonce}`, t.reply.slice(0, 120), t.reply.includes(s.m(`M${i}`)));
+          ids.users.push(t.messageId);
+          ids.replies.push(s.after('root', t.messageId).filter(e => e.role === 'assistant').at(-1)?.id ?? null);
+        }
+        s.check('three-turns', 'three user and three assistant rows', {users: s.users('root').length}, s.users('root').length === 3 && ids.replies.every(Boolean));
+      });
+      const sourceIds = () => s.entries('root').map(e => e.id).join(',');
+      await s.step('fork-user-row', async () => {
+        const before = sourceIds();
+        const fork = await s.d.fork(s.chatId('root'), {boundary: 'beforeUserMessage', messageId: ids.users[1], role: 'fork-user'});
+        s.check('fork-user-applied', 'fork before user row 2 applied', {status: fork.receipt?.status, reason: fork.receipt?.reason?.message ?? null}, fork.receipt?.status === 'applied');
+        if (fork.receipt?.status === 'applied') {
+          const users = s.users('fork-user');
+          s.check('fork-user-prefix', 'the fork holds only turn 1', users.map(textOf).map(t => maskNonce(t, s.nonce)), users.length === 1 && textOf(users[0]).includes(s.m('M1')));
+        }
+        s.check('source-unchanged', 'the source transcript is unchanged by the fork (OCF-92)', null, sourceIds() === before);
+      });
+      await s.step('fork-assistant-row', async () => {
+        const before = sourceIds();
+        const fork = await s.d.fork(s.chatId('root'), {boundary: 'afterCompletedTurn', messageId: ids.replies[1], role: 'fork-assistant'});
+        s.check('fork-assistant-applied', 'fork after assistant row 2 applied', {status: fork.receipt?.status, reason: fork.receipt?.reason?.message ?? null}, fork.receipt?.status === 'applied');
+        if (fork.receipt?.status === 'applied') {
+          const users = s.users('fork-assistant');
+          s.check('fork-assistant-prefix', 'the fork holds turns 1 and 2', users.length, users.length === 2);
+        }
+        s.check('source-unchanged', 'the source transcript is unchanged by the fork', null, sourceIds() === before);
+      });
+      await s.step('fork-continuation', async () => {
+        if (!s.d.chatByRole('fork-user')) return s.check('fork-continuation', 'needs the user-row fork', 'no fork', false);
+        const t = await s.turn('fork-user', P.list, {mock: `text:${s.m('M1')}`});
+        s.settled(t.wait);
+        s.modelCheck('fork-recall', 'the fork recalls M1 but not M2/M3 (real msg_ boundary, OCF-155)', t.reply.slice(0, 200),
+          t.reply.includes(s.m('M1')) && !t.reply.includes(s.m('M2')) && !t.reply.includes(s.m('M3')));
+      });
+      await s.step('side-chat-native', async () => {
+        const before = sourceIds();
+        const side = await s.d.createSideChat(s.chatId('root'), {role: 'side-native', snapshot: false, originMessageId: ids.replies[1]});
+        s.check('side-native-created', 'native-fork side chat created', side.error ?? side.created?.meta?.contextMode ?? null, !side.error);
+        if (side.error) return;
+        s.info('side-native-mode', 'the side chat context mode is nativeFork', side.created?.meta?.contextMode ?? null, side.created?.meta?.contextMode === 'nativeFork');
+        const first = await s.waitSideTurn('side-native', await s.d.sendSideChat(side.id, s.p(P.sideRecall, `text:${s.m('M2')}`)));
+        s.settled(first.wait, 'side-native-turn-1');
+        s.modelCheck('side-native-recall', 'the native fork knows the parent context (M2)', first.reply.slice(0, 120), first.reply.includes(s.m('M2')));
+        const second = await s.waitSideTurn('side-native', await s.d.sendSideChat(side.id, s.p(P.sideNative, `text:${s.m('SIDE-NATIVE')}`)));
+        s.settled(second.wait, 'side-native-turn-2');
+        s.check('parent-unchanged', 'the parent transcript is unchanged by the side chat', null, sourceIds() === before);
+        s.evidence.save('side-native-readback.json', await s.d.rpc.call('ReadSideChat', {id: side.id}).catch(error => ({error: String(error.message ?? error)})));
+        s.d.capture('s5-side-native');
+      });
+      await s.step('side-chat-snapshot', async () => {
+        const before = sourceIds();
+        const anchor = s.m('M2');
+        const side = await s.d.createSideChat(s.chatId('root'), {role: 'side-snapshot', snapshot: true, originMessageId: ids.replies[1], anchorText: anchor});
+        s.check('side-snapshot-created', 'snapshot side chat created', side.error ?? side.created?.meta?.contextMode ?? null, !side.error);
+        if (side.error) return;
+        const first = await s.waitSideTurn('side-snapshot', await s.d.sendSideChat(side.id, s.p(P.sideSnap, `text:${s.m('SIDE-SNAP')}`)));
+        s.settled(first.wait, 'side-snapshot-turn-1');
+        const firstUser = s.users('side-snapshot')[0];
+        s.check('seed-not-in-user-text', 'the snapshot seed is not prepended to the first user message (instruction channel)', textOf(firstUser).slice(0, 200), firstUser && !textOf(firstUser).includes(anchor));
+        const second = await s.waitSideTurn('side-snapshot', await s.d.sendSideChat(side.id, s.p(P.sideSeed, `text:${anchor}`)));
+        s.settled(second.wait, 'side-snapshot-turn-2');
+        s.modelCheck('side-snapshot-seed-known', 'the snapshot side chat knows the selected excerpt', second.reply.slice(0, 120), second.reply.includes(anchor));
+        s.check('parent-unchanged', 'the parent transcript is unchanged by the snapshot side chat', null, sourceIds() === before);
+      });
+      await s.step('edit-earlier-message', async () => {
+        const edit = await s.d.editEarlier(s.chatId('root'), ids.users[1], s.p(P.edit, `text:${s.m('E2')}`));
+        s.check('edit-applied', 'edit earlier message applied', {status: edit.receipt?.status, reason: edit.receipt?.reason?.message ?? null}, edit.receipt?.status === 'applied');
+        if (edit.receipt?.status !== 'applied') return;
+        const wait = await s.d.waitTurn(s.chatId('root'), {mark: edit.mark, timeoutMs: s.turnTimeout});
+        s.settled(wait, 'edit-turn-settled');
+        const users = s.users('root').map(textOf);
+        s.check('edit-history', 'history is turn 1 plus the edited turn 2; turn 3 is gone', users.map(t => maskNonce(t, s.nonce)), users.length === 2 && users[1].includes(s.m('E2')) && !users.some(t => t.includes(s.m('M3'))));
+        const reply = s.entries('root').filter(e => e.role === 'assistant').map(textOf).join('\n');
+        s.modelCheck('edit-reply', `reply E2-${s.nonce}`, reply.slice(-120), reply.includes(s.m('E2')));
+      });
+      await s.step('rewind', async () => {
+        const edited = s.users('root').find(e => textOf(e).includes(s.m('E2')));
+        if (!edited) return s.check('rewind-target', 'needs the edited user row', null, false);
+        fs.appendFileSync(path.join(s.fixture.dir, 'README.md'), 'Unrelated modified tracked content.\n');
+        fs.writeFileSync(path.join(s.fixture.dir, 'unrelated.txt'), 'Unrelated untracked content.\n');
+        const before = fileHashes(s.fixture.dir, ['README.md', 'unrelated.txt']);
+        const rewind = await s.d.rewind(s.chatId('root'), edited.id);
+        s.check('rewind-applied', 'same-chat rewind applied', {status: rewind.receipt?.status, reason: rewind.receipt?.reason?.message ?? null}, rewind.receipt?.status === 'applied');
+        const mirror = s.d.chatByRole('root').mirror;
+        await mirror.waitFor(entries => !entries.some(e => e.id === edited.id), {timeoutMs: 30000, label: 'rewound row removed'}).catch(() => null);
+        s.check('rewind-history', 'history keeps only turn 1', s.users('root').map(textOf).map(t => maskNonce(t, s.nonce)), s.users('root').length === 1);
+        s.check('rewind-keeps-files', 'rewind keeps files (files:false, OCF-93)', fileHashes(s.fixture.dir, ['README.md', 'unrelated.txt']), JSON.stringify(fileHashes(s.fixture.dir, ['README.md', 'unrelated.txt'])) === JSON.stringify(before));
+      });
+      await s.step('rewind-continuation', async () => {
+        const t = await s.turn('root', P.list, {mock: `text:${s.m('M1')}`});
+        s.settled(t.wait);
+        s.modelCheck('rewind-recall', 'the continuation recalls only M1', t.reply.slice(0, 200),
+          t.reply.includes(s.m('M1')) && !['M2', 'M3', 'E2'].some(m => t.reply.includes(s.m(m))));
+      });
+      await s.step('reopen-readback', async () => {
+        const state = await s.d.snapshot('history-final');
+        const binding = state.chats.root?.identity?.currentBinding;
+        s.check('root-binding', 'the root keeps a provider binding after edit and rewind', binding ? {provider: binding.providerId ?? null} : null, Boolean(binding?.providerTaskId));
+      });
+    },
+  },
+
+  S6: {
+    title: 'Models, variants and usage', validation: ['OCE-13'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['catalog', 'turn-with-variant', 'switch-variant', 'usage-store (opt-in)'],
+    prompts: n => ({v1: `Reply with exactly V1-${n}. Do not use tools.`, v2: `Reply with exactly V2-${n}. Do not use tools.`}),
+    unverified: ['`opencode stats --models --cost` comparison (read-only CLI against the isolated profile) is an operator step.',
+      'Disconnecting a provider and the accounts card are UI steps outside this runner.'],
+    async run(s, P) {
+      await s.step('catalog', async () => {
+        const harness = s.provider;
+        const cached = await s.d.rpc.call('ListModels', {harness});
+        const fresh = await s.d.rpc.call('ListModels', {harness, refresh: true});
+        s.evidence.save('catalog-cached.json', cached);
+        s.evidence.save('catalog-refreshed.json', fresh);
+        s.check('catalog-not-empty', 'the catalog lists models right after boot and after refresh (OCF-100)', {cached: cached.length, refreshed: fresh.length}, cached.length > 0 && fresh.length > 0);
+        const model = fresh.find(m => m.id === s.config.model) ?? cached.find(m => m.id === s.config.model);
+        s.check('selected-model-listed', 'the run model is in the catalog', s.config.model, Boolean(model));
+        s.ids.levels = model?.reasoningLevels ?? [];
+        s.info('variants-offered', 'the model advertises variants (reasoning levels)', s.ids.levels, s.ids.levels.length > 0);
+        s.check('no-plan-mode', 'no catalog entry exposes the native plan agent as a model or mode (OCF-105)', fresh.filter(m => /(^|\/)plan$/i.test(m.id)).map(m => m.id), !fresh.some(m => /(^|\/)plan$/i.test(m.id)));
+      });
+      await s.step('turn-with-variant', async () => {
+        const t = await s.turn('root', P.v1, {mock: `text:${s.m('V1')}`});
+        s.settled(t.wait);
+        const record = await s.d.chatRecord(s.chatId('root'));
+        s.evidence.save('effective-config-1.json', record?.config ?? null);
+        s.check('effective-model', 'readback model equals the requested model', record?.config?.model ?? null, record?.config?.model === s.config.model);
+        s.check('effective-variant', 'readback variant equals the requested variant', record?.config?.reasoning ?? null, (record?.config?.reasoning ?? null) === (s.config.reasoning ?? null));
+        const usage = s.d.chatByRole('root').mirror.latest.contextUsage;
+        s.info('context-usage', 'the transcript carries context usage after a turn (context window from the model limit, OCF-159)', usage, Boolean(usage));
+      });
+      await s.step('switch-variant', async () => {
+        const next = (s.ids.levels ?? []).find(level => level !== s.config.reasoning);
+        if (!next) return s.info('switch-variant', 'a second variant exists to switch to', s.ids.levels, false);
+        const result = await s.d.setModel(s.chatId('root'), {reasoning: next});
+        s.check('set-model-applied', 'setModel (next safe turn) applied', {status: result.receipt?.status, reason: result.receipt?.reason?.message ?? null}, result.receipt?.status === 'applied');
+        const t = await s.turn('root', P.v2, {mock: `text:${s.m('V2')}`});
+        s.settled(t.wait);
+        const record = await s.d.chatRecord(s.chatId('root'));
+        s.evidence.save('effective-config-2.json', record?.config ?? null);
+        s.check('variant-switched', 'readback variant follows the switch (OCF-104)', record?.config?.reasoning ?? null, record?.config?.reasoning === next);
+      });
+      await s.step('usage-store', async () => {
+        if (!s.opts['allow-usage-store']) return s.info('usage-store', 'GetUsageSnapshot skipped without --allow-usage-store (QF-23)', 'skipped', true);
+        const snapshot = await s.d.rpc.call('GetUsageSnapshot', {days: 1, includeLimits: false}, {timeoutMs: 120000});
+        s.evidence.save('usage-snapshot.json', snapshot);
+        s.info('usage-history', 'Usage history returned for the day (compare with the run turns)', Object.keys(snapshot ?? {}), Boolean(snapshot));
+      });
+    },
+  },
+
+  S7: {
+    title: 'Images, compaction and discovery', validation: ['OCE-08', 'OCE-14', 'OCE-20'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['image-initial', 'image-queued', 'image-steer', 'compaction', 'discovery'],
+    prompts: n => ({
+      image: 'What is the dominant color of the attached image? Reply with exactly one lowercase color word and nothing else. Do not use tools.',
+      busy: `Use your shell tool to run exactly this command: sleep 12\nThen reply with exactly SLEPT-${n}.`,
+      luna: `Call the get_workspace tool from the luna MCP server. Then reply with exactly WS-${n}- followed by the project name. Do not use any other tool.`,
+      command: '/qa-echo',
+    }),
+    fixture(fx, nonce) {
+      const body = `---\ndescription: LUNA QA echo command\n---\nReply with exactly CMD-ECHO-${nonce} and nothing else. Do not use tools.\n`;
+      for (const dir of ['.opencode/command', '.claude/commands']) {
+        fs.mkdirSync(path.join(fx.dir, dir), {recursive: true});
+        fs.writeFileSync(path.join(fx.dir, dir, 'qa-echo.md'), body);
+      }
+      fx.git('add', '.opencode', '.claude');
+      fx.git('commit', '-q', '-m', 'qa commands');
+    },
+    unverified: ['Auto-compaction mid-turn (OCE-14) needs a small-context mock; this scenario runs manual compaction.',
+      'Invalid, oversized and SVG attachments and the app-restart image path (OCE-08 5-6) are not driven here.'],
+    async run(s, P) {
+      const colors = {red: [220, 20, 20], blue: [20, 40, 220], green: [20, 200, 40]};
+      const image = async name => s.d.upload(solidPng(64, 64, colors[name]), `qa-${name}.png`);
+      const busyTurn = async () => {
+        const sent = await s.d.send(s.chatId('root'), s.p(P.busy, 'tool-shell:sleep 12'));
+        await waitOn([s.d.sessions, s.d.chatByRole('root').mirror], () => s.d.busy(s.chatId('root')), 60000, 'busy').catch(() => null);
+        return sent;
+      };
+      await s.step('image-initial', async () => {
+        const staged = await image('red');
+        const t = await s.turn('root', P.image, {mock: 'image', attachments: [staged.path]});
+        s.settled(t.wait);
+        const user = s.entries('root').find(e => e.id === t.messageId);
+        s.check('image-part', 'the user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.modelCheck('image-consumed', 'the model names the image colour (red)', t.reply.slice(0, 80), /\bred\b/i.test(t.reply));
+        s.ids.images = [{step: 'image-initial', ...staged}];
+      });
+      await s.step('image-queued', async () => {
+        const busy = await busyTurn();
+        const staged = await image('blue');
+        const queued = await s.d.send(s.chatId('root'), s.p(P.image, 'image'), {attachments: [staged.path], queue: true});
+        s.check('queued-path', 'a busy chat queues the image row (queueMessage)', queued.path, queued.path === 'queueMessage');
+        const queue = s.d.chatByRole('root').queue;
+        s.info('queued-row-attachment', 'the queue row keeps its attachment', (queue.latest?.items ?? []).filter(i => i.id === queued.messageId).map(i => (i.attachments ?? []).length), (queue.latest?.items ?? []).some(i => i.id === queued.messageId && (i.attachments ?? []).length === 1));
+        await s.d.waitTurn(s.chatId('root'), {mark: busy.mark, messageId: busy.messageId, timeoutMs: s.turnTimeout, answer: allowAll});
+        const delivered = await s.d.chatByRole('root').mirror.waitFor(() => s.d.replySettled(s.entries('root'), queued.messageId), {timeoutMs: s.turnTimeout, label: 'queued image delivered'}).catch(() => false);
+        s.check('queued-delivered', 'the queued image row is delivered at idle as its own turn', delivered, Boolean(delivered));
+        const reply = s.replyAfter('root', queued.messageId);
+        s.modelCheck('queued-image-consumed', 'the model names the queued image colour (blue)', reply.slice(0, 80), /\bblue\b/i.test(reply));
+        s.ids.images.push({step: 'image-queued', ...staged});
+      });
+      await s.step('image-steer', async () => {
+        const busy = await busyTurn();
+        const staged = await image('green');
+        const queued = await s.d.send(s.chatId('root'), s.p(P.image, 'image'), {attachments: [staged.path], queue: true});
+        const steer = await s.d.steerQueued(s.chatId('root'), queued.messageId);
+        s.check('steer-receipt', 'steerQueuedNow is applied or truthfully refused', {status: steer.receipt?.status, reason: steer.receipt?.reason?.code ?? null}, ['applied', 'rejected', 'conflict'].includes(steer.receipt?.status));
+        await s.d.waitTurn(s.chatId('root'), {mark: busy.mark, messageId: busy.messageId, timeoutMs: s.turnTimeout, answer: allowAll});
+        await s.d.chatByRole('root').mirror.waitFor(() => s.d.replySettled(s.entries('root'), queued.messageId) || s.entries('root').some(e => e.id === queued.messageId), {timeoutMs: s.turnTimeout, label: 'steer delivered'}).catch(() => null);
+        const count = s.entries('root').filter(e => e.id === queued.messageId).length;
+        s.check('steer-once', 'the steered image message appears exactly once (OCF-32/33)', count, count === 1);
+        const reply = s.entries('root').filter(e => e.role === 'assistant').slice(-2).map(textOf).join('\n');
+        s.modelCheck('steer-image-consumed', 'the model names the steered image colour (green)', reply.slice(-120), /\bgreen\b/i.test(reply));
+        s.ids.images.push({step: 'image-steer', ...staged});
+      });
+      await s.step('compaction', async () => {
+        const mirror = s.d.chatByRole('root').mirror;
+        const before = JSON.stringify(mirror.latest.contextControl ?? null);
+        const compact = await s.d.compact(s.chatId('root'));
+        s.check('compact-receipt', 'compactContext applied (or truthfully refused)', {status: compact.receipt?.status, reason: compact.receipt?.reason?.code ?? null}, ['applied', 'rejected'].includes(compact.receipt?.status));
+        await mirror.waitFor(() => JSON.stringify(mirror.latest.contextControl ?? null) !== before, {timeoutMs: 120000, label: 'compaction lifecycle'}).catch(() => null);
+        s.info('compaction-lifecycle', 'compaction shows as context-control lifecycle, not a turn end (OCF-110/156)', mirror.latest.contextControl, JSON.stringify(mirror.latest.contextControl ?? null) !== before);
+        const t = await s.turn('root', P.luna, {mock: 'text', answer: allowAll});
+        s.settled(t.wait);
+        const calls = lunaParts(s.after('root', t.messageId));
+        s.modelCheck('luna-after-compaction', 'LUNA tools survive compaction (OCF-111)', calls.map(p => `${p.resolved}:${p.isError}`), calls.some(p => p.resolved && !p.isError));
+      });
+      await s.step('discovery', async () => {
+        const commands = await s.d.rpc.call('ListCommands', {harness: s.provider, chatId: s.chatId('root')}, {timeoutMs: 90000}).catch(error => ({error: String(error.message ?? error)}));
+        s.evidence.save('commands.json', commands);
+        const list = Array.isArray(commands) ? commands : commands?.commands ?? [];
+        s.check('project-command-listed', 'the project-only command qa-echo is discovered for this chat (OCF-04)', list.map(c => c.name ?? c.id ?? c).filter(n => /qa-echo/.test(String(n))), list.some(c => /qa-echo/.test(String(c.name ?? c.id ?? c))));
+        const catalog = await s.d.rpc.call('ListComposerCatalog', {chatId: s.chatId('root')}, {timeoutMs: 90000}).catch(error => ({error: String(error.message ?? error)}));
+        s.evidence.save('composer-catalog.json', catalog);
+        const t = await s.turn('root', P.command, {mock: `text:CMD-ECHO-${s.nonce}`, answer: allowAll});
+        s.settled(t.wait);
+        s.modelCheck('command-ran', `the slash command ran (CMD-ECHO-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(`CMD-ECHO-${s.nonce}`));
+        const record = await s.d.chatRecord(s.chatId('root'));
+        s.info('title-generated', 'the chat has a generated title (run_title)', record?.title ?? null, Boolean(record?.title));
+      });
+    },
+  },
+
+  S8: {
+    title: 'Review and goals', validation: ['OCE-23'], parity: true, permissionMode: 'full', phases: ['run'],
+    steps: ['review-uncommitted', 'review-commit', 'review-base-branch', 'goals-unavailable'],
+    prompts: () => ({}),
+    fixture(fx) {
+      fx.git('branch', 'qa-base');
+      fs.writeFileSync(path.join(fx.dir, 'calc.js'), 'export const add = (a, b) => a - b; // deliberate bug for review\n');
+      fx.git('add', 'calc.js');
+      fx.git('commit', '-q', '-m', 'Add calc helper');
+      fx.sha = fx.git('rev-parse', 'HEAD');
+      fs.appendFileSync(path.join(fx.dir, 'calc.js'), 'export const mul = (a, b) => a + b;\n');
+    },
+    unverified: ['The provider-side review command body (OpenCode /review, Claude /code-review) is in the wire log (OpenCode) or the Claude transcript; not asserted here.'],
+    async run(s) {
+      // The review row id is engine-owned, so the turn settles on activity
+      // after the mark and the new rows are read by position.
+      const review = async (label, target) => s.step(label, async () => {
+        await s.d.waitIdle(s.chatId('root')).catch(() => null);
+        const before = s.entries('root').length;
+        const started = await s.d.review(s.chatId('root'), target);
+        s.check('review-receipt', `nativeReview for ${target.type} applied`, {status: started.receipt?.status, reason: started.receipt?.reason?.message ?? null}, started.receipt?.status === 'applied');
+        if (started.receipt?.status !== 'applied') return;
+        const wait = await s.d.waitTurn(s.chatId('root'), {mark: started.mark, timeoutMs: s.turnTimeout * 2, answer: allowAll});
+        s.settled(wait, 'review-settled', ['idle']);
+        const added = s.entries('root').slice(before);
+        const user = added.find(e => e.role === 'user');
+        s.info('review-row', 'the review row carries the shared review label', user ? textOf(user).slice(0, 120) : null, Boolean(user) && textOf(user).includes(reviewLabel(target).split('\n')[0]));
+        const reply = added.filter(e => e.role === 'assistant').map(textOf).join('\n').trim();
+        s.info('review-output', 'the review produced output', reply.length, reply.length > 0);
+      });
+      await review('review-uncommitted', {type: 'uncommittedChanges'});
+      await review('review-commit', {type: 'commit', sha: s.fixture.sha, title: 'Add calc helper'});
+      await review('review-base-branch', {type: 'baseBranch', branch: 'qa-base'});
+      await s.step('goals-unavailable', async () => {
+        const goal = await s.d.goal(s.chatId('root'), {action: 'get'});
+        s.info('goal-get', 'goals: OpenCode reports unavailable with the shared copy; Claude has native /goal', {status: goal.receipt?.status, reason: goal.receipt?.reason?.message ?? null}, true);
+      });
+    },
+  },
+};
+
+// ------------------------------------------------------------------ run
+function chooseModel(catalog, {provider, tier, model}) {
+  if (model) return catalog.find(m => m.id === model);
+  if (provider === 'opencode' && tier === 'T2') return catalog.find(m => m.id.startsWith('luna-mock/'));
+  if (provider === 'opencode') return catalog.find(m => /^opencode\/.*(-free|big-pickle)$/.test(m.id)) ?? catalog.find(m => m.isDefault);
+  return catalog.find(m => m.isDefault) ?? catalog[0];
+}
+
+async function runScenario(id, opts, {rehearsal = null} = {}) {
+  const scenario = SCENARIOS[id];
+  assert.ok(scenario, `unknown scenario ${id}; try: list`);
+  const provider = opts.provider;
+  assert.ok(PROVIDERS.includes(provider), `--provider must be one of ${PROVIDERS.join(', ')}`);
+  const phase = opts.phase ?? scenario.phases[0];
+  assert.ok(scenario.phases.includes(phase), `${id} phases: ${scenario.phases.join(', ')}`);
+  const tier = rehearsal ? 'R0' : opts.tier;
+  if (!rehearsal) {
+    assert.ok(['T2', 'T3'].includes(tier), '--tier T2 (mock provider) or T3 (real model) is required (QF-05)');
+    assert.ok(!(provider === 'claude-code' && tier === 'T2'), 'Claude comparison runs are real-model runs: use --tier T3 (PD-18)');
+  }
+  const identity = rehearsal ? assertRehearsalIdentity(rehearsal.child, rehearsal.port) : assertQaIdentity({provider});
+  let evidence;
+  let resumed = null;
+  if (phase === 'post') {
+    assert.ok(opts.run, '--phase post needs --run <pre-phase run dir>');
+    const dir = path.resolve(opts.run);
+    resumed = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+    assert.equal(resumed.scenario, id, 'the run directory belongs to another scenario');
+    assert.equal(resumed.requested.provider, provider, 'the run directory belongs to another provider');
+    assert.ok(fs.existsSync(path.join(dir, 'restart-required.json')), 'the pre phase did not finish (no restart-required.json)');
+    evidence = new Evidence(dir, resumed);
+    evidence.criteria = (resumed.criteria ?? []).filter(c => c.criterion !== 'secret-scan' && c.criterion !== 'wire-log-captured');
+  } else {
+    const scenarioRoot = path.join(path.resolve(opts['evidence-root'] ?? path.join(root, 'target/qa/opencode')), id.toLowerCase(), provider);
+    fs.mkdirSync(scenarioRoot, {recursive: true});
+    const dir = fs.mkdtempSync(path.join(scenarioRoot, `run-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15)}Z-`));
+    fs.writeFileSync(path.join(scenarioRoot, 'latest'), `${dir}\n`);
+    evidence = new Evidence(dir, null);
+  }
+  console.error(`evidence: ${evidence.dir}`);
+  const nonce = resumed?.nonce ?? crypto.randomBytes(4).toString('hex').toUpperCase();
+  const prompts = scenario.prompts(nonce);
+  const rpc = new Rpc({port: identity.port, log: record => evidence.command({...record, phase})});
+  const manifest = resumed ?? {
+    schema: 'luna-opencode-qa-scenario/1', mode: 'scenario', scenario: id, title: scenario.title, validation: scenario.validation,
+    tier, rehearsal: Boolean(rehearsal), nonce, startedAt: now(), luna: lunaSource(),
+    app: {name: identity.appName, bundleId: identity.bundleId, port: identity.port, pid: identity.pid, executable: identity.executable,
+      dataDir: identity.dataDir, codesign: rehearsal ? 'n/a (rehearsal)' : 'verified (--deep --strict)', mcpIsolation: identity.lsenv.LUNA_QA_MCP_ISOLATION ?? null},
+    requested: {provider, model: opts.model ?? null, variant: opts.variant ?? null, permissionMode: scenario.permissionMode},
+    xdg: identity.profile ? {isolated: true, profile: identity.profile.dir, homeIsolated: identity.profile.homeIsolated, offline: identity.profile.offline, projectConfigDisabled: identity.profile.projectConfigDisabled} : null,
+    server: provider === 'opencode' && !rehearsal ? {ownership: 'spawned by the LUNA adapter (--stdio)', credentials: 'LUNA-private; never captured'} : null,
+    plannedSteps: scenario.steps, sends: [], tasks: {}, phases: {},
+    replay: ['node', 'scripts/qa-opencode-scenarios.mjs', ...process.argv.slice(2)].join(' '),
+  };
+  evidence.manifest = manifest;
+  evidence.phase = phase;
+  manifest.phases[phase] = {startedAt: now(), pid: identity.pid};
+  manifest.wireLog = manifest.wireLog ?? null;
+  const wireStart = provider === 'opencode' && !rehearsal ? wireOffsets(identity.wireDir) : null;
+  manifest.phases[phase].wireStart = wireStart?.files ?? null;
+  if (!resumed && provider === 'opencode' && !rehearsal) {
+    const out = evidence.file('binary-resolution.json');
+    const argv = [path.join(root, 'scripts/qa-opencode-manifest.py'), 'binary', '--path', identity.profile.wrapper, '--out', out];
+    const record = spawnSync('python3', argv, {encoding: 'utf8'});
+    evidence.command({method: 'binary-record', params: {argv: ['python3', ...argv]}, outcome: record.status === 0 ? 'ok' : 'err'});
+    manifest.opencodeBinary = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, 'utf8')) : {error: record.stderr};
+  }
+  evidence.writeManifest();
+
+  await rpc.connect();
+  const driver = new Driver({rpc, evidence, identity, provider, nonce, rpcTimeoutMs: Number(opts['rpc-timeout'] ?? 45000), ax: Boolean(opts.ax)});
+  let failure = null;
+  let stopped = [];
+  try {
+    const engine = await driver.init();
+    evidence.save(`engine-info-${phase}.json`, engine);
+    let config;
+    let fixture;
+    if (resumed) {
+      config = resumed.config;
+      fixture = resumed.fixtureInfo;
+      for (const [role, chatId] of Object.entries(resumed.tasks)) driver.attach(chatId, {role, config, cwd: fixture.dir, spaceId: resumed.projectId});
+      await Promise.all([...driver.chats.values()].map(c => c.mirror.ready));
+    } else {
+      const catalog = await rpc.call('ListModels', {harness: provider});
+      evidence.save('catalog.json', catalog);
+      const model = chooseModel(catalog, {provider, tier: rehearsal ? 'T3' : tier, model: opts.model});
+      evidence.check('model-in-catalog', 'requested or tier default model listed by ListModels', model?.id ?? null, Boolean(model));
+      assert.ok(model, 'no usable model in the LUNA catalog');
+      if (!rehearsal) {
+        const mock = model.id.startsWith('luna-mock/');
+        evidence.check('tier-label', tier === 'T2' ? 'T2 uses the luna-mock provider' : 'T3 uses a real (non-mock) model', model.id, tier === 'T2' ? mock : !mock);
+      }
+      const variant = opts.variant ?? null;
+      config = {harness: provider, model: model.id, reasoning: variant, modelOptions: {}, permissionMode: scenario.permissionMode,
+        effectivePermissionMode: scenario.permissionMode, sandbox: scenario.permissionMode === 'full' ? 'danger-full-access' : 'workspace-write'};
+      manifest.requested.model = model.id;
+      manifest.config = config;
+      const fx = makeFixture();
+      scenario.fixture?.(fx, nonce);
+      fixture = {dir: fx.dir, sha: fx.sha ?? null};
+      manifest.fixture = fx.dir;
+      manifest.fixtureInfo = fixture;
+      evidence.writeManifest();
+      const spaceId = await driver.createProject(fx.dir);
+      await driver.createChat({role: 'root', spaceId, cwd: fx.dir, config, title: `OpenCode QA ${id} ${nonce}`});
+      fixture.git = fx.git;
+    }
+    const context = new ScenarioContext({driver, evidence, provider, tier, nonce, fixture, config, opts});
+    const fn = phase === 'post' ? scenario.post : phase === 'pre' ? scenario.pre : scenario.run;
+    await driver.runStep('setup', () => driver.snapshot(`before-${phase}`));
+    await fn.call(scenario, context, prompts);
+    await driver.snapshot(`after-${phase}`);
+    const record = await driver.chatRecord(driver.chatByRole('root').id).catch(() => null);
+    manifest.effective = {config: record?.config ?? null, title: record?.title ?? null, providerSession: record?.harnessSessionId ?? null};
+  } catch (error) {
+    failure = error;
+    evidence.save(`failure-${phase}-${Date.now()}.json`, {message: String(error?.message ?? error), stack: error?.stack, unknown: Boolean(error?.unknown), time: now()});
+    evidence.check('scenario-completed', 'every step ran to completion', String(error?.message ?? error).slice(0, 300), false);
+    if (!(error instanceof UnknownOutcome)) stopped = await driver.cleanup().catch(e => [{error: String(e)}]);
+    else stopped = [{skipped: 'an unknown send stops the run without further writes (QF-17)'}];
+  }
+  manifest.phases[phase].endedAt = now();
+  manifest.phases[phase].cleanup = stopped;
+  if (provider === 'opencode' && !rehearsal) {
+    const slice = captureWireSlice(evidence, identity.wireDir, wireStart?.files);
+    manifest.phases[phase].wire = slice;
+    manifest.wireLog = {dir: identity.wireDir, present: slice.present};
+    evidence.check(`wire-log-captured`, 'LUNA_OPENCODE_WIRE_LOG present with bytes for this phase (QF-11)', `${identity.wireDir ?? 'unset'}; ${slice.bytes} bytes; ${slice.frames} frames; ${slice.http} http`, slice.present && slice.bytes > 0);
+    if (id === 'S7') verifyImageBytes(evidence, driver);
+  }
+  driver.close();
+  const usage = evidence.manifest.sends.filter(s => ['message', 'sideChatMessage', 'review', 'history'].includes(s.kind)).length;
+  manifest.modelUsage = {provider, model: manifest.requested.model, tier, providerTurnsRequested: usage, note: 'turns requested through LUNA; consumption per provider accounting is not asserted'};
+  const passed = finishEvidence(evidence, {
+    title: `OpenCode QA scenario ${id}: ${scenario.title} (${provider}, ${phase})`, tier, rehearsal: Boolean(rehearsal),
+    writePass: phase !== 'pre',
+    notes: [`Validation rows: ${scenario.validation.join(', ')}.`, `Nonce ${nonce}; prompts are provider-neutral (QF-18).`,
+      ...(phase === 'pre' ? ['Pre phase only: restart the QA app gracefully, then run --phase post --run this directory (QF-24).'] : [])],
+    unverified: scenario.unverified ?? [],
+  });
+  console.log(JSON.stringify({scenario: id, provider, tier, phase, passed, evidence: evidence.dir, failure: failure ? String(failure.message ?? failure) : null}));
+  return {passed, evidence: evidence.dir, failure};
+}
+
+// QF-08 image path: the staged bytes equal the files[] the adapter sent.
+function verifyImageBytes(evidence, driver) {
+  const staged = new Map((evidence.manifest.attachments ?? []).map(a => [a.sha256, a]));
+  const seen = [];
+  for (const record of readJsonl(evidence.file('http.jsonl'))) {
+    const files = record.request?.body?.files;
+    if (!Array.isArray(files)) continue;
+    for (const file of files) {
+      const uri = String(file.uri ?? file.url ?? '');
+      const local = uri.startsWith('file://') ? decodeURIComponent(new URL(uri).pathname) : null;
+      const hash = local && fs.existsSync(local) ? sha256(fs.readFileSync(local)) : null;
+      seen.push({path: record.path, uri: uri.replace(/^file:\/\/.*\//, 'file://…/'), sha256: hash, staged: hash ? staged.has(hash) : null});
+    }
+  }
+  evidence.save('image-bytes.json', seen);
+  driver.check('image-bytes-sent', 'every staged image reaches OpenCode as files[] with the same SHA-256 (OCE-08)', seen.map(x => `${x.path}:${x.staged}`),
+    staged.size > 0 && [...staged.keys()].every(hash => seen.some(x => x.sha256 === hash)));
+}
+
+// ------------------------------------------------------------------ list / dry run
+function list() {
+  for (const [id, s] of Object.entries(SCENARIOS)) {
+    console.log(`${id}  ${s.title}  [${s.validation.join(', ')}]  permission=${s.permissionMode}  phases=${s.phases.join('/')}  parity=${s.parity}`);
+    console.log(`    steps: ${s.steps.join(', ')}`);
+  }
+}
+
+function dryRun(target, opts) {
+  const ids = target === 'all' ? Object.keys(SCENARIOS) : [target];
+  const nonce = 'DRYRUN00';
+  for (const id of ids) {
+    const s = SCENARIOS[id];
+    assert.ok(s, `unknown scenario ${id}`);
+    const prompts = s.prompts(nonce);
+    const flat = Object.fromEntries(Object.entries(prompts).map(([k, v]) => [k, typeof v === 'function' ? [1, 2, 3].map(v) : v]));
+    console.log(JSON.stringify({scenario: id, title: s.title, validation: s.validation, provider: opts.provider, tier: opts.tier ?? 'T3',
+      permissionMode: s.permissionMode, phases: s.phases, steps: s.steps, prompts: flat,
+      writes: ['Mutate createSpace', 'ExecuteTaskCommand createChat', 'ExecuteTaskCommand session.run | queueMessage (commandId = messageId)',
+        'ExecuteTaskCommand session.respondApproval {providerChoice|enum} | session.respondInput', 'ExecuteTaskCommand session.interrupt (turn-fenced)',
+        'ExecuteTaskCommand forkTask | editEarlierMessage | rewindConversation (review token)', 'CreateSideChat / SendSideChat',
+        'ExecuteTaskCommand nativeReview | compactContext | setModel | steerQueuedNow | goal', 'UploadChunk / UploadCommit'].filter(w => w),
+      subscriptions: ['WatchDocMessages', 'WatchSessions', 'WatchQueue', 'WatchTaskCommands', 'WatchNativeTasks'],
+      unverified: s.unverified ?? []}, null, 2));
+  }
+}
+
+// ------------------------------------------------------------------ self-check
+// Offline checks of the recorded failure cases (QF-12..QF-21) against the
+// shared plumbing; no app, no network.
+async function selfCheck() {
+  const results = [];
+  const ok = (name, fn) => {
+    try { fn(); results.push({name, passed: true}); console.error(`[PASS] ${name}`); }
+    catch (error) { results.push({name, passed: false, error: String(error.message ?? error)}); console.error(`[FAIL] ${name}: ${error.message}`); }
+  };
+  const ocCard = {id: 'q', header: 'h', question: 'q', options: ['Deny', 'Allow once', 'Cancel turn'],
+    approval: {actionKind: 'command', supportsTaskAllowance: false, details: {choices: [{label: 'Deny', scope: 'none'}, {label: 'Allow once', scope: 'request'}, {label: 'Cancel turn', scope: 'none'}]}}};
+  const plainCard = {id: 'q', options: ['Allow once', 'Allow for task', 'Deny', 'Cancel'], approval: {actionKind: 'command', supportsTaskAllowance: true}};
+  ok('QF-12 card choices map to providerChoice indexes', () => {
+    assert.deepEqual(approvalDecision(ocCard, 'allow-once').decision, {providerChoice: {index: 1}});
+    assert.deepEqual(approvalDecision(ocCard, 'deny').decision, {providerChoice: {index: 0}});
+    assert.deepEqual(approvalDecision(ocCard, 'cancel').decision, {providerChoice: {index: 2}});
+  });
+  ok('QF-12 plain approvals use the decision enum', () => {
+    assert.equal(approvalDecision(plainCard, 'allow-once').decision, 'allowOnce');
+    assert.equal(approvalDecision(plainCard, 'allow-task').decision, 'allowTask');
+    assert.equal(approvalDecision(plainCard, 'cancel').decision, 'cancel');
+  });
+  ok('QF-12 an absent choice fails instead of sending Deny', () => {
+    assert.throws(() => approvalDecision(ocCard, 'allow-task'), NotAnswerable);
+  });
+  ok('QF-13 LUNA cross-task approvals are recognised', () => {
+    assert.ok(isLunaCrossTask({approval: {actionKind: 'lunaCrossTask'}}));
+    assert.ok(!isLunaCrossTask(ocCard));
+  });
+  ok('panel and MCP answers follow the shared contract', () => {
+    assert.deepEqual(buildAnswers([{id: 'c', options: ['red', 'green', 'blue']}], {pick: 'green'}), [{questionId: 'c', labels: ['green']}]);
+    assert.deepEqual(buildAnswers([{id: 'm', options: ['alpha', 'beta', 'gamma'], multiSelect: true}], {pick: ['alpha', 'gamma']}), [{questionId: 'm', labels: ['alpha', 'gamma']}]);
+    const field = {id: 'f', options: [], mcp: {kind: {type: 'field', name: 'size', schema: {valueType: 'string', choices: [{value: 's', label: 'Small'}, {value: 'l', label: 'Large'}], default: 'l'}}}};
+    const action = {id: 'a', options: ['Accept', 'Decline', 'Cancel'], mcp: {kind: {type: 'formAction'}}};
+    assert.deepEqual(buildAnswers([field, action], {mcp: 'Accept'}), [{questionId: 'f', labels: ['Large']}, {questionId: 'a', labels: ['Accept']}]);
+    assert.deepEqual(buildAnswers([field, action], {mcp: 'Decline', values: {size: 's'}}), [{questionId: 'f', labels: ['Small']}, {questionId: 'a', labels: ['Decline']}]);
+  });
+  ok('QF-15 transcript frames apply like apply_transcript_frame', () => {
+    const e = (id, text, role = 'assistant') => ({id, role, parts: [{kind: 'text', id: 't0', text}], createdAt: 0, deviceId: 'd', status: 'streaming'});
+    let state = applyTranscriptFrame([], {reset: [e('u1', 'hi', 'user')]}).entries;
+    state = applyTranscriptFrame(state, {upsert: [{after: 'u1', entry: e('a1', 'he')}], append: [], remove: [], count: 2}).entries;
+    state = applyTranscriptFrame(state, {upsert: [], append: [{entry: 'a1', part: 't0', text: 'llo é', len: Buffer.byteLength('hello é')}], remove: [], count: 2}).entries;
+    assert.equal(state[1].parts[0].text, 'hello é');
+    assert.ok(applyTranscriptFrame(state, {upsert: [], append: [{entry: 'a1', part: 't0', text: 'x', len: 3}], remove: [], count: 2}).desync);
+    assert.ok(applyTranscriptFrame(state, {upsert: [{after: 'missing', entry: e('a2', 'x')}], append: [], remove: [], count: 3}).desync);
+    assert.ok(applyTranscriptFrame(state, {upsert: [], append: [], remove: ['a1'], count: 2}).desync);
+    assert.equal(applyTranscriptFrame(state, {upsert: [], append: [], remove: ['a1'], count: 1}).entries.length, 1);
+  });
+  ok('task command fences copy crates/ui/src/task_commands.rs', () => {
+    const snapshot = {taskRevision: 7, bindingGeneration: 2, activeTurnId: 'turn-1'};
+    const p = intent => taskCommandParams({taskId: 't', commandId: 'c', intent, snapshot, actorId: 'dev', clientSessionId: 's'});
+    const run = p({kind: 'session', command: {kind: 'run', request: {}}});
+    assert.deepEqual([run.expectedTaskRevision, run.expectedBindingGeneration, run.expectedTurnId], [undefined, 2, undefined]);
+    const stop = p({kind: 'session', command: {kind: 'interrupt'}});
+    assert.deepEqual([stop.expectedTaskRevision, stop.expectedBindingGeneration, stop.expectedTurnId], [undefined, 2, 'turn-1']);
+    const fork = p({kind: 'forkTask'});
+    assert.deepEqual([fork.expectedTaskRevision, fork.expectedBindingGeneration, fork.expectedTurnId], [7, 2, undefined]);
+    const create = p({kind: 'createChat'});
+    assert.deepEqual([create.expectedTaskRevision, create.expectedBindingGeneration], [undefined, undefined]);
+    const review = p({kind: 'session', command: {kind: 'run', request: {review: {target: {type: 'uncommittedChanges'}}}}});
+    assert.equal(review.expectedTaskRevision, 7);
+    assert.equal(p({kind: 'steerQueuedNow'}).expectedTurnId, 'turn-1');
+  });
+  ok('history fork permission follows history_fork_initial_permission', () => {
+    assert.equal(forkInitialPermission({permissionMode: 'full', effectivePermissionMode: 'full'}), 'full');
+    assert.equal(forkInitialPermission({permissionMode: 'ask', effectivePermissionMode: 'full'}), 'auto');
+    assert.equal(forkInitialPermission({permissionMode: 'ask', effectivePermissionMode: 'ask'}), 'ask');
+  });
+  ok('QF-18 prompts are provider-neutral and the nonce is masked', () => {
+    for (const [id, s] of Object.entries(SCENARIOS)) {
+      const a = JSON.stringify(s.prompts('AAAA1111'), (k, v) => (typeof v === 'function' ? v(2) : v));
+      const b = JSON.stringify(s.prompts('BBBB2222'), (k, v) => (typeof v === 'function' ? v(2) : v));
+      assert.equal(maskNonce(a, 'AAAA1111'), maskNonce(b, 'BBBB2222'), `${id} prompts depend on more than the nonce`);
+      assert.ok(s.validation.length && s.steps.length && s.phases.length, `${id} is incomplete`);
+    }
+    assert.deepEqual(Object.keys(SCENARIOS), ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8']);
+  });
+  ok('QF-20 normalization keeps kinds and drops volatile values', () => {
+    const entries = [{id: 'x1', role: 'assistant', status: 'complete', parts: [
+      {kind: 'reasoning', id: 'r', text: 'think'}, {kind: 'text', id: 'a', text: 'one'}, {kind: 'text', id: 'b', text: 'two'},
+      {kind: 'tool', id: 'c', call: {kind: 'exec', command: 'echo SECRET-NONCE'}, resolved: true, output: 'SECRET-NONCE'},
+      {kind: 'tool', id: 'd', call: {kind: 'unknown', name: 'Agent: explore the repo'}, subagentRef: 'chat--sub--1', subagentStatus: 'completed'}]}];
+    const normalized = JSON.stringify(normalizeEntries(entries));
+    assert.ok(!normalized.includes('SECRET-NONCE') && !normalized.includes('x1') && !normalized.includes('explore'));
+    assert.deepEqual(normalizeEntries(entries)[0].parts.map(p => p.tool ?? p.kind), ['reasoning', 'text', 'exec', 'unknown:Agent']);
+  });
+  ok('the diff tool reports differences and honours reasoned allowances only', () => {
+    const diff = spawnSync(process.execPath, [path.join(root, 'scripts/qa-opencode-diff.mjs'), 'self-check'], {encoding: 'utf8'});
+    assert.equal(diff.status, 0, diff.stderr || diff.stdout);
+  });
+  ok('a solid PNG fixture decodes to its colour', () => {
+    const png = solidPng(4, 4, [220, 20, 20]);
+    assert.equal(png.subarray(1, 4).toString('ascii'), 'PNG');
+  });
+  const passed = results.every(r => r.passed);
+  console.log(JSON.stringify({selfCheck: passed ? 'passed' : 'failed', checks: results.length, failed: results.filter(r => !r.passed)}));
+  return passed;
+}
+
+// ------------------------------------------------------------------ rehearse
+// Rehearsal fixtures are disposable: remove exactly the temp parents the
+// runs recorded (QF-02 prefix, system temp dir), never anything else.
+function removeRehearsalFixtures(runDirs) {
+  for (const dir of runDirs) {
+    const fixture = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).fixture;
+    const parent = fixture ? path.dirname(fixture) : null;
+    if (parent && path.basename(parent).startsWith('luna-qa-opencode-scenario-') && path.dirname(fs.realpathSync(parent)) === fs.realpathSync(os.tmpdir())) {
+      fs.rmSync(parent, {recursive: true, force: true});
+    }
+  }
+}
+
+// QF-21: the whole runner against a fake engine this process spawned. Proves
+// the plumbing (RPC shapes, waits, evidence, diff), never LUNA behaviour.
+async function rehearse(target, opts) {
+  const ids = !target || target === 'all' ? Object.keys(SCENARIOS) : [target];
+  const out = path.resolve(opts['evidence-root'] ?? path.join(root, 'target/qa/opencode-rehearsal'));
+  const summary = [];
+  const fakeArgs = opts['fake-args'] ? opts['fake-args'].split(' ') : [];
+  const runDirs = new Set();
+  let engine = await spawnFakeEngine(fakeArgs);
+  try {
+    for (const id of ids) {
+      const runs = {};
+      for (const provider of PROVIDERS) {
+        const base = {...opts, provider, 'evidence-root': out, 'turn-timeout': opts['turn-timeout'] ?? '20'};
+        if (SCENARIOS[id].phases.includes('pre')) {
+          const pre = await runScenario(id, {...base, phase: 'pre'}, {rehearsal: engine});
+          // A "restarted app": the fake saves its state and exits; a new
+          // process (new pid) loads it. The runner itself never restarts apps.
+          const {state} = await (await fetch(`http://127.0.0.1:${engine.port}/__fake/restart`, {method: 'POST'})).json();
+          await new Promise(resolve => engine.child.once('exit', resolve));
+          engine = await spawnFakeEngine([...fakeArgs, '--state', state]);
+          runs[provider] = await runScenario(id, {...base, phase: 'post', run: pre.evidence}, {rehearsal: engine});
+          fs.rmSync(state, {force: true});
+        } else {
+          runs[provider] = await runScenario(id, base, {rehearsal: engine});
+        }
+      }
+      for (const run of Object.values(runs)) runDirs.add(run.evidence);
+      const diff = spawnSync(process.execPath, [path.join(root, 'scripts/qa-opencode-diff.mjs'), 'compare', runs.opencode.evidence, runs['claude-code'].evidence,
+        '--out', path.join(out, id.toLowerCase(), 'parity-diff')], {encoding: 'utf8'});
+      summary.push({scenario: id, opencode: runs.opencode.passed, claude: runs['claude-code'].passed, diffExit: diff.status, diff: diff.stdout.trim().split('\n').at(-1)});
+    }
+  } finally {
+    engine.child.kill('SIGTERM');
+    removeRehearsalFixtures(runDirs);
+  }
+  fs.mkdirSync(out, {recursive: true});
+  fs.writeFileSync(path.join(out, 'rehearsal-summary.json'), `${JSON.stringify({tier: 'R0', note: 'fake engine; driver plumbing only (QF-21)', at: now(), summary}, null, 2)}\n`);
+  console.log(JSON.stringify({rehearsal: summary}, null, 2));
+  return summary.every(s => s.opencode && s.claude && [0, 1].includes(s.diffExit));
+}
+
+// QF-17 end to end: a lost ExecuteTaskCommand reply is read back by command
+// id (no resend); a command whose outcome stays unknown stops the run with
+// no further writes. Fake engine only (R0).
+async function rehearseFaults(opts) {
+  const out = path.resolve(opts['evidence-root'] ?? path.join(root, 'target/qa/opencode-rehearsal'), 'faults');
+  const results = [];
+  const runWith = async (fakeArgs, extra) => {
+    const engine = await spawnFakeEngine(fakeArgs);
+    let result;
+    try {
+      result = await runScenario('S6', {...opts, provider: 'opencode', 'evidence-root': out, 'turn-timeout': '20', ...extra}, {rehearsal: engine});
+      return result;
+    } finally {
+      engine.child.kill('SIGTERM');
+      if (result) removeRehearsalFixtures([result.evidence]);
+    }
+  };
+  const lost = await runWith(['--drop-reply', 'session'], {});
+  const lostManifest = JSON.parse(fs.readFileSync(path.join(lost.evidence, 'manifest.json'), 'utf8'));
+  const readback = lostManifest.sends.filter(send => send.readback);
+  const sameIds = new Set(lostManifest.sends.map(send => send.commandId)).size === lostManifest.sends.length;
+  results.push({name: 'lost reply is read back once, never resent', passed: lost.passed && readback.length === 1 && sameIds,
+    detail: {passed: lost.passed, readback: readback.map(send => send.commandId), sends: lostManifest.sends.length}});
+  const unknown = await runWith(['--lose-command', 'session'], {'rpc-timeout': '2000'});
+  const unknownManifest = JSON.parse(fs.readFileSync(path.join(unknown.evidence, 'manifest.json'), 'utf8'));
+  const index = unknownManifest.sends.findIndex(send => send.outcome === 'unknown');
+  const later = index < 0 ? [] : unknownManifest.sends.slice(index + 1);
+  results.push({name: 'unknown outcome stops the run with no later writes', passed: !unknown.passed && index >= 0 && later.length === 0
+    && (unknownManifest.phases.run.cleanup ?? []).every(row => row.skipped),
+  detail: {passed: unknown.passed, unknownIndex: index, laterSends: later.length, cleanup: unknownManifest.phases.run.cleanup}});
+  fs.mkdirSync(out, {recursive: true});
+  fs.writeFileSync(path.join(out, 'faults-summary.json'), `${JSON.stringify({tier: 'R0', at: now(), results}, null, 2)}\n`);
+  for (const r of results) console.error(`[${r.passed ? 'PASS' : 'FAIL'}] ${r.name}: ${JSON.stringify(r.detail)}`);
+  return results.every(r => r.passed);
+}
+
+// ------------------------------------------------------------------ main
+const mode = process.argv[2];
+const {values: opts, positionals} = parseArgs({
+  args: process.argv.slice(3),
+  options: {
+    provider: {type: 'string', default: 'opencode'}, tier: {type: 'string'}, model: {type: 'string'}, variant: {type: 'string'},
+    'evidence-root': {type: 'string'}, 'turn-timeout': {type: 'string'}, 'allow-usage-store': {type: 'boolean', default: false},
+    phase: {type: 'string'}, run: {type: 'string'}, 'fake-args': {type: 'string'}, 'rpc-timeout': {type: 'string'}, ax: {type: 'boolean', default: false},
+  },
+  allowPositionals: true,
+});
+const target = positionals[0];
+let exitCode = 0;
+if (mode === 'list') list();
+else if (mode === 'dry-run') dryRun(target ?? 'all', opts);
+else if (mode === 'self-check') exitCode = (await selfCheck()) ? 0 : 1;
+else if (mode === 'rehearse') exitCode = (await rehearse(target, opts)) ? 0 : 1;
+else if (mode === 'rehearse-faults') exitCode = (await rehearseFaults(opts)) ? 0 : 1;
+else if (mode === 'run') {
+  assert.ok(target && SCENARIOS[target], `run needs a scenario id: ${Object.keys(SCENARIOS).join(', ')}`);
+  const result = await runScenario(target, opts);
+  exitCode = result.passed ? 0 : 1;
+} else {
+  console.error('usage: qa-opencode-scenarios.mjs list | dry-run <S#|all> | self-check | rehearse [<S#|all>] | rehearse-faults | run <S#> --provider P --tier T (see header)');
+  exitCode = 64;
+}
+process.exit(exitCode);
