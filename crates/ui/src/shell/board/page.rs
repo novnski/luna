@@ -1,8 +1,9 @@
 //! The Board page (A8): header and toolbar, Backlog / Ready / Done columns
 //! (or the List view, also chosen automatically at narrow widths), drag and
-//! keyboard moves, card menus, Board drafts, the empty state and the drawer
-//! that hosts the detail, New issue, From GitHub issue and Discuss with AI
-//! surfaces (A9, A7, A6).
+//! keyboard moves, card menus, Board drafts and the empty state. The detail
+//! drawer, New ticket chooser, Write manually and Discuss with AI live in
+//! the one overlay host the page mounts, [`BoardSurfaces`] (A9; it embeds
+//! A6's pane); From GitHub issue opens A7's picker through the Shell.
 //!
 //! Every move is one engine operation: a drop or a keyboard move between
 //! columns calls `BoardMove` once (no confirmation; the engine resolves
@@ -31,10 +32,7 @@ use luna_proto::{
 };
 
 use super::api::BoardCallError;
-use super::authoring_pane::AuthoringPane;
-use super::detail::BoardDetail;
-use super::github_picker::GitHubIssuePicker;
-use super::manual_form::ManualTicketForm;
+use super::detail::BoardSurfaces;
 use super::model::{BoardListFilters, BoardModel, BoardModelEvent, BoardStatus};
 use crate::settings::{BoardUiPrefs, BoardViewMode, widgets};
 use crate::state::AppState;
@@ -44,8 +42,6 @@ use crate::typography::ui_rems;
 /// Below this page width (interface points at the default size) the Board
 /// shows the List view whatever the saved preference says.
 pub(super) const NARROW_WIDTH: f32 = 760.0;
-/// Width of the drawer that hosts the detail and creation surfaces.
-const DRAWER_WIDTH: f32 = 440.0;
 /// Search edits settle this long before the engine is asked again.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(220);
 /// Scroll offsets are saved once scrolling pauses.
@@ -63,6 +59,8 @@ pub enum BoardPageEvent {
     PrefsChanged(BoardUiPrefs),
     /// Open a ticket's working chat (Go to chat).
     OpenChat(BoardNavigationTarget),
+    /// From GitHub issue for one project (A7's picker, hosted by the Shell).
+    OpenGitHubPicker { project_id: String },
 }
 
 impl EventEmitter<BoardPageEvent> for BoardPage {}
@@ -151,7 +149,6 @@ pub(super) struct BoardNotice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProjectIntent {
     GitHub,
-    Discuss,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,35 +223,18 @@ impl MenuEntry {
     }
 }
 
-/// The surface in the page's drawer.
-pub(super) enum BoardOverlay {
-    Detail {
-        work_item_id: String,
-        view: Entity<BoardDetail>,
+/// A surface change asked for where no window is at hand (async results,
+/// model requests); applied on the next frame.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SurfaceRequest {
+    Detail(String),
+    NewTicket(Option<String>),
+    Manual(String),
+    Authoring {
+        project_id: String,
+        resume_session_id: Option<String>,
     },
-    NewIssue(Entity<ManualTicketForm>),
-    GitHub(Entity<GitHubIssuePicker>),
-    Authoring(Entity<AuthoringPane>),
-}
-
-impl BoardOverlay {
-    pub(super) fn kind(&self) -> &'static str {
-        match self {
-            Self::Detail { .. } => "detail",
-            Self::NewIssue(_) => "newIssue",
-            Self::GitHub(_) => "github",
-            Self::Authoring(_) => "authoring",
-        }
-    }
-
-    fn view(&self) -> AnyElement {
-        match self {
-            Self::Detail { view, .. } => view.clone().into_any_element(),
-            Self::NewIssue(view) => view.clone().into_any_element(),
-            Self::GitHub(view) => view.clone().into_any_element(),
-            Self::Authoring(view) => view.clone().into_any_element(),
-        }
-    }
+    Close,
 }
 
 /// Painted bounds from the last frame (window coordinates): the drop logic
@@ -301,7 +281,12 @@ pub struct BoardPage {
     pub(super) dragging: Option<String>,
     pub(super) drag_over: Option<DropTarget>,
     pub(super) geometry: Rc<RefCell<BoardGeometry>>,
-    pub(super) overlay: Option<BoardOverlay>,
+    /// The overlay host (A9): detail drawer, New ticket chooser, Write
+    /// manually, Discuss with AI.
+    pub(super) surfaces: Entity<BoardSurfaces>,
+    /// What the host showed last (focus returns to the card on close).
+    shown_surface: Option<&'static str>,
+    pending_surface: Option<SurfaceRequest>,
     pub(super) notice: Option<BoardNotice>,
     /// The latest status announcement (an accessibility status element;
     /// never moves focus).
@@ -326,9 +311,6 @@ pub struct BoardPage {
     /// updates may pass before the request lapses (a reload in flight).
     pending_focus: Option<(String, u8)>,
     pending_menu_focus: bool,
-    /// Move keyboard focus into the drawer once it renders.
-    pending_drawer_focus: bool,
-    pub(super) drawer_focus: FocusHandle,
     /// Scroll the focused card into view on the next frame.
     pending_reveal: Option<String>,
     /// The sidebar project filter last applied, so the Board follows a
@@ -373,6 +355,8 @@ impl BoardPage {
             input
         });
         let observer = cx.observe(&model, |_, _, cx| cx.notify());
+        let surfaces = cx.new(|cx| BoardSurfaces::new(state.clone(), model.clone(), cx));
+        let surfaces_observer = cx.observe(&surfaces, |page, _, cx| page.on_surfaces_changed(cx));
         let model_events =
             cx.subscribe(&model, |page, _, event: &BoardModelEvent, cx| match event {
                 BoardModelEvent::Changed => page.on_model_changed(cx),
@@ -410,7 +394,9 @@ impl BoardPage {
             dragging: None,
             drag_over: None,
             geometry: Rc::new(RefCell::new(BoardGeometry::default())),
-            overlay: None,
+            surfaces,
+            shown_surface: None,
+            pending_surface: None,
             notice: None,
             announcement: SharedString::default(),
             phases: HashMap::new(),
@@ -427,12 +413,16 @@ impl BoardPage {
             issued: Vec::new(),
             restore_scroll,
             pending_menu_focus: false,
-            pending_drawer_focus: false,
-            drawer_focus: cx.focus_handle(),
             pending_reveal: None,
             seen_sidebar_filter: None,
             narrow: false,
-            _subscriptions: vec![observer, model_events, requests, search_events],
+            _subscriptions: vec![
+                observer,
+                surfaces_observer,
+                model_events,
+                requests,
+                search_events,
+            ],
         };
         page.load_drafts(cx);
         page
@@ -771,12 +761,12 @@ impl BoardPage {
         match key {
             "enter" | "space" => {
                 self.select(id, true, window, cx);
-                self.open_detail(id, cx);
+                self.open_detail(id.to_owned(), window, cx);
                 true
             }
             "escape" => {
-                if self.overlay.is_some() {
-                    self.close_overlay(cx);
+                if self.surface_open(cx) {
+                    self.apply_surface(SurfaceRequest::Close, window, cx);
                     true
                 } else {
                     false
@@ -855,15 +845,20 @@ impl BoardPage {
 
     fn on_request(&mut self, request: BoardPageRequest, cx: &mut Context<Self>) {
         match request {
-            BoardPageRequest::OpenDetail { work_item_id } => self.open_detail(&work_item_id, cx),
-            BoardPageRequest::OpenNewIssue => self.open_new_issue(cx),
+            BoardPageRequest::OpenDetail { work_item_id } => {
+                self.request_surface(SurfaceRequest::Detail(work_item_id), cx)
+            }
+            BoardPageRequest::OpenNewIssue => {
+                let project_id = self.scope(cx).project_id().map(str::to_owned);
+                self.request_surface(SurfaceRequest::NewTicket(project_id), cx)
+            }
             BoardPageRequest::OpenGitHubIssue { project_id } => self.open_github(project_id, cx),
             BoardPageRequest::DiscussWithAi {
                 project_id,
                 resume_session_id,
-            } => self.open_authoring(project_id, resume_session_id, cx),
+            } => self.request_authoring(project_id, resume_session_id, cx),
             BoardPageRequest::AddExistingChat => self.open_add_chat(cx),
-            BoardPageRequest::CloseOverlay => self.close_overlay(cx),
+            BoardPageRequest::CloseOverlay => self.request_surface(SurfaceRequest::Close, cx),
             BoardPageRequest::Select { work_item_id } => {
                 self.selected = Some(work_item_id.clone());
                 self.prefs.selected_item = Some(work_item_id.clone());
@@ -1016,33 +1011,129 @@ impl BoardPage {
         });
     }
 
-    // ---- overlays ----------------------------------------------------------
+    // ---- overlays (A9's host) -----------------------------------------------
 
-    pub(super) fn open_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(BoardOverlay::Detail { work_item_id, .. }) = &self.overlay
-            && work_item_id == id
+    /// The overlay host (detail drawer, New ticket chooser and forms).
+    pub fn surfaces(&self) -> &Entity<BoardSurfaces> {
+        &self.surfaces
+    }
+
+    /// Open one ticket's detail drawer (card click / Enter on a card).
+    pub fn open_detail(
+        &mut self,
+        work_item_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_surface(SurfaceRequest::Detail(work_item_id), window, cx);
+    }
+
+    /// Open the New ticket chooser (`None`, All projects: it asks for the
+    /// project; never guessed).
+    pub fn open_new_ticket(
+        &mut self,
+        project_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_surface(SurfaceRequest::NewTicket(project_id), window, cx);
+    }
+
+    /// Queue a surface change for the next frame (no window at hand).
+    pub(super) fn request_surface(&mut self, request: SurfaceRequest, cx: &mut Context<Self>) {
+        self.pending_surface = Some(request);
+        cx.notify();
+    }
+
+    pub(super) fn apply_surface(
+        &mut self,
+        request: SurfaceRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_surface = None;
+        if let SurfaceRequest::Detail(id) = &request
+            && self.selected.as_deref() != Some(id.as_str())
         {
-            return;
+            self.selected = Some(id.clone());
+            self.prefs.selected_item = Some(id.clone());
+            self.persist(cx);
         }
-        let model = self.model.clone();
-        let work_item_id = id.to_owned();
-        let view = cx.new(|cx| BoardDetail::new(model, work_item_id.clone(), cx));
-        self.overlay = Some(BoardOverlay::Detail { work_item_id, view });
-        self.pending_drawer_focus = true;
+        self.surfaces.update(cx, |surfaces, cx| match request {
+            SurfaceRequest::Detail(id) => surfaces.open_detail(id, window, cx),
+            SurfaceRequest::NewTicket(project_id) => {
+                surfaces.open_new_ticket(project_id, window, cx)
+            }
+            SurfaceRequest::Manual(project_id) => surfaces.open_manual_form(project_id, window, cx),
+            SurfaceRequest::Authoring {
+                project_id,
+                resume_session_id: Some(session_id),
+            } => surfaces.resume_authoring(project_id, session_id, window, cx),
+            SurfaceRequest::Authoring {
+                project_id,
+                resume_session_id: None,
+            } => surfaces.open_authoring(project_id, window, cx),
+            SurfaceRequest::Close => surfaces.close(window, cx),
+        });
         cx.notify();
     }
 
-    pub(super) fn open_new_issue(&mut self, cx: &mut Context<Self>) {
-        let model = self.model.clone();
-        // All projects passes no project: the form resolves one explicitly.
-        let project_id = self.scope(cx).project_id().map(str::to_owned);
-        let view = cx.new(|cx| ManualTicketForm::new(model, project_id, cx));
-        self.overlay = Some(BoardOverlay::NewIssue(view));
-        self.pending_drawer_focus = true;
+    pub(super) fn surface_open(&self, cx: &App) -> bool {
+        self.surfaces.read(cx).is_open()
+    }
+
+    /// The host opened, switched or closed a surface: keep the drawer's
+    /// ticket selected, return focus to the card on close, and re-read the
+    /// drafts after a discussion.
+    fn on_surfaces_changed(&mut self, cx: &mut Context<Self>) {
+        let (shown, detail) = {
+            let surfaces = self.surfaces.read(cx);
+            (
+                surfaces.surface().map(|surface| surface.key()),
+                surfaces.detail_work_item_id(cx),
+            )
+        };
+        if let Some(id) = detail
+            && self.selected.as_deref() != Some(id.as_str())
+        {
+            self.selected = Some(id.clone());
+            self.prefs.selected_item = Some(id);
+            self.persist(cx);
+        }
+        let before = std::mem::replace(&mut self.shown_surface, shown);
+        if before.is_some()
+            && shown.is_none()
+            && let Some(id) = self.selected.clone()
+        {
+            self.pending_focus = Some((id, FOCUS_PATIENCE));
+        }
+        if before == Some("authoring") && shown != Some("authoring") {
+            self.load_drafts(cx);
+        }
         cx.notify();
     }
 
-    /// From GitHub issue: needs one project (asked for under All projects).
+    /// Write manually or Discuss with AI straight away when the Board shows
+    /// one project; under All projects the chooser asks for the project.
+    pub(super) fn open_create(
+        &mut self,
+        authoring: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let request = match self.scope(cx).project_id().map(str::to_owned) {
+            Some(project_id) if authoring => SurfaceRequest::Authoring {
+                project_id,
+                resume_session_id: None,
+            },
+            Some(project_id) => SurfaceRequest::Manual(project_id),
+            None => SurfaceRequest::NewTicket(None),
+        };
+        self.apply_surface(request, window, cx);
+    }
+
+    /// From GitHub issue: A7's picker for one project (asked for under All
+    /// projects), hosted by the Shell.
     pub(super) fn open_github(&mut self, project_id: Option<String>, cx: &mut Context<Self>) {
         let Some(project_id) =
             project_id.or_else(|| self.scope(cx).project_id().map(str::to_owned))
@@ -1050,15 +1141,11 @@ impl BoardPage {
             self.open_menu(BoardMenu::ChooseProject(ProjectIntent::GitHub), false, cx);
             return;
         };
-        let model = self.model.clone();
-        let view = cx.new(|cx| GitHubIssuePicker::new(model, project_id, cx));
-        self.overlay = Some(BoardOverlay::GitHub(view));
-        self.pending_drawer_focus = true;
-        cx.notify();
+        cx.emit(BoardPageEvent::OpenGitHubPicker { project_id });
     }
 
-    /// Discuss with AI, or resume a Board draft.
-    pub(super) fn open_authoring(
+    /// Discuss with AI (or resume a Board draft) from a model request.
+    fn request_authoring(
         &mut self,
         project_id: Option<String>,
         resume_session_id: Option<String>,
@@ -1070,40 +1157,22 @@ impl BoardPage {
                 .find(|draft| &draft.id == session)
                 .map(|draft| draft.project_id.clone())
         });
-        let Some(project_id) = project_id
+        let request = match project_id
             .or(draft_project)
             .or_else(|| self.scope(cx).project_id().map(str::to_owned))
-        else {
-            self.open_menu(BoardMenu::ChooseProject(ProjectIntent::Discuss), false, cx);
-            return;
+        {
+            Some(project_id) => SurfaceRequest::Authoring {
+                project_id,
+                resume_session_id,
+            },
+            None => SurfaceRequest::NewTicket(None),
         };
-        let model = self.model.clone();
-        let view = cx.new(|cx| {
-            let mut pane = AuthoringPane::new(model, project_id, cx);
-            pane.session_id = resume_session_id;
-            pane
-        });
-        self.overlay = Some(BoardOverlay::Authoring(view));
-        self.pending_drawer_focus = true;
-        cx.notify();
+        self.request_surface(request, cx);
     }
 
     pub(super) fn open_add_chat(&mut self, cx: &mut Context<Self>) {
         let project_id = self.scope(cx).project_id().map(str::to_owned);
         self.open_menu(BoardMenu::AddChat { project_id }, false, cx);
-    }
-
-    pub(super) fn close_overlay(&mut self, cx: &mut Context<Self>) {
-        let reload_drafts = matches!(self.overlay, Some(BoardOverlay::Authoring(_)));
-        if self.overlay.take().is_some() {
-            if let Some(id) = self.selected.clone() {
-                self.pending_focus = Some((id, FOCUS_PATIENCE));
-            }
-            if reload_drafts {
-                self.load_drafts(cx);
-            }
-            cx.notify();
-        }
     }
 
     // ---- menus --------------------------------------------------------------
@@ -1367,7 +1436,6 @@ impl BoardPage {
             MenuAction::ClearFilters => self.clear_filters(cx),
             MenuAction::Project(intent, project_id) => match intent {
                 ProjectIntent::GitHub => self.open_github(Some(project_id), cx),
-                ProjectIntent::Discuss => self.open_authoring(Some(project_id), None, cx),
             },
             MenuAction::AddChat(task_id) => self.convert_chat(task_id, cx),
             MenuAction::Card(action, id) => self.run_card_action(action, &id, window, cx),
@@ -1432,7 +1500,7 @@ impl BoardPage {
         match action {
             CardAction::Open => {
                 self.select(id, true, window, cx);
-                self.open_detail(id, cx);
+                self.open_detail(id.to_owned(), window, cx);
             }
             CardAction::MoveToReady
                 if !view.actions.is_empty()
@@ -1678,7 +1746,7 @@ impl BoardPage {
                 );
                 self.set_notice(tone, text, Some(id.to_owned()));
                 if unresolved {
-                    self.open_detail(id, cx);
+                    self.request_surface(SurfaceRequest::Detail(id.to_owned()), cx);
                 }
             }
             Err(BoardCallError::Lost) => match reconciled {
@@ -1727,7 +1795,7 @@ impl BoardPage {
                     Some(id.to_owned()),
                 );
                 if open_ticket {
-                    self.open_detail(id, cx);
+                    self.request_surface(SurfaceRequest::Detail(id.to_owned()), cx);
                 }
                 self.model.update(cx, |model, cx| model.refresh(cx));
             }
@@ -1917,7 +1985,7 @@ impl BoardPage {
                         page.prefs.selected_item = Some(id.clone());
                         page.persist(cx);
                         page.model.update(cx, |model, cx| model.refresh(cx));
-                        page.open_detail(&id, cx);
+                        page.request_surface(SurfaceRequest::Detail(id), cx);
                     }
                     Err(error) => page.set_notice(NoticeTone::Error, error.message(), None),
                 }
@@ -2066,10 +2134,10 @@ impl BoardPage {
             window.focus(&handle, cx);
             self.pending_reveal = Some(id);
         }
-        // The drawer is a dialog: focus moves into it (a form inside may
-        // take it further when it renders) and returns to the card on close.
-        if std::mem::take(&mut self.pending_drawer_focus) && self.overlay.is_some() {
-            window.focus(&self.drawer_focus, cx);
+        // Surface changes queued without a window (the host focuses the
+        // drawer; focus returns to the card when it closes).
+        if let Some(request) = self.pending_surface.take() {
+            self.apply_surface(request, window, cx);
         }
         if self.pending_menu_focus && self.menu.is_open() {
             self.pending_menu_focus = false;
@@ -2195,7 +2263,6 @@ impl Render for BoardPage {
         let notice = self.render_notice(&theme, cx);
         let drafts = self.render_drafts(&theme, cx);
         let body = self.render_body(&theme, window, cx);
-        let drawer = self.render_drawer(&theme, cx);
         let card_menu = self.render_card_menu(&theme, cx);
         let status = div()
             .id("board-status-announcer")
@@ -2232,8 +2299,8 @@ impl Render for BoardPage {
             .size_full()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let mods = event.keystroke.modifiers;
-                if event.keystroke.key == "escape" && this.overlay.is_some() {
-                    this.close_overlay(cx);
+                if event.keystroke.key == "escape" && this.surface_open(cx) {
+                    this.apply_surface(SurfaceRequest::Close, window, cx);
                     cx.stop_propagation();
                 } else if mods.secondary() && event.keystroke.key == "f" {
                     let focus = this.search.read(cx).focus_handle(cx);
@@ -2268,7 +2335,9 @@ impl Render for BoardPage {
                             .child(body),
                     ),
             )
-            .children(drawer)
+            // The overlay host sits outside the scroller so the drawer never
+            // scrolls with the board.
+            .child(self.surfaces.clone())
             .children(card_menu)
             .child(status)
     }
@@ -2298,7 +2367,8 @@ impl BoardPage {
         if let Some(notice) = notice {
             let open = notice.work_item_id.clone().filter(|id| {
                 self.model.read(cx).item(id).is_some()
-                    && !matches!(&self.overlay, Some(BoardOverlay::Detail { work_item_id, .. }) if work_item_id == id)
+                    && self.surfaces.read(cx).detail_work_item_id(cx).as_deref()
+                        != Some(id.as_str())
             });
             column = column.child(
                 notice_strip("board-notice", theme, notice.tone, notice.text.to_string())
@@ -2316,7 +2386,7 @@ impl BoardPage {
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     this.select(&id, true, window, cx);
-                                    this.open_detail(&id, cx);
+                                    this.open_detail(id.clone(), window, cx);
                                 },
                             )),
                         )
@@ -2418,9 +2488,18 @@ impl BoardPage {
                         )
                         .aria_label("Resume draft")
                         .child("Resume")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.open_authoring(Some(project.clone()), Some(resume_id.clone()), cx);
-                        })),
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.apply_surface(
+                                    SurfaceRequest::Authoring {
+                                        project_id: project.clone(),
+                                        resume_session_id: Some(resume_id.clone()),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
                     .child(
                         crate::button::button(
@@ -2567,9 +2646,9 @@ impl BoardPage {
                         move |style| crate::theme::focus_ring(style, ring)
                     })
                     .on_key_down(crate::swallow_activation_key)
-                    .on_click(cx.listener(move |this, _, _, cx| match id {
-                        "board-empty-manual" => this.open_new_issue(cx),
-                        "board-empty-discuss" => this.open_authoring(None, None, cx),
+                    .on_click(cx.listener(move |this, _, window, cx| match id {
+                        "board-empty-manual" => this.open_create(false, window, cx),
+                        "board-empty-discuss" => this.open_create(true, window, cx),
                         "board-empty-github" => this.open_github(None, cx),
                         _ => this.open_add_chat(cx),
                     }))
@@ -2634,88 +2713,6 @@ impl BoardPage {
                     .children(tiles),
             )
             .into_any_element()
-    }
-
-    /// The drawer hosting the detail and creation surfaces.
-    fn render_drawer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let overlay = self.overlay.as_ref()?;
-        let title = match overlay {
-            BoardOverlay::Detail { work_item_id, .. } => self
-                .model
-                .read(cx)
-                .item(work_item_id)
-                .map(|view| format!("{} · {}", view.item.key, view.item.title))
-                .unwrap_or_else(|| "Ticket".into()),
-            BoardOverlay::NewIssue(_) => "New issue".into(),
-            BoardOverlay::GitHub(_) => "From GitHub issue".into(),
-            BoardOverlay::Authoring(_) => "Discuss with AI".into(),
-        };
-        let kind = overlay.kind();
-        let content = overlay.view();
-        Some(
-            div()
-                .id("board-drawer")
-                .track_focus(&self.drawer_focus)
-                .role(gpui::Role::Dialog)
-                .aria_label(SharedString::from(title.clone()))
-                .absolute()
-                .top_0()
-                .right_0()
-                .bottom_0()
-                .w(ui_rems(DRAWER_WIDTH))
-                .max_w(gpui::relative(0.9))
-                .flex()
-                .flex_col()
-                .border_l_1()
-                .border_color(theme.separator(true))
-                .bg(theme.surface)
-                .shadow(crate::theme::menu_shadows())
-                .occlude()
-                .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(ui_rems(8.0))
-                        .px(ui_rems(14.0))
-                        .py(ui_rems(10.0))
-                        .border_b_1()
-                        .border_color(theme.separator(false))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(ui_rems(13.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
-                                .child(SharedString::from(title)),
-                        )
-                        .child(
-                            crate::button::icon_button(
-                                format!("board-drawer-close-{kind}"),
-                                crate::icons::CLOSE,
-                                crate::button::ControlSize::Sm,
-                                true,
-                                theme,
-                            )
-                            .aria_label("Close")
-                            .tooltip(crate::popover::text_tooltip("Close (Esc)"))
-                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-                            .on_click(cx.listener(|this, _, _, cx| this.close_overlay(cx))),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("board-drawer-body")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(content),
-                )
-                .into_any_element(),
-        )
     }
 
     /// A Board menu card: rows with one shared keyboard/pointer highlight.
@@ -2957,11 +2954,8 @@ impl BoardPage {
                 .into_iter()
                 .map(|entry| serde_json::json!({"key": entry.key, "label": entry.label, "enabled": entry.enabled}))
                 .collect::<Vec<_>>()),
-            "overlay": self.overlay.as_ref().map(BoardOverlay::kind),
-            "overlayItem": match &self.overlay {
-                Some(BoardOverlay::Detail { work_item_id, .. }) => Some(work_item_id.clone()),
-                _ => None,
-            },
+            "overlay": self.surfaces.read(cx).surface().map(|surface| surface.key()),
+            "overlayItem": self.surfaces.read(cx).detail_work_item_id(cx),
             "notice": self.notice.as_ref().map(|notice| notice.text.to_string()),
             "announcement": self.announcement.to_string(),
             "drafts": self.drafts.iter().map(|draft| draft.id.clone()).collect::<Vec<_>>(),

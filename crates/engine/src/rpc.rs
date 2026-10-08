@@ -10245,7 +10245,25 @@ impl RpcService for EngineRpc {
                             .into(),
                     ));
                 }
+                let stop = matches!(
+                    &command.intent,
+                    TaskCommandIntent::Session {
+                        command: SessionCommandPayload::Interrupt {},
+                        ..
+                    }
+                )
+                .then(|| (command.task_id.clone(), command.command_id.clone()));
                 let receipt = self.execute_task_command(command, false).await?;
+                if let Some((task_id, command_id)) = stop
+                    && matches!(
+                        receipt.status,
+                        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+                    )
+                {
+                    // Board scope extension: a ticket worker's Stop also stops
+                    // that ticket's owned reviewer chats (same set as board Stop).
+                    self.board_follow_chat_stop(&task_id, &command_id).await;
+                }
                 RpcReply::value(&receipt)
             }
             methods::GET_TASK_COMMAND_RECEIPT => {
