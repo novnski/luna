@@ -365,11 +365,18 @@ impl EngineRpc {
             (compatible
                 && !chat.archived
                 && chat.config.as_ref().map(|config| config.harness)
-                    == Some(run.profile.resolved.harness)
-                && self.sessions.active_turn_id(reviewer).is_none())
+                    == Some(run.profile.resolved.harness))
             .then(|| reviewer.clone())
         });
         let reviewer = match reuse {
+            // Reuse across rounds; a reviewer still finishing its previous
+            // turn is waited for, never replaced by a second chat.
+            Some(reviewer)
+                if self.sessions.active_turn_id(&reviewer).is_some()
+                    || self.sessions.has_live_background_work(&reviewer) =>
+            {
+                return Ok(None);
+            }
             Some(reviewer) => reviewer,
             None => {
                 let resolved = &run.profile.resolved;
@@ -440,12 +447,14 @@ impl EngineRpc {
             "wl-{}",
             &board_digest(&("board-reviewer-link", &item.id, &reviewer))?[..32]
         );
+        // One Reviewer link per reviewer chat, whoever recorded it (the
+        // chat-model slice's reviewer creation may link it itself).
         let linked = self
             .store
-            .board_task_links_for_item(&item.id, false)
+            .board_task_links_for_item(&item.id, true)
             .map_err(storage)?
             .into_iter()
-            .any(|link| link.id == link_id && link.active);
+            .any(|link| link.task_id == reviewer && link.role == TaskLinkRole::Reviewer);
         let link = WorkItemTaskLink {
             id: link_id,
             work_item_id: item.id.clone(),

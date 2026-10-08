@@ -171,4 +171,18 @@ impl EngineRpc {
         let _ = (work_item_id, execution_generation);
         Err(BoardError::not_implemented("board.deliverOutcome"))
     }
+
+    /// For the review slice: move a ticket to Done when the passing result
+    /// still belongs to the current generation and intent revision. A stale
+    /// or held ticket returns `None` and changes nothing. (Contract addition
+    /// by A5; the lifecycle slice owns the body.)
+    pub(crate) async fn board_mark_done_if_current(
+        &self,
+        work_item_id: &str,
+        execution_generation: u64,
+        intent_revision: u64,
+    ) -> BoardResult<Option<BoardMutationReceipt>> {
+        let _ = (work_item_id, execution_generation, intent_revision);
+        Err(BoardError::not_implemented("board.markDoneIfCurrent"))
+    }
 }

@@ -19,10 +19,15 @@
 //! identity. A late result (Backlog, another generation, a stale basis) is
 //! kept as history and never applied.
 //!
+//! Done: evidence is persisted first, then the lifecycle slice's
+//! `board_mark_done_if_current` performs the engine-owned transition (a
+//! standalone commit with the same guards when that slice is absent), then
+//! the pass is recorded and exact reviewer cleanup becomes due.
+//!
 //! Locking: the async entry points and the sweeper take
-//! `board_hub().gate(ticket)`. Do not call them while holding that gate.
-//! `board_review_owned_work`, `board_review_observation` and
-//! `board_capture_outcomes` never take it.
+//! `board_hub().gate(ticket)` and may then take `lifecycle:{ticket}` (Done).
+//! Do not call them while holding either gate. `board_review_owned_work`,
+//! `board_review_observation` and `board_capture_outcomes` take neither.
 // Hooks for other slices (observation merge, project review profile setter).
 #![allow(dead_code)]
 use super::*;
@@ -66,6 +71,9 @@ const STALE_REVIEWS_MAX: usize = 2;
 /// result (crash, restart, a reviewer that ignored the contract).
 const RELAUNCHES_MAX: u8 = 1;
 const CLEANUP_ATTEMPTS_MAX: u32 = 10;
+/// An unattended reviewer turn running longer than this is stopped and the
+/// pass is unresolved.
+const REVIEW_TIMEOUT_MS: i64 = 45 * 60 * 1000;
 const SWEEP_INTERVAL: Duration = Duration::from_millis(400);
 const FULL_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 /// Commit retries after a concurrent writer moved the ticket/intent/run.
@@ -789,13 +797,18 @@ impl EngineRpc {
             }
         };
         let item = self.board_item_for(caller, &work_item_id, BoardAccess::Read)?;
-        let mut runs = self
-            .store
-            .board_review_runs(&item.id, 20)
-            .map_err(storage)?;
-        if let Some(run_id) = &request.review_run_id {
-            runs.retain(|run| &run.id == run_id);
-        }
+        let runs = match &request.review_run_id {
+            Some(run_id) => self
+                .store
+                .board_review_run(run_id)
+                .map_err(storage)?
+                .into_iter()
+                .collect(),
+            None => self
+                .store
+                .board_review_runs(&item.id, 20)
+                .map_err(storage)?,
+        };
         let intent = self.store.board_intent(&item.id).map_err(storage)?;
         let (passes, rounds) = intent.as_ref().map_or((0, 0), |intent| {
             (intent.review_passes, intent.repair_rounds)
@@ -897,7 +910,12 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardReviewSubmitRequest,
     ) -> BoardResult<ReviewRunReceipt> {
-        let BoardCaller::Agent { task_id, .. } = caller else {
+        let BoardCaller::Agent {
+            task_id,
+            project_ids,
+            ..
+        } = caller
+        else {
             return Err(BoardError::NotAuthorized {
                 reason: "Only the run's reviewer chat can submit a review result.".into(),
             });
@@ -908,12 +926,21 @@ impl EngineRpc {
             .board_review_run(&request.review_run_id)
             .map_err(storage)?
             .ok_or_else(|| BoardError::invalid("reviewRunId", "no such review run"))?;
+        // Authority is the recorded run, not a board scope: only its exact
+        // reviewer chat, in the ticket's own project, on the owning host.
         if run.reviewer_task_id.as_deref() != Some(task_id.as_str()) {
             return Err(BoardError::NotAuthorized {
                 reason: "Only the run's recorded reviewer chat can submit its result.".into(),
             });
         }
-        let item = self.board_item_for(caller, &run.work_item_id, BoardAccess::Read)?;
+        let item = self.board_load(&run.work_item_id)?;
+        if item.owner_host_id != self.engine_info.device_id
+            || !project_ids.contains(&item.project_id)
+        {
+            return Err(BoardError::NotAuthorized {
+                reason: "This review run belongs to another project or host.".into(),
+            });
+        }
         let summary =
             bounded_text("summary", Some(&request.summary), SUMMARY_MAX)?.ok_or_else(|| {
                 BoardError::invalid(
@@ -1074,8 +1101,7 @@ impl EngineRpc {
                     "The reviewer's model could not be observed; the selected {requested} is unverified, so the result cannot complete the ticket."
                 ),
             });
-        } else {
-            let basis = run.basis.as_ref().expect("checked above");
+        } else if let Some(basis) = run.basis.as_ref() {
             let cwd = self
                 .workspace
                 .chat(&run.primary_task_id)
@@ -1614,9 +1640,16 @@ impl EngineRpc {
             .filter(|other| other.id != run.id)
             .find_map(|other| other.basis.as_ref()?.base_revision.clone());
         let cwd = primary.cwd.clone().unwrap_or_else(|| ".".into());
-        let capture = self
+        let capture = match self
             .review_capture(&cwd, prior_base.as_deref(), &run.evidence)
-            .await?;
+            .await
+        {
+            Ok(capture) => capture,
+            Err(error) => {
+                self.review_fail(run, BoardAttentionKind::ReviewUnavailable, &error.message())?;
+                return Ok(true);
+            }
+        };
         let outcomes = self.store.board_outcomes(&item.id, 200).map_err(storage)?;
         let packet = self
             .review_packet(item, run, &primary, &capture, &outcomes)
@@ -1723,11 +1756,29 @@ impl EngineRpc {
             return Ok(false);
         }
         if !self.review_turn_finished(reviewer, &delivery::packet_message_id(&run.id))? {
+            // Time bound for an unattended review (a reviewer waiting for the
+            // user's approval or input is not timed out).
+            let started = run
+                .basis
+                .as_ref()
+                .map_or(run.updated_at_ms, |basis| basis.captured_at_ms);
+            if run.state == ReviewRunState::Running && crate::now_ms() - started > REVIEW_TIMEOUT_MS
+            {
+                self.review_stop_reviewer(run, reviewer).await;
+                self.review_fail(
+                    run,
+                    BoardAttentionKind::ReviewUnavailable,
+                    "The review timed out; a timeout never completes a ticket.",
+                )?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         // The turn ended and no structured result arrived (prose, provider
-        // exit, crash or restart). Relaunch once into the same reviewer.
+        // exit, crash or restart). Drop an undelivered packet row, then
+        // relaunch once into the same reviewer.
         let detail = "The reviewer turn ended without calling review_submit; prose or a provider exit is not a review result.";
+        self.review_stop_reviewer(run, reviewer).await;
         if run.relaunches < RELAUNCHES_MAX {
             self.review_supersede(run, detail, run.relaunches + 1)?;
         } else {
@@ -1753,13 +1804,23 @@ impl EngineRpc {
         {
             return Ok(false);
         }
-        if self
+        match self
             .doc_host
             .queued_message(task_id, message_id)
             .map_err(storage)?
-            .is_some()
         {
-            return Ok(false);
+            // A restart left the delivery unknown and never replays it: no
+            // turn is running for it, so the pass cannot finish by itself.
+            Some(queued)
+                if matches!(
+                    queued.status,
+                    luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                ) =>
+            {
+                return Ok(true);
+            }
+            Some(_) => return Ok(false),
+            None => {}
         }
         let entries = self
             .doc_host
@@ -1855,6 +1916,20 @@ impl EngineRpc {
             return Ok(true);
         };
         if not_current(&item, intent.as_ref(), run.execution_generation).is_some() {
+            // A crash between the Done transition and recording this pass:
+            // finish recording instead of calling it history.
+            if result.verdict == ReviewVerdict::Passed
+                && self.review_done_for(&item.id, run.execution_generation)?
+            {
+                self.review_record_completion(run)?;
+                let run = self
+                    .store
+                    .board_review_run(&run.id)
+                    .map_err(storage)?
+                    .unwrap_or_else(|| run.clone());
+                self.review_result_notice(&item, &run, None).await;
+                return self.review_cleanup_step(&run).await;
+            }
             self.review_set_outcome(run, ReviewRunOutcome::Historical, None, None)?;
             return Ok(true);
         }
@@ -2020,6 +2095,39 @@ impl EngineRpc {
                     && run.delivered_id.is_some() =>
             {
                 let message = delivery::repair_message_id(&run.id);
+                if self
+                    .doc_host
+                    .queued_message(&working.task_id, &message)
+                    .map_err(storage)?
+                    .is_some_and(|queued| {
+                        matches!(
+                            queued.status,
+                            luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                        )
+                    })
+                {
+                    // Never re-review an unchanged result as if repaired.
+                    self.review_update_run(
+                        run,
+                        "repair-unknown",
+                        |_| {
+                            Some(WorkItemEventKind::AttentionRaised {
+                                reason: BoardAttentionKind::DeliveryUnknown,
+                            })
+                        },
+                        |next, _| {
+                            if next.attention == Some(BoardAttentionKind::DeliveryUnknown) {
+                                return false;
+                            }
+                            next.attention = Some(BoardAttentionKind::DeliveryUnknown);
+                            next.detail = Some(
+                                "The repair request's delivery is unknown after a restart; resend it from the ticket chat's queue.".into(),
+                            );
+                            true
+                        },
+                    )?;
+                    return Ok(true);
+                }
                 if !self.review_turn_finished(&working.task_id, &message)?
                     || self
                         .review_quiescent(&working.task_id, &reviewers)
@@ -2043,6 +2151,7 @@ impl EngineRpc {
             }
             Some(run)
                 if run.state == ReviewRunState::Stale
+                    && run.outcome.is_none()
                     && run.execution_generation == intent.execution_generation
                     && !runs
                         .iter()
@@ -2263,9 +2372,9 @@ impl EngineRpc {
         Ok(self.review_receipt(&request_id, run, None))
     }
 
-    /// The Done gate: current checks + current review passed + Ready intent
-    /// + matching generation, the implementer quiet, evidence persisted with
-    /// the transition. Then reviewer cleanup.
+    /// The Done gate: current checks, current review passed, Ready intent and
+    /// the matching generation, the implementer quiet, evidence persisted
+    /// with the transition. Then reviewer cleanup.
     async fn review_done_gate(
         &self,
         item: &WorkItem,
@@ -2358,47 +2467,42 @@ impl EngineRpc {
         {
             return Ok(false);
         }
-        let outcomes = self.review_outcome_rows(item, run)?;
         let generation = run.execution_generation;
-        let (done, _) = self.review_mutate(&item.id, Some(&run.id), |ctx| {
-            let Some(current) = ctx.run.clone() else {
-                return Ok((None, false));
-            };
-            if current.outcome.is_some() {
-                return Ok((None, false));
-            }
-            if not_current(&ctx.item, ctx.intent.as_ref(), generation).is_some() {
-                return Ok((None, false));
-            }
-            let mut intent = ctx.intent.clone().expect("checked by not_current");
-            intent.desired = BoardColumn::Done;
-            intent.observed_phase = BoardPhase::CleanupPending;
-            intent.updated_at_ms = crate::now_ms();
-            let mut next = current.clone();
-            next.outcome = Some(ReviewRunOutcome::Completed {
-                execution_generation: generation,
-            });
-            next.cleanup.state = ReviewCleanupState::Pending;
-            next.updated_at_ms = crate::now_ms();
-            let mut write = ReviewWrite::new(
-                format!("{}:v{}:done", current.id, current.version),
-                BoardOperation::ReviewSubmit,
-            )
-            .row(run_row(&next, Some(current.version)))
-            .row(intent_row(&intent))
-            .event(WorkItemEventKind::Completed {
-                execution_generation: generation,
-            });
-            write.column = Some(BoardColumn::Done);
-            for outcome in &outcomes {
-                write = write.row(BoardRowWrite::Outcome(Box::new(outcome.clone())));
-            }
-            Ok((Some(write), true))
-        })?;
-        if !done {
-            return Ok(true);
+        // 1. Evidence is durable before the transition.
+        let outcomes = self.review_outcome_rows(item, run)?;
+        if !outcomes.is_empty() {
+            let key = format!("{}:v{}:evidence", run.id, run.version);
+            self.review_mutate(&item.id, None, |_| {
+                let mut write = ReviewWrite::new(key.clone(), BoardOperation::ReviewSubmit);
+                for outcome in &outcomes {
+                    write = write.row(BoardRowWrite::Outcome(Box::new(outcome.clone())));
+                }
+                Ok((Some(write), ()))
+            })?;
         }
-        let _ = intent;
+        // 2. The engine-owned Done transition, through the lifecycle slice:
+        // only while the Ready intent, generation and intent revision match
+        // and the worker is quiet.
+        match self
+            .board_mark_done_if_current(&item.id, generation, intent.intent_revision)
+            .await
+        {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if !self.review_done_for(&item.id, generation)? {
+                    // Held, stale or still busy: re-evaluated next sweep.
+                    return Ok(false);
+                }
+            }
+            Err(BoardError::NotImplemented { .. }) => {
+                if !self.review_mark_done_standalone(item, run)? {
+                    return Ok(false);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        // 3. Record which pass completed the ticket; cleanup becomes due.
+        self.review_record_completion(run)?;
         let run = self
             .store
             .board_review_run(&run.id)
@@ -2408,5 +2512,84 @@ impl EngineRpc {
         self.review_result_notice(&item, &run, None).await;
         // Cleanup runs after the Done transition and evidence are durable.
         self.review_cleanup_step(&run).await
+    }
+
+    /// Whether the ticket is Done for exactly this execution generation
+    /// (journal readback; a Done from an older generation never counts).
+    fn review_done_for(&self, work_item_id: &str, generation: u64) -> BoardResult<bool> {
+        let item = self.board_load(work_item_id)?;
+        if item.column != BoardColumn::Done {
+            return Ok(false);
+        }
+        let events = self
+            .store
+            .board_recent_events(work_item_id, 100)
+            .map_err(storage)?;
+        Ok(events
+            .iter()
+            .find_map(|event| match &event.kind {
+                WorkItemEventKind::Completed {
+                    execution_generation,
+                } => Some(*execution_generation == generation),
+                WorkItemEventKind::Reopened { .. } | WorkItemEventKind::Moved { .. } => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false))
+    }
+
+    /// The Done transition when the lifecycle slice is not present in this
+    /// build: the same guards (Ready intent, generation), one commit with
+    /// the canonical `Completed` event.
+    fn review_mark_done_standalone(&self, item: &WorkItem, run: &ReviewRun) -> BoardResult<bool> {
+        let generation = run.execution_generation;
+        let (done, _) = self.review_mutate(&item.id, None, |ctx| {
+            if ctx.item.column == BoardColumn::Done {
+                return Ok((None, self.review_done_for(&ctx.item.id, generation)?));
+            }
+            if not_current(&ctx.item, ctx.intent.as_ref(), generation).is_some() {
+                return Ok((None, false));
+            }
+            let mut intent = ctx.intent.clone().expect("checked by not_current");
+            intent.observed_phase = BoardPhase::Complete;
+            intent.queue = None;
+            intent.needs_reconcile = false;
+            intent.updated_at_ms = crate::now_ms();
+            let mut write = ReviewWrite::new(
+                format!("done:{}:{generation}", ctx.item.id),
+                BoardOperation::ReviewSubmit,
+            )
+            .row(intent_row(&intent))
+            .event(WorkItemEventKind::Completed {
+                execution_generation: generation,
+            });
+            write.column = Some(BoardColumn::Done);
+            Ok((Some(write), true))
+        })?;
+        Ok(done)
+    }
+
+    /// Mark the pass that completed the ticket; cleanup becomes due.
+    fn review_record_completion(&self, run: &ReviewRun) -> BoardResult<()> {
+        let generation = run.execution_generation;
+        self.review_update_run(
+            run,
+            "completed",
+            |_| None,
+            |next, intent| {
+                if next.outcome.is_some() {
+                    return false;
+                }
+                next.outcome = Some(ReviewRunOutcome::Completed {
+                    execution_generation: generation,
+                });
+                next.cleanup.state = ReviewCleanupState::Pending;
+                if let Some(intent) = intent {
+                    intent.observed_phase = BoardPhase::CleanupPending;
+                    intent.updated_at_ms = crate::now_ms();
+                }
+                true
+            },
+        )?;
+        Ok(())
     }
 }

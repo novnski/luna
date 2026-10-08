@@ -345,6 +345,9 @@ struct Rig {
     core: Option<EngineCore>,
     client: Option<RpcClient>,
     evidence: Evidence,
+    /// Turns that are finished as soon as they arrive while waiting for
+    /// another (e.g. a provider-side recovery of an interrupted turn).
+    autofinish: Option<fn(&Turn) -> bool>,
 }
 
 impl Rig {
@@ -382,6 +385,7 @@ impl Rig {
                 scenario,
                 steps: Vec::new(),
             },
+            autofinish: None,
         };
         rig.boot();
         let path = rig.repo.to_string_lossy().to_string();
@@ -484,6 +488,10 @@ impl Rig {
                 .expect("peer channel open");
             if wanted(&turn) {
                 return turn;
+            }
+            if self.autofinish.is_some_and(|autofinish| autofinish(&turn)) {
+                turn.finish();
+                continue;
             }
             self.pending.push_back(turn);
         }
@@ -1345,9 +1353,12 @@ async fn restart_at_launch_and_delivery_boundaries_is_once_only() {
         None,
     );
     // Restart before launch (the implementer turn is still in flight): the
-    // queued pass survives with its owner.
+    // queued pass survives with its owner. A provider-side recovery of the
+    // interrupted implementer turn is simply allowed to finish.
     rig.restart().await;
     drop(turn);
+    rig.autofinish =
+        Some(|turn| turn.harness == HarnessId::Codex && !turn.is_packet() && !turn.is_repair());
     let (review_turn, run) = reviewer_turn(&mut rig, &id, "review after restart").await;
     rig.evidence.step(
         "owner association survives restart",
