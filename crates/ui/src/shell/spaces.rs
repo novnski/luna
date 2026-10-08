@@ -23,12 +23,15 @@ struct ActiveChatRow {
     branch: Option<String>,
     change_request: Option<luna_proto::ChangeRequestSummary>,
     group: Option<(String, String)>,
+    /// Waiting on the user (approval, question, unseen failure or an open
+    /// Activity item): an All projects group header counts these.
+    needs_you: bool,
 }
 
 /// A parent-origin chat enters the main sidebar only after an explicit drag.
 /// Keep this projection shared by Activity, active, Settled, Archived, and
 /// keyboard navigation; selection and pinning never reveal an unplaced row.
-fn sidebar_rows<'a>(
+pub(super) fn sidebar_rows<'a>(
     rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     state: &AppState,
     placed: &super::placement::EffectivePlacements,
@@ -234,6 +237,9 @@ pub(super) struct SidebarProbe {
     pub scroll_children: Vec<String>,
     /// The strings a surface rendered this frame, keyed by surface.
     pub texts: std::collections::HashMap<String, Vec<String>>,
+    /// What each sidebar row and project header drew (`row:{id}`,
+    /// `project-header:{space}`), written from `&self` render paths.
+    pub marks: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>>,
     pub bounds: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<String, gpui::Bounds<gpui::Pixels>>>,
     >,
@@ -250,13 +256,22 @@ impl SidebarProbe {
         self.shelf_pages.clear();
         self.scroll_children.clear();
         self.texts.clear();
+        self.marks.borrow_mut().clear();
         self.bounds.borrow_mut().clear();
     }
 }
 
-/// The unpinned section an active row lists under: one list, or its device
-/// group (the same `device:{id}` key the group's collapse state uses).
-fn active_section_key(chat: &luna_proto::Chat, organization: SidebarOrganization) -> String {
+/// The unpinned section an active row lists under: one list, its device
+/// group, or (All projects) its project group — the same `device:{id}` /
+/// `project:{id}` key the group's collapse state uses.
+fn active_section_key(
+    chat: &luna_proto::Chat,
+    organization: SidebarOrganization,
+    by_project: bool,
+) -> String {
+    if by_project {
+        return format!("project:{}", chat.space_id.as_deref().unwrap_or_default());
+    }
     match organization {
         SidebarOrganization::ByDevice => format!("device:{}", chat.device_id),
         SidebarOrganization::ByProject | SidebarOrganization::InOneList => "active".into(),
@@ -322,6 +337,7 @@ fn active_page<'a>(
     attention_task_keys: &std::collections::HashSet<(String, String)>,
     pending_actions: &std::collections::HashMap<String, TaskConfirmation>,
     organization: SidebarOrganization,
+    by_project: bool,
     limit: impl Fn(&str) -> usize,
 ) -> (
     Vec<(ChatIndicator, &'a luna_proto::Chat)>,
@@ -346,7 +362,7 @@ fn active_page<'a>(
             if chat.pinned_order.is_some() {
                 return true;
             }
-            let key = active_section_key(chat, organization);
+            let key = active_section_key(chat, organization, by_project);
             let page = pages.entry(key).or_insert_with_key(|key| SectionPage {
                 limit: limit(key),
                 ..Default::default()
@@ -509,7 +525,7 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 12] = [
 // (well over 2x the intra-list gap). Disclosure content gets a small 4px
 // handoff from its header without leaving dead space while collapsed.
 const SIDEBAR_SECTION_GAP: f32 = 12.0;
-const SIDEBAR_DISCLOSURE_HEADER_HEIGHT: f32 = 28.0;
+pub(super) const SIDEBAR_DISCLOSURE_HEADER_HEIGHT: f32 = 28.0;
 const SIDEBAR_DISCLOSURE_BODY_INSET: f32 = 4.0;
 const SIDEBAR_DISCLOSURE_SECTION_HEIGHT: f32 =
     SIDEBAR_SECTION_GAP + SIDEBAR_DISCLOSURE_HEADER_HEIGHT;
@@ -537,6 +553,33 @@ fn promote_local_device_group<T>(
         let local = groups.remove(index);
         groups.insert(0, local);
     }
+}
+
+/// One sidebar group: its `(key, label)` (none for the single list) and rows.
+type SidebarGroup<T> = (Option<(String, String)>, Vec<T>);
+
+/// Order All projects groups like the project picker (case-insensitive name,
+/// then id), keeping a leading Pinned group in place. Group keys are project
+/// ids.
+fn sort_project_groups<T>(groups: &mut [SidebarGroup<T>], state: &AppState) {
+    let start = usize::from(groups.first().is_some_and(|(group, _)| {
+        group
+            .as_ref()
+            .is_some_and(|(key, _)| key == "__luna_pinned__")
+    }));
+    groups[start..].sort_by_cached_key(|(group, _)| {
+        let id = group
+            .as_ref()
+            .map(|(key, _)| key.as_str())
+            .unwrap_or_default();
+        (
+            state
+                .space_row(id)
+                .map(|space| space.display_name().to_lowercase())
+                .unwrap_or_default(),
+            id.to_owned(),
+        )
+    });
 }
 
 /// Shared quiet rule for sidebar groups and palette sections.
@@ -592,6 +635,25 @@ pub(super) enum SpacesMenuRow {
     All,
     Space(String),
     AddSpace,
+    /// The pinned footer's second action: Settings › Projects.
+    ManageProjects,
+}
+
+/// One rendered row of the project picker: what it activates, its two text
+/// lines and its live counts (`None` for All projects, which sums them in
+/// its subtitle instead).
+struct SpacesMenuDetail {
+    row: SpacesMenuRow,
+    label: SharedString,
+    /// The folder path for a project; the total for All projects.
+    subtitle: SharedString,
+    /// The machine, only to tell apart same-named projects.
+    tag: Option<SharedString>,
+    offline: bool,
+    selected: bool,
+    activity: Option<super::sidebar_projects::ProjectActivity>,
+    /// The project's tile colour (`None` for All projects).
+    tint: Option<gpui::Hsla>,
 }
 
 /// New project navigates devices, locations, then folders on a command-palette surface.
@@ -654,7 +716,7 @@ pub(super) struct AddSpaceFlow {
 
 /// Segment-aware "is `path` at or under `base`" (`/media/a` is not under
 /// `/media/ab`); a root base covers everything.
-fn path_under(path: &str, base: &str) -> bool {
+pub(super) fn path_under(path: &str, base: &str) -> bool {
     let base = base.trim_end_matches('/');
     base.is_empty() || path == base || path.starts_with(&format!("{base}/"))
 }
@@ -954,7 +1016,75 @@ impl Shell {
                 self.close_spaces_menu(cx);
                 self.open_add_space(cx);
             }
+            SpacesMenuRow::ManageProjects => {
+                self.close_spaces_menu(cx);
+                self.open_settings(SettingsSection::Projects, cx);
+            }
         }
+    }
+
+    /// A picker row's live counts, right-aligned before the check column:
+    /// what needs the user, what is running, or when a quiet project was last
+    /// used.
+    fn spaces_menu_counts(
+        project: super::sidebar_projects::ProjectActivity,
+        now: chrono::DateTime<Utc>,
+        theme: &Theme,
+    ) -> gpui::Div {
+        let count = |tone: gpui::Hsla, glyph: AnyElement, n: usize| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(crate::typography::ui_rems(3.0))
+                .text_color(theme.readable_tone(tone, 1.0))
+                .child(glyph)
+                .child(SharedString::from(n.to_string()))
+        };
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(8.0))
+            .text_size(crate::typography::ui_rems(11.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .font_features(crate::typography::tabular_figures())
+            .when(project.need > 0, |el| {
+                el.child(count(
+                    theme.warning,
+                    icon(icons::SHIELD_WARNING)
+                        .size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.readable_icon(theme.warning))
+                        .into_any_element(),
+                    project.need,
+                ))
+            })
+            .when(project.working > 0, |el| {
+                // A small square: the running task's loader, at rest.
+                el.child(count(
+                    theme.busy,
+                    div()
+                        .size(crate::typography::ui_rems(6.0))
+                        .rounded(px(1.5))
+                        .bg(theme.busy)
+                        .into_any_element(),
+                    project.working,
+                ))
+            })
+            .when(project.need == 0 && project.working == 0, |el| {
+                el.child(
+                    div()
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .text_color(theme.readable_faint(0.9))
+                        .child(SharedString::from(
+                            project
+                                .last
+                                .map(|last| format_time_ago(last, now))
+                                .unwrap_or_default(),
+                        )),
+                )
+            })
     }
 
     /// Dropdown keys (bubbling from the focused search input): ↑↓ navigate,
@@ -977,9 +1107,9 @@ impl Shell {
             }
             popover::MenuKey::Up | popover::MenuKey::Down => {
                 let rows = self.spaces_menu_rows(cx);
-                // +1: the pinned footer stays in the nav order, exactly as
-                // when it was the list's last row.
-                let count = rows.len() + 1;
+                // +2: the pinned footer's two actions stay in the nav order,
+                // exactly as when they were the list's last rows.
+                let count = rows.len() + 2;
                 let delta = if key == popover::MenuKey::Up { -1 } else { 1 };
                 if let Some(menu) = self.spaces_menu.open_mut() {
                     menu.active = popover::menu_step(Some(menu.active), count, delta).unwrap_or(0);
@@ -995,11 +1125,13 @@ impl Shell {
             popover::MenuKey::Enter | popover::MenuKey::ModEnter => {
                 let active = self.spaces_menu.get().map(|m| m.active).unwrap_or(0);
                 let rows = self.spaces_menu_rows(cx);
-                // One past the scrollable rows is the pinned footer.
+                // Past the scrollable rows come the pinned footer's actions.
                 let row = if active < rows.len() {
                     rows[active].clone()
-                } else {
+                } else if active == rows.len() {
                     SpacesMenuRow::AddSpace
+                } else {
+                    SpacesMenuRow::ManageProjects
                 };
                 self.activate_spaces_menu_row(row, cx);
             }
@@ -1254,21 +1386,53 @@ impl Shell {
         let filter = self.settings.space_filter.clone();
         // Just the project's name: the machine it lives on is noise here
         // (user request). A disconnected host still shows its glyph.
-        let (label, offline): (SharedString, bool) = {
+        let (label, offline, project_id): (SharedString, bool, Option<String>) = {
             let state = self.state.read(cx);
             match filter.as_deref().and_then(|id| state.space_row(id)) {
                 Some(space) => (
                     space.display_name().to_string().into(),
                     !state.device_online(&space.device_id, Utc::now()),
+                    Some(space.id.clone()),
                 ),
-                None => (SharedString::from("All projects"), false),
+                None => (SharedString::from("All projects"), false, None),
             }
+        };
+        // The pill's second line: the selected project's live counts, or
+        // every project's together under All projects.
+        let summary: SharedString = {
+            let activity = self.project_activity(cx);
+            match &project_id {
+                Some(id) => activity.get(id).copied().unwrap_or_default().summary(),
+                None => activity
+                    .values()
+                    .fold(
+                        super::sidebar_projects::ProjectActivity::default(),
+                        |mut all, project| {
+                            all.active += project.active;
+                            all.need += project.need;
+                            all.working += project.working;
+                            all
+                        },
+                    )
+                    .summary(),
+            }
+            .into()
+        };
+        let tile = match &project_id {
+            Some(id) => super::sidebar_projects::project_tile(
+                super::sidebar_projects::project_tint(&self.state.read(cx), id),
+                &label,
+                24.0,
+                theme,
+            ),
+            None => super::sidebar_projects::all_projects_tile(24.0, theme),
         };
         #[cfg(feature = "appshots-fixture")]
         if let Some(probe) = self.sidebar_probe.as_mut() {
-            probe
-                .texts
-                .insert("spaces-trigger".into(), vec![label.to_string()]);
+            probe.texts.insert(
+                "spaces-trigger".into(),
+                vec![label.to_string(), summary.to_string()],
+            );
         }
         let open = self.spaces_menu.is_open();
 
@@ -1279,26 +1443,31 @@ impl Shell {
             .aria_expanded(open)
             .flex_1()
             .min_w_0()
-            .h(crate::typography::ui_rems(29.0))
+            .h(crate::typography::ui_rems(40.0))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(Theme::SPACE_SM))
-            .rounded(px(8.0))
-            .px(px(Theme::SPACE_SM))
+            .gap(crate::typography::ui_rems(10.0))
+            // A bordered pill (Design A): the project is the sidebar's
+            // subject, not one more toolbar label.
+            .rounded(crate::typography::ui_rems(11.0))
+            .border_1()
+            .border_color(if open {
+                theme.accent.opacity(0.45)
+            } else {
+                theme.border.opacity(0.7)
+            })
+            .pl(crate::typography::ui_rems(7.0))
+            .pr(px(Theme::SPACE_SM))
             .text_size(crate::typography::ui_rems(13.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(motion::hover_blend(
-                "spaces-filter",
-                theme.text.opacity(0.8),
-                theme.text,
-            ))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(theme.text)
             .bg(if open {
                 theme.glass_hover()
             } else {
                 motion::hover_blend(
                     "spaces-filter",
-                    theme.glass_hover().opacity(0.0),
+                    theme.text.opacity(0.035),
                     theme.glass_hover(),
                 )
             })
@@ -1317,12 +1486,7 @@ impl Shell {
                     this.open_spaces_menu(window, cx);
                 }
             }))
-            .child(
-                icon(icons::FOLDER)
-                    .size(crate::typography::ui_rems(16.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
+            .child(tile)
             // flex_1 pushes the caret to the trigger's right edge and gives
             // long space names a bound to fade against.
             .child(
@@ -1330,23 +1494,39 @@ impl Shell {
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(crate::typography::ui_rems(6.0))
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(crate::typography::ui_rems(6.0))
+                            .line_height(crate::typography::ui_rems(16.0))
+                            .child(super::sidebar_faded_label(
+                                "spaces-filter-label".into(),
+                                false,
+                                label,
+                            ))
+                            // Disconnected glyph, not the word (user request).
+                            .when(offline, |el| {
+                                el.child(
+                                    icon(icons::WIFI_OFF)
+                                        .size(crate::typography::ui_rems(12.0))
+                                        .flex_none()
+                                        .text_color(theme.readable_tone(theme.warning, 0.8)),
+                                )
+                            }),
+                    )
                     .child(super::sidebar_faded_label(
-                        "spaces-filter-label".into(),
+                        "spaces-filter-summary".into(),
                         false,
-                        label,
-                    ))
-                    // Disconnected glyph, not the word (user request).
-                    .when(offline, |el| {
-                        el.child(
-                            icon(icons::WIFI_OFF)
-                                .size(crate::typography::ui_rems(12.0))
-                                .flex_none()
-                                .text_color(theme.readable_tone(theme.warning, 0.8)),
-                        )
-                    }),
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(14.0))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .text_color(theme.readable_faint(0.9))
+                            .child(summary),
+                    )),
             )
             .child(
                 icon(icons::ALT_ARROW_DOWN)
@@ -1491,13 +1671,9 @@ impl Shell {
         // No machine names (user request), except to tell apart projects
         // that share a name on different machines. Consume `rows` to avoid
         // cloning the list children per frame.
-        let details: Vec<(
-            SpacesMenuRow,
-            SharedString,
-            Option<SharedString>,
-            bool,
-            bool,
-        )> = {
+        let activity = self.project_activity(cx);
+        let now = Utc::now();
+        let details: Vec<SpacesMenuDetail> = {
             let state = self.state.read(cx);
             let mut name_counts: std::collections::HashMap<&str, usize> = Default::default();
             for row in &rows {
@@ -1507,43 +1683,65 @@ impl Shell {
                     *name_counts.entry(space.display_name()).or_default() += 1;
                 }
             }
+            let projects = state.spaces.len();
             rows.into_iter()
                 .map(|row| match row {
-                    SpacesMenuRow::All => (
-                        SpacesMenuRow::All,
-                        SharedString::from("All projects"),
-                        None,
-                        false,
-                        filter.is_none(),
-                    ),
+                    SpacesMenuRow::All => {
+                        let active: usize = activity.values().map(|project| project.active).sum();
+                        SpacesMenuDetail {
+                            row: SpacesMenuRow::All,
+                            label: SharedString::from("All projects"),
+                            subtitle: format!(
+                                "{active} active across {projects} project{}",
+                                if projects == 1 { "" } else { "s" }
+                            )
+                            .into(),
+                            tag: None,
+                            offline: false,
+                            selected: filter.is_none(),
+                            activity: None,
+                            tint: None,
+                        }
+                    }
                     SpacesMenuRow::Space(id) => {
                         let selected = filter.as_deref() == Some(id.as_str());
+                        let project = activity.get(&id).copied().unwrap_or_default();
+                        let tint = Some(super::sidebar_projects::project_tint(&state, &id));
                         match state.space_row(&id) {
                             Some(space) => {
-                                let (tag, offline) = state.space_device_tag(space, Utc::now());
+                                let (tag, offline) = state.space_device_tag(space, now);
                                 let shared_name = name_counts
                                     .get(space.display_name())
                                     .is_some_and(|count| *count > 1);
-                                (
-                                    SpacesMenuRow::Space(id),
-                                    space.display_name().to_string().into(),
-                                    shared_name.then(|| tag.into()),
+                                SpacesMenuDetail {
+                                    label: space.display_name().to_string().into(),
+                                    subtitle: super::sidebar_projects::display_project_path(
+                                        &space.path,
+                                    )
+                                    .into(),
+                                    tag: shared_name.then(|| tag.into()),
                                     offline,
                                     selected,
-                                )
+                                    activity: Some(project),
+                                    tint,
+                                    row: SpacesMenuRow::Space(id),
+                                }
                             }
-                            None => (
-                                SpacesMenuRow::Space(id),
-                                SharedString::from("?"),
-                                None,
-                                false,
+                            None => SpacesMenuDetail {
+                                row: SpacesMenuRow::Space(id),
+                                label: SharedString::from("?"),
+                                subtitle: SharedString::default(),
+                                tag: None,
+                                offline: false,
                                 selected,
-                            ),
+                                activity: Some(project),
+                                tint,
+                            },
                         }
                     }
-                    // spaces_menu_rows never yields this variant — the
-                    // footer is rendered by the card, not the list.
-                    SpacesMenuRow::AddSpace => unreachable!(),
+                    // spaces_menu_rows never yields these variants — the
+                    // footer actions are rendered by the card, not the list.
+                    SpacesMenuRow::AddSpace | SpacesMenuRow::ManageProjects => unreachable!(),
                 })
                 .collect()
         };
@@ -1553,9 +1751,30 @@ impl Shell {
                 "spaces-menu".into(),
                 details
                     .iter()
-                    .map(|(_, label, tag, _, _)| match tag {
-                        Some(tag) => format!("{label} {tag}"),
-                        None => label.to_string(),
+                    .map(|detail| match &detail.tag {
+                        Some(tag) => format!("{} {tag}", detail.label),
+                        None => detail.label.to_string(),
+                    })
+                    .collect(),
+            );
+            probe.texts.insert(
+                "spaces-menu-details".into(),
+                details
+                    .iter()
+                    .map(|detail| {
+                        let counts = detail.activity.map_or(String::new(), |project| {
+                            format!(
+                                "need={} working={} active={}",
+                                project.need, project.working, project.active
+                            )
+                        });
+                        format!(
+                            "{}|{}|{}|{}",
+                            detail.label,
+                            detail.subtitle,
+                            if detail.selected { "selected" } else { "" },
+                            counts
+                        )
                     })
                     .collect(),
             );
@@ -1563,6 +1782,7 @@ impl Shell {
         // The pinned footer's keyboard-nav index: one past the last
         // scrollable row, its permanent place at the end of the nav order.
         let add_index = details.len();
+        let manage_index = add_index + 1;
 
         let list = popover::menu_scroll_host("spaces-menu-list-host")
             .on_hover(cx.listener(Self::on_spaces_menu_list_hover))
@@ -1573,64 +1793,114 @@ impl Shell {
                     .gap(px(2.0))
                     // Same scroll budget as the composer project menu.
                     .max_h(crate::typography::ui_rems(224.0))
-                    .children(details.into_iter().enumerate().map(
-                        |(ix, (row, label, tag, offline, selected))| {
-                            let menu_space = match &row {
-                                SpacesMenuRow::Space(id) => Some(id.clone()),
-                                _ => None,
-                            };
-                            let activate = row;
-                            popover::menu_row_nav(theme, selected, ix == active)
-                                .id(("spaces-menu-row", ix))
-                                .on_mouse_move(cx.listener(
-                                    move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                                        if let Some(menu) = this.spaces_menu.open_mut()
-                                            && menu.active != ix
-                                        {
-                                            menu.active = ix;
-                                            cx.notify();
-                                        }
-                                    },
-                                ))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.activate_spaces_menu_row(activate.clone(), cx);
-                                }))
-                                .when_some(menu_space, |el, space_id| {
-                                    el.on_mouse_down(
-                                        MouseButton::Right,
-                                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                            this.space_menu
-                                                .open((space_id.clone(), event.position));
-                                            cx.notify();
-                                        }),
-                                    )
-                                })
-                                .child(div().flex_1().min_w_0().truncate().child(label))
-                                .when_some(tag, |el, tag| {
-                                    el.child(
+                    .children(details.into_iter().enumerate().map(|(ix, detail)| {
+                        let SpacesMenuDetail {
+                            row,
+                            label,
+                            subtitle,
+                            tag,
+                            offline,
+                            selected,
+                            activity,
+                            tint,
+                        } = detail;
+                        let menu_space = match &row {
+                            SpacesMenuRow::Space(id) => Some(id.clone()),
+                            _ => None,
+                        };
+                        let tile = match tint {
+                            Some(tint) => {
+                                super::sidebar_projects::project_tile(tint, &label, 28.0, theme)
+                            }
+                            None => super::sidebar_projects::all_projects_tile(28.0, theme),
+                        };
+                        // Project rows show their folder (mono); the All
+                        // projects row a sentence.
+                        let is_path = activity.is_some();
+                        let counts = activity.map(|project| {
+                            Self::spaces_menu_counts(project, now, theme).into_any_element()
+                        });
+                        let activate = row;
+                        popover::menu_row_nav(theme, selected, ix == active)
+                            .id(("spaces-menu-row", ix))
+                            .on_mouse_move(cx.listener(
+                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                    if let Some(menu) = this.spaces_menu.open_mut()
+                                        && menu.active != ix
+                                    {
+                                        menu.active = ix;
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.activate_spaces_menu_row(activate.clone(), cx);
+                            }))
+                            .when_some(menu_space, |el, space_id| {
+                                el.on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        this.space_menu.open((space_id.clone(), event.position));
+                                        cx.notify();
+                                    }),
+                                )
+                            })
+                            .child(tile)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
                                         div()
-                                            .max_w(gpui::relative(0.5))
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_muted)
-                                            .child(tag),
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(crate::typography::ui_rems(6.0))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child(div().min_w_0().truncate().child(label))
+                                            .when_some(tag, |el, tag| {
+                                                el.child(
+                                                    div()
+                                                        .max_w(gpui::relative(0.5))
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .text_size(crate::typography::ui_rems(11.0))
+                                                        .font_weight(gpui::FontWeight::NORMAL)
+                                                        .text_color(theme.text_muted)
+                                                        .child(tag),
+                                                )
+                                            })
+                                            // Disconnected glyph, not the word (user request).
+                                            .when(offline, |el| {
+                                                el.child(
+                                                    icon(icons::WIFI_OFF)
+                                                        .size(crate::typography::ui_rems(12.0))
+                                                        .flex_none()
+                                                        .text_color(
+                                                            theme.readable_tone(theme.warning, 0.8),
+                                                        ),
+                                                )
+                                            }),
                                     )
-                                })
-                                // Disconnected glyph, not the word (user request).
-                                .when(offline, |el| {
-                                    el.child(
-                                        icon(icons::WIFI_OFF)
-                                            .size(crate::typography::ui_rems(12.0))
-                                            .flex_none()
-                                            .text_color(theme.readable_tone(theme.warning, 0.8)),
-                                    )
-                                })
-                            // No check glyph — the selected row's wash (menu_row's
-                            // active styling) is the selection signal.
-                        },
-                    )),
+                                    .when(!subtitle.is_empty(), |el| {
+                                        el.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(crate::typography::ui_rems(11.0))
+                                                .font_weight(gpui::FontWeight::NORMAL)
+                                                .when(is_path, |el| {
+                                                    el.font_family(theme.font_mono.clone())
+                                                })
+                                                .text_color(theme.readable_faint(0.9))
+                                                .child(subtitle),
+                                        )
+                                    }),
+                            )
+                            .children(counts)
+                    })),
             )
             .children(scrollbar);
 
@@ -1697,6 +1967,34 @@ impl Shell {
                             .child(SharedString::from("New project…")),
                     ),
             )
+            .child(
+                popover::menu_row_nav(theme, false, active == manage_index)
+                    .id("spaces-menu-manage")
+                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                        if let Some(menu) = this.spaces_menu.open_mut()
+                            && menu.active != manage_index
+                        {
+                            menu.active = manage_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.activate_spaces_menu_row(SpacesMenuRow::ManageProjects, cx);
+                    }))
+                    .child(
+                        icon(icons::SETTINGS)
+                            .size(crate::typography::ui_rems(12.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from("Manage projects…")),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -1716,6 +2014,7 @@ impl Shell {
 
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
+        let by_project = self.project_tree_view();
         let attention_task_keys = self.activity_task_keys(cx);
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
@@ -1754,6 +2053,7 @@ impl Shell {
                 &settlement_task_keys,
                 &self.pending_task_actions,
                 self.settings.sidebar_organization,
+                by_project,
                 |key| self.sidebar_pages.limit(filter.as_deref(), key),
             )
             .0
@@ -1762,7 +2062,7 @@ impl Shell {
             .collect()
         };
         if self.activity.view_active
-            || self.settings.sidebar_organization != SidebarOrganization::ByDevice
+            || (!by_project && self.settings.sidebar_organization != SidebarOrganization::ByDevice)
         {
             return chats.into_iter().map(|chat| chat.id).collect();
         }
@@ -1774,14 +2074,27 @@ impl Shell {
         let mut ordered: Vec<String> = chats.into_iter().map(|chat| chat.id).collect();
         let mut groups: Vec<(Option<(String, String)>, Vec<luna_proto::Chat>)> = Vec::new();
         for chat in unpinned {
-            let key = Some((chat.device_id.clone(), String::new()));
+            // All projects groups by project in first-appearance order, the
+            // same grouping `render_active_rows` draws.
+            let key = Some(if by_project {
+                (
+                    chat.space_id.clone().unwrap_or_default(),
+                    "project".to_owned(),
+                )
+            } else {
+                (chat.device_id.clone(), String::new())
+            });
             if let Some((_, existing)) = groups.iter_mut().find(|(group, _)| group == &key) {
                 existing.push(chat);
             } else {
                 groups.push((key, vec![chat]));
             }
         }
-        promote_local_device_group(&mut groups, state.local_device_id.as_deref());
+        if by_project {
+            sort_project_groups(&mut groups, &state);
+        } else {
+            promote_local_device_group(&mut groups, state.local_device_id.as_deref());
+        }
         ordered.extend(
             groups
                 .into_iter()
@@ -1802,6 +2115,7 @@ impl Shell {
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
         let activity_view = self.activity.view_active;
+        let by_project = self.project_tree_view();
         let attention_task_keys = self.activity_task_keys(cx);
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
@@ -1843,6 +2157,7 @@ impl Shell {
                     &settlement_task_keys,
                     &self.pending_task_actions,
                     self.settings.sidebar_organization,
+                    by_project,
                     |key| self.sidebar_pages.limit(filter.as_deref(), key),
                 );
                 pages = section_pages;
@@ -1891,12 +2206,22 @@ impl Shell {
                         None
                     } else if chat.pinned_order.is_some() {
                         Some(("__luna_pinned__".into(), "Pinned".into()))
+                    } else if by_project {
+                        Some((chat.space_id.clone().unwrap_or_default(), folder.clone()))
                     } else {
                         match self.settings.sidebar_organization {
                             SidebarOrganization::ByDevice => Some((chat.device_id.clone(), device)),
                             SidebarOrganization::ByProject | SidebarOrganization::InOneList => None,
                         }
                     };
+                    let needs_you = attention_task_keys
+                        .contains(&(chat.device_id.clone(), chat.id.clone()))
+                        || matches!(
+                            status,
+                            ChatIndicator::AwaitingApproval
+                                | ChatIndicator::AwaitingInput
+                                | ChatIndicator::Errored
+                        );
                     ActiveChatRow {
                         parent,
                         status,
@@ -1906,6 +2231,7 @@ impl Shell {
                         branch,
                         change_request,
                         group,
+                        needs_you,
                     }
                 })
                 .collect()
@@ -1931,7 +2257,15 @@ impl Shell {
                 groups.push((row.group.clone(), vec![row]));
             }
         }
-        if !activity_view && self.settings.sidebar_organization == SidebarOrganization::ByDevice {
+        if by_project {
+            // Project groups keep the picker's alphabetical order, so a busy
+            // project never pushes the others around; Pinned stays first.
+            sort_project_groups(&mut groups, &self.state.read(cx));
+        }
+        if !activity_view
+            && !by_project
+            && self.settings.sidebar_organization == SidebarOrganization::ByDevice
+        {
             let local_device_id = self.state.read(cx).local_device_id.clone();
             if groups.first().is_some_and(|(group, _)| {
                 group
@@ -1974,6 +2308,41 @@ impl Shell {
         let mut rendered = Vec::new();
         #[cfg(feature = "appshots-fixture")]
         let mut rendered_ids: Vec<(String, String)> = Vec::new();
+        // A project group's header counts every task in its group, the ones
+        // behind Show more included, but not its pins (they list under
+        // Pinned): the project's live counts less its pinned rows.
+        let mut group_activity: std::collections::HashMap<
+            String,
+            super::sidebar_projects::ProjectActivity,
+        > = if by_project {
+            self.project_activity(cx)
+        } else {
+            Default::default()
+        };
+        if by_project {
+            for row in groups
+                .iter()
+                .filter(|(group, _)| {
+                    group
+                        .as_ref()
+                        .is_some_and(|(key, _)| key == "__luna_pinned__")
+                })
+                .flat_map(|(_, rows)| rows)
+            {
+                if let Some(project) = row
+                    .chat
+                    .space_id
+                    .as_ref()
+                    .and_then(|id| group_activity.get_mut(id))
+                {
+                    if row.needs_you {
+                        project.need = project.need.saturating_sub(1);
+                    } else if row.status == ChatIndicator::Working {
+                        project.working = project.working.saturating_sub(1);
+                    }
+                }
+            }
+        }
         for (group, rows) in groups {
             let mut rendered_rows = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1986,6 +2355,7 @@ impl Shell {
                     branch,
                     change_request,
                     group: _,
+                    needs_you: _,
                 } = row;
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
@@ -2017,7 +2387,11 @@ impl Shell {
                     .sidebar_show_harness
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
-                let height = super::chat_row_height(theme.ui_scale());
+                let height = if by_project {
+                    super::compact_chat_row_height(theme.ui_scale())
+                } else {
+                    super::chat_row_height(theme.ui_scale())
+                };
                 // Only rows a jump slot can reach wear a chip; row 10 onward
                 // keeps its time-ago.
                 let jump_label: Option<SharedString> = if jump_hints {
@@ -2031,10 +2405,16 @@ impl Shell {
                     if chat.pinned_order.is_some() {
                         SidebarDragScope::Pinned
                     } else {
-                        SidebarDragScope::Unpinned(
+                        SidebarDragScope::Unpinned(if by_project {
+                            // A task reorders only among its own project.
+                            Some(format!(
+                                "project:{}",
+                                chat.space_id.as_deref().unwrap_or_default()
+                            ))
+                        } else {
                             (organization == SidebarOrganization::ByDevice)
-                                .then(|| chat.device_id.clone()),
-                        )
+                                .then(|| chat.device_id.clone())
+                        })
                     }
                 });
                 if let Some(scope) = &scope {
@@ -2048,6 +2428,14 @@ impl Shell {
                     project: folder.clone().into(),
                     harness: chat.config.as_ref().map(|config| config.harness),
                 });
+                let folder_tag: SharedString = folder.clone().into();
+                let remote_device: Option<SharedString> = {
+                    let state = self.state.read(cx);
+                    (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
+                        .then(|| state.device_name(&chat.device_id).map(str::to_owned))
+                        .flatten()
+                        .map(SharedString::from)
+                };
                 let element = self.render_chat_row(
                     ChatRowProps {
                         id: chat.id.clone(),
@@ -2080,6 +2468,16 @@ impl Shell {
                         details: Some(details),
                         drag,
                         workbench_open: None,
+                        compact: by_project,
+                        // A pin names its project; a task elsewhere names
+                        // its machine.
+                        device_tag: if !by_project {
+                            None
+                        } else if chat.pinned_order.is_some() {
+                            Some(folder_tag.clone())
+                        } else {
+                            remote_device.clone()
+                        },
                     },
                     theme,
                     cx,
@@ -2133,7 +2531,7 @@ impl Shell {
                     } else if chat.pinned_order.is_some() {
                         "pinned".into()
                     } else {
-                        active_section_key(&chat, organization)
+                        active_section_key(&chat, organization, by_project)
                     },
                     chat.id.clone(),
                 ));
@@ -2146,6 +2544,8 @@ impl Shell {
             };
             let organization = if key == "__luna_pinned__" {
                 "pinned"
+            } else if by_project {
+                "project"
             } else {
                 match self.settings.sidebar_organization {
                     SidebarOrganization::ByDevice => "device",
@@ -2182,17 +2582,29 @@ impl Shell {
             let visible_label: SharedString = if collapsed {
                 format!("{label} ({row_count})").into()
             } else {
-                label.into()
+                label.clone().into()
             };
             let chevron = self.sidebar_disclosure_chevron(&motion_key, !collapsed, theme);
             let toggle_key = collapse_key.clone();
             let toggle_motion_key = motion_key.clone();
-            let header = sidebar_disclosure_header(
-                SharedString::from(format!("sidebar-group-{collapse_key}")),
-                theme,
-                visible_label,
-                chevron,
-            )
+            let header_id = SharedString::from(format!("sidebar-group-{collapse_key}"));
+            let header = if organization == "project" {
+                self.project_group_header(
+                    header_id,
+                    &key,
+                    label.into(),
+                    collapsed,
+                    super::sidebar_projects::ProjectActivity {
+                        active: row_count,
+                        ..group_activity.get(&key).copied().unwrap_or_default()
+                    },
+                    chevron,
+                    theme,
+                    cx,
+                )
+            } else {
+                sidebar_disclosure_header(header_id, theme, visible_label, chevron)
+            }
             .on_click(cx.listener(move |this, _, _, cx| {
                 let was_open = !this.sidebar_collapsed_groups.contains(&toggle_key);
                 this.begin_sidebar_disclosure_motion(
@@ -2386,6 +2798,14 @@ impl Shell {
             .children(settled)
             .children(archived);
         Some(self.sidebar_probed(tray, move || labels).into_any_element())
+    }
+
+    /// Record what a row or header drew for the sidebar QA probe.
+    #[cfg(feature = "appshots-fixture")]
+    pub(super) fn sidebar_mark(&self, key: String, values: impl FnOnce() -> Vec<String>) {
+        if let Some(probe) = &self.sidebar_probe {
+            probe.marks.borrow_mut().insert(key, values());
+        }
     }
 
     /// Record the painted bounds of `el`'s children under `labels` for the
@@ -4895,6 +5315,8 @@ impl Shell {
             .collect();
         serde_json::json!({
             "order": self.sidebar_visible_order(cx),
+            "route": format!("{:?}", self.route),
+            "marks": probe.marks.borrow().clone(),
             "filter": self.settings.space_filter,
             "selected": self.state.read(cx).selected_chat,
             "uiScale": Theme::of(cx).ui_scale(),

@@ -558,9 +558,12 @@ fn listed(rb: &serde_json::Value) -> Vec<String> {
 /// Items 7 and 8: no machine on the trigger; in the dropdown only the two
 /// same-named projects carry theirs.
 fn check_picker_texts(rb: &serde_json::Value, menu_open: bool) -> anyhow::Result<()> {
+    // The pill's first line is the project's name alone; its second line is
+    // the live task summary (sidebar redesign), never a machine.
     let trigger = strings(&rb["texts"]["spaces-trigger"]);
     anyhow::ensure!(
-        trigger == ["LUNA"],
+        trigger.first().map(String::as_str) == Some("LUNA")
+            && !trigger.iter().any(|line| line.contains('@')),
         "the project trigger must show only the project name: {trigger:?}"
     );
     if !menu_open {

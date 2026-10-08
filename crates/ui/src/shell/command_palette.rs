@@ -979,6 +979,8 @@ impl Shell {
                         details: None,
                         drag: None,
                         workbench_open: None,
+                        compact: false,
+                        device_tag: None,
                     },
                     &theme,
                     cx,

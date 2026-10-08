@@ -626,6 +626,8 @@ impl Shell {
                         harness: chat.config.as_ref().map(|config| config.harness),
                     }),
                     workbench_open: self.workbench_is_open(&chat.id),
+                    compact: false,
+                    device_tag: None,
                 },
                 &theme,
                 cx,
