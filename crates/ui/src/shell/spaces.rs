@@ -1274,6 +1274,9 @@ impl Shell {
 
         let trigger = div()
             .id("spaces-filter")
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_expanded(open)
             .flex_1()
             .min_w_0()
             .h(crate::typography::ui_rems(29.0))

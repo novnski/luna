@@ -8,12 +8,15 @@
 //! boot opens a child chat the sidebar folds away (an archived task's child
 //! still open, or a newer child of an active task) instead of the new-session
 //! canvas or the task's own row.
+//! An actually projectless profile must reveal the welcome canvas, and a
+//! Shell opened after the engine became Ready must retire its splash without
+//! waiting for another workspace notification (SU-02).
 //!
 //! Run twice with the same case directory to check process-restart persistence:
 //! target/debug/examples/startup-fixture <evidence-directory> <case> <label>
 //! Cases: empty, settled, archived, mixed-finished, auto-settled, active,
 //! mixed-active, manual-new, manual-archived, archived-parent-child,
-//! active-parent-child. Each run saves PNG + JSON readback.
+//! active-parent-child, no-project, ready-empty. Each run saves PNG + JSON readback.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -32,6 +35,8 @@ fn main() -> anyhow::Result<()> {
         matches!(
             case.as_str(),
             "empty"
+                | "no-project"
+                | "ready-empty"
                 | "settled"
                 | "archived"
                 | "mixed-finished"
@@ -73,7 +78,8 @@ fn main() -> anyhow::Result<()> {
     auth.dev_user_id = "startup-fixture".into();
     auth.use_in_memory_credentials_for_tests();
     core.set_auth(Auth::new(auth));
-    if core.workspace.read_spaces()?.is_empty() {
+    let projectless = matches!(case.as_str(), "no-project" | "ready-empty");
+    if !projectless && core.workspace.read_spaces()?.is_empty() {
         core.workspace.create_space(
             "startup-project",
             &core.device_id,
@@ -198,9 +204,21 @@ fn main() -> anyhow::Result<()> {
             let state = cx.new(|_| {
                 let mut state = state::AppState::new();
                 state.local_device_id = Some(device);
+                if case == "ready-empty" {
+                    // An existing ready, empty AppState before this Shell is
+                    // constructed, as when reopening the main window. No
+                    // later watch notification is needed to reveal it.
+                    state.connection = state::ConnectionStatus::Ready;
+                    state.workspace_scope = Some(handle.engine_info().workspace_scope);
+                    state.fixture_attachment_engine(handle.clone());
+                    state.apply_spaces(Vec::new());
+                    state.apply_chats(Vec::new());
+                    state.apply_sessions(Vec::new());
+                    state.auto_selected = true;
+                }
                 state
             });
-            let window: gpui::AnyWindowHandle = cx
+            let typed_window = cx
                 .open_window(
                     WindowOptions {
                         window_background: theme::Theme::of(cx).window_background_appearance(),
@@ -214,8 +232,14 @@ fn main() -> anyhow::Result<()> {
                     },
                     |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
                 )
-                .unwrap()
-                .into();
+                .unwrap();
+            let window: gpui::AnyWindowHandle = typed_window.into();
+            let initial_splash = window
+                .update(cx, |_, window, cx| {
+                    window.draw(cx).clear();
+                })
+                .and_then(|_| typed_window.read(cx).map(|shell| shell.fixture_splash_phase()))
+                .unwrap();
             // Dispatch the actual Cmd+N action before the first workspace watches.
             if case == "manual-new" {
                 window
@@ -229,7 +253,9 @@ fn main() -> anyhow::Result<()> {
                     state.select_chat(Some("archived".into()), cx)
                 });
             }
-            state.update(cx, |state, cx| state.fixture_attach_engine(handle, cx));
+            if case != "ready-empty" {
+                state.update(cx, |state, cx| state.fixture_attach_engine(handle, cx));
+            }
             cx.spawn(async move |cx| {
                 let result: anyhow::Result<()> = async {
                     for _ in 0..100 {
@@ -245,7 +271,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     cx.background_executor()
-                        .timer(Duration::from_millis(500))
+                        .timer(Duration::from_millis(850))
                         .await;
                     let readback = cx.update(|cx| {
                     let state = state.read(cx);
@@ -254,6 +280,9 @@ fn main() -> anyhow::Result<()> {
                         "selectedSpace": state.selected_space, "autoSelected": state.auto_selected,
                         "chatsSynced": state.chats_synced, "spacesSynced": state.spaces_synced,
                         "chats": state.chats,
+                        "spaces": state.spaces,
+                        "initialSplash": initial_splash,
+                        "splash": typed_window.read(cx).unwrap().fixture_splash_phase(),
                     })
                 });
                     std::fs::write(
@@ -285,10 +314,26 @@ fn main() -> anyhow::Result<()> {
                         readback["autoSelected"] == true,
                         "startup decision remained pending: {readback}"
                     );
-                    anyhow::ensure!(
-                        readback["selectedSpace"] == "startup-project",
-                        "new session lost its project: {readback}"
-                    );
+                    anyhow::ensure!(readback["splash"] == "gone", "startup splash remained: {readback}");
+                    if projectless {
+                        anyhow::ensure!(
+                            readback["selectedSpace"].is_null()
+                                && readback["spaces"] == serde_json::json!([])
+                                && readback["chats"] == serde_json::json!([]),
+                            "projectless startup manufactured workspace data: {readback}"
+                        );
+                        if case == "ready-empty" {
+                            anyhow::ensure!(
+                                readback["initialSplash"] != "visible",
+                                "ready-before-Shell startup waited for a later observation: {readback}"
+                            );
+                        }
+                    } else {
+                        anyhow::ensure!(
+                            readback["selectedSpace"] == "startup-project",
+                            "new session lost its project: {readback}"
+                        );
+                    }
                     std::fs::write(output.join(format!("{label}.pass")), "PASS\n")?;
                     Ok(())
                 }

@@ -1894,10 +1894,10 @@ impl Run {
             );
             window.update(cx, |shell, _, cx| shell.fixture_workbench_open(MAIN, cx))?;
             settle(cx, 300).await;
-            // Cache admission: lowered ceilings reject oversize chats (a 4,200
-            // entry chat by bytes, and ONE entry carrying a 2 MiB child result,
-            // whose count is tiny); default ceilings admit, and the next switch
-            // replaces the one kept chat.
+            // Cache admission: isolate bytes from entry/part/row ceilings,
+            // including ONE entry carrying a 2 MiB child result. Positive
+            // default-cache reuse uses a compact post-measurement probe below;
+            // the requested benchmark history may exceed the default limits.
             let other_doc = self.doc_host.open(OTHER)?;
             let mut other_rows = other_doc.doc().read_entries()?;
             other_rows.push(assistant(
@@ -1911,7 +1911,14 @@ impl Run {
                 8_000_000,
             ));
             replace_atomically(other_doc.doc(), &other_rows)?;
-            let small_limits = (10_000usize, 40_000usize, 1024 * 1024usize);
+            // Include tail/marker entries and tool rows at either benchmark
+            // scale, so this probe cannot reject 10,003 entries by count first.
+            let byte_probe_count_limit = self.entries.saturating_add(512).saturating_mul(4);
+            let small_limits = (
+                byte_probe_count_limit,
+                byte_probe_count_limit,
+                1024 * 1024usize,
+            );
             let set_limits =
                 |limits: Option<(usize, usize, usize)>, cx: &mut AsyncApp| -> anyhow::Result<()> {
                     cx.update(|cx| {
@@ -1958,7 +1965,7 @@ impl Run {
             oversize_ok,
             json!({"afterMain": after_main, "afterFork": after_fork, "afterHugeEntry": after_huge}),
         );
-            admission.insert("oversize".into(), json!({"pass": oversize_ok, "toFork": to_fork["counters"], "toOther": to_other["counters"], "toD": to_d["counters"]}));
+            admission.insert("oversize".into(), json!({"pass": oversize_ok, "limits": {"entries": small_limits.0, "partsOrRows": small_limits.1, "bytes": small_limits.2}, "toFork": to_fork["counters"], "toOther": to_other["counters"], "toD": to_d["counters"]}));
             // Count ceilings alone (bytes effectively unlimited): entries, then
             // parts (recent transcript) and rows (row cache).
             set_limits(Some((100, 1_000_000, 1usize << 30)), cx)?;
@@ -1980,43 +1987,116 @@ impl Run {
             "counts".into(),
             json!({"pass": counts_ok, "byEntries": by_entries["counters"], "byParts": by_parts["counters"]}),
         );
+            let within = |kept: &Value| {
+                let fits = |charge: &Value, entries: u64, items: &str, count: u64| {
+                    charge.is_null()
+                        || (charge["entries"].as_u64().is_some_and(|n| n <= entries)
+                            && charge[items].as_u64().is_some_and(|n| n <= count)
+                            && charge["bytes"]
+                                .as_u64()
+                                .is_some_and(|b| b <= 32 * 1024 * 1024))
+                };
+                fits(&kept["recent"], 20_000, "parts", 80_000)
+                    && fits(&kept["rows"], 10_000, "rows", 40_000)
+            };
             set_limits(None, cx)?;
+            let full_to_fork = self.open_main(cx, FORK).await?;
+            let full_kept_d = kept(cx)?;
+            let full_to_d = self.open_main(cx, PANE_D).await?;
+            let full_kept_fork = kept(cx)?;
+            let full_bounds_ok = within(&full_kept_d) && within(&full_kept_fork);
+            checks.check(
+                "full-workload caches respect every default count and byte ceiling",
+                full_bounds_ok,
+                json!({"keptD": full_kept_d, "keptFork": full_kept_fork}),
+            );
+            admission.insert(
+                "fullWorkload".into(),
+                json!({"pass": full_bounds_ok, "historyEntries": self.entries, "toFork": full_to_fork["counters"], "toD": full_to_d["counters"]}),
+            );
+
+            // Exercise positive admission under unchanged production limits
+            // with a bounded payload. Save and restore both full histories so
+            // subsequent native phases still use the advertised workload.
+            let d_doc = self.doc_host.open(PANE_D)?;
+            let fork_doc = self.doc_host.open(FORK)?;
+            let original_d = d_doc.doc().read_entries()?;
+            let original_fork = fork_doc.doc().read_entries()?;
+            let compact_entries = self.entries.min(256);
+            let compact = |marker| {
+                let mut entries: Vec<_> = (0..compact_entries).map(text_entry).collect();
+                entries.extend(tail(marker, compact_entries as i64 + 10));
+                entries
+            };
+            let compact_d = compact("CACHEDDD");
+            replace_atomically(d_doc.doc(), &compact_d)?;
+            replace_atomically(fork_doc.doc(), &compact("CACHEFFF"))?;
+            let d_scope = format!("main:{PANE_D}");
+            let (compact_painted, _) = wait_painted(window, cx, &d_scope, "tail-text", |text| {
+                text.contains("TEXT-CACHEDDD")
+            })
+            .await?;
             self.open_main(cx, FORK).await?;
+            let (compact_fork_painted, _) =
+                wait_painted(window, cx, &format!("main:{FORK}"), "tail-text", |text| {
+                    text.contains("TEXT-CACHEFFF")
+                })
+                .await?;
             let kept_d = kept(cx)?;
             let back_to_d = self.open_main(cx, PANE_D).await?;
             let kept_fork = kept(cx)?;
-            let d_scope = format!("main:{PANE_D}");
             let reused =
                 back_to_d["counters"]["transcript.row_cache_hit"][d_scope.as_str()]["items"]
                     .as_u64()
                     .unwrap_or(0);
             let d_painted = painted_entry(&d_scope, "tail-text");
-            let within = |kept: &Value| {
-                kept["recent"]["bytes"]
-                    .as_u64()
-                    .is_some_and(|b| b <= 32 * 1024 * 1024)
-                    && kept["rows"]["bytes"]
-                        .as_u64()
-                        .is_some_and(|b| b <= 32 * 1024 * 1024)
-            };
-            let replace_ok = kept_d["recent"]["chat"] == PANE_D
+            let replace_ok = compact_painted
+                .as_deref()
+                .is_some_and(|text| text.contains("TEXT-CACHEDDD"))
+                && compact_fork_painted
+                    .as_deref()
+                    .is_some_and(|text| text.contains("TEXT-CACHEFFF"))
+                && kept_d["recent"]["chat"] == PANE_D
                 && kept_d["rows"]["chat"] == PANE_D
                 && kept_fork["recent"]["chat"] == FORK
                 && kept_fork["rows"]["chat"] == FORK
+                && [&kept_d, &kept_fork].into_iter().all(|kept| {
+                    kept["recent"]["entries"] == compact_d.len()
+                        && kept["rows"]["entries"] == compact_d.len()
+                })
                 && within(&kept_d)
                 && within(&kept_fork)
-                && reused as usize >= self.entries * 9 / 10
+                && reused as usize >= compact_d.len() * 9 / 10
                 && d_painted
                     .as_deref()
-                    .is_some_and(|t| t.contains("TEXT-PANEPANE"));
+                    .is_some_and(|t| t.contains("TEXT-CACHEDDD"));
             checks.check(
-            "one chat is kept under its ceilings, replaced on the next switch, and reused on reopen",
+            "a compact chat is kept under default ceilings, replaced on the next switch, and reused on reopen",
             replace_ok,
-            json!({"keptD": kept_d, "keptFork": kept_fork, "reusedRows": reused, "painted": d_painted}),
+            json!({"probeHistoryEntries": compact_entries, "probeTotalEntries": compact_d.len(), "keptD": kept_d, "keptFork": kept_fork, "reusedRows": reused, "painted": d_painted}),
         );
+
+            replace_atomically(d_doc.doc(), &original_d)?;
+            replace_atomically(fork_doc.doc(), &original_fork)?;
+            let (restored_painted, _) = wait_painted(window, cx, &d_scope, "tail-text", |text| {
+                text.contains("TEXT-PANEPANE")
+            })
+            .await?;
+            let restored_entries = cx.update(|cx| self.state.read(cx).transcript.len());
+            let restored = d_doc.doc().read_entries()? == original_d
+                && fork_doc.doc().read_entries()? == original_fork
+                && restored_entries == original_d.len()
+                && restored_painted
+                    .as_deref()
+                    .is_some_and(|text| text.contains("TEXT-PANEPANE"));
+            checks.check(
+                "full benchmark histories restored after the compact cache probe",
+                restored,
+                json!({"visibleEntries": restored_entries, "expectedEntries": original_d.len(), "painted": restored_painted}),
+            );
             admission.insert(
                 "replace".into(),
-                json!({"pass": replace_ok, "reopenCounters": back_to_d["counters"]}),
+                json!({"pass": replace_ok, "probeHistoryEntries": compact_entries, "probeTotalEntries": compact_d.len(), "restored": restored, "reopenCounters": back_to_d["counters"]}),
             );
             visibility.insert("admission".into(), Value::Object(admission));
             phases.insert("cacheVisibility".into(), Value::Object(visibility));

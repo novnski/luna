@@ -2495,6 +2495,12 @@ impl HarnessesPage {
                 page.model_refresh_result = Some((clean, message));
                 if updated > 0 {
                     crate::pickers::bump_harness_catalog(cx);
+                    // This page caches the title model choices separately.
+                    // An ongoing save already reloads its selected catalog;
+                    // never cancel that write with a refresh-only request.
+                    if !page.title_saving {
+                        page.load_titles(None, cx);
+                    }
                 }
                 cx.notify();
             })

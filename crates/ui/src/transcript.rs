@@ -2046,6 +2046,7 @@ pub fn rows_for_entry(
                                 "Answered {n} times, latest: {} · click to change",
                                 single_line(labels)
                             ),
+                            (None, _) if *resolved => "Answered · click to change".into(),
                             (None, _) => "Open · the agent kept working · click to answer".into(),
                         }
                         .into();
@@ -7924,9 +7925,14 @@ impl Transcript {
                         .clone()
                         .or_else(|| self.state.read(cx).selected_chat.clone());
                     let message_id = message_id.clone();
+                    let accessible_label: SharedString = format!("{title} · {status}").into();
                     async_question_card(&row.id, title.clone(), status.clone(), *answered, &theme)
                         .when_some(chat_id, |el, chat_id| {
-                            el.cursor_pointer()
+                            el.role(gpui::Role::Button)
+                                .aria_label(accessible_label)
+                                .tab_index(0)
+                                .on_key_down(crate::swallow_activation_key)
+                                .cursor_pointer()
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(TranscriptEvent::OpenAsyncQuestion {
                                         chat_id: chat_id.clone(),

@@ -384,7 +384,7 @@ impl Render for GeneralPage {
             .child(setting_row(
                 &theme,
                 "Answer for me after",
-                "When an agent marks one answer as recommended and you don't reply in time, LUNA picks it so the agent can keep going. Approvals and questions without a recommendation always wait for you.",
+                "When an agent is waiting for your answer, LUNA can pick its recommended option after this delay. Questions you can answer later stay open. Approvals and questions without a recommendation always wait for you.",
                 unattended.into_any_element(),
             ))
             .when(cfg!(target_os = "macos"), |card| {

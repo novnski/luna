@@ -2576,6 +2576,15 @@ impl Shell {
         self.add_space.is_some()
     }
 
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_splash_phase(&self) -> &'static str {
+        match self.splash {
+            SplashPhase::Visible => "visible",
+            SplashPhase::FadingOut => "fading",
+            SplashPhase::Gone => "gone",
+        }
+    }
+
     pub fn new(state: Entity<AppState>, boot: EngineBootConfig, cx: &mut Context<Self>) -> Self {
         let observation = cx.observe(&state, |this: &mut Shell, state, cx| {
             this.on_state_changed(&state, cx);
@@ -3044,6 +3053,37 @@ impl Shell {
 
     // ---- splash ----
 
+    fn reconcile_splash(&mut self, cx: &mut Context<Self>) {
+        // A Shell can be created after Ready was already observed (including
+        // an empty workspace with no later row changes). Derive this one-way
+        // transition from current connection truth on render as well as on
+        // notifications, rather than waiting for another project/chat event.
+        let connection = self.state.read(cx).connection.clone();
+        match connection {
+            ConnectionStatus::Ready => {
+                if self.splash == SplashPhase::Visible && self.splash_task.is_none() {
+                    self.splash = SplashPhase::FadingOut;
+                    self.splash_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(SPLASH_OUT.total() + Duration::from_millis(30))
+                            .await;
+                        this.update(cx, |shell, cx| {
+                            shell.splash = SplashPhase::Gone;
+                            cx.notify();
+                        })
+                        .ok();
+                    }));
+                }
+            }
+            // Reveal the error gate immediately; never revive the splash.
+            ConnectionStatus::Failed(_) => {
+                self.splash = SplashPhase::Gone;
+                self.splash_task = None;
+            }
+            ConnectionStatus::Connecting => {}
+        }
+    }
+
     fn reconcile_session_history_scope(&mut self, engine_changed: bool, cx: &mut Context<Self>) {
         // Session history follows the effective search scope rather than the
         // open task's immutable project. The generation fence owns late pages
@@ -3329,26 +3369,7 @@ impl Shell {
             }
         }
         self.reconcile_workbench(cx);
-        match state.read(cx).connection {
-            ConnectionStatus::Ready => {
-                if self.splash == SplashPhase::Visible {
-                    self.splash = SplashPhase::FadingOut;
-                    self.splash_task = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor()
-                            .timer(SPLASH_OUT.total() + Duration::from_millis(30))
-                            .await;
-                        this.update(cx, |shell, cx| {
-                            shell.splash = SplashPhase::Gone;
-                            cx.notify();
-                        })
-                        .ok();
-                    }));
-                }
-            }
-            // Reveal the gate card immediately; the splash never returns mid-session.
-            ConnectionStatus::Failed(_) => self.splash = SplashPhase::Gone,
-            ConnectionStatus::Connecting => {}
-        }
+        self.reconcile_splash(cx);
     }
 
     // ---- layout state ----
@@ -8435,16 +8456,31 @@ impl Shell {
         out
     }
 
-    fn render_sidebar(&mut self, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&mut self, window: &Window, _cx: &mut Context<Self>) -> AnyElement {
         // The sidebar is part of the resolved theme. A second fixed-Luna
         // palette here made imported families look split in half and froze
         // activity/glyph personality independently of the selected variant.
-        let inner = self.sidebar_pane.clone().cached(
-            gpui::StyleRefinement::default()
+        // GPUI's cached scene replay does not replay its AX subtree. While
+        // accessibility is active, prepaint the sidebar on every frame so
+        // sibling/caret updates cannot remove its still-visible controls.
+        let inner = if window.is_a11y_active() {
+            div()
                 .w(px(self.settings.sidebar_width))
                 .h_full()
-                .flex_none(),
-        );
+                .flex_none()
+                .child(self.sidebar_pane.clone())
+                .into_any_element()
+        } else {
+            self.sidebar_pane
+                .clone()
+                .cached(
+                    gpui::StyleRefinement::default()
+                        .w(px(self.settings.sidebar_width))
+                        .h_full()
+                        .flex_none(),
+                )
+                .into_any_element()
+        };
         // Transparent — the sidebar sits directly on the frost shell; the main
         // card's own border provides the separation. The content row spans the
         // full window height (the titlebar overlays it), so the column pads
@@ -9206,18 +9242,20 @@ impl Shell {
                 })
             })
             .cursor_pointer()
+            // Every rendered chat row is an AX action. Keep keyboard
+            // traversal separate: sidebar and palette navigation is unchanged.
+            .role(gpui::Role::Button)
+            .aria_selected(selected)
+            .aria_label(match kind {
+                Some(kind) => SharedString::from(format!(
+                    "{}: {title}. {}",
+                    kind.display(),
+                    kind.description()
+                )),
+                None => title.clone(),
+            })
             .when(surface.in_pane(), |row| {
-                row.role(gpui::Role::Button)
-                    .aria_label(match kind {
-                        Some(kind) => SharedString::from(format!(
-                            "{}: {title}. {}",
-                            kind.display(),
-                            kind.description()
-                        )),
-                        None => title.clone(),
-                    })
-                    .tab_index(0)
-                    .on_key_down(crate::swallow_activation_key)
+                row.tab_index(0).on_key_down(crate::swallow_activation_key)
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.activate_chat_row(surface, select_id.clone(), cx);
@@ -15177,6 +15215,7 @@ fn header_icon_button(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _perf = crate::perf_counters::Timer::start("shell.render", || "shell".into());
+        self.reconcile_splash(cx);
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
         self.sync_execution_focus(cx);
@@ -15636,7 +15675,7 @@ impl Render for Shell {
                     }
                 });
 
-                let sidebar = self.render_sidebar(cx);
+                let sidebar = self.render_sidebar(window, cx);
                 let sidebar_handle = self.resize_handle(
                     "sidebar-resize",
                     PaneResizeKind::Sidebar,

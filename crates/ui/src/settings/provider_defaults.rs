@@ -128,6 +128,7 @@ pub struct ProviderDefaultsPanel {
     load_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
     _observe: Subscription,
+    _catalog_observe: Subscription,
 }
 
 impl ProviderDefaultsPanel {
@@ -157,6 +158,18 @@ impl ProviderDefaultsPanel {
             }
             cx.notify();
         });
+        let catalog_observe =
+            cx.observe_global::<crate::pickers::HarnessCatalogChanged>(|this: &mut Self, cx| {
+                this.close_menu(cx);
+                this.mark_stale();
+                // A retained Providers page owns its own catalog; the shared
+                // refresh signal must update it as well as composer pickers.
+                // Keep any defaults write in flight independent of this read.
+                if !matches!(this.models, Loadable::Idle) {
+                    this.load(cx);
+                }
+                cx.notify();
+            });
         Self {
             state,
             provider,
@@ -171,6 +184,7 @@ impl ProviderDefaultsPanel {
             load_task: None,
             save_task: None,
             _observe: observe,
+            _catalog_observe: catalog_observe,
         }
     }
 

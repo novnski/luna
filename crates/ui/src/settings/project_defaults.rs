@@ -151,6 +151,7 @@ pub struct ProjectsPage {
     catalog_generation: u64,
     catalog_harness: Option<HarnessId>,
     _observe: Subscription,
+    _catalog_observe: Subscription,
     _search: Subscription,
 }
 
@@ -192,6 +193,17 @@ impl ProjectsPage {
                 cx.notify();
             }
         });
+        let catalog_observe =
+            cx.observe_global::<crate::pickers::HarnessCatalogChanged>(|page: &mut Self, cx| {
+                // Projects is retained across Settings navigation. Its next
+                // model-menu opening must read a refreshed engine catalog.
+                page.catalog_generation = page.catalog_generation.wrapping_add(1);
+                page.catalog_task = None;
+                page.models = popover::Loadable::Idle;
+                page.model_menu = Default::default();
+                page.model_cursor = None;
+                cx.notify();
+            });
         Self {
             state,
             selected_project_id,
@@ -214,6 +226,7 @@ impl ProjectsPage {
             catalog_generation: 0,
             catalog_harness: None,
             _observe: observe,
+            _catalog_observe: catalog_observe,
             _search: search,
         }
     }

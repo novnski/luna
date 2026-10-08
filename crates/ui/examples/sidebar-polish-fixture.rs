@@ -36,6 +36,13 @@
 //! Writes PNG captures per Interface size (12, 16, 20; dark), readback.json
 //! and sidebar-polish.pass; a failure writes failure.txt/failure.png and
 //! exits nonzero.
+//!
+//! Set LUNA_SIDEBAR_AX_NATIVE=1 for a native macOS window that checks the
+//! rendered accessibility tree instead of the headless geometry cases.
+//! Failure cases, before the cache mitigation: sidebar Buttons vanish after
+//! a composer-only redraw; Settings navigation vanishes on a later frame;
+//! an unchanged AX frame is mistaken for fresh evidence. Preserve initial
+//! and subsequent tree JSON plus screenshots. This mode uses no provider.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -255,6 +262,146 @@ fn capture(window: Window, cx: &mut AsyncApp, path: PathBuf) -> anyhow::Result<(
         Ok(())
     })??;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn activate_accessibility(window: &gpui::Window) -> anyhow::Result<()> {
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("window handle unavailable: {error}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        anyhow::bail!("native AX fixture requires an AppKit window");
+    };
+    let view = appkit.ns_view.as_ptr().cast::<AnyObject>();
+    // SAFETY: this live window and its native view are accessed on the main
+    // thread. Check each returned pointer before sending its next message.
+    let native_window: *mut AnyObject = unsafe { objc2::msg_send![view, window] };
+    anyhow::ensure!(!native_window.is_null(), "fixture view has no NSWindow");
+    let content: *mut AnyObject = unsafe { objc2::msg_send![native_window, contentView] };
+    anyhow::ensure!(!content.is_null(), "fixture window has no content view");
+    let _children: *mut AnyObject = unsafe { objc2::msg_send![content, accessibilityChildren] };
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_accessibility(_: &gpui::Window) -> anyhow::Result<()> {
+    anyhow::bail!("native AX fixture is implemented for macOS only")
+}
+
+fn check_ax_frame(
+    window: Window,
+    cx: &mut AsyncApp,
+    output: &Path,
+    name: &str,
+    labels: &[&str],
+    previous_frame: Option<u64>,
+) -> anyhow::Result<u64> {
+    let text = gpui::AnyWindowHandle::from(window)
+        .update(cx, |_, window, _| window.debug_a11y_tree_json())?
+        .ok_or_else(|| anyhow::anyhow!("AX tree missing for {name}"))?;
+    std::fs::write(output.join(format!("{name}.json")), &text)?;
+    let tree: serde_json::Value = serde_json::from_str(&text)?;
+    let frame = tree["frame"]["frame_number"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("AX frame number missing for {name}"))?;
+    anyhow::ensure!(
+        previous_frame.is_none_or(|previous| frame > previous),
+        "{name} reused stale AX frame {frame} (previous {previous_frame:?})"
+    );
+    let nodes = tree["nodes"]
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("AX nodes missing for {name}"))?;
+    for label in labels {
+        anyhow::ensure!(
+            nodes.values().any(|node| {
+                node["aria"]["role"] == "Button" && node["aria"]["label"] == *label
+            }),
+            "{name}: accessible Button {label:?} is missing"
+        );
+    }
+    Ok(frame)
+}
+
+async fn native_ax_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    output: &Path,
+) -> anyhow::Result<serde_json::Value> {
+    gpui::AnyWindowHandle::from(window)
+        .update(cx, |_, window, _| activate_accessibility(window))??;
+    // Let GPUI observe AccessKit activation, then establish a known full frame.
+    settle(cx, 100).await;
+    gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    })?;
+    let sidebar_labels = [
+        "Idle review",
+        "Old refactor",
+        "Sidebar view options",
+        "LUNA",
+    ];
+    let mut frame = check_ax_frame(
+        window,
+        cx,
+        output,
+        "ax-sidebar-initial",
+        &sidebar_labels,
+        None,
+    )?;
+    capture(window, cx, output.join("ax-sidebar-initial.png"))?;
+    let composer = window.update(cx, |shell, _, _| shell.fixture_appshots_composer())?;
+    for index in 1..=3 {
+        // No Shell notification or window.refresh: only a sibling is dirty.
+        composer.update(cx, |_, cx| cx.notify());
+        draw(window, cx)?;
+        frame = check_ax_frame(
+            window,
+            cx,
+            output,
+            &format!("ax-sidebar-sibling-{index}"),
+            &sidebar_labels,
+            Some(frame),
+        )?;
+    }
+    capture(window, cx, output.join("ax-sidebar-after-sibling.png"))?;
+
+    window.update(cx, |shell, _, cx| shell.fixture_open_settings(cx))?;
+    gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    })?;
+    let settings_labels = ["General settings", "Appearance settings", "Back to chat"];
+    frame = check_ax_frame(
+        window,
+        cx,
+        output,
+        "ax-settings-initial",
+        &settings_labels,
+        Some(frame),
+    )?;
+    capture(window, cx, output.join("ax-settings-initial.png"))?;
+    for index in 1..=3 {
+        // A new frame without dirtying the Shell must retain cached siblings.
+        draw(window, cx)?;
+        frame = check_ax_frame(
+            window,
+            cx,
+            output,
+            &format!("ax-settings-frame-{index}"),
+            &settings_labels,
+            Some(frame),
+        )?;
+    }
+    capture(window, cx, output.join("ax-settings-after-frames.png"))?;
+    Ok(serde_json::json!({
+        "native": true,
+        "sidebarLabels": sidebar_labels,
+        "settingsLabels": settings_labels,
+        "subsequentFramesPerSurface": 3,
+        "lastFrame": frame,
+    }))
 }
 
 fn input(window: Window, cx: &mut AsyncApp, event: PlatformInput) -> anyhow::Result<()> {
@@ -575,6 +722,7 @@ async fn behaviour_pass(
 }
 
 fn main() -> anyhow::Result<()> {
+    let native_ax = std::env::var("LUNA_SIDEBAR_AX_NATIVE").is_ok_and(|value| value == "1");
     let output =
         PathBuf::from(std::env::args().nth(1).ok_or_else(|| {
             anyhow::anyhow!("usage: sidebar-polish-fixture ABSOLUTE_EVIDENCE_DIR")
@@ -593,7 +741,12 @@ fn main() -> anyhow::Result<()> {
     let _guard = runtime.enter();
     let temp = tempfile::tempdir()?;
     let data = temp.path().to_path_buf();
-    gpui_platform::headless()
+    let application = if native_ax {
+        gpui_platform::application()
+    } else {
+        gpui_platform::headless()
+    };
+    application
         .with_assets(icons::Assets)
         .run(move |cx| {
             gpui_tokio::init(cx);
@@ -667,8 +820,8 @@ fn main() -> anyhow::Result<()> {
                 .open_window(
                     WindowOptions {
                         window_background: theme::Theme::of(cx).window_background_appearance(),
-                        show: false,
-                        focus: false,
+                        show: native_ax,
+                        focus: native_ax,
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             point(px(20.0), px(20.0)),
                             size(px(WIDTH), px(HEIGHT)),
@@ -690,16 +843,21 @@ fn main() -> anyhow::Result<()> {
                     })?;
                     frames(window, cx, 900).await?;
                     let mut record = serde_json::Map::new();
-                    for font in [
-                        typography::UiFontSize::ALL[0],
-                        typography::UiFontSize::ALL[4],
-                        typography::UiFontSize::ALL[6],
-                    ] {
-                        let pass = scale_pass(window, cx, &output, font).await?;
-                        record.insert(format!("{}px", font.pixels() as u32), pass);
+                    if native_ax {
+                        let pass = native_ax_pass(window, cx, &output).await?;
+                        record.insert("nativeAccessibility".into(), pass);
+                    } else {
+                        for font in [
+                            typography::UiFontSize::ALL[0],
+                            typography::UiFontSize::ALL[4],
+                            typography::UiFontSize::ALL[6],
+                        ] {
+                            let pass = scale_pass(window, cx, &output, font).await?;
+                            record.insert(format!("{}px", font.pixels() as u32), pass);
+                        }
+                        let behaviour = behaviour_pass(window, &ui_state, cx, &output).await?;
+                        record.insert("behaviour".into(), behaviour);
                     }
-                    let behaviour = behaviour_pass(window, &ui_state, cx, &output).await?;
-                    record.insert("behaviour".into(), behaviour);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -712,7 +870,11 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("sidebar-polish.pass"),
-                                "PASS: headless production Shell with real pointer input at Interface sizes 12, 16 and 20 (dark): thread rows sit evenly between the window edge and the canvas border in the list and in Activity, with the header on the same edges; Activity lists only the unread completion, the pending approval and the running task (no read, idle task with just an earlier completion, in any project); a completion read from Activity leaves once another task opens, and closing Activity restores the full list; the project trigger shows no machine, and the dropdown names a machine only for the two same-named projects\n",
+                                if native_ax {
+                                    "PASS: native rendered AX tree retains sidebar task/project Buttons through composer-only frames and Settings navigation Buttons through later frames; all frame numbers advance; JSON and PNG evidence saved\n"
+                                } else {
+                                    "PASS: headless production Shell with real pointer input at Interface sizes 12, 16 and 20 (dark): thread rows sit evenly between the window edge and the canvas border in the list and in Activity, with the header on the same edges; Activity lists only the unread completion, the pending approval and the running task (no read, idle task with just an earlier completion, in any project); a completion read from Activity leaves once another task opens, and closing Activity restores the full list; the project trigger shows no machine, and the dropdown names a machine only for the two same-named projects\n"
+                                },
                             )
                         });
                         if let Err(error) = written {

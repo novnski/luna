@@ -109,6 +109,9 @@ pub const COMPOSER_MAX_HEIGHT: f32 = TEXTAREA_MAX + ACTIONS_ROW_HEIGHT + PILL_BO
 /// One-line answer pill (question wizard), border-box: `py-3` (24) + one
 /// 22.75px line (rounds to 47) + the 2px hairline = 49.
 pub const COMPACT_TOTAL_HEIGHT: f32 = 49.0;
+/// Free-form answers grow with their text, then use the editor's own scroll.
+const ANSWER_MAX_LINES: f32 = 6.0;
+const ANSWER_PADDING_Y: f32 = 12.0;
 /// An established chat's textarea floor: one input line with breathing room
 /// above the controls row (60 + 46 + 2 = 108 when empty).
 pub const SESSION_TEXTAREA_MIN: f32 = TEXTAREA_MIN - 16.0;
@@ -1068,6 +1071,19 @@ impl Wizard {
     /// Whether the current page has any picked option.
     pub fn page_has_pick(&self) -> bool {
         self.picked.get(self.page).is_some_and(|p| !p.is_empty())
+    }
+
+    fn answer_placeholder(&self) -> &'static str {
+        if self
+            .current()
+            .is_none_or(|question| question.options.is_empty())
+        {
+            "Type your answer"
+        } else if self.page_has_pick() {
+            "Type your own answer, or leave this blank to use the selected option"
+        } else {
+            "Type your own answer, or pick an option above"
+        }
     }
 
     /// Click/tap an option.
@@ -5029,8 +5045,9 @@ pub struct Composer {
     /// frame marks them resolved).
     answered_requests: HashSet<String>,
     /// Questions whose unattended answer this composer asked the host to
-    /// cancel (the user started answering or chose to keep waiting).
-    held_auto_answers: HashSet<String>,
+    /// cancel, keyed by chat and request because provider IDs are chat-local.
+    held_auto_answers: HashSet<(String, String)>,
+    hold_failure: Option<((String, String), SharedString)>,
     /// Repaints the question panel's countdown once a second while it runs.
     countdown_task: Option<Task<()>>,
     /// Async cards whose picker collapsed (timed out or "Answer later"),
@@ -5456,6 +5473,7 @@ impl Composer {
             wizard_focus: cx.focus_handle(),
             answered_requests: HashSet::new(),
             held_auto_answers: HashSet::new(),
+            hold_failure: None,
             countdown_task: None,
             async_dismissed: HashSet::new(),
             async_reopened: None,
@@ -10046,6 +10064,9 @@ impl Composer {
 
         // Draft swap on chat navigation — the input entity itself survives.
         if key != self.current_key {
+            // Park the question under its original chat before navigation
+            // resets the wizard and its separate answer input.
+            self.stash_async_draft(cx);
             let new_thread_launch =
                 self.launching_new_chat && self.current_key.is_empty() && !key.is_empty();
             let returning_to_new_thread = !self.current_key.is_empty() && key.is_empty();
@@ -10107,6 +10128,22 @@ impl Composer {
         self.finish_pending_draft_owner_stage(cx);
 
         let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
+        if let Some((key, message)) = self.hold_failure.clone()
+            && key.0 == self.current_key
+        {
+            if input_request_resolved(&transcript, &key.1) {
+                if self.failure_key.as_deref() == Some(key.0.as_str())
+                    && self.failure.as_ref() == Some(&message)
+                {
+                    self.failure = None;
+                    self.failure_key = None;
+                }
+                self.hold_failure = None;
+            } else if self.failure.is_none() {
+                self.failure = Some(message);
+                self.failure_key = Some(key.0);
+            }
+        }
         // A submission settles when its answer is recorded on the card (one
         // more record than before it was sent; amendments included).
         let settled: Vec<_> = self
@@ -10144,17 +10181,10 @@ impl Composer {
                     self.wizard = Some(candidate.clone());
                     self.advance_task = None;
                     let initial = candidate.current_typed().to_string();
-                    let has_pick = candidate.page_has_pick();
+                    let placeholder = candidate.answer_placeholder();
                     self.answer_input.update(cx, |input, cx| {
                         input.set_text(initial, cx);
-                        input.set_placeholder(
-                            if has_pick {
-                                "Type your own answer, or leave this blank to use the selected option"
-                            } else {
-                                "Type your own answer, or pick an option above"
-                            },
-                            cx,
-                        );
+                        input.set_placeholder(placeholder, cx);
                     });
                     // An async picker that opened on its own hides after a
                     // while (the agent kept working); a reopened one stays.
@@ -11507,20 +11537,12 @@ impl Composer {
             return;
         };
         let step = wizard.select(option_ix);
-        let has_pick = wizard.page_has_pick();
+        let placeholder = wizard.answer_placeholder();
         if !matches!(step, WizardStep::Done(_)) {
             self.note_wizard_interaction(cx);
         }
-        self.answer_input.update(cx, |input, cx| {
-            input.set_placeholder(
-                if has_pick {
-                    "Type your own answer, or leave this blank to use the selected option"
-                } else {
-                    "Type your own answer, or pick an option above"
-                },
-                cx,
-            )
-        });
+        self.answer_input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         match step {
             WizardStep::AutoAdvance => self.schedule_auto_advance(cx),
             WizardStep::Done(answers) => self.wizard_finish(answers, cx),
@@ -11533,7 +11555,9 @@ impl Composer {
     /// the agent's recommended option: (milliseconds left, labels).
     fn auto_answer_countdown(&self, now_ms: i64) -> Option<(i64, Vec<String>)> {
         let wizard = self.wizard.as_ref()?;
-        if self.held_auto_answers.contains(&wizard.request_id)
+        if self
+            .held_auto_answers
+            .contains(&(self.current_key.clone(), wizard.request_id.clone()))
             || self.answered_requests.contains(&wizard.request_id)
         {
             return None;
@@ -11565,15 +11589,48 @@ impl Composer {
         else {
             return;
         };
-        self.held_auto_answers.insert(request_id.clone());
+        let hold_key = (chat_id.clone(), request_id.clone());
         let Ok(command) = serde_json::to_value(SessionCommandPayload::HoldInput { request_id })
         else {
             return;
         };
+        if let Some((key, message)) = &self.hold_failure
+            && key == &hold_key
+        {
+            if self.failure_key.as_deref() == Some(chat_id.as_str())
+                && self.failure.as_ref() == Some(message)
+            {
+                self.failure = None;
+                self.failure_key = None;
+            }
+            self.hold_failure = None;
+        }
+        self.held_auto_answers.insert(hold_key.clone());
         let intent = serde_json::json!({ "kind": "session", "command": command });
-        cx.spawn(async move |_, _| {
-            if let Err(error) = crate::task_commands::execute(&engine, &chat_id, intent).await {
-                tracing::warn!(%error, "holding the unattended answer failed");
+        cx.spawn(async move |this, cx| {
+            let failure = match crate::task_commands::execute(&engine, &chat_id, intent).await {
+                Ok(receipt) if receipt.status == CommandReceiptStatus::Applied => None,
+                Ok(_) => Some(
+                    "Keep waiting is not confirmed. The automatic answer may still run; try again."
+                        .to_string(),
+                ),
+                Err(error) => Some(format!(
+                    "Keep waiting failed: {error}. The automatic answer may still run; try again."
+                )),
+            };
+            if let Some(failure) = failure {
+                this.update(cx, |composer, cx| {
+                    composer.held_auto_answers.remove(&hold_key);
+                    let message: SharedString = failure.into();
+                    composer.hold_failure = Some((hold_key, message.clone()));
+                    if composer.current_key == chat_id && composer.failure.is_none() {
+                        composer.failure = Some(message);
+                        composer.failure_key = Some(chat_id);
+                    }
+                    composer.ensure_countdown_ticking(cx);
+                    cx.notify();
+                })
+                .ok();
             }
         })
         .detach();
@@ -11627,11 +11684,9 @@ impl Composer {
         if let Some((chat, id, baseline)) = self.async_reopened.clone()
             && chat == key
         {
-            if let Some(wizard) = self
-                .wizard
-                .as_ref()
-                .filter(|w| w.source == QuestionSource::Async && w.request_id == id)
-            {
+            if let Some(wizard) = self.wizard.as_ref().filter(|w| {
+                self.current_key == key && w.source == QuestionSource::Async && w.request_id == id
+            }) {
                 return Some(wizard.clone());
             }
             let (questions, _) = async_question_card(transcript, &id)?;
@@ -11825,8 +11880,11 @@ impl Composer {
             WizardStep::Done(answers) => self.wizard_finish(answers, cx),
             _ => {
                 let next = wizard.current_typed().to_string();
-                self.answer_input
-                    .update(cx, |input, cx| input.set_text(next, cx));
+                let placeholder = wizard.answer_placeholder();
+                self.answer_input.update(cx, |input, cx| {
+                    input.set_text(next, cx);
+                    input.set_placeholder(placeholder, cx);
+                });
                 cx.notify();
             }
         }
@@ -11845,8 +11903,11 @@ impl Composer {
             wizard.set_typed(typed);
             wizard.back();
             let previous = wizard.current_typed().to_string();
-            self.answer_input
-                .update(cx, |input, cx| input.set_text(previous, cx));
+            let placeholder = wizard.answer_placeholder();
+            self.answer_input.update(cx, |input, cx| {
+                input.set_text(previous, cx);
+                input.set_placeholder(placeholder, cx);
+            });
             cx.notify();
         }
     }
@@ -12351,8 +12412,20 @@ impl Composer {
             || mcp_field
                 .is_some_and(|schema| schema.choices.is_empty() && schema.value_type != "boolean");
         let secret = question.is_secret();
-        self.answer_input
-            .update(cx, |input, cx| input.set_masked(secret, cx));
+        let answer_cap = INPUT_LINE_HEIGHT * ANSWER_MAX_LINES * theme.ui_scale();
+        let answer_padding = ANSWER_PADDING_Y * theme.ui_scale();
+        self.answer_input.update(cx, |input, cx| {
+            input.set_masked(secret, cx);
+            if input.viewport_height != Some(answer_cap)
+                || input.settled_viewport_height != Some(answer_cap)
+                || input.overflow_top_padding != answer_padding
+            {
+                input.viewport_height = Some(answer_cap);
+                input.settled_viewport_height = Some(answer_cap);
+                input.overflow_top_padding = answer_padding;
+                cx.notify();
+            }
+        });
         let can_advance = retryable || (!submitting && (wizard.page_has_answer() || !typed_empty));
         let surface_radius =
             composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
@@ -12486,6 +12559,9 @@ impl Composer {
         let panel = composer_surface(&theme, surface_radius)
             .id("question-panel")
             .track_focus(&self.wizard_focus)
+            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                this.note_wizard_interaction(cx);
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_wizard_key(event, window, cx)
             }))
@@ -12596,8 +12672,8 @@ impl Composer {
                             .gap(crate::typography::ui_rems(4.0))
                             .children(options),
                     )
-                    // Same compact pill surface and input-row geometry as the
-                    // ordinary composer; the input entity stays shared.
+                    // Grow with the answer up to its six-line editor viewport;
+                    // overflow then scrolls inside the same bounded surface.
                     .when(text_input, |el| {
                         el.child(
                             div()
@@ -12608,14 +12684,14 @@ impl Composer {
                                     composer_surface(&theme, surface_radius)
                                         .id("wizard-answer-surface")
                                         .w_full()
-                                        .h(px(COMPACT_TOTAL_HEIGHT))
+                                        .overflow_hidden()
                                         .child(
                                             div()
-                                                .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
                                                 .flex()
                                                 .items_center()
                                                 .min_w_0()
                                                 .px(crate::typography::ui_rems(8.0))
+                                                .py(crate::typography::ui_rems(ANSWER_PADDING_Y))
                                                 .child(self.answer_input.clone()),
                                         ),
                                 ),
@@ -17035,6 +17111,182 @@ mod tests {
         }
         assert!(pending_async_question(&transcript).is_none());
         assert!(async_question_resolved(&transcript, "aq-call-1"));
+    }
+
+    #[gpui::test]
+    fn unattended_answer_hold_requires_applied_receipt(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        for status in [
+            CommandReceiptStatus::Rejected,
+            CommandReceiptStatus::Pending,
+            CommandReceiptStatus::Applied,
+        ] {
+            let service = Arc::new(DraftTestRpc::new(Vec::new()));
+            *service.command_status.lock().unwrap() = Some(status);
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, _| {
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    luna_rpc::memory_client(service.clone()),
+                ));
+                state.selected_chat = Some("hold-task".into());
+            });
+            let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+            let now = chrono::Utc::now().timestamp_millis();
+            composer.update(cx, |composer, cx| {
+                composer.on_state_changed(cx);
+                let mut question = question("q", &["A (Recommended)", "B"], false);
+                question.input = Some(luna_proto::UserInputDetails {
+                    auto_select: Some(luna_proto::AutoSelect {
+                        at_ms: now + 60_000,
+                        labels: vec!["A (Recommended)".into()],
+                        fired: false,
+                    }),
+                    ..Default::default()
+                });
+                composer.wizard = Some(Wizard::new("same-request".into(), vec![question]));
+                composer.hold_auto_answer(cx);
+            });
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                cx.run_until_parked();
+                runtime.block_on(tokio::task::yield_now());
+                std::thread::sleep(Duration::from_millis(1));
+                if service.command_calls.load(Ordering::SeqCst) > 0
+                    && (status == CommandReceiptStatus::Applied
+                        || composer.read_with(cx, |composer, _| composer.failure.is_some()))
+                {
+                    break;
+                }
+            }
+            assert_eq!(service.command_calls.load(Ordering::SeqCst), 1);
+            composer.update(cx, |composer, _| {
+                let applied = status == CommandReceiptStatus::Applied;
+                assert_eq!(composer.auto_answer_countdown(now).is_none(), applied);
+                assert_eq!(composer.failure.is_none(), applied);
+                if !applied {
+                    assert_eq!(composer.failure_key.as_deref(), Some("hold-task"));
+                }
+            });
+            if status != CommandReceiptStatus::Applied {
+                *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Applied);
+                composer.update(cx, |composer, cx| composer.hold_auto_answer(cx));
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while service.command_calls.load(Ordering::SeqCst) < 2 && Instant::now() < deadline
+                {
+                    cx.run_until_parked();
+                    runtime.block_on(tokio::task::yield_now());
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(service.command_calls.load(Ordering::SeqCst), 2);
+            }
+            composer.update(cx, |composer, _| {
+                assert!(composer.failure.is_none(), "retry clears its own error");
+                // A matching request ID in another chat has an independent timer.
+                composer.current_key = "other-hold-task".into();
+                assert!(composer.auto_answer_countdown(now).is_some());
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn async_question_draft_survives_navigation_and_amendment(cx: &mut gpui::TestAppContext) {
+        for answered in [false, true] {
+            let transcript = vec![SessionMessageEntry {
+                id: "assistant-question".into(),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::AsyncQuestion {
+                    id: "aq-navigation".into(),
+                    questions: vec![
+                        luna_proto::AsyncUserInputQuestion {
+                            title: "Which option?".into(),
+                            options: Some(vec!["A".into(), "B".into()]),
+                            ..Default::default()
+                        },
+                        luna_proto::AsyncUserInputQuestion {
+                            title: "Any details?".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    resolved: answered,
+                    answers: if answered {
+                        vec![luna_proto::AsyncQuestionAnswer {
+                            answers: vec![UserInputAnswer {
+                                question_id: "0".into(),
+                                labels: vec!["A".into()],
+                            }],
+                            at_ms: 1,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                }],
+                created_at: 1,
+                device_id: "synthetic".into(),
+                status: Some(luna_doc::MessageStatus::Complete),
+                continuation_of: None,
+            }];
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("question-task".into());
+                state.transcript = transcript.clone();
+            });
+            let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+            composer.update(cx, |composer, cx| {
+                composer.on_state_changed(cx);
+                if answered {
+                    composer.open_async_question(
+                        "question-task".into(),
+                        "aq-navigation".into(),
+                        cx,
+                    );
+                }
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("Independent prompt", cx));
+                composer.wizard_select(1, cx);
+                composer.wizard_advance(cx);
+                composer
+                    .answer_input
+                    .update(cx, |input, cx| input.set_text("Unsent detail", cx));
+            });
+
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("ordinary-task".into());
+                state.transcript.clear();
+            });
+            composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+            composer.read_with(cx, |composer, cx| {
+                assert!(composer.wizard.is_none());
+                assert!(composer.answer_input.read(cx).is_empty());
+                assert!(
+                    !composer
+                        .async_drafts
+                        .contains_key(&("ordinary-task".into(), "aq-navigation".into(),))
+                );
+            });
+
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("question-task".into());
+                state.transcript = transcript.clone();
+            });
+            composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+            composer.read_with(cx, |composer, cx| {
+                let wizard = composer.wizard.as_ref().expect("question restored");
+                assert_eq!(wizard.page, 1, "the question page must survive navigation");
+                assert_eq!(wizard.answers()[0].labels, ["B"]);
+                assert_eq!(composer.answer_input.read(cx).text(), "Unsent detail");
+                assert_eq!(composer.input.read(cx).text(), "Independent prompt");
+                assert!(composer.async_submissions.is_empty());
+                assert_eq!(
+                    async_answer_count(&transcript, "aq-navigation"),
+                    usize::from(answered),
+                );
+            });
+        }
     }
 
     #[gpui::test]
