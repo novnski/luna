@@ -644,8 +644,19 @@ async fn run_control(
     requests: &[Value],
     on_written: Option<&(dyn Fn() + Send + Sync)>,
 ) -> Result<ControlRun, HarnessError> {
+    let config_home = config_override(scope.provider_home.as_deref());
+    // Rewinds are cold resumes too. The engine stops its own runtime before
+    // getting here, but another terminal/IDE can still own this transcript.
+    // Fork validation scopes this check to its freshly created destination.
+    super::background_sessions::refuse_concurrent_writer(
+        executable,
+        &scope.session_id,
+        config_home.as_deref(),
+    )
+    .await?;
     let mut command = Command::new(executable);
     crate::compose_child_path(&mut command, executable);
+    super::coordination::scrub_inherited_session_env(&mut command);
     command.args([
         "--print",
         "--input-format",
@@ -657,6 +668,10 @@ async fn run_control(
         // history maintenance must not trigger SessionStart side effects.
         "--setting-sources",
         "",
+        // Setting sources do not remove managed hooks. As with discovery,
+        // initialize-only history controls explicitly suppress all hooks.
+        "--settings",
+        "{\"disableAllHooks\":true}",
         "--strict-mcp-config",
         "--mcp-config",
         "{\"mcpServers\":{}}",
@@ -665,7 +680,7 @@ async fn run_control(
     if !scope.cwd.is_empty() {
         command.current_dir(&scope.cwd);
     }
-    if let Some(directory) = config_override(scope.provider_home.as_deref()) {
+    if let Some(directory) = config_home {
         command.env("CLAUDE_CONFIG_DIR", directory);
     }
     if file_checkpoints {

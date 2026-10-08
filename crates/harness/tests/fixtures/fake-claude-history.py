@@ -34,6 +34,11 @@ VALUE_FLAGS = {
 CHAIN_TYPES = {"user", "assistant", "system", "attachment", "progress"}
 CHECKPOINT_ENV = "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"
 VERSION = "2.1.286"
+SESSION_ENV = (
+    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_JOB_DIR",
+)
 
 
 def parse_args(argv):
@@ -69,12 +74,17 @@ def _record_crash(kind, value, trace):
 sys.excepthook = _record_crash
 with open(os.path.join(CONFIG, "fake-claude-argv.jsonl"), "a") as log:
     log.write(json.dumps({"argv": sys.argv[1:], "cwd": CWD,
+                          "inherited_session_env": [name for name in SESSION_ENV if name in os.environ],
                           "checkpointing": os.environ.get(CHECKPOINT_ENV) == "1"}) + "\n")
 try:
     with open(os.path.join(CONFIG, "fake-claude-knobs.json")) as handle:
         KNOBS = json.load(handle)
 except FileNotFoundError:
     KNOBS = {}
+
+if sys.argv[1:] == ["agents", "--json"]:
+    print(json.dumps(KNOBS.get("external_sessions", [])))
+    sys.exit(0)
 
 CONTROL_ONLY = FLAGS.get("--setting-sources") == "" and "--strict-mcp-config" in FLAGS
 if CONTROL_ONLY and "--dangerously-skip-permissions" in FLAGS:

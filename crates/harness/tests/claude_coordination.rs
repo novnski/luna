@@ -366,6 +366,102 @@ async fn resume_held_by_an_external_background_session_is_refused() {
     );
 }
 
+/// The configured provider home must govern both Settings readback and the
+/// pre-launch writer check, rather than whichever home the engine inherited.
+#[tokio::test]
+async fn external_sessions_and_resume_use_the_configured_provider_home() {
+    let _env = ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("provider-home");
+    std::fs::create_dir(&config).unwrap();
+    let external = orphan_sleeper();
+    let rows = format!(
+        r#"[{{"pid":{external},"id":"held-in-custom-home","kind":"background","sessionId":"sess-held","state":"working"}}]"#
+    );
+    let rows_path = config.join("sessions.json");
+    std::fs::write(&rows_path, &rows).unwrap();
+    let exe = wrapper(dir.path(), "[]", 0);
+    let source = std::fs::read_to_string(&exe).unwrap();
+    let listing = format!(
+        "if [ \"$CLAUDE_CONFIG_DIR\" = '{config}' ]; then cat '{rows_path}'; else printf '%s\\n' '{rows}'; fi",
+        config = config.display(),
+        rows_path = rows_path.display(),
+    );
+    std::fs::write(&exe, source.replace("cat <<'ROWS'\n[]\nROWS", &listing)).unwrap();
+    let harness = ClaudeHarness::new()
+        .with_executable(exe)
+        .with_config_dir(&config);
+    let view = harness.external_sessions().await;
+    let mut req = request("scenario:happy");
+    req.resume = Some("sess-held".into());
+    let blocked = harness.run(req.clone(), controls()).await;
+    // The inherited home still reports the writer. Clearing only the pinned
+    // home's listing must allow this independent provider instance to resume.
+    std::fs::write(&rows_path, "[]").unwrap();
+    let empty_view = harness.external_sessions().await;
+    let resumed = harness.run(req, controls()).await;
+    kill(external);
+    assert!(view.unavailable_reason.is_none());
+    assert_eq!(view.sessions.len(), 1);
+    assert!(matches!(
+        blocked,
+        Err(HarnessError::RejectedBeforeAcceptance(_))
+    ));
+    assert!(empty_view.unavailable_reason.is_none());
+    assert!(
+        empty_view.sessions.is_empty(),
+        "readback used the wrong home"
+    );
+    assert!(
+        resumed.is_ok(),
+        "resume checked another provider home's writer"
+    );
+    let events = tokio::time::timeout(
+        Duration::from_secs(10),
+        resumed
+            .unwrap()
+            .map(|event| event.unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .expect("resumed turn settled");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        }
+    )));
+    assert!(dir.path().join("launched").exists());
+}
+
+/// The display limit is not a safety boundary: a writer after the first 200
+/// rows must still be found before the resume process is launched.
+#[tokio::test]
+async fn resume_checks_writers_beyond_the_external_session_display_limit() {
+    let _env = ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let external = orphan_sleeper();
+    let mut rows = vec![serde_json::json!({"sessionId": "other", "state": "stopped"}); 201];
+    rows.push(serde_json::json!({
+        "pid": external, "id": "held-after-display-limit", "kind": "background",
+        "sessionId": "sess-held", "state": "working",
+    }));
+    let exe = wrapper(dir.path(), &serde_json::to_string(&rows).unwrap(), 0);
+    let harness = ClaudeHarness::new().with_executable(exe);
+    let view = harness.external_sessions().await;
+    let mut req = request("scenario:happy");
+    req.resume = Some("sess-held".into());
+    let result = harness.run(req, controls()).await;
+    kill(external);
+    assert!(view.truncated && view.sessions.len() == 200);
+    assert!(matches!(
+        result,
+        Err(HarnessError::RejectedBeforeAcceptance(_))
+    ));
+    assert!(!dir.path().join("launched").exists());
+}
+
 /// B-4/B-5: rows that are not a live foreign writer never block — LUNA's own
 /// print-mode child, a stopped background row and other conversations.
 #[tokio::test]

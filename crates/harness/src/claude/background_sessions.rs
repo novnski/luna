@@ -96,7 +96,7 @@ fn parse_row(row: &Value) -> Option<(ClaudeExternalSession, Option<u32>)> {
 type ParsedListing = (Vec<(ClaudeExternalSession, Option<u32>)>, bool);
 
 /// Parse `claude agents --json` stdout. `Err` carries a user-facing reason.
-fn parse_listing(stdout: &[u8]) -> Result<ParsedListing, String> {
+fn parse_listing(stdout: &[u8], session_id: Option<&str>) -> Result<ParsedListing, String> {
     if stdout.len() > MAX_STDOUT_BYTES {
         return Err("The Claude session listing was too large to read safely.".into());
     }
@@ -105,11 +105,19 @@ fn parse_listing(stdout: &[u8]) -> Result<ParsedListing, String> {
     let rows = value
         .as_array()
         .ok_or_else(|| "Claude returned a session listing in an unexpected shape.".to_owned())?;
-    let truncated = rows.len() > MAX_ROWS;
-    Ok((
-        rows.iter().take(MAX_ROWS).filter_map(parse_row).collect(),
-        truncated,
-    ))
+    // The UI keeps a bounded list, but the resume guard searches the full
+    // bounded response before applying that display limit. Otherwise a live
+    // writer after row 200 would silently escape the check.
+    let mut matching = rows.iter().filter(|row| {
+        session_id.is_none_or(|id| row.get("sessionId").and_then(Value::as_str) == Some(id))
+    });
+    let selected = matching
+        .by_ref()
+        .take(MAX_ROWS)
+        .filter_map(parse_row)
+        .collect();
+    let truncated = matching.next().is_some();
+    Ok((selected, truncated))
 }
 
 /// Parent process ids for the given pids (Unix `ps`). Missing entries mean
@@ -154,6 +162,15 @@ async fn parent_pids(_pids: &[u32]) -> HashMap<u32, u32> {
 /// List native sessions with the given Claude executable. Never errors: an
 /// unreadable listing is an explicit `unavailable_reason`, not "no sessions".
 pub async fn list_external_sessions(exe: &Path, budget: Duration) -> ClaudeExternalSessionsView {
+    list_sessions_in_home(exe, budget, None, None).await
+}
+
+async fn list_sessions_in_home(
+    exe: &Path,
+    budget: Duration,
+    config_home: Option<&Path>,
+    session_id: Option<&str>,
+) -> ClaudeExternalSessionsView {
     let checked_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -166,6 +183,9 @@ pub async fn list_external_sessions(exe: &Path, budget: Duration) -> ClaudeExter
     let mut cmd = Command::new(exe);
     crate::compose_child_path(&mut cmd, exe);
     super::coordination::scrub_inherited_session_env(&mut cmd);
+    if let Some(home) = config_home {
+        cmd.env("CLAUDE_CONFIG_DIR", home);
+    }
     cmd.args(["agents", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -190,7 +210,7 @@ pub async fn list_external_sessions(exe: &Path, budget: Duration) -> ClaudeExter
                 .into(),
         );
     }
-    let (rows, truncated) = match parse_listing(&output.stdout) {
+    let (rows, truncated) = match parse_listing(&output.stdout, session_id) {
         Ok(parsed) => parsed,
         Err(reason) => return unavailable(reason),
     };
@@ -218,7 +238,9 @@ impl super::ClaudeHarness {
     /// Read-only listing through the same executable resolution as launches.
     pub async fn external_sessions(&self) -> ClaudeExternalSessionsView {
         match self.resolve_executable() {
-            Ok(exe) => list_external_sessions(&exe, LIST_TIMEOUT).await,
+            Ok(exe) => {
+                list_sessions_in_home(&exe, LIST_TIMEOUT, self.config_home.as_deref(), None).await
+            }
             Err(_) => ClaudeExternalSessionsView {
                 unavailable_reason: Some("The Claude Code CLI is not installed.".into()),
                 ..Default::default()
@@ -230,8 +252,12 @@ impl super::ClaudeHarness {
 /// Refuse a cold `--resume` of a conversation another live Claude process is
 /// writing. Fails open: when the listing is unavailable the native CLI stays
 /// the final authority, and the attempt is logged.
-pub(crate) async fn refuse_concurrent_writer(exe: &Path, resume: &str) -> Result<(), HarnessError> {
-    let view = list_external_sessions(exe, GUARD_TIMEOUT).await;
+pub(crate) async fn refuse_concurrent_writer(
+    exe: &Path,
+    resume: &str,
+    config_home: Option<&Path>,
+) -> Result<(), HarnessError> {
+    let view = list_sessions_in_home(exe, GUARD_TIMEOUT, config_home, Some(resume)).await;
     if let Some(reason) = &view.unavailable_reason {
         tracing::debug!(target: "luna_harness::claude", %reason, "two-writer guard skipped");
         return Ok(());

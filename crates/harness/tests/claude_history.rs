@@ -106,6 +106,7 @@ async fn drive(
     }
     let mut steer_tx = Some(steer_tx);
     let mut stream = harness()
+        .with_config_dir(home(cwd))
         .run(request(cwd, turns[0].0, resume), controls)
         .await
         .expect("run starts");
@@ -250,6 +251,152 @@ async fn rewind(
         .await;
     let written = *written.lock().unwrap();
     (result, written)
+}
+
+/// History controls must not join a launching Claude's peer bridge or invoke
+/// managed SessionStart hooks. Run the production harness in a separate test
+/// process so injected environment cannot race other tests or modify our host.
+#[tokio::test]
+async fn history_controls_disable_hooks_and_drop_inherited_session_identity() {
+    const CHILD: &str = "LUNA_HISTORY_ISOLATION_REGRESSION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "history_controls_disable_hooks_and_drop_inherited_session_identity",
+            "--nocapture",
+        ]);
+        command.env(CHILD, "1");
+        for name in [
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_JOB_DIR",
+        ] {
+            command.env(name, "synthetic-parent-session");
+        }
+        let output = command.output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    let cwd = workspace.path();
+    std::fs::write(cwd.join("notes.txt"), "before\n").unwrap();
+    let run = drive(cwd, None, &[("edit:notes.txt=after", 1)], &[]).await;
+    let checkpoint = run.dones[0].1.as_deref().unwrap();
+    fork(cwd, &run.session_id, ProviderForkBoundary::Tip)
+        .await
+        .0
+        .unwrap();
+    let preview = harness()
+        .rewind_native_files(NativeFileRewindRequest {
+            scope: scope(cwd, &run.session_id),
+            checkpoint: checkpoint.into(),
+            dry_run: true,
+        })
+        .await
+        .unwrap();
+    assert!(preview.can_rewind);
+    assert_eq!(
+        rewind(cwd, &run.session_id, checkpoint, checkpoint)
+            .await
+            .0
+            .unwrap(),
+        NativeRewindOutcome::Rewound
+    );
+    let controls: Vec<_> = argv_log(cwd)
+        .into_iter()
+        .filter(|entry| {
+            entry["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg.as_str() == Some("--strict-mcp-config"))
+        })
+        .collect();
+    assert_eq!(
+        controls.len(),
+        3,
+        "fork validation, file preview and conversation rewind"
+    );
+    for entry in controls {
+        assert_eq!(
+            entry["inherited_session_env"],
+            serde_json::json!([]),
+            "history child retained foreign session identity"
+        );
+        let argv = entry["argv"].as_array().unwrap();
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0].as_str() == Some("--settings"))
+            .and_then(|pair| pair[1].as_str())
+            .map(|settings| serde_json::from_str::<serde_json::Value>(settings).unwrap())
+            .unwrap_or_default();
+        assert_eq!(
+            settings["disableAllHooks"], true,
+            "history initialization can execute managed hooks"
+        );
+    }
+}
+
+/// A stopped LUNA runtime does not establish exclusive access to the native
+/// session: an external writer must block both kinds of history mutation.
+#[tokio::test]
+async fn history_rewinds_refuse_an_external_session_writer_before_mutation() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cwd = workspace.path();
+    let notes = cwd.join("notes.txt");
+    std::fs::write(&notes, "before\n").unwrap();
+    let run = drive(cwd, None, &[("edit:notes.txt=after", 1)], &[]).await;
+    let checkpoint = run.dones[0].1.as_deref().unwrap();
+    let session_file = transcript(cwd, &run.session_id);
+    let before = (sha(&session_file), sha(&notes));
+    // This process is alive and is not a child of itself; the fixture uses
+    // its PID to model a foreign supervisor row without spawning a daemon.
+    knobs(
+        cwd,
+        serde_json::json!({"external_sessions": [{
+            "pid": std::process::id(), "id": "foreign-writer", "kind": "background",
+            "sessionId": run.session_id, "state": "working",
+        }]}),
+    );
+    let (conversation, written) = rewind(cwd, &run.session_id, checkpoint, checkpoint).await;
+    let files = harness()
+        .rewind_native_files(NativeFileRewindRequest {
+            scope: scope(cwd, &run.session_id),
+            checkpoint: checkpoint.into(),
+            dry_run: false,
+        })
+        .await;
+    assert!(matches!(
+        conversation,
+        Err(luna_harness::HarnessError::RejectedBeforeAcceptance(_))
+    ));
+    assert!(
+        !written,
+        "conversation rewind was sent to a concurrently written session"
+    );
+    assert!(matches!(
+        files,
+        Err(luna_harness::HarnessError::RejectedBeforeAcceptance(_))
+    ));
+    assert_eq!((sha(&session_file), sha(&notes)), before);
+    assert!(
+        argv_log(cwd).iter().all(|entry| !entry["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str() == Some("--strict-mcp-config"))),
+        "a history control process launched before exclusive access was checked"
+    );
 }
 
 /// A1–A6: every LUNA prompt carries a client uuid; only completed turns that

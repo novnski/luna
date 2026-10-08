@@ -693,7 +693,12 @@ impl ClaudeHarness {
         // CC-13: never become a second writer of a session another live
         // Claude process owns.
         if !title_only && let Some(resume) = request.resume.as_deref() {
-            background_sessions::refuse_concurrent_writer(&exe, resume).await?;
+            background_sessions::refuse_concurrent_writer(
+                &exe,
+                resume,
+                self.config_home.as_deref(),
+            )
+            .await?;
         }
         let mut cmd = self.build_command(&exe, &request, tools);
         let (luna_endpoint, luna) = match luna {
