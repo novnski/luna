@@ -1381,6 +1381,24 @@ impl WorkspaceHost {
         Ok(self.read(|doc| doc.read_chats())?)
     }
 
+    /// The ticket title a board working chat carries (chat-model title
+    /// sync); `None` for a chat that is no ticket's current working chat.
+    pub(crate) fn board_working_title(&self, chat_id: &str) -> Option<String> {
+        let link = self
+            .inner
+            .store
+            .board_task_links_for_task(chat_id, true)
+            .ok()?
+            .into_iter()
+            .find(|link| link.role == luna_proto::TaskLinkRole::Working)?;
+        self.inner
+            .store
+            .board_item(&link.work_item_id)
+            .ok()
+            .flatten()
+            .map(|item| item.title)
+    }
+
     pub fn read_devices(&self) -> Result<Vec<Device>, EngineError> {
         Ok(self.read(|doc| doc.read_devices())?)
     }

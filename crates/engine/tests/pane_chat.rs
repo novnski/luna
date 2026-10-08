@@ -1606,8 +1606,27 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .harness_session_id
         .unwrap();
 
+    // Side chats never fork their conversation (chat-model §1): the nested
+    // fork is refused before any command or provider effect. A second native
+    // fork of the main chat carries the surviving-fork checks below.
     let nested_request = uuid::Uuid::new_v4().to_string();
-    let nested_fork = client.call("CreateSideChat", json!({"parentId":side,"requestId":nested_request})).await.unwrap_or_else(|error| {
+    let refused = client
+        .call(
+            "CreateSideChat",
+            json!({"parentId":side,"requestId":nested_request}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("invalidRole"), "{refused}");
+    assert!(
+        core.doc_host
+            .task_command_receipt(&format!("side-chat-create:{nested_request}"))
+            .unwrap()
+            .is_none()
+    );
+    let nested_request = uuid::Uuid::new_v4().to_string();
+    let nested_fork = client.call("CreateSideChat", json!({"parentId":parent,"requestId":nested_request})).await.unwrap_or_else(|error| {
         let receipt = core.doc_host.task_command_receipt(&format!("side-chat-create:{nested_request}")).unwrap();
         evidence("nested-fork-error.json", &json!({"error":error.to_string(),"receipt":receipt,"entries":core.doc_host.open(&side).unwrap().doc().read_entries().unwrap(),"checkpoints":recorder.checkpoints.lock().unwrap().clone()}));
         panic!("nested native fork failed: {error}; receipt={receipt:?}")
@@ -2049,28 +2068,29 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .call("GetChatWorkbench", json!({"mainChatId":side}))
         .await
         .unwrap();
-    let blank_child = client.call("CreateChildTab", json!({"parentTaskId":side,"idempotencyKey":"fork-blank-child","title":"Child from fork","provider":id,"model":"child-model","reasoning":"medium"})).await.unwrap();
-    assert_eq!(blank_child["startupState"], "awaiting-first-message");
-    assert!(runs_for(&recorder, blank_child["taskId"].as_str().unwrap()).is_empty());
-    // Steered display segments without a checkpoint must fail before any
-    // provider mutation; the native-fork alternative remains explicit.
+    // A side chat shown as its own workbench is still a side chat: its `+`
+    // cannot create a nested child (chat-model §1).
+    let blank_child = client.call("CreateChildTab", json!({"parentTaskId":side,"idempotencyKey":"fork-blank-child","title":"Child from fork","provider":id,"model":"child-model","reasoning":"medium"})).await.unwrap_err().to_string();
+    assert!(blank_child.contains("invalidRole"), "{blank_child}");
+    // Forking a side chat is refused before any command or provider
+    // mutation; the alternatives are a fresh sibling or a new main chat.
     let rejected_request = uuid::Uuid::new_v4().to_string();
     let provider_operations = recorder.sequence.load(Ordering::SeqCst);
+    let rejected = client
+        .call(
+            "CreateSideChat",
+            json!({"parentId":side,"requestId":rejected_request}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(rejected.contains("invalidRole"), "{rejected}");
     assert!(
-        client
-            .call(
-                "CreateSideChat",
-                json!({"parentId":side,"requestId":rejected_request})
-            )
-            .await
-            .is_err()
+        core.doc_host
+            .task_command_receipt(&format!("side-chat-create:{rejected_request}"))
+            .unwrap()
+            .is_none()
     );
-    let rejected = core
-        .doc_host
-        .task_command_receipt(&format!("side-chat-create:{rejected_request}"))
-        .unwrap()
-        .unwrap();
-    assert_ne!(rejected.status, luna_proto::CommandReceiptStatus::Pending);
     assert_eq!(
         recorder.sequence.load(Ordering::SeqCst),
         provider_operations,

@@ -200,6 +200,17 @@ impl EngineRpc {
         {
             return Err(CrossTaskError::Input);
         }
+        if request.action == Action::ForkThread {
+            // Neither a side caller (no parent-proxy fork of its main) nor a
+            // side source may fork a conversation (chat-model §1).
+            for origin in [&authority.caller_task_id, &request.task_ids[0]] {
+                self.board_guard_legacy_creation(
+                    origin,
+                    luna_proto::BoardChatCreationKind::NativeFork,
+                )
+                .map_err(|error| CrossTaskError::Backend(error.to_rpc_message()))?;
+            }
+        }
         let layout = self.read_chat_workbench(&main).map_err(fail)?;
         let layout_command_id = format!(
             "agent-layout:{}",

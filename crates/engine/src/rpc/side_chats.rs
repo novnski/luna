@@ -23,6 +23,212 @@ impl EngineRpc {
         self.handle_side_chat_with_fence(method, params, None).await
     }
 
+    /// Create (or replay) a persistent side chat of `parent_id`: a native
+    /// fork when the provider supports it, else a frozen context snapshot.
+    /// Shared by the `CreateSideChat` RPC, agent workspace forks and the
+    /// board's main-origin with-context side chats.
+    pub(super) async fn create_side_chat_fork(
+        &self,
+        parent_id: &str,
+        request_id: &str,
+        origin_message_id: Option<&str>,
+        anchor_text: Option<&str>,
+        force_snapshot: bool,
+        fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
+    ) -> Result<crate::side_chats::SideChatCreated, RpcError> {
+        let service = self
+            .side_chats
+            .as_ref()
+            .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?;
+        let fail = |error: anyhow::Error| RpcError::Failed(error.to_string());
+        let id = uuid::Uuid::parse_str(request_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .to_string();
+        if service.contains(&id) {
+            return service
+                .prepare(
+                    parent_id,
+                    request_id,
+                    false,
+                    origin_message_id,
+                    anchor_text,
+                    force_snapshot,
+                )
+                .await
+                .map_err(fail);
+        }
+        // Depth/context rule (chat-model §1): only main chats fork or copy
+        // their conversation into a side chat. Replays above stay readable.
+        self.board_guard_legacy_creation(
+            parent_id,
+            luna_proto::BoardChatCreationKind::SideWithContext,
+        )
+        .map_err(|error| RpcError::Failed(error.to_rpc_message()))?;
+        if self.task_identity.view(&id).is_some() {
+            return Err(RpcError::Failed(
+                "Creation request ID belongs to an existing or deleted task".into(),
+            ));
+        }
+        let chat = self
+            .workspace
+            .chat(parent_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .ok_or_else(|| RpcError::Failed("Parent conversation unavailable".into()))?;
+        let config = chat
+            .config
+            .as_ref()
+            .ok_or_else(|| RpcError::Failed("Choose the parent's provider first".into()))?;
+        let native =
+            !force_snapshot && capability_for(config.harness) != ProviderForkCapability::None;
+        let readiness = if native {
+            Some(
+                self.ensure_history_operation_ready(parent_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let created = service
+            .prepare(
+                parent_id,
+                request_id,
+                native,
+                origin_message_id,
+                anchor_text,
+                force_snapshot,
+            )
+            .await
+            .map_err(fail)?;
+        let Some((source, binding)) = readiness else {
+            let command: TaskCommandParams = parse_params(serde_json::json!({
+                "commandId": format!("side-chat-create:{}", request_id), "taskId":id,
+                "intent": { "kind":"createChat", "sideParentId":parent_id,
+                    "deviceId":chat.device_id, "spaceId":chat.space_id, "cwd":chat.cwd,
+                    "branch":chat.branch, "config":created.meta.config,
+                    "lineage":{"sourceTaskId":parent_id,"lifecycleOwnerTaskId":id}
+                }
+            }))?;
+            // A portable fork creates a new task; fence both the source
+            // context and the new task's command admission.
+            let mut creation_fence = fence.cloned();
+            if let Some(source_fence) = fence {
+                self.sessions
+                    .with_live_approved_send(source_fence, || Ok(()))
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+            }
+            if let Some(fence) = &mut creation_fence {
+                fence.request.task_id = id.clone();
+                fence.target_snapshot = self.current_task_command_snapshot(&id)?;
+            }
+            return match self
+                .execute_task_command_with_send_fence(command, false, creation_fence.as_ref())
+                .await
+            {
+                Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
+                    Ok(service.activate(&id).await.map_err(fail)?)
+                }
+                result => {
+                    let detail = format!(
+                        "Side chat creation did not complete: {result:?}. It will not be replayed."
+                    );
+                    service.creation_failed(&id, &detail);
+                    Err(RpcError::Failed(detail))
+                }
+            };
+        };
+        let snapshot = self.current_task_command_snapshot(parent_id)?;
+        let (boundary, message_text) = if let Some(origin) = origin_message_id {
+            let entry = self
+                .doc_host
+                .open(parent_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .doc()
+                .read_entries()
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .into_iter()
+                .find(|entry| entry.id == origin)
+                .ok_or_else(|| RpcError::Failed("Origin message is unavailable".into()))?;
+            let text = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    MessagePart::Text { text, .. } => Some(text.trim()),
+                    _ => None,
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                if entry.role == MessageRole::User {
+                    "beforeUserMessage"
+                } else {
+                    "afterCompletedTurn"
+                },
+                Some(text),
+            )
+        } else {
+            ("tip", None)
+        };
+        let command: TaskCommandParams = parse_params(serde_json::json!({
+            "commandId": format!("side-chat-create:{}", request_id),
+            "taskId": parent_id,
+            "expectedTaskRevision": snapshot.task_revision,
+            "expectedBindingGeneration": snapshot.binding_generation,
+            "intent": {
+                "kind":"forkTask", "sideChat":true, "newTaskId":id,
+                "boundary":boundary, "messageId":origin_message_id, "title":created.meta.title,
+                "sourceLink":format!("luna://open/chat/{}?workspace=local", parent_id),
+                "review": {
+                    "taskRevision":snapshot.task_revision,
+                    "bindingGeneration":snapshot.binding_generation,
+                    "providerSessionId":binding.provider_task_id,
+                    "providerAccountId":source.config.as_ref().and_then(|config| config.provider_account_id.clone()),
+                    "cwd":source.cwd.unwrap_or_default(),
+                    "messageId":origin_message_id, "messageText":message_text
+                }
+            }
+        }))?;
+        let result = self
+            .execute_task_command_with_send_fence(command, false, fence)
+            .await;
+        match result {
+            Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
+                Ok(service.activate(&id).await.map_err(fail)?)
+            }
+            result => {
+                let detail = match result {
+                    Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Pending => {
+                        format!(
+                            "Native fork did not complete ({:?}): {}. Creation will not be replayed; receipt {} preserves the outcome.",
+                            receipt.status,
+                            receipt.reason.as_ref().map_or(
+                                "Inspect the saved receipt for the provider result",
+                                |reason| reason.message.as_str()
+                            ),
+                            receipt.command_id
+                        )
+                    }
+                    Ok(receipt) => format!(
+                        "Native fork could not be created ({:?}): {}. Receipt {} records the refusal.",
+                        receipt.status,
+                        receipt
+                            .reason
+                            .as_ref()
+                            .map_or("The request did not pass history validation", |reason| {
+                                reason.message.as_str()
+                            }),
+                        receipt.command_id,
+                    ),
+                    Err(error) => {
+                        format!("Native fork failed: {error}. Creation will not be replayed.")
+                    }
+                };
+                service.creation_failed(&id, &detail);
+                Err(RpcError::Failed(detail))
+            }
+        }
+    }
+
     pub(super) async fn handle_side_chat_with_fence(
         &self,
         method: &str,
@@ -80,196 +286,18 @@ impl EngineRpc {
         }
         let p: Params = parse_params(params)?;
         match method {
-            methods::CREATE_SIDE_CHAT => {
-                let id = uuid::Uuid::parse_str(&p.request_id)
-                    .map_err(|error| RpcError::Failed(error.to_string()))?
-                    .to_string();
-                if service.contains(&id) {
-                    return RpcReply::value(
-                        &service
-                            .prepare(
-                                &p.parent_id,
-                                &p.request_id,
-                                false,
-                                p.origin_message_id.as_deref(),
-                                p.anchor_text.as_deref(),
-                                p.force_snapshot,
-                            )
-                            .await
-                            .map_err(fail)?,
-                    );
-                }
-                if self.task_identity.view(&id).is_some() {
-                    return Err(RpcError::Failed(
-                        "Creation request ID belongs to an existing or deleted task".into(),
-                    ));
-                }
-                let chat = self
-                    .workspace
-                    .chat(&p.parent_id)
-                    .map_err(|error| RpcError::Failed(error.to_string()))?
-                    .ok_or_else(|| RpcError::Failed("Parent conversation unavailable".into()))?;
-                let config = chat
-                    .config
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("Choose the parent's provider first".into()))?;
-                let native = !p.force_snapshot
-                    && capability_for(config.harness) != ProviderForkCapability::None;
-                let readiness = if native {
-                    Some(
-                        self.ensure_history_operation_ready(&p.parent_id)
-                            .map_err(|error| RpcError::Failed(error.to_string()))?,
-                    )
-                } else {
-                    None
-                };
-                let created = service
-                    .prepare(
+            methods::CREATE_SIDE_CHAT => RpcReply::value(
+                &self
+                    .create_side_chat_fork(
                         &p.parent_id,
                         &p.request_id,
-                        native,
                         p.origin_message_id.as_deref(),
                         p.anchor_text.as_deref(),
                         p.force_snapshot,
+                        fence,
                     )
-                    .await
-                    .map_err(fail)?;
-                let Some((source, binding)) = readiness else {
-                    let command: TaskCommandParams = parse_params(serde_json::json!({
-                        "commandId": format!("side-chat-create:{}", p.request_id), "taskId":id,
-                        "intent": { "kind":"createChat", "sideParentId":p.parent_id,
-                            "deviceId":chat.device_id, "spaceId":chat.space_id, "cwd":chat.cwd,
-                            "branch":chat.branch, "config":created.meta.config,
-                            "lineage":{"sourceTaskId":p.parent_id,"lifecycleOwnerTaskId":id}
-                        }
-                    }))?;
-                    // A portable fork creates a new task; fence both the source
-                    // context and the new task's command admission.
-                    let mut creation_fence = fence.cloned();
-                    if let Some(source_fence) = fence {
-                        self.sessions
-                            .with_live_approved_send(source_fence, || Ok(()))
-                            .map_err(|error| RpcError::Failed(error.to_string()))?;
-                    }
-                    if let Some(fence) = &mut creation_fence {
-                        fence.request.task_id = id.clone();
-                        fence.target_snapshot = self.current_task_command_snapshot(&id)?;
-                    }
-                    return match self
-                        .execute_task_command_with_send_fence(
-                            command,
-                            false,
-                            creation_fence.as_ref(),
-                        )
-                        .await
-                    {
-                        Ok(receipt)
-                            if receipt.status == luna_proto::CommandReceiptStatus::Applied =>
-                        {
-                            RpcReply::value(&service.activate(&id).await.map_err(fail)?)
-                        }
-                        result => {
-                            let detail = format!(
-                                "Side chat creation did not complete: {result:?}. It will not be replayed."
-                            );
-                            service.creation_failed(&id, &detail);
-                            Err(RpcError::Failed(detail))
-                        }
-                    };
-                };
-                let snapshot = self.current_task_command_snapshot(&p.parent_id)?;
-                let (boundary, message_text) = if let Some(origin) = p.origin_message_id.as_deref()
-                {
-                    let entry = self
-                        .doc_host
-                        .open(&p.parent_id)
-                        .map_err(|error| RpcError::Failed(error.to_string()))?
-                        .doc()
-                        .read_entries()
-                        .map_err(|error| RpcError::Failed(error.to_string()))?
-                        .into_iter()
-                        .find(|entry| entry.id == origin)
-                        .ok_or_else(|| RpcError::Failed("Origin message is unavailable".into()))?;
-                    let text = entry
-                        .parts
-                        .iter()
-                        .filter_map(|part| match part {
-                            MessagePart::Text { text, .. } => Some(text.trim()),
-                            _ => None,
-                        })
-                        .filter(|text| !text.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    (
-                        if entry.role == MessageRole::User {
-                            "beforeUserMessage"
-                        } else {
-                            "afterCompletedTurn"
-                        },
-                        Some(text),
-                    )
-                } else {
-                    ("tip", None)
-                };
-                let command: TaskCommandParams = parse_params(serde_json::json!({
-                    "commandId": format!("side-chat-create:{}", p.request_id),
-                    "taskId": p.parent_id,
-                    "expectedTaskRevision": snapshot.task_revision,
-                    "expectedBindingGeneration": snapshot.binding_generation,
-                    "intent": {
-                        "kind":"forkTask", "sideChat":true, "newTaskId":id,
-                        "boundary":boundary, "messageId":p.origin_message_id, "title":created.meta.title,
-                        "sourceLink":format!("luna://open/chat/{}?workspace=local", p.parent_id),
-                        "review": {
-                            "taskRevision":snapshot.task_revision,
-                            "bindingGeneration":snapshot.binding_generation,
-                            "providerSessionId":binding.provider_task_id,
-                            "providerAccountId":source.config.as_ref().and_then(|config| config.provider_account_id.clone()),
-                            "cwd":source.cwd.unwrap_or_default(),
-                            "messageId":p.origin_message_id, "messageText":message_text
-                        }
-                    }
-                }))?;
-                let result = self
-                    .execute_task_command_with_send_fence(command, false, fence)
-                    .await;
-                match result {
-                    Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
-                        RpcReply::value(&service.activate(&id).await.map_err(fail)?)
-                    }
-                    result => {
-                        let detail = match result {
-                            Ok(receipt)
-                                if receipt.status == luna_proto::CommandReceiptStatus::Pending =>
-                            {
-                                format!(
-                                    "Native fork did not complete ({:?}): {}. Creation will not be replayed; receipt {} preserves the outcome.",
-                                    receipt.status,
-                                    receipt.reason.as_ref().map_or(
-                                        "Inspect the saved receipt for the provider result",
-                                        |reason| reason.message.as_str()
-                                    ),
-                                    receipt.command_id
-                                )
-                            }
-                            Ok(receipt) => format!(
-                                "Native fork could not be created ({:?}): {}. Receipt {} records the refusal.",
-                                receipt.status,
-                                receipt.reason.as_ref().map_or(
-                                    "The request did not pass history validation",
-                                    |reason| reason.message.as_str()
-                                ),
-                                receipt.command_id,
-                            ),
-                            Err(error) => format!(
-                                "Native fork failed: {error}. Creation will not be replayed."
-                            ),
-                        };
-                        service.creation_failed(&id, &detail);
-                        Err(RpcError::Failed(detail))
-                    }
-                }
-            }
+                    .await?,
+            ),
             methods::LIST_SIDE_CHATS => {
                 RpcReply::value(&service.list(&p.parent_id, p.before).map_err(fail)?)
             }

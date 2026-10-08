@@ -275,6 +275,10 @@ pub struct BoardChatCreated {
     pub launch: BoardChatLaunchState,
     pub settings: ResolvedExecution,
     pub navigation: BoardNavigationTarget,
+    /// The ticket already had a worker: this is that chat in its original
+    /// location (never moved, never sent a second first message).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reused: bool,
 }
 
 /// "Convert this chat to a ticket": create a ticket and link the same chat as
@@ -305,6 +309,30 @@ pub struct BoardConvertReceipt {
     pub mutation: super::BoardMutationReceipt,
     pub link: super::WorkItemTaskLink,
     pub identity: CanonicalChatIdentity,
+    /// The exact task/binding/run association recorded at conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<BoardRunAssociation>,
+}
+
+/// What was running in a chat when it became a ticket's worker. Recorded
+/// once; current state is always re-derived (conversion never marks work
+/// complete and never resends anything).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardRunAssociation {
+    pub task_id: String,
+    /// A provider run or turn was active at conversion.
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_message_id: Option<String>,
+    /// LUNA execution binding (never a provider session id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u32>,
+    pub observed_at_ms: i64,
 }
 
 /// `board_link_thread`: link an existing chat as source/reference/attempt.

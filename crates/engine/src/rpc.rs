@@ -5562,6 +5562,23 @@ impl EngineRpc {
                             "Side chat creation is not reserved".into(),
                         )));
                     }
+                } else if let Some(origin) = lineage
+                    .parent_task_id
+                    .as_deref()
+                    .or(lineage.source_task_id.as_deref())
+                    .filter(|origin| *origin != task_id)
+                {
+                    // A lineage claim makes the new chat a side chat of
+                    // `origin`; a side chat cannot be that origin.
+                    self.board_guard_legacy_creation(
+                        origin,
+                        luna_proto::BoardChatCreationKind::NativeFork,
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            Self::board_error_text(&error),
+                        ))
+                    })?;
                 }
                 let identity_space_id = space_id.clone();
                 let identity_device_id = device_id.clone();
@@ -5662,6 +5679,21 @@ impl EngineRpc {
                 source_link,
                 review,
             } => {
+                // Message-level Fork and native side forks: side chats never
+                // fork their conversation (chat-model §1).
+                self.board_guard_legacy_creation(
+                    task_id,
+                    if side_chat {
+                        luna_proto::BoardChatCreationKind::NativeFork
+                    } else {
+                        luna_proto::BoardChatCreationKind::MessageFork
+                    },
+                )
+                .map_err(|error| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        Self::board_error_text(&error),
+                    ))
+                })?;
                 if side_chat
                     && !self
                         .side_chats
@@ -6703,6 +6735,7 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Rename { title } => {
+                let synced_title = title.clone();
                 let native = self.task_identity.has_native_codex_binding(task_id);
                 if native {
                     self.task_identity
@@ -6728,6 +6761,8 @@ impl EngineRpc {
                 {
                     tracing::warn!(task = %task_id, %error, "post-rename task reconciliation failed");
                 }
+                // One rename for a ticket and its working chat (title sync).
+                self.board_chat_renamed(task_id, &synced_title).await;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetPinned {
@@ -6930,6 +6965,11 @@ impl EngineRpc {
             TaskCommandIntent::MoveProject {
                 destination_space_id,
             } => {
+                self.board_guard_container_change(task_id).map_err(|error| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        Self::board_error_text(&error),
+                    ))
+                })?;
                 let owned_task_id = task_id.to_string();
                 let validated = validated_project_move.ok_or_else(|| {
                     TaskProjectionError::Mutation(crate::EngineError::Other(

@@ -368,14 +368,47 @@ async fn surviving_forks_keep_workspace_tools_after_source_deletion() {
     let (source, unrelated) = seed(&core, &rpc, root.path()).await;
     let fork = uuid::Uuid::new_v4().to_string();
     let nested = uuid::Uuid::new_v4().to_string();
-    for (parent, id) in [(&source, &fork), (&fork, &nested)] {
+    rpc.call(
+        "CreateSideChat",
+        json!({"parentId":source,"requestId":fork,"forceSnapshot":true}),
+    )
+    .await
+    .unwrap();
+    // New nesting is refused (chat-model §1); the nested fork below is a
+    // legacy record as older builds left it (fork lineage under the fork).
+    assert!(
         rpc.call(
             "CreateSideChat",
-            json!({"parentId":parent,"requestId":id,"forceSnapshot":true}),
+            json!({"parentId":fork,"requestId":nested,"forceSnapshot":true}),
         )
         .await
+        .unwrap_err()
+        .to_string()
+        .contains("invalidRole")
+    );
+    let fork_row = core.workspace.chat(&fork).unwrap().unwrap();
+    core.workspace
+        .create_chat(
+            &nested,
+            fork_row.space_id.as_deref(),
+            None,
+            fork_row.config.clone(),
+            fork_row.cwd.clone(),
+        )
         .unwrap();
-    }
+    core.task_identity
+        .register_new_task(
+            &nested,
+            fork_row.space_id.as_deref(),
+            None,
+            fork_row.cwd.as_deref(),
+            luna_proto::TaskLineage {
+                source_task_id: Some(fork.clone()),
+                lifecycle_owner_task_id: Some(nested.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let tools = CrossTaskTools::new(service.clone());
     let mut authority = CrossTaskAuthority {
         caller_task_id: nested.clone(),
