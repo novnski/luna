@@ -526,6 +526,8 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 12] = [
 // handoff from its header without leaving dead space while collapsed.
 const SIDEBAR_SECTION_GAP: f32 = 12.0;
 pub(super) const SIDEBAR_DISCLOSURE_HEADER_HEIGHT: f32 = 28.0;
+/// Icon-to-label gap of a sidebar navigation row (New thread, Automations).
+const SIDEBAR_NAV_GAP: f32 = 10.0;
 const SIDEBAR_DISCLOSURE_BODY_INSET: f32 = 4.0;
 const SIDEBAR_DISCLOSURE_SECTION_HEIGHT: f32 =
     SIDEBAR_SECTION_GAP + SIDEBAR_DISCLOSURE_HEADER_HEIGHT;
@@ -1353,36 +1355,6 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.activity.view_active {
-            let row = div()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(crate::typography::ui_rems(4.0))
-                .pl(px(super::SIDEBAR_GUTTER))
-                .pt(crate::typography::ui_rems(8.0))
-                .pb(crate::typography::ui_rems(4.0))
-                .child(
-                    div()
-                        .id("sidebar-activity-label")
-                        .flex_1()
-                        .h(crate::typography::ui_rems(29.0))
-                        .px(px(Theme::SPACE_SM))
-                        .flex()
-                        .items_center()
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child("Activity"),
-                )
-                .child(self.render_activity_action(theme, cx));
-            return self
-                .sidebar_probed(row, || {
-                    vec!["header-activity-label".into(), "header-activity".into()]
-                })
-                .into_any_element();
-        }
         let filter = self.settings.space_filter.clone();
         // Just the project's name: the machine it lives on is noise here
         // (user request). A disconnected host still shows its glyph.
@@ -1420,7 +1392,7 @@ impl Shell {
         };
         let tile = match &project_id {
             Some(id) => super::sidebar_projects::project_tile(
-                super::sidebar_projects::project_tint(&self.state.read(cx), id),
+                super::sidebar_projects::project_tint(self.state.read(cx), id),
                 &label,
                 24.0,
                 theme,
@@ -1546,6 +1518,146 @@ impl Shell {
             trigger
         };
 
+        // The project pill owns the whole top row (user request): the list's
+        // sort/view and Activity controls moved to the Threads header.
+        let row = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .pl(px(super::SIDEBAR_GUTTER))
+            .pt(crate::typography::ui_rems(8.0))
+            .pb(crate::typography::ui_rems(4.0))
+            .child(trigger);
+        self.sidebar_probed(row, || vec!["header-trigger".into()])
+            .into_any_element()
+    }
+
+    /// The sidebar's navigation section under the project pill: one row per
+    /// [`SidebarNavItem`] (New thread, Automations), a page's row marked
+    /// while its page is open. More destinations join the same list.
+    pub(super) fn render_sidebar_nav(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let new_thread_combo = crate::settings::display_combo(
+            self.settings
+                .keymap
+                .get(crate::settings::ShortcutId::NewSession),
+        );
+        let route = self.route;
+        let rows = SidebarNavItem::ALL.into_iter().map(|item| {
+            let id = format!("sidebar-nav-{}", item.key());
+            let current = matches!(item, SidebarNavItem::Page(page) if route == Route::Page(page));
+            let hint = (item == SidebarNavItem::NewThread && !new_thread_combo.is_empty())
+                .then(|| new_thread_combo.clone());
+            #[cfg(feature = "appshots-fixture")]
+            self.sidebar_mark(format!("nav:{}", item.key()), || {
+                vec![item.label().to_owned(), format!("current={current}")]
+            });
+            div()
+                .id(SharedString::from(id.clone()))
+                .group(SharedString::from(id.clone()))
+                .role(gpui::Role::Button)
+                .aria_label(item.label())
+                .aria_selected(current)
+                .tab_index(0)
+                .w_full()
+                .h(crate::typography::ui_rems(30.0))
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(crate::typography::ui_rems(SIDEBAR_NAV_GAP))
+                .px(px(Theme::SPACE_SM))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .text_size(crate::typography::ui_rems(13.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .when(current, |row| row.bg(crate::theme::glass_selected_bg()))
+                .when(!current, |row| {
+                    row.hover_fill_fg(
+                        id.clone(),
+                        gpui::transparent_black(),
+                        crate::theme::sidebar_hover_bg(),
+                        theme.text.opacity(0.85),
+                        theme.text,
+                    )
+                })
+                .when(current, |row| row.text_color(theme.text))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.activate_sidebar_nav(item, cx)))
+                .on_key_down(crate::swallow_activation_key)
+                .child(
+                    icon(item.icon())
+                        .size(crate::typography::ui_rems(16.0))
+                        .flex_none()
+                        .text_color(if current {
+                            theme.text
+                        } else {
+                            theme.text_muted
+                        }),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(item.label()))
+                .when_some(hint, |row, hint| {
+                    // The shortcut shows under the pointer only.
+                    row.child(
+                        div()
+                            .flex_none()
+                            .opacity(0.0)
+                            .group_hover(SharedString::from(id.clone()), |style| style.opacity(1.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .font_family(theme.font_mono.clone())
+                            .text_color(theme.readable_faint(0.9))
+                            .child(SharedString::from(hint)),
+                    )
+                })
+                .into_any_element()
+        });
+        let labels: Vec<String> = SidebarNavItem::ALL
+            .iter()
+            .map(|item| format!("nav-{}", item.key()))
+            .collect();
+        let list = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .pl(px(super::SIDEBAR_GUTTER))
+            .pt(crate::typography::ui_rems(6.0))
+            .children(rows);
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .child(self.sidebar_probed(list, move || labels))
+            .child(
+                div()
+                    .pl(px(super::SIDEBAR_GUTTER))
+                    .pt(crate::typography::ui_rems(10.0))
+                    .child(
+                        div()
+                            .px(px(Theme::SPACE_SM))
+                            .child(sidebar_separator(theme)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The Threads section's header: its label (Activity while that view is
+    /// on), then the list's sort/view options and the Activity toggle, which
+    /// moved down from the top row with the project pill (user request).
+    pub(super) fn render_threads_header(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let activity_view = self.activity.view_active;
         let view_open = self.sidebar_view_menu.is_open();
         let view_focus = self.sidebar_view_trigger_focus.clone();
         let view_trigger = div()
@@ -1628,6 +1740,26 @@ impl Shell {
             view_trigger
         };
 
+        let label = div()
+            .id(if activity_view {
+                "sidebar-activity-label"
+            } else {
+                "sidebar-threads-label"
+            })
+            .flex_1()
+            .min_w_0()
+            .h(crate::typography::ui_rems(29.0))
+            .px(px(Theme::SPACE_SM))
+            .flex()
+            .items_center()
+            .text_size(crate::typography::ui_rems(12.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(if activity_view {
+                theme.text
+            } else {
+                theme.readable_faint(0.9)
+            })
+            .child(if activity_view { "Activity" } else { "Threads" });
         let row = div()
             .flex_none()
             .flex()
@@ -1635,17 +1767,20 @@ impl Shell {
             .items_center()
             .gap(crate::typography::ui_rems(4.0))
             .pl(px(super::SIDEBAR_GUTTER))
-            .pt(crate::typography::ui_rems(8.0))
-            .pb(crate::typography::ui_rems(4.0))
-            .child(trigger)
-            .child(view_trigger)
+            .pt(crate::typography::ui_rems(4.0))
+            .child(label)
+            .when(!activity_view, |row| row.child(view_trigger))
             .child(self.render_activity_action(theme, cx));
-        self.sidebar_probed(row, || {
-            vec![
-                "header-trigger".into(),
-                "header-view".into(),
-                "header-activity".into(),
-            ]
+        self.sidebar_probed(row, move || {
+            if activity_view {
+                vec!["header-activity-label".into(), "header-activity".into()]
+            } else {
+                vec![
+                    "threads-label".into(),
+                    "header-view".into(),
+                    "header-activity".into(),
+                ]
+            }
         })
         .into_any_element()
     }
@@ -2280,7 +2415,7 @@ impl Shell {
             }
         }
 
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self.sidebar_selected_chat(cx);
         // Re-checked at render so the chips drop the FRAME a popover opens,
         // not on the next modifier event — the jumps are suppressed under it.
         let jump_hints = self.jump_hints && !self.overlay_owns_keyboard(cx);
@@ -3011,7 +3146,7 @@ impl Shell {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_sidebar_shelf("settled", body_height, cx);
             }));
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self.sidebar_selected_chat(cx);
         let mut list = div()
             .w_full()
             .flex()
@@ -3284,7 +3419,7 @@ impl Shell {
         }
         let section = div().w_full().flex().flex_col().child(header);
         let body = {
-            let selected = self.state.read(cx).selected_chat.clone();
+            let selected = self.sidebar_selected_chat(cx);
             let selected_wash = crate::theme::glass_selected_bg();
             let mut list = div()
                 .w_full()

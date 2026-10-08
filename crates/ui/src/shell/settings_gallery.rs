@@ -18,7 +18,7 @@ impl Shell {
         let state = self.state.read(cx);
         let section = match self.route {
             Route::Settings(section) => Some(section),
-            Route::Chat => None,
+            Route::Chat | Route::Page(_) => None,
         };
         let mounted = section.is_some_and(|section| match section {
             SettingsSection::General => self.general_page.is_some(),

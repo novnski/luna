@@ -43,6 +43,20 @@
 //!     not all start on the same left edge across idle and busy rows, the
 //!     provider icon does not start under the title, a status is not at the
 //!     row's right edge, or an idle row still paints a status.
+//! 12. The top row still carries more than the project pill (the list's
+//!     view options or Activity), or the pill does not span the sidebar.
+//! 13. The navigation section is missing or out of order: New thread then
+//!     Automations, between the pill and the Threads header, on the rows'
+//!     left edge.
+//! 14. New thread does not open the new-thread canvas; Automations does not
+//!     open its own page beside the thread list (route, marked row, rows
+//!     still listed, no thread marked current); Back does not return;
+//!     Settings still lists Automations;
+//!     opening Settings › Automations does not land on the page.
+//! 15. The Threads header lacks its label, view options or Activity toggle,
+//!     or Activity no longer opens and closes from it.
+//! 16. A pin is painted in the status spot (user report: it hid the status),
+//!     or hovering a row paints more than one pin.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example sidebar-redesign-fixture
@@ -538,7 +552,7 @@ fn check_project(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_jso
         "{step}: item 9, the jump order {order:?} disagrees with the rows {rendered:?}"
     );
     let expect = [
-        ("l-pin", "pin", ""),
+        ("l-pin", "none", ""),
         ("l-work", "loader", ""),
         ("l-approve", "approval", "Approve"),
         ("l-input", "input", "Reply"),
@@ -552,6 +566,8 @@ fn check_project(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_jso
             format!("pill={pill}"),
             "metaHarness=true".to_owned(),
             "compact=false".to_owned(),
+            "pins=0".to_owned(),
+            "selected=false".to_owned(),
         ];
         anyhow::ensure!(
             marks == want,
@@ -727,7 +743,7 @@ fn check_all(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_json::V
         rb,
         step,
         &rendered,
-        &["i-idle", "w-idle-1", "w-idle-2"],
+        &["l-pin", "i-idle", "w-idle-1", "w-idle-2"],
         true,
     )?;
     anyhow::ensure!(
@@ -829,7 +845,7 @@ async fn scale_pass(
         &rb,
         &format!("{px_size}px project, all rows"),
         &ids,
-        &["l-idle-1", "l-idle-2", "l-remote"],
+        &["l-pin", "l-idle-1", "l-idle-2", "l-remote"],
         false,
     )?;
     capture(
@@ -990,6 +1006,177 @@ async fn behaviour_pass(
     }))
 }
 
+fn center(bounds: &serde_json::Value) -> (f32, f32) {
+    (
+        num(&bounds["x"]) + num(&bounds["w"]) / 2.0,
+        num(&bounds["y"]) + num(&bounds["h"]) / 2.0,
+    )
+}
+
+async fn click_label(window: Window, cx: &mut AsyncApp, label: &str) -> anyhow::Result<()> {
+    let rb = readback(window, cx)?;
+    let (x, y) = center(bounds_of(&rb, label)?);
+    click_at(window, cx, x, y).await
+}
+
+/// Items 12 to 16: the top row, the navigation section, the Automations
+/// page, the Threads header and the pin.
+async fn navigation_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    output: &Path,
+) -> anyhow::Result<serde_json::Value> {
+    window.update(cx, |shell, _, cx| {
+        shell.fixture_set_space_filter(Some(P_LUNA.into()), cx)
+    })?;
+    frames(window, cx, 400).await?;
+    let rb = readback(window, cx)?;
+    let row = bounds_of(&rb, "c:l-work")?.clone();
+    let row_left = num(&row["x"]);
+    let row_right = row_left + num(&row["w"]);
+    let trigger = bounds_of(&rb, "header-trigger")?.clone();
+    let bell = bounds_of(&rb, "header-activity")?.clone();
+    anyhow::ensure!(
+        (num(&trigger["x"]) - row_left).abs() <= 0.5
+            && (num(&trigger["x"]) + num(&trigger["w"]) - row_right).abs() <= 0.5,
+        "item 12: the project pill must span the rows' width: {trigger} vs rows {row_left}..{row_right}"
+    );
+    anyhow::ensure!(
+        num(&bell["y"]) > num(&trigger["bottom"]),
+        "item 12: the Activity toggle must leave the top row: bell {bell}, pill {trigger}"
+    );
+    let new_thread = bounds_of(&rb, "nav-new-thread")?.clone();
+    let automations = bounds_of(&rb, "nav-automations")?.clone();
+    let threads = bounds_of(&rb, "threads-label")?.clone();
+    anyhow::ensure!(
+        num(&trigger["bottom"]) <= num(&new_thread["y"])
+            && num(&new_thread["bottom"]) <= num(&automations["y"])
+            && num(&automations["bottom"]) <= num(&threads["y"])
+            && num(&threads["bottom"]) <= num(&row["y"]),
+        "item 13: expected pill, New thread, Automations, Threads, rows top to bottom: {trigger} {new_thread} {automations} {threads} {row}"
+    );
+    for (label, bounds) in [("New thread", &new_thread), ("Automations", &automations)] {
+        anyhow::ensure!(
+            (num(&bounds["x"]) - row_left).abs() <= 0.5,
+            "item 13: {label} must start on the rows' left edge: {bounds} vs {row_left}"
+        );
+    }
+    anyhow::ensure!(
+        rb["bounds"]["header-view"].is_object()
+            && (num(&bell["x"]) + num(&bell["w"]) - row_right).abs() <= 0.5,
+        "item 15: the Threads header must carry the view options and end the bell on the rows' edge"
+    );
+    capture(window, cx, output.join("n-layout.png"))?;
+
+    // Item 16: the pinned row paints no pin at rest and one under the
+    // pointer; an unpinned row's hover shows the one pin to pin it.
+    let marks = mark(&rb, "row:l-pin")?;
+    anyhow::ensure!(
+        marks.contains(&"status=none".to_owned()) && marks.contains(&"pins=0".to_owned()),
+        "item 16: a pinned row at rest must paint no pin: {marks:?}"
+    );
+    for id in ["l-pin", "l-work"] {
+        let rb = readback(window, cx)?;
+        let (x, y) = center(bounds_of(&rb, &format!("title:{id}"))?);
+        hover_at(window, cx, x, y)?;
+        frames(window, cx, 300).await?;
+        let rb = readback(window, cx)?;
+        let marks = mark(&rb, &format!("row:{id}"))?;
+        anyhow::ensure!(
+            marks.contains(&"pins=1".to_owned())
+                && marks.contains(&format!(
+                    "status={}",
+                    if id == "l-pin" { "none" } else { "loader" }
+                )),
+            "item 16: hovering {id} must paint exactly one pin and keep its status: {marks:?}"
+        );
+        if id == "l-pin" {
+            capture(window, cx, output.join("n-pinned-hover.png"))?;
+        }
+    }
+    hover_at(window, cx, WIDTH - 40.0, HEIGHT - 40.0)?;
+    frames(window, cx, 300).await?;
+
+    // Item 15: Activity opens and closes from the Threads header.
+    click_label(window, cx, "header-activity").await?;
+    let rb = readback(window, cx)?;
+    anyhow::ensure!(
+        rb["activityView"] == true && rb["bounds"]["header-activity-label"].is_object(),
+        "item 15: the Threads header's bell did not open Activity"
+    );
+    click_label(window, cx, "header-activity").await?;
+    let rb = readback(window, cx)?;
+    anyhow::ensure!(
+        rb["activityView"] == false,
+        "item 15: Activity did not close"
+    );
+
+    // Item 14: Automations is its own page beside the thread list.
+    click_label(window, cx, "c:l-work").await?;
+    click_label(window, cx, "nav-automations").await?;
+    let rb = readback(window, cx)?;
+    let route = rb["route"].as_str().unwrap_or_default().to_owned();
+    anyhow::ensure!(
+        route == "Page(Automations)",
+        "item 14: Automations opened {route}, not its page"
+    );
+    anyhow::ensure!(
+        mark(&rb, "nav:automations")? == ["Automations", "current=true"]
+            && mark(&rb, "nav:new-thread")? == ["New thread", "current=false"],
+        "item 14: the Automations row is not marked while its page is open"
+    );
+    anyhow::ensure!(
+        rb["bounds"]["c:l-work"].is_object(),
+        "item 14: the thread list must stay beside the Automations page"
+    );
+    anyhow::ensure!(
+        mark(&rb, "row:l-work")?.contains(&"selected=false".to_owned()),
+        "item 14: the open thread must not read as current beside the Automations page"
+    );
+    capture(window, cx, output.join("n-automations.png"))?;
+    window.update(cx, |shell, _, cx| shell.fixture_leave_settings(true, cx))?;
+    frames(window, cx, 300).await?;
+    let rb = readback(window, cx)?;
+    anyhow::ensure!(
+        rb["route"] == "Chat"
+            && rb["selected"] == "l-work"
+            && mark(&rb, "row:l-work")?.contains(&"selected=true".to_owned()),
+        "item 14: Back must return to the open, marked thread: {} {}",
+        rb["route"],
+        rb["selected"]
+    );
+    window.update(cx, |shell, _, cx| shell.fixture_open_settings(cx))?;
+    frames(window, cx, 300).await?;
+    let rb = readback(window, cx)?;
+    let listed = strings(&rb["texts"]["settings-nav"]);
+    anyhow::ensure!(
+        !listed.is_empty() && !listed.contains(&"Automations".to_owned()),
+        "item 14: Settings must no longer list Automations: {listed:?}"
+    );
+    window.update(cx, |shell, _, cx| {
+        shell.fixture_open_automation_settings(cx)
+    })?;
+    frames(window, cx, 300).await?;
+    let rb = readback(window, cx)?;
+    anyhow::ensure!(
+        rb["route"] == "Page(Automations)",
+        "item 14: Settings › Automations must land on the page: {}",
+        rb["route"]
+    );
+
+    // Item 14: New thread opens the new-thread canvas.
+    click_label(window, cx, "nav-new-thread").await?;
+    let rb = readback(window, cx)?;
+    anyhow::ensure!(
+        rb["route"] == "Chat" && rb["selected"].is_null(),
+        "item 14: New thread must open the new-thread canvas: {} {}",
+        rb["route"],
+        rb["selected"]
+    );
+    capture(window, cx, output.join("n-new-thread.png"))?;
+    Ok(serde_json::json!({ "settingsNav": listed, "route": route }))
+}
+
 fn main() -> anyhow::Result<()> {
     let output =
         PathBuf::from(std::env::args().nth(1).ok_or_else(|| {
@@ -1106,6 +1293,8 @@ fn main() -> anyhow::Result<()> {
                     }
                     let behaviour = behaviour_pass(window, cx, &output).await?;
                     record.insert("behaviour".into(), behaviour);
+                    let navigation = navigation_pass(window, cx, &output).await?;
+                    record.insert("navigation".into(), navigation);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -1118,7 +1307,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("sidebar-redesign.pass"),
-                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and live counts and two-line rows whose titles and provider icons share one left edge, with the status at the right edge (square loader, done dot, Approve/Reply/Failed pills) and none at all on idle rows; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows on one title edge whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable\n",
+                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and live counts and two-line rows whose titles and provider icons share one left edge, with the status at the right edge (square loader, done dot, Approve/Reply/Failed pills) and none at all on idle rows; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows on one title edge whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable; the project pill owns the top row, New thread and Automations sit between it and the Threads header (which carries the view options and Activity), Automations opens as its own page beside the thread list (Back returns, Settings no longer lists it), New thread opens the canvas, and a row paints a pin only as its one hover control\n",
                             )
                         });
                         if let Err(error) = written {

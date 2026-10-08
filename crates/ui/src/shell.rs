@@ -236,14 +236,6 @@ fn conversation_width(viewport: f32, sidebar: f32, right: f32) -> f32 {
     (viewport - sidebar - right).max(0.0)
 }
 
-fn titlebar_new_session_alpha(is_chat_route: bool, has_selected_chat: bool) -> f32 {
-    if is_chat_route && has_selected_chat {
-        1.0
-    } else {
-        0.0
-    }
-}
-
 /// Open the session at `slot` (zero-based) of the sidebar's active list. One
 /// action carrying the slot, rather than nine near-identical action types.
 #[derive(Clone, PartialEq, Action)]
@@ -299,9 +291,6 @@ pub const TITLEBAR_ACTION_EDGE_INSET: f32 = 6.0;
 /// Width of the persistent top-left button cluster itself: a 24px sidebar
 /// trigger, an 8px group gap, then two 24px history buttons on a 2px rhythm.
 pub const CLUSTER_BUTTONS_WIDTH: f32 = 24.0 * 3.0 + TITLEBAR_GROUP_GAP + TITLEBAR_CONTROL_GAP;
-/// Extra width consumed when the collapsed-sidebar New Session action joins
-/// the left controls as its own group.
-pub const TITLEBAR_ACTION_SLOT_WIDTH: f32 = TITLEBAR_GROUP_GAP + 24.0;
 /// Horizontal inset owned by the titlebar control row itself. Keep this value
 /// paired with [`Self::titlebar_spacer`]: using a different number for the
 /// spacer shifts every control while leaving the declared cluster geometry
@@ -594,6 +583,61 @@ impl SettingsSection {
 pub enum Route {
     Chat,
     Settings(SettingsSection),
+    /// A page from the sidebar's navigation section; the sidebar keeps the
+    /// thread list beside it (Settings swaps in its own navigation).
+    Page(SidebarPage),
+}
+
+/// The full pages the sidebar's navigation section opens. New destinations
+/// (plugins, skills, …) join here and in [`SidebarNavItem`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarPage {
+    Automations,
+}
+
+impl SidebarPage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automations => "Automations",
+        }
+    }
+}
+
+/// One row of the sidebar's navigation section, top to bottom: an action
+/// (New thread) or a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarNavItem {
+    NewThread,
+    Page(SidebarPage),
+}
+
+impl SidebarNavItem {
+    pub const ALL: [SidebarNavItem; 2] = [
+        SidebarNavItem::NewThread,
+        SidebarNavItem::Page(SidebarPage::Automations),
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NewThread => "New thread",
+            Self::Page(page) => page.label(),
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::NewThread => icons::PEN_NEW_SQUARE,
+            Self::Page(SidebarPage::Automations) => icons::STOPWATCH_PLAY,
+        }
+    }
+
+    /// Stable id for the row's element and the QA probe.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::NewThread => "new-thread",
+            Self::Page(SidebarPage::Automations) => "automations",
+        }
+    }
 }
 
 /// Maximum width the right pane may occupy while retaining the conversation
@@ -708,6 +752,7 @@ pub enum NavEntry {
     /// A chat route; the id of the selected chat ("" = the new-chat canvas).
     Chat(String),
     Settings(SettingsSection),
+    Page(SidebarPage),
 }
 
 /// Browser-style navigation history for the titlebar back/forward buttons
@@ -2073,7 +2118,7 @@ impl Render for SidebarPane {
             let theme = Theme::of(cx).clone();
             match shell.route {
                 Route::Settings(section) => shell.render_settings_nav(section, &theme, cx),
-                Route::Chat => shell.render_chat_sidebar(&theme, cx),
+                Route::Chat | Route::Page(_) => shell.render_chat_sidebar(&theme, cx),
             }
         });
         div().size_full().child(inner).into_any_element()
@@ -2737,6 +2782,8 @@ impl Shell {
                 state.update(cx, |s, _| s.auto_selected = true);
                 Route::Chat
             }
+            // Automations left Settings for its own page.
+            Some("automations" | "settings/automations") => Route::Page(SidebarPage::Automations),
             Some(route) => SettingsSection::from_fixture_route(route)
                 .map(Route::Settings)
                 .unwrap_or(Route::Chat),
@@ -2763,6 +2810,7 @@ impl Shell {
         let nav = NavHistory::new(match route {
             Route::Chat => NavEntry::Chat(String::new()),
             Route::Settings(section) => NavEntry::Settings(section),
+            Route::Page(page) => NavEntry::Page(page),
         });
         // Parent notifications carry presentation changes (session status,
         // elapsed labels, menus); sibling animation/caret ticks do not.
@@ -5256,6 +5304,13 @@ impl Shell {
     }
 
     fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        // Automations moved out of Settings to its own sidebar page; every
+        // path that still names the old section (the palette, fixtures)
+        // lands there.
+        if section == SettingsSection::Automations {
+            self.open_sidebar_page(SidebarPage::Automations, cx);
+            return;
+        }
         self.dismiss_command_palette(cx);
         if section == SettingsSection::Providers
             && let Some(page) = &self.accounts_page
@@ -5273,6 +5328,37 @@ impl Shell {
         self.nav.push(NavEntry::Settings(section));
         self.close_chat_menu(cx);
         cx.notify();
+    }
+
+    /// Open a sidebar navigation page in the main outlet, keeping the
+    /// thread list in the sidebar and recording it for back/forward.
+    pub(super) fn open_sidebar_page(&mut self, page: SidebarPage, cx: &mut Context<Self>) {
+        self.dismiss_command_palette(cx);
+        self.route = Route::Page(page);
+        if *self.nav.current() != NavEntry::Page(page) {
+            self.nav.push(NavEntry::Page(page));
+        }
+        self.close_chat_menu(cx);
+        cx.notify();
+    }
+
+    /// Activate a row of the sidebar's navigation section.
+    pub(super) fn activate_sidebar_nav(&mut self, item: SidebarNavItem, cx: &mut Context<Self>) {
+        match item {
+            SidebarNavItem::NewThread => self.open_new_session(cx),
+            SidebarNavItem::Page(page) => self.open_sidebar_page(page, cx),
+        }
+    }
+
+    /// The main outlet of a sidebar page, created lazily.
+    fn sidebar_page_outlet(&mut self, page: SidebarPage, cx: &mut Context<Self>) -> AnyElement {
+        match page {
+            // The app-wide panel, the same entity Settings used to host: its
+            // own title bar, section cards, scroller and rail.
+            SidebarPage::Automations => self
+                .automations_panel(crate::automations::AutomationScope::All, true, cx)
+                .into_any_element(),
+        }
     }
 
     fn close_settings(&mut self, cx: &mut Context<Self>) {
@@ -5312,6 +5398,9 @@ impl Shell {
             }
             NavEntry::Settings(section) => {
                 self.route = Route::Settings(section);
+            }
+            NavEntry::Page(page) => {
+                self.route = Route::Page(page);
             }
         }
         self.close_chat_menu(cx);
@@ -7946,7 +8035,7 @@ impl Shell {
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.route {
             Route::Chat => self.render_session_title_bar(cx),
-            Route::Settings(_) => {
+            Route::Settings(_) | Route::Page(_) => {
                 let inner = div()
                     .size_full()
                     .flex()
@@ -8025,12 +8114,6 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let can_back = self.nav.can_back();
         let can_forward = self.nav.can_forward();
-        // The titlebar is the single owner of the new-session action in both
-        // sidebar states. Hide it on the new-session canvas: opening another
-        // blank canvas from an already blank canvas has no effect and used to
-        // leave two competing + placements across the responsive variants.
-        let plus_alpha = self.titlebar_plus_alpha(cx);
-        let show_plus = plus_alpha > 0.01;
         let island_target = if matches!(self.route, Route::Chat)
             && self.state.read(cx).selected_chat.is_none()
             && self.settings.sidebar_collapsed
@@ -8123,28 +8206,9 @@ impl Shell {
                         cx.listener(|this, _, _, cx| this.navigate_forward(cx)),
                     )),
             )
-            .children(show_plus.then(|| {
-                div()
-                    .flex_none()
-                    .ml(px(TITLEBAR_GROUP_GAP))
-                    .opacity(plus_alpha)
-                    .child(window_control_button(
-                        "titlebar-new-session",
-                        icons::PLUS,
-                        &theme,
-                        cx.listener(|this, _, _, cx| this.open_new_session(cx)),
-                    ))
-            }))
+            // New thread lives in the sidebar's navigation section (user
+            // request); the titlebar no longer carries a `+`.
             .into_any_element()
-    }
-
-    /// The titlebar owns new-session creation regardless of sidebar state. It
-    /// is useful only while an existing session is selected.
-    pub(super) fn titlebar_plus_alpha(&self, cx: &App) -> f32 {
-        titlebar_new_session_alpha(
-            matches!(self.route, Route::Chat),
-            self.state.read(cx).selected_chat.is_some(),
-        )
     }
 
     /// Native Windows caption controls integrated into Luna's unified
@@ -8584,20 +8648,29 @@ impl Shell {
         let starts_group = |item: SettingsSection| {
             matches!(item, SettingsSection::Files | SettingsSection::Archived)
         };
-        let rows = SettingsSection::ALL
+        let listed = SettingsSection::ALL
             .into_iter()
             .filter(|item| *item != SettingsSection::Appshots || crate::appshots::is_desktop())
-            .map(|item| {
-                let selected = item == section;
-                let id = format!("settings-nav-{}", item.label());
-                Self::settings_nav_row(id, section_icon(item), item.label(), selected, theme)
-                    .aria_label(format!("{} settings", item.label()))
-                    .aria_selected(selected)
-                    .when(starts_group(item), |row| {
-                        row.mt(crate::typography::ui_rems(16.0))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_settings(item, cx)))
-            });
+            // Automations has its own page in the chat sidebar.
+            .filter(|item| *item != SettingsSection::Automations);
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.texts.insert(
+                "settings-nav".into(),
+                listed.clone().map(|item| item.label().to_owned()).collect(),
+            );
+        }
+        let rows = listed.map(|item| {
+            let selected = item == section;
+            let id = format!("settings-nav-{}", item.label());
+            Self::settings_nav_row(id, section_icon(item), item.label(), selected, theme)
+                .aria_label(format!("{} settings", item.label()))
+                .aria_selected(selected)
+                .when(starts_group(item), |row| {
+                    row.mt(crate::typography::ui_rems(16.0))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.open_settings(item, cx)))
+        });
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
@@ -8853,10 +8926,16 @@ impl Shell {
                         cx.stop_propagation();
                         this.set_chat_pinned(pin_id.clone(), !pinned, cx);
                     }))
+                    // The row's one pin: accent while pinned (click unpins),
+                    // muted otherwise.
                     .child(
                         icon(icons::PIN)
                             .size(px(crate::surface_chrome::ICON_S))
-                            .text_color(theme.text_muted),
+                            .text_color(if pinned {
+                                theme.readable_icon(theme.accent)
+                            } else {
+                                theme.text_muted
+                            }),
                     )
                     .into_any_element()
             });
@@ -8897,6 +8976,15 @@ impl Shell {
         };
         let queued = queued && !undelivered;
         let working = status == luna_proto::ChatIndicator::Working && !queued && !undelivered;
+        // The hover corner (when no jump hint covers it) is the one place a
+        // row paints a pin.
+        #[cfg(feature = "appshots-fixture")]
+        let hover_pins = usize::from(
+            corner_hovered
+                && search_query.is_none()
+                && pin_control.is_some()
+                && jump_label.is_none(),
+        );
         let corner_body: AnyElement = if let Some(label) = jump_label {
             // The jump hint replaces the status/time corner while the modifier
             // is held, cut to the sidebar PR badge's exact cloth
@@ -9102,7 +9190,7 @@ impl Shell {
         #[cfg(feature = "appshots-fixture")]
         if !surface.in_pane() && search_query.is_none() {
             let lead = if status_label.is_none() {
-                if pinned && !archived { "pin" } else { "none" }
+                "none"
             } else if working {
                 "loader"
             } else {
@@ -9127,6 +9215,10 @@ impl Shell {
                     format!("pill={pill}"),
                     format!("metaHarness={}", !compact && harness.is_some()),
                     format!("compact={compact}"),
+                    // Pin glyphs the row paints: the hover corner's control
+                    // is the only one (the status never shows a pin).
+                    format!("pins={}", hover_pins),
+                    format!("selected={selected}"),
                 ]
             });
         }
@@ -9134,7 +9226,7 @@ impl Shell {
         // time on a two-line row, before it on a compact one. A row with
         // nothing going on shows nothing there, so no row carries an empty
         // column and every title starts on the same edge. Working keeps the
-        // square loader, Done its dot, an idle pin its pin; a task waiting on
+        // square loader and Done its dot; a task waiting on
         // the user (or a send that did not go out) names the next step in one
         // pill with the glyph of what it waits for, cut to the PR badge's
         // cloth so the row keeps one badge system.
@@ -9203,13 +9295,9 @@ impl Shell {
                         .into_any_element(),
                 )
             }
-            None if pinned && !archived => Some(
-                icon(icons::PIN)
-                    .size(px(crate::surface_chrome::ICON_S))
-                    .flex_none()
-                    .text_color(theme.readable_muted(0.5))
-                    .into_any_element(),
-            ),
+            // A pin is never a status: the Pinned section says it at rest
+            // and the row's one pin control says it under the pointer (a
+            // second pin here read as a duplicate and hid the status).
             None => None,
         };
         // The sidebar QA probe records where a row's title, meta line and
@@ -9971,6 +10059,8 @@ impl Shell {
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
         let filter_row = self.render_spaces_filter(theme, cx);
+        let sidebar_nav = self.render_sidebar_nav(theme, cx);
+        let threads_header = self.render_threads_header(theme, cx);
         let sidebar_scroll = if activity_view {
             self.activity_sidebar_scroll.clone()
         } else {
@@ -10116,7 +10206,11 @@ impl Shell {
             .flex_col()
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
+            // The project pill, the navigation section (New thread,
+            // Automations, …), then the Threads section and its list.
             .child(filter_row)
+            .child(sidebar_nav)
+            .child(threads_header)
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
@@ -12823,6 +12917,25 @@ impl Shell {
         // floating rail and its centred `widgets::page_column`, so the host
         // fills the plane and may shrink in both axes (no min-content squish
         // from a wide page pushing the plane past a narrow window).
+        // A sidebar page sits in the same contained plane as Settings, with
+        // the thread list still beside it.
+        if let Route::Page(page) = self.route {
+            let outlet = self.sidebar_page_outlet(page, cx);
+            return workbench::render::contained_plane(
+                theme,
+                "sidebar-page-plane",
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(outlet)
+                    .into_any_element(),
+            )
+            .into_any_element();
+        }
         if let Route::Settings(section) = self.route {
             let outlet = self.settings_outlet(section, window, cx);
             return workbench::render::contained_plane(
@@ -16657,14 +16770,6 @@ mod tests {
     }
 
     #[test]
-    fn new_session_action_lives_in_the_titlebar_only_when_useful() {
-        assert_eq!(titlebar_new_session_alpha(true, true), 1.0);
-        assert_eq!(titlebar_new_session_alpha(true, false), 0.0);
-        assert_eq!(titlebar_new_session_alpha(false, true), 0.0);
-        assert_eq!(titlebar_new_session_alpha(false, false), 0.0);
-    }
-
-    #[test]
     fn right_panel_content_keeps_the_larger_width_only_during_transition() {
         assert_eq!(right_panel_content_width(520.0, None, None), 520.0);
         assert_eq!(
@@ -17046,7 +17151,6 @@ mod tests {
         assert_eq!(TITLEBAR_GROUP_GAP, Theme::SPACE_SM);
         assert_eq!(TITLEBAR_IDENTITY_GAP, Theme::SPACE_MD);
         assert_eq!(CLUSTER_BUTTONS_WIDTH, 82.0);
-        assert_eq!(TITLEBAR_ACTION_SLOT_WIDTH, 32.0);
         assert_eq!(TITLEBAR_ACTION_EDGE_INSET, 6.0);
     }
 

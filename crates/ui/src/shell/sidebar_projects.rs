@@ -171,6 +171,15 @@ impl Shell {
 }
 
 impl Shell {
+    /// The thread the sidebar marks as current: none while a sidebar page
+    /// (Automations, …) is open, so only that page's row reads as current.
+    pub(super) fn sidebar_selected_chat(&self, cx: &App) -> Option<String> {
+        if matches!(self.route, Route::Page(_)) {
+            return None;
+        }
+        self.state.read(cx).selected_chat.clone()
+    }
+
     /// All projects, outside Activity, lists tasks as a tree: one group per
     /// project (Design D). A single project keeps the flat list (Design A).
     pub(super) fn project_tree_view(&self) -> bool {

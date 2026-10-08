@@ -6,6 +6,27 @@ projects. The existing square glyph loader stays as the Working indicator.
 
 ![Single project, picker, All projects, a folded project](../../media/sidebar-redesign/overview.png)
 
+## Sidebar layout
+
+Top to bottom: the project pill (alone on its row, the sidebar's full
+width), the navigation section, a hairline, then the Threads section.
+
+- **Navigation section.** One row per `SidebarNavItem`: New thread (opens
+  the new-thread canvas; its shortcut shows under the pointer) and
+  Automations. Future destinations (plugins, skills, …) join the same list.
+  The titlebar no longer carries a `+`: New thread lives here.
+- **Automations is a page, not a Settings section.** `Route::Page` opens
+  it in the main content plane while the sidebar keeps the thread list; its
+  row is marked current and no thread row is, Back/Forward record it, and
+  Settings no longer lists Automations (anything that asks for Settings ›
+  Automations lands on the page).
+- **Threads header.** The section's label (Activity while that view is on)
+  with the list's sort/view options and the Activity toggle, which moved
+  down from the top row.
+- **Pins.** A pin is never a status. A pinned row shows nothing extra at
+  rest (the Pinned section says it); under the pointer its one pin control
+  is tinted while pinned and unpins on click.
+
 ## Project pill and picker (both views)
 
 - The project trigger is a bordered pill: the project's tile (its monogram on
@@ -27,7 +48,7 @@ projects. The existing square glyph loader stays as the Working indicator.
   No row reserves a status column on the left: a read, finished task used to
   leave a gap above its provider icon (user report).
 - The status sits at the row's right edge, under the time: the square loader
-  while Working, a dot for Done, the pin for an idle pin, and for a task
+  while Working, a dot for Done, and for a task
   waiting on the user one pill with the glyph of what it waits for and the
   next step (Approve, Reply, Failed, Queued), cut to the PR badge's cloth. A
   task with nothing going on shows nothing there.
@@ -55,7 +76,9 @@ projects. The existing square glyph loader stays as the Working indicator.
 headlessly with real pointer and keyboard input at Interface sizes 12, 16 and
 20. Its header lists the failure cases written before each implementation,
 including item 11, which measures that titles and provider icons share one
-left edge and that a status ends on the row's right inset.
+left edge and that a status ends on the row's right inset, and items 12–16
+(the top row, the navigation section, the Automations page, the Threads
+header and the single pin).
 
 ```bash
 scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture --example sidebar-redesign-fixture
@@ -65,7 +88,8 @@ target/debug/examples/sidebar-redesign-fixture "$PWD/target/qa-evidence/sidebar-
 The 2026-10-08 run passed, together with `sidebar-polish-fixture` and
 `sidebar-sections-fixture`. Its PNGs, `readback.json` files and `SHA256SUMS`
 are preserved locally under `target/qa-evidence/sidebar-redesign-2026-10-08/`
-(first layout) and `…-2026-10-08-v2/` (status moved to the right edge).
+(first layout), `…-v2/` (status moved to the right edge) and `…-v3/`
+(navigation section, Automations page, pin).
 
 Follow-ups not in this change: listing each project's own Settled and
 Archived rows inside its group (Design D's shelf board), and showing quiet
