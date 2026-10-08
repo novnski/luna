@@ -343,12 +343,8 @@ impl BoardPage {
 
     fn render_new_issue_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let menu = self.menu.get().cloned();
-        // Discuss with AI and Add existing chat ask for a project here when
-        // the Board shows All projects.
-        let anchored = matches!(
-            menu,
-            Some(BoardMenu::ChooseProject(ProjectIntent::Discuss) | BoardMenu::AddChat { .. })
-        );
+        // Add existing chat lists its chats here.
+        let anchored = matches!(menu, Some(BoardMenu::AddChat { .. }));
         let mut button = crate::button::button(
             "board-new-issue",
             ButtonKind::Primary,
@@ -359,7 +355,10 @@ impl BoardPage {
         .aria_label("New issue")
         .relative()
         .gap(ui_rems(6.0))
-        .on_click(cx.listener(|this, _, _, cx| this.open_new_issue(cx)))
+        .on_click(cx.listener(|this, _, window, cx| {
+            let project_id = this.scope(cx).project_id().map(str::to_owned);
+            this.open_new_ticket(project_id, window, cx);
+        }))
         .child(crate::button::glyph(icons::PLUS, ControlSize::Md).text_color(theme.on_solid))
         .child("New issue");
         if anchored && let Some(menu) = menu {

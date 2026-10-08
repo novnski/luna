@@ -63,10 +63,21 @@ impl Shell {
             page.note_sidebar_filter(filter);
             page
         });
-        // Lives as long as the page, which the Shell keeps for its lifetime.
+        // Both live as long as the page, which the Shell keeps for its
+        // lifetime: the page's own events (prefs, Go to chat, the GitHub
+        // picker) and its overlay host's (A9: Go to chat, Needs attention,
+        // writeback).
         cx.subscribe(&page, |shell, _, event: &BoardPageEvent, cx| {
             shell.on_board_page_event(event, cx)
         })
+        .detach();
+        let surfaces = page.read(cx).surfaces().clone();
+        cx.subscribe(
+            &surfaces,
+            |shell, _, event: &detail::BoardSurfacesEvent, cx| {
+                shell.on_board_surface_event(event, cx)
+            },
+        )
         .detach();
         page.update(cx, |page, cx| page.sync_prefs(cx));
         self.board_page = Some(page.clone());
@@ -82,6 +93,9 @@ impl Shell {
                 }
             }
             BoardPageEvent::OpenChat(target) => self.open_board_chat(target, cx),
+            BoardPageEvent::OpenGitHubPicker { project_id } => {
+                self.open_board_github_picker(project_id.clone(), cx)
+            }
         }
     }
 

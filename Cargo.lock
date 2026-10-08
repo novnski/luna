@@ -5294,6 +5294,7 @@ dependencies = [
  "luna-harness",
  "luna-proto",
  "luna-rpc",
+ "luna-sync",
  "luna-syntax",
  "luna-theme",
  "luna-update",

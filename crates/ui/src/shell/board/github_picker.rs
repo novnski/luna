@@ -2031,8 +2031,12 @@ impl super::super::Shell {
             }
             GitHubPickerEvent::OpenCard { work_item_id } => {
                 shell.board_github = None;
-                shell.settings.board.selected_item = Some(work_item_id.clone());
-                shell.schedule_save(cx);
+                // The Board page owns its selection: it opens the card's
+                // detail drawer and selects it (saved with its prefs).
+                let request = super::page::BoardPageRequest::OpenDetail {
+                    work_item_id: work_item_id.clone(),
+                };
+                model.update(cx, |_, cx| cx.emit(request));
                 cx.notify();
             }
             GitHubPickerEvent::Imported(receipt) => {

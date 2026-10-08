@@ -38,8 +38,8 @@
 //!    review; the notice does not explain that Done is engine-owned.
 //! 8. Keyboard: arrows do not move focus between cards; Alt+Right / Alt+Left
 //!    do not issue exactly one `BoardMove` each; focus leaves the card after a
-//!    move; Enter does not open that ticket's detail drawer and Escape does
-//!    not return focus to it; Shift+F10 does not open a menu offering Move to
+//!    move; Enter does not open that ticket's detail drawer in the overlay
+//!    host and Escape does not return focus to it; Shift+F10 does not open a menu offering Move to
 //!    Ready, Move to Backlog, Open chat and Archive; Archive/Unarchive from
 //!    the menu and Cmd+Backspace do not issue exactly one `BoardArchive`.
 //! 9. Accessibility: a card's label lacks its key, title, column or phase; a
@@ -52,7 +52,8 @@
 //!     bring the columns back.
 //! 12. Empty state: a project without tickets does not offer Write manually,
 //!     Discuss with AI, From GitHub issue and Add existing chat, or Write
-//!     manually needs GitHub.
+//!     manually needs GitHub or opens anywhere but the page's one overlay
+//!     host (A9's `BoardSurfaces`).
 //! 13. Preferences: after re-creating the Shell, the scope, view, search and
 //!     source filter, selected card or scroll offset are not restored, or
 //!     `ui-settings.json` lacks them.
@@ -1337,11 +1338,11 @@ async fn behaviour_pass(
         control(&rb, label)?;
     }
     let png = capture(window, cx, manifest, "b-empty")?;
+    // Write manually opens A9's form in the page's one overlay host (the
+    // Board shows one project, so no chooser step) and needs no GitHub.
     click(window, cx, center(control(&rb, "board-empty-manual")?)).await?;
-    wait(window, cx, "Write manually", |rb| {
-        rb["overlay"] == "newIssue"
-    })
-    .await?;
+    let manual = wait(window, cx, "Write manually", |rb| rb["overlay"] == "manual").await?;
+    let form_png = capture(window, cx, manifest, "b-empty-write-manually")?;
     press(window, cx, "escape").await?;
     let rb = wait(window, cx, "the drawer closed", |rb| {
         rb["overlay"].is_null()
@@ -1349,8 +1350,8 @@ async fn behaviour_pass(
     .await?;
     manifest.step(
         "empty-state",
-        "Write manually, Discuss with AI, From GitHub issue and Add existing chat offered; Write manually opens without GitHub",
-        json!({"png": png}),
+        "Write manually, Discuss with AI, From GitHub issue and Add existing chat offered; Write manually opens A9's form in the overlay host without GitHub; Escape closes it",
+        json!({"png": png, "form": form_png, "surface": manual["overlay"]}),
     );
     click(window, cx, center(control(&rb, "board-project")?)).await?;
     press(window, cx, "down").await?;
