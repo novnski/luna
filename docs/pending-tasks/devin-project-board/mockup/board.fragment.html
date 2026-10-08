@@ -1,0 +1,364 @@
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;650;700&family=Manrope:wght@400;500;600;650;700&display=swap');
+#luna-board-lifecycle{--lb-paper:light-dark(#fafaf9,#161719);--lb-sidebar:light-dark(#f1f1ef,#1c1d20);--lb-card:light-dark(#ffffff,#222327);--lb-input:light-dark(#ffffff,#1b1c1f);--lb-hover:light-dark(#e9e9e6,#2b2c31);--lb-ink:light-dark(#242529,#ededee);--lb-muted:light-dark(#71737a,#a2a3ab);--lb-line:light-dark(#e3e3df,#333439);--lb-accent:light-dark(#6251bf,#b1a0fb);--lb-accent-wash:light-dark(#eeebfa,#302a46);--lb-good:light-dark(#357359,#8bc5a2);--lb-good-wash:light-dark(#edf5ef,#23382c);--lb-warn:light-dark(#946425,#dfb679);--lb-warn-wash:light-dark(#fbf2e4,#3c3124);--lb-danger:light-dark(#a34b48,#e2948c);--lb-button:light-dark(#27282c,#e8e7ed);--lb-button-text:light-dark(#fff,#212125);--lb-shadow:light-dark(#24252914,#00000038);--lb-pad:14px;--lb-shell-radius:12px;color:var(--lb-ink);font:13px/1.5 'Manrope',sans-serif;background:transparent;width:100%;text-align:left}
+#luna-board-lifecycle *{box-sizing:border-box}
+#luna-board-lifecycle button,#luna-board-lifecycle input,#luna-board-lifecycle textarea{font:inherit}
+#luna-board-lifecycle button{color:inherit;cursor:var(--cursor-interaction,pointer)}
+#luna-board-lifecycle button:disabled{cursor:not-allowed;opacity:.45}
+#luna-board-lifecycle button:focus-visible,#luna-board-lifecycle input:focus-visible,#luna-board-lifecycle textarea:focus-visible{outline:2px solid var(--lb-accent);outline-offset:3px}
+#luna-board-lifecycle .lb-app{border:1px solid var(--lb-line);border-radius:var(--lb-shell-radius);overflow:hidden;background:var(--lb-paper);min-height:710px}
+#luna-board-lifecycle .lb-top{height:43px;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--lb-sidebar);border-bottom:1px solid var(--lb-line)}
+#luna-board-lifecycle .lb-lights{display:flex;gap:7px;width:66px}
+#luna-board-lifecycle .lb-lights span{width:10px;height:10px;border-radius:50%;background:light-dark(#c9c9c3,#53545a)}
+#luna-board-lifecycle .lb-top-title{font-family:'DM Sans',sans-serif;font-weight:500;flex:1;text-align:center;color:var(--lb-muted);font-size:11px;padding-right:92px;letter-spacing:.02em}
+#luna-board-lifecycle .lb-layout{display:grid;grid-template-columns:176px minmax(0,1fr);min-height:666px}
+#luna-board-lifecycle .lb-side{background:var(--lb-sidebar);padding:19px 10px 13px;display:flex;flex-direction:column;border-right:1px solid var(--lb-line);min-width:0}
+#luna-board-lifecycle .lb-brand{font-family:'DM Sans',sans-serif;font-size:17px;letter-spacing:.06em;font-weight:650;display:flex;align-items:center;gap:8px;margin:0 10px 22px}
+#luna-board-lifecycle .lb-brand svg{color:var(--lb-accent)}
+#luna-board-lifecycle svg{width:15px;height:15px;flex-shrink:0;stroke-width:1.7;vertical-align:middle}
+#luna-board-lifecycle .lb-nav{border:0;background:transparent;border-radius:7px;display:flex;align-items:center;gap:9px;width:100%;min-height:34px;padding:7px 10px;text-align:left;font-size:12px;margin-bottom:3px}
+#luna-board-lifecycle .lb-nav:hover{background:var(--lb-hover)}
+#luna-board-lifecycle .lb-nav.active{background:var(--lb-card);font-weight:650;color:var(--lb-ink);box-shadow:0 1px 2px var(--lb-shadow)}
+#luna-board-lifecycle .lb-nav.active svg{color:var(--lb-accent)}
+#luna-board-lifecycle .lb-key{margin-left:auto;font-size:10px;color:var(--lb-muted);white-space:nowrap}
+#luna-board-lifecycle .lb-side-label{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.09em;color:var(--lb-muted);padding:23px 10px 8px}
+#luna-board-lifecycle .lb-thread{border:0;background:transparent;text-align:left;border-radius:7px;width:100%;padding:9px 10px;display:flex;gap:8px;align-items:flex-start;min-width:0}
+#luna-board-lifecycle .lb-thread:hover,#luna-board-lifecycle .lb-thread.active{background:var(--lb-hover)}
+#luna-board-lifecycle .lb-thread-text{min-width:0;flex:1;font-size:11.5px}
+#luna-board-lifecycle .lb-thread-title{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#luna-board-lifecycle .lb-thread-meta{font-size:10px;color:var(--lb-muted);display:flex;align-items:center;gap:4px;margin-top:4px}
+#luna-board-lifecycle .lb-thread-meta svg{width:11px;height:11px}
+#luna-board-lifecycle .lb-side-foot{margin-top:auto;padding:36px 10px 0;display:flex;align-items:center;gap:8px;color:var(--lb-muted);font-size:11px}
+#luna-board-lifecycle .lb-avatar{width:25px;height:25px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:var(--lb-hover);color:var(--lb-ink);font-weight:600;flex-shrink:0}
+#luna-board-lifecycle .lb-main{min-width:0;position:relative;background:var(--lb-paper)}
+#luna-board-lifecycle .lb-heading{padding:28px 23px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#luna-board-lifecycle h1,#luna-board-lifecycle h2,#luna-board-lifecycle h3,#luna-board-lifecycle p{margin:0}
+#luna-board-lifecycle h1{font:650 25px/1.2 'DM Sans',sans-serif;letter-spacing:-.045em}
+#luna-board-lifecycle h2{font:600 21px/1.3 'DM Sans',sans-serif;letter-spacing:-.025em}
+#luna-board-lifecycle h3{font:600 13px/1.45 'Manrope',sans-serif}
+#luna-board-lifecycle .lb-heading .lb-grow{flex:1}
+#luna-board-lifecycle .lb-subtitle{color:var(--lb-muted);font-size:11.5px;margin-top:7px}
+#luna-board-lifecycle .lb-button{border:1px solid var(--lb-line);background:var(--lb-card);border-radius:7px;padding:7px 10px;display:inline-flex;gap:6px;align-items:center;justify-content:center;font-size:11.5px;min-height:32px;white-space:nowrap}
+#luna-board-lifecycle .lb-button:hover{background:var(--lb-hover)}
+#luna-board-lifecycle .lb-button.primary{background:var(--lb-button);color:var(--lb-button-text);border-color:var(--lb-button)}
+#luna-board-lifecycle .lb-button.primary:hover{opacity:.88}
+#luna-board-lifecycle .lb-button.ghost{border-color:transparent;background:transparent}
+#luna-board-lifecycle .lb-button.soft{background:var(--lb-accent-wash);color:var(--lb-accent);border-color:transparent}
+#luna-board-lifecycle .lb-button.icon{padding:7px;min-width:30px}
+#luna-board-lifecycle .lb-toolbar{margin:0 23px 22px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#luna-board-lifecycle .lb-search{position:relative;flex:1;min-width:115px;max-width:240px;display:flex;align-items:center;gap:7px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-search input{width:100%;border:0;background:transparent;color:var(--lb-ink);font-size:11.5px;outline-offset:4px;padding:7px 0}
+#luna-board-lifecycle .lb-toolbar-end{margin-left:auto;display:flex;gap:4px}
+#luna-board-lifecycle .lb-filter{font-size:11px;background:transparent;border:1px solid var(--lb-line);padding:5px 8px;border-radius:6px;display:flex;gap:6px;align-items:center}
+#luna-board-lifecycle .lb-filter.on{color:var(--lb-warn);border-color:var(--lb-warn);background:var(--lb-warn-wash)}
+#luna-board-lifecycle .lb-board{padding:0 18px 27px;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:start}
+#luna-board-lifecycle .lb-col{min-width:0}
+#luna-board-lifecycle .lb-col-heading{display:flex;align-items:center;gap:5px;padding:0 3px 13px;font-size:10.5px;font-weight:650;white-space:nowrap}
+#luna-board-lifecycle .lb-status-mark{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--lb-muted);display:inline-block;flex-shrink:0}
+#luna-board-lifecycle .lb-status-mark.ready{border-style:dashed}
+#luna-board-lifecycle .lb-status-mark.progress{border-color:var(--lb-accent);background:var(--lb-accent)}
+#luna-board-lifecycle .lb-status-mark.review{border-color:var(--lb-warn);background:var(--lb-warn)}
+#luna-board-lifecycle .lb-status-mark.done{border-color:var(--lb-good);background:var(--lb-good)}
+#luna-board-lifecycle .lb-count{font-size:10px;color:var(--lb-muted);font-weight:400;margin-left:2px}
+#luna-board-lifecycle .lb-col-add{border:0;background:transparent;color:var(--lb-muted);margin-left:auto;padding:0;display:inline-flex;align-items:center}
+#luna-board-lifecycle .lb-col-add svg{width:13px;height:13px}
+#luna-board-lifecycle .lb-ticket{display:block;width:100%;background:var(--lb-card);border:1px solid var(--lb-line);padding:var(--lb-pad);border-radius:9px;text-align:left;margin-bottom:9px;box-shadow:0 1px 2px var(--lb-shadow);transition:border-color .15s,transform .15s;min-width:0}
+#luna-board-lifecycle .lb-ticket:hover{border-color:var(--lb-accent);transform:translateY(-1px)}
+#luna-board-lifecycle .lb-ticket:focus-visible{outline-offset:1px}
+#luna-board-lifecycle .lb-ticket-top{display:flex;align-items:center;gap:5px;color:var(--lb-muted);font-size:10px;margin-bottom:8px}
+#luna-board-lifecycle .lb-ticket-top svg{width:12px;height:12px}
+#luna-board-lifecycle .lb-ticket-top .lb-priority{margin-left:auto;letter-spacing:-2px;font-size:10px}
+#luna-board-lifecycle .lb-ticket-name{font-size:12px;font-weight:600;line-height:1.55;letter-spacing:-.02em;overflow-wrap:anywhere}
+#luna-board-lifecycle .lb-ticket-summary{font-size:10.5px;line-height:1.5;color:var(--lb-muted);margin-top:7px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#luna-board-lifecycle .lb-ticket-source{font-size:9.5px;color:var(--lb-muted);display:flex;gap:4px;align-items:center;margin-top:10px}
+#luna-board-lifecycle .lb-ticket-source svg{width:11px;height:11px}
+#luna-board-lifecycle .lb-location{font-size:10px;line-height:1.45;margin-top:13px;padding-top:10px;border-top:1px solid var(--lb-line);color:var(--lb-muted)}
+#luna-board-lifecycle .lb-location-line{display:flex;gap:5px;align-items:center;color:var(--lb-ink)}
+#luna-board-lifecycle .lb-location svg{width:12px;height:12px}
+#luna-board-lifecycle .lb-location small{display:block;font-size:9.5px;margin:3px 0 0 17px;color:var(--lb-muted);overflow-wrap:anywhere}
+#luna-board-lifecycle .lb-attention{display:flex;gap:4px;align-items:center;color:var(--lb-warn);font-size:9.5px;margin-top:9px}
+#luna-board-lifecycle .lb-attention svg{width:11px;height:11px}
+#luna-board-lifecycle .lb-empty-col{padding:16px 4px;color:var(--lb-muted);font-size:11px}
+#luna-board-lifecycle .lb-board-foot{border-top:1px solid var(--lb-line);margin:0 23px;padding:12px 0;color:var(--lb-muted);font-size:10px;display:flex;gap:14px;flex-wrap:wrap}
+#luna-board-lifecycle .lb-board-foot span{display:inline-flex;align-items:center;gap:5px}
+#luna-board-lifecycle .lb-board-foot svg{width:12px;height:12px}
+#luna-board-lifecycle .lb-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid color-mix(in srgb,var(--lb-accent) 24%,var(--lb-line));color:var(--lb-accent);background:var(--lb-accent-wash);border-radius:5px;padding:3px 6px;font-size:10.5px;font-weight:600;white-space:nowrap}
+#luna-board-lifecycle .lb-badge svg{width:12px;height:12px}
+#luna-board-lifecycle button.lb-badge:hover{filter:brightness(.95)}
+#luna-board-lifecycle .lb-tag{font-size:10.5px;color:var(--lb-muted);display:inline-flex;align-items:center;gap:5px;background:var(--lb-hover);border-radius:5px;padding:3px 6px}
+#luna-board-lifecycle .lb-tag.good{color:var(--lb-good);background:var(--lb-good-wash)}
+#luna-board-lifecycle .lb-tag.warn{color:var(--lb-warn);background:var(--lb-warn-wash)}
+#luna-board-lifecycle .lb-breadcrumb{display:flex;gap:6px;align-items:center;padding:17px 22px;color:var(--lb-muted);font-size:11px;border-bottom:1px solid var(--lb-line);flex-wrap:wrap}
+#luna-board-lifecycle .lb-breadcrumb .lb-button{padding:2px 4px;min-height:24px;font-size:11px}
+#luna-board-lifecycle .lb-detail-head{padding:25px 25px 22px;display:flex;align-items:flex-start;gap:12px}
+#luna-board-lifecycle .lb-detail-head h2{margin:11px 0 10px;max-width:560px}
+#luna-board-lifecycle .lb-detail-head>div{flex:1;min-width:0}
+#luna-board-lifecycle .lb-detail-grid{display:grid;grid-template-columns:minmax(0,1fr) 237px;gap:30px;padding:0 25px 28px}
+#luna-board-lifecycle .lb-bodytext{font-size:12px;line-height:1.8;color:var(--lb-ink);white-space:pre-line}
+#luna-board-lifecycle .lb-section-title{font-size:11px;font-weight:650;color:var(--lb-muted);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+#luna-board-lifecycle .lb-section{margin-bottom:26px}
+#luna-board-lifecycle .lb-checks{list-style:none;padding:0;margin:10px 0;display:grid;gap:8px;font-size:11.5px}
+#luna-board-lifecycle .lb-checks li{display:flex;align-items:flex-start;gap:7px}
+#luna-board-lifecycle .lb-checks svg{margin-top:2px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-property{padding:9px 0;border-bottom:1px solid var(--lb-line);display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px}
+#luna-board-lifecycle .lb-property>span:first-child{color:var(--lb-muted)}
+#luna-board-lifecycle .lb-property .lb-button{padding:4px 6px;font-size:11px;min-height:27px}
+#luna-board-lifecycle .lb-launch{margin-top:20px;padding:15px;border:1px solid var(--lb-line);background:var(--lb-card);border-radius:9px}
+#luna-board-lifecycle .lb-launch h3{margin-bottom:5px}
+#luna-board-lifecycle .lb-launch p{font-size:11px;color:var(--lb-muted);line-height:1.7;margin-bottom:12px}
+#luna-board-lifecycle .lb-launch>.lb-button{width:100%;margin-top:7px}
+#luna-board-lifecycle .lb-option{display:flex;gap:8px;align-items:center;margin:11px 0;font-size:11.5px}
+#luna-board-lifecycle .lb-option input{accent-color:var(--lb-accent)}
+#luna-board-lifecycle .lb-option small{display:block;color:var(--lb-muted);font-size:10px;margin-top:2px}
+#luna-board-lifecycle .lb-trace{padding-left:12px;border-left:1px solid var(--lb-line);font-size:11px;line-height:1.7;color:var(--lb-muted);margin-top:12px}
+#luna-board-lifecycle .lb-trace strong{color:var(--lb-ink);font-weight:500}
+#luna-board-lifecycle .lb-worklink{width:100%;border:1px solid var(--lb-line);background:var(--lb-card);border-radius:8px;padding:12px;text-align:left;display:flex;gap:8px;align-items:center;margin:12px 0;font-size:11px}
+#luna-board-lifecycle .lb-worklink small{display:block;color:var(--lb-muted);font-size:10px;margin-top:4px}
+#luna-board-lifecycle .lb-draft{padding:0 24px 24px}
+#luna-board-lifecycle .lb-draft-tabs{display:flex;gap:3px;border-bottom:1px solid var(--lb-line);margin-bottom:20px}
+#luna-board-lifecycle .lb-draft-tab{border:0;background:transparent;padding:10px 12px;font-size:12px;color:var(--lb-muted);border-bottom:2px solid transparent}
+#luna-board-lifecycle .lb-draft-tab.active{color:var(--lb-ink);border-bottom-color:var(--lb-accent)}
+#luna-board-lifecycle .lb-draft-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px}
+#luna-board-lifecycle .lb-field{display:block;margin-bottom:16px;font-size:11px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-field input,#luna-board-lifecycle .lb-field textarea{display:block;width:100%;margin-top:7px;background:var(--lb-input);border:1px solid var(--lb-line);border-radius:7px;padding:10px 11px;color:var(--lb-ink);font-size:12px;resize:vertical}
+#luna-board-lifecycle .lb-field textarea{min-height:174px;line-height:1.75}
+#luna-board-lifecycle .lb-draft-discussion{background:var(--lb-card);border:1px solid var(--lb-line);border-radius:9px;padding:16px;min-width:0}
+#luna-board-lifecycle .lb-draft-discussion .lb-bodytext{font-size:11.5px}
+#luna-board-lifecycle .lb-ai-label{font-size:10px;color:var(--lb-accent);display:flex;gap:5px;align-items:center;margin-bottom:11px}
+#luna-board-lifecycle .lb-draft-discussion textarea{display:block;border:0;resize:vertical;min-height:90px;background:transparent;color:var(--lb-ink);width:100%;font-size:12px;line-height:1.7;padding:10px 0;margin-top:18px}
+#luna-board-lifecycle .lb-save-row{display:flex;justify-content:flex-end;gap:8px;margin-top:22px;align-items:center;flex-wrap:wrap}
+#luna-board-lifecycle .lb-save-note{font-size:11px;color:var(--lb-muted);margin-right:auto}
+#luna-board-lifecycle .lb-chat-head{padding:21px 23px 13px;border-bottom:1px solid var(--lb-line)}
+#luna-board-lifecycle .lb-chat-head-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+#luna-board-lifecycle .lb-chat-head h2{font-size:18px}
+#luna-board-lifecycle .lb-chat-tabs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#luna-board-lifecycle .lb-chat-tab{border:1px solid var(--lb-line);border-radius:6px;background:transparent;font-size:10.5px;padding:6px 8px;display:inline-flex;gap:5px;align-items:center;max-width:100%}
+#luna-board-lifecycle .lb-chat-tab.active{background:var(--lb-card);border-color:var(--lb-accent);box-shadow:0 1px 2px var(--lb-shadow)}
+#luna-board-lifecycle .lb-chat-tab svg{width:12px;height:12px}
+#luna-board-lifecycle .lb-chat-tab .lb-tab-label{white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-width:175px}
+#luna-board-lifecycle .lb-chat-context{padding:12px 24px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:10.5px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-messages{padding:16px 32px 25px;max-width:680px;margin:auto;min-height:245px}
+#luna-board-lifecycle .lb-message{margin-bottom:24px}
+#luna-board-lifecycle .lb-message-label{font-size:10px;font-weight:650;color:var(--lb-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+#luna-board-lifecycle .lb-message .lb-bodytext{font-size:12px}
+#luna-board-lifecycle .lb-message.user .lb-bodytext{background:var(--lb-hover);padding:11px 14px;border-radius:9px;display:inline-block}
+#luna-board-lifecycle .lb-receipt{margin:12px 0;padding:12px;border:1px solid var(--lb-line);border-radius:8px;display:flex;gap:10px;align-items:center;font-size:11px;background:var(--lb-card)}
+#luna-board-lifecycle .lb-receipt>div{flex:1}
+#luna-board-lifecycle .lb-receipt small{display:block;color:var(--lb-muted);font-size:10px;margin-top:4px}
+#luna-board-lifecycle .lb-composer{margin:0 24px 21px;padding:12px 14px;border:1px solid var(--lb-line);border-radius:10px;background:var(--lb-card)}
+#luna-board-lifecycle .lb-composer textarea{border:0;background:transparent;display:block;width:100%;min-height:59px;resize:vertical;color:var(--lb-ink);font-size:12px;line-height:1.7}
+#luna-board-lifecycle .lb-composer-bottom{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#luna-board-lifecycle .lb-composer-bottom .lb-spacer{flex:1}
+#luna-board-lifecycle .lb-chat-actions{padding:0 24px 19px;display:flex;flex-wrap:wrap;gap:7px}
+#luna-board-lifecycle .lb-popover{position:absolute;z-index:5;right:20px;top:100px;width:225px;background:var(--lb-card);border:1px solid var(--lb-line);border-radius:9px;padding:6px;box-shadow:0 8px 25px var(--lb-shadow)}
+#luna-board-lifecycle .lb-popover-title{padding:7px 8px;color:var(--lb-muted);font-size:10px}
+#luna-board-lifecycle .lb-menu-item{display:flex;gap:7px;align-items:center;border:0;background:transparent;width:100%;text-align:left;padding:9px 8px;border-radius:5px;font-size:11px}
+#luna-board-lifecycle .lb-menu-item:hover{background:var(--lb-hover)}
+#luna-board-lifecycle .lb-menu-item small{font-size:9.5px;color:var(--lb-muted);display:block;margin-top:3px}
+#luna-board-lifecycle .lb-toast{padding:10px 23px;background:var(--lb-accent-wash);color:var(--lb-accent);border-top:1px solid var(--lb-line);font-size:11px;display:flex;gap:8px;align-items:center}
+#luna-board-lifecycle .lb-toast>span{flex:1}
+#luna-board-lifecycle .lb-list{margin:0 23px 25px;border-top:1px solid var(--lb-line)}
+#luna-board-lifecycle .lb-list-item{display:grid;grid-template-columns:58px minmax(0,1fr) 110px 120px;gap:10px;align-items:center;border:0;border-bottom:1px solid var(--lb-line);background:transparent;width:100%;padding:13px 5px;text-align:left;font-size:11px}
+#luna-board-lifecycle .lb-list-item:hover{background:var(--lb-hover)}
+#luna-board-lifecycle .lb-list-id{font-size:10px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-no-results{padding:35px;text-align:center;color:var(--lb-muted);font-size:12px}
+#luna-board-lifecycle :is(.lb-key,.lb-side-label,.lb-thread-meta,.lb-thread-meta small,.lb-col-heading,.lb-count,.lb-ticket-top,.lb-ticket-summary,.lb-ticket-source,.lb-location,.lb-location small,.lb-attention,.lb-board-foot,.lb-ai-label,.lb-trace,.lb-message-label,.lb-receipt small,.lb-popover-title,.lb-menu-item small,.lb-list-id){font-size:11px}
+#luna-board-lifecycle .lb-empty-chat{min-height:220px;padding:50px 15px 20px;text-align:center;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-empty-chat h3{font-size:16px;color:var(--lb-ink);margin-bottom:10px}
+#luna-board-lifecycle .lb-title-editor{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:12px 0}
+#luna-board-lifecycle .lb-title-editor input{background:var(--lb-input);color:var(--lb-ink);border:1px solid var(--lb-line);border-radius:6px;padding:8px;min-width:0;flex:1}
+@media(max-width:850px){#luna-board-lifecycle .lb-layout{grid-template-columns:155px minmax(0,1fr)}#luna-board-lifecycle .lb-board{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:22px}#luna-board-lifecycle .lb-detail-grid{grid-template-columns:minmax(0,1fr);gap:5px}#luna-board-lifecycle .lb-detail-props{display:grid;grid-template-columns:1fr 1fr;gap:20px}#luna-board-lifecycle .lb-launch{margin:0}#luna-board-lifecycle .lb-draft-grid{grid-template-columns:1fr}#luna-board-lifecycle .lb-list-item{grid-template-columns:50px minmax(0,1fr) 90px}#luna-board-lifecycle .lb-list-item .lb-list-location{display:none}}
+@media(max-width:560px){#luna-board-lifecycle .lb-layout{grid-template-columns:1fr}#luna-board-lifecycle .lb-side{border-right:0;border-bottom:1px solid var(--lb-line);padding:10px;display:grid;grid-template-columns:auto 1fr 1fr;gap:5px;align-items:center}#luna-board-lifecycle .lb-brand{font-size:14px;margin:0 8px}#luna-board-lifecycle .lb-nav{font-size:11px;margin:0;min-height:34px}#luna-board-lifecycle .lb-side>.lb-new-nav,#luna-board-lifecycle .lb-side-label,#luna-board-lifecycle .lb-thread,#luna-board-lifecycle .lb-side-foot{display:none}#luna-board-lifecycle .lb-heading{padding:20px 16px 15px}#luna-board-lifecycle .lb-toolbar{margin:0 16px 18px}#luna-board-lifecycle .lb-board{padding:0 14px 20px;grid-template-columns:repeat(2,minmax(0,1fr))}#luna-board-lifecycle .lb-detail-head,#luna-board-lifecycle .lb-detail-grid,#luna-board-lifecycle .lb-draft{padding-left:16px;padding-right:16px}#luna-board-lifecycle .lb-detail-props{grid-template-columns:1fr}#luna-board-lifecycle .lb-messages{padding:16px}#luna-board-lifecycle .lb-chat-head{padding:17px 16px}#luna-board-lifecycle .lb-chat-actions{padding:0 16px 18px}#luna-board-lifecycle .lb-composer{margin:0 16px 18px}#luna-board-lifecycle .lb-top-title{padding-right:0}#luna-board-lifecycle .lb-top{padding-right:70px}#luna-board-lifecycle .lb-popover{right:12px;max-width:calc(100% - 24px)}#luna-board-lifecycle .lb-board-foot{margin:0 16px}#luna-board-lifecycle h1{font-size:23px}#luna-board-lifecycle .lb-key{display:none}}
+@media(prefers-reduced-motion:reduce){#luna-board-lifecycle *{transition:none!important}}
+</style>
+<style>
+#luna-board-lifecycle .lb-board{grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+#luna-board-lifecycle .lb-ticket{cursor:grab}
+#luna-board-lifecycle .lb-ticket.dragging{opacity:.45}
+#luna-board-lifecycle .lb-ticket-top>*{pointer-events:none}
+#luna-board-lifecycle .lb-col{padding:7px;border-radius:10px;min-height:340px}
+#luna-board-lifecycle .lb-col.over{background:var(--lb-accent-wash);outline:1px dashed var(--lb-accent)}
+#luna-board-lifecycle .lb-col-heading{font-size:12px;padding:0 1px 4px}
+#luna-board-lifecycle .lb-col-hint{font-size:11px;color:var(--lb-muted);padding:0 1px 16px}
+#luna-board-lifecycle .lb-card-open{background:transparent;border:0;text-align:left;padding:0;width:100%;font-size:13px;font-weight:600;line-height:1.55}
+#luna-board-lifecycle .lb-card-action{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+#luna-board-lifecycle .lb-card-action .lb-button{font-size:11px;min-height:27px;padding:4px 7px}
+#luna-board-lifecycle .lb-card-action svg{width:12px;height:12px}
+#luna-board-lifecycle .lb-reviewer{color:var(--lb-accent);font-size:11px;display:flex;align-items:center;gap:5px;margin-top:8px}
+#luna-board-lifecycle .lb-tag.running{color:var(--lb-accent);background:var(--lb-accent-wash)}
+#luna-board-lifecycle .lb-select{font:inherit;color:var(--lb-ink);background:var(--lb-card);border:1px solid var(--lb-line);border-radius:6px;max-width:148px;padding:5px;font-size:11px}
+#luna-board-lifecycle .lb-instruction{margin-top:15px;font-size:11px;border-top:1px solid var(--lb-line);padding-top:12px;line-height:1.7}
+#luna-board-lifecycle .lb-instruction summary{color:var(--lb-muted);cursor:var(--cursor-interaction,pointer);margin-bottom:9px}
+#luna-board-lifecycle .lb-instruction p{white-space:pre-line}
+#luna-board-lifecycle .lb-demo{padding:12px 5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-demo .lb-button{font-size:11px;min-height:28px;padding:5px 8px}
+#luna-board-lifecycle .lb-demo-label{margin-right:auto}
+#luna-board-lifecycle .lb-draft-actions{display:flex;gap:8px;justify-content:flex-end}
+#luna-board-lifecycle .lb-state-note{font-size:11px;color:var(--lb-muted);margin:12px 0}
+#luna-board-lifecycle .lb-phase{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--lb-muted);margin-top:9px}
+#luna-board-lifecycle .lb-draft-discussion textarea{border:1px solid var(--lb-line);border-radius:7px;padding:9px;background:var(--lb-input)}
+#luna-board-lifecycle .lb-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;margin:18px 0}
+#luna-board-lifecycle .lb-config-grid label{font-size:11px;color:var(--lb-muted)}
+#luna-board-lifecycle .lb-config-grid select{display:block;width:100%;max-width:none;margin-top:6px;padding:8px}
+#luna-board-lifecycle .lb-author{padding:0 24px 22px;max-width:790px;margin:auto}
+#luna-board-lifecycle .lb-author-header{display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+#luna-board-lifecycle .lb-author-messages{min-height:150px;padding:2px 8px 12px}
+#luna-board-lifecycle .lb-author .lb-message.user{text-align:right}
+#luna-board-lifecycle .lb-author .lb-message.user .lb-bodytext{text-align:left;max-width:92%}
+#luna-board-lifecycle .lb-author .lb-composer{margin:0}
+#luna-board-lifecycle .lb-author-profile{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11px;color:var(--lb-muted);margin-bottom:12px}
+#luna-board-lifecycle .lb-author-profile select{max-width:170px}
+#luna-board-lifecycle .lb-author-options{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 22px}
+#luna-board-lifecycle .lb-proposed-ticket{padding:15px;background:var(--lb-card);border:1px solid var(--lb-line);border-radius:9px;margin:16px 0}
+#luna-board-lifecycle .lb-proposed-ticket h3{font-size:15px;margin:8px 0}
+#luna-board-lifecycle .lb-proposed-ticket .lb-bodytext{font-size:12px;line-height:1.8}
+#luna-board-lifecycle .lb-author-hint{font-size:11px;color:var(--lb-muted);padding:11px 1px;line-height:1.7}
+@media(max-width:560px){#luna-board-lifecycle .lb-config-grid{grid-template-columns:1fr}#luna-board-lifecycle .lb-author{padding:0 16px 20px}}
+@media(max-width:650px){#luna-board-lifecycle .lb-layout{grid-template-columns:1fr}#luna-board-lifecycle .lb-side{display:none}#luna-board-lifecycle .lb-board{grid-template-columns:1fr;gap:16px}#luna-board-lifecycle .lb-col{min-height:0}#luna-board-lifecycle .lb-board .lb-ticket{max-width:none}#luna-board-lifecycle .lb-heading{padding:20px 17px}#luna-board-lifecycle .lb-col-hint{padding-bottom:10px}#luna-board-lifecycle .lb-demo{padding:12px 4px}}
+</style>
+<div id="luna-board-lifecycle" aria-label="LUNA Board start, stop, resume and reviewer cleanup preview"></div>
+<script>
+(()=>{
+const root=document.getElementById('luna-board-lifecycle');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ico=name=>`<i data-lucide="${name}" aria-hidden="true"></i>`;
+const button=(label,action,id='',style='',extra='')=>`<button type="button" class="lb-button ${style}" data-action="${action}" ${id!==''?`data-id="${id}"`:''} ${extra}>${label}</button>`;
+const catalog={'Codex':['GPT-6.1 Sol','GPT-6 Luna'],'Claude Code':['Opus 5.5','Sonnet 5'],'OpenCode':['Project default']};
+const baseProfile={harness:'Codex',model:'GPT-6.1 Sol',effort:'High',access:'Auto'};
+const baseAuthor={harness:'Claude Code',model:'Opus 5.5',effort:'High',access:'Ask'};
+const seed={version:3,page:'board',selected:41,chatId:'planning',toast:'',draftTitle:'',draftBody:'',draftMode:'manual',ticketProfile:structuredClone(baseProfile),authorProfile:structuredClone(baseAuthor),draftReview:'Opus 5.5',authorMessages:[],candidate:null,profileConfirmed:false,authorSaved:null,boardDraft:null,chatReceipts:{},query:'',tickets:[
+ {id:42,title:'Include archived projects in search',body:'Respect the Include archived toggle. Find matching archived projects when it is enabled and preserve the current results when disabled.',column:'Backlog',phase:'Not started',worker:null,reviewer:null,starts:0,resumes:0,generation:0,intent:0,build:'Codex',review:'Opus 5.5',instructions:[]},
+ {id:43,title:'Make ticket links keyboard accessible',body:'Let keyboard users open a ticket from its chat badge and return to the same conversation without losing their draft.',column:'Backlog',phase:'Not started',worker:null,reviewer:null,starts:0,resumes:0,generation:0,intent:0,build:'Claude Code',review:'Opus 5.5',instructions:[]},
+ {id:41,title:'Restore sessions after reconnect',body:'Reconnect to the existing session without replaying the last prompt. Preserve the unsent draft and the selected side chat.',column:'Ready',phase:'Reviewing',worker:'work-41',reviewer:'review-41',starts:1,resumes:0,generation:1,intent:1,build:'Codex',review:'Opus 5.5',instructions:[{kind:'Start',text:'Work on LUN-41. Preserve unrelated changes, implement the reconnect fix, run the required checks and use the configured reviewer.'}]},
+ {id:44,title:'Remember board filters',body:'Restore the selected project and board filters when the app reopens.',column:'Ready',phase:'Working',worker:'work-44',reviewer:null,starts:1,resumes:0,generation:1,intent:1,build:'Codex',review:'Opus 5.5',instructions:[{kind:'Start',text:'Work on LUN-44. Implement persistent board filters, verify restart behavior and request the configured review.'}]},
+ {id:39,title:'Keep chat titles consistent',body:'Keep the ticket title and primary working-chat title synchronized.',column:'Done',phase:'Complete',worker:'work-39',reviewer:'review-39',starts:1,resumes:0,generation:1,intent:1,build:'Claude Code',review:'Opus 5.5',reviewPassed:true,instructions:[]}
+],chats:[
+ {id:'planning',title:'Release planning',role:'main',ticket:null},
+ {id:'work-44',title:'Remember board filters',role:'main',ticket:44},
+ {id:'work-41',title:'Restore sessions after reconnect',role:'side',parent:'planning',ticket:41},
+ {id:'review-41',title:'Review · LUN-41',role:'side',parent:'planning',reviewFor:41,owner:'work-41',status:'Running',generation:1,model:'Opus 5.5',archived:false},
+ {id:'work-39',title:'Keep chat titles consistent',role:'side',parent:'planning',ticket:39},
+ {id:'review-39',title:'Review · LUN-39',role:'side',parent:'planning',reviewFor:39,owner:'work-39',status:'Passed',generation:1,model:'Opus 5.5',archived:true,closed:true}
+]};
+let state=structuredClone(seed),lastPublished=null,draggedId=null;
+const timers=new Map();
+const ticket=id=>state.tickets.find(t=>t.id===Number(id));
+const chat=id=>state.chats.find(c=>c.id===id);
+const key=t=>`LUN-${t.id}`;
+const current=()=>ticket(state.selected)||state.tickets[0];
+const iconize=()=>{if(globalThis.lucide)lucide.createIcons({attrs:{width:16,height:16}});};
+const note=text=>{state.toast=text;};
+function restore(v){const p=v?.privateContent;if(p?.version===3&&Array.isArray(p.tickets)&&Array.isArray(p.chats))state={...structuredClone(seed),...p,toast:''};}
+restore(window.openai?.widgetState);
+function persist(){if(!window.openai?.setWidgetState)return;const copy=structuredClone(state);lastPublished=JSON.stringify(copy);if(new TextEncoder().encode(lastPublished).length>14000)return;window.openai.setWidgetState({modelContent:{screen:state.page,authoringMode:state.page==='draft'?state.draftMode:null,implementationProfile:state.page==='draft'?state.ticketProfile:null,selectedTicket:key(current()),ticketStates:state.tickets.map(t=>({id:key(t),column:t.column,phase:t.phase,starts:t.starts,resumes:t.resumes})),archivedReviewers:state.chats.filter(c=>c.reviewFor&&c.archived).length},privateContent:copy}).catch(()=>{});}
+function commit(){render();persist();}
+function mainFor(t){const c=chat(t.worker);return c?.role==='side'?c.parent:c?.id;}
+function sideCount(id){return state.chats.filter(c=>c.role==='side'&&c.parent===id&&!c.archived).length;}
+function badge(t,review=false){return button(ico(review?'scan-search':'ticket')+`${review?'Review · ':''}${key(t)}`,'ticket',t.id,'soft');}
+function sidebar(){return `<aside class="lb-side"><div class="lb-brand">${ico('moon')}LUNA</div><button class="lb-nav lb-new-nav" data-action="new-main">${ico('square-pen')}New chat<span class="lb-key">⌘ N</span></button><button class="lb-nav" data-action="automations">${ico('calendar-clock')}Automations</button><button class="lb-nav ${state.page!=='chat'?'active':''}" data-action="board">${ico('columns-3')}Board<span class="lb-key">${state.tickets.length}</span></button><div class="lb-side-label">Luna</div>${state.chats.filter(c=>c.role==='main'&&!c.archived).map(c=>`<button class="lb-thread ${state.page==='chat'&&(state.chatId===c.id||chat(state.chatId)?.parent===c.id)?'active':''}" data-action="chat" data-id="${c.id}" data-tooltip="${esc(c.title)}">${ico(c.ticket?'ticket':'message-square')}<span class="lb-thread-text"><span class="lb-thread-title">${esc(c.title)}</span><span class="lb-thread-meta">${c.ticket?'LUN-'+c.ticket+' · ':''}${sideCount(c.id)?sideCount(c.id)+' side chats':'Main chat'}</span></span></button>`).join('')}<div class="lb-side-foot"><span class="lb-avatar">I</span><span>Iulian<br>Personal workspace</span></div></aside>`;}
+function card(t){const c=chat(t.worker);return `<article class="lb-ticket" draggable="true" data-ticket="${t.id}" aria-label="${key(t)} ${esc(t.title)}"><div class="lb-ticket-top">${ico('ticket')}${key(t)}<span style="margin-left:auto">${ico('grip-vertical')}</span></div><button class="lb-card-open" data-action="ticket" data-id="${t.id}">${esc(t.title)}</button><p class="lb-ticket-summary">${esc(t.body)}</p><div class="lb-phase"><span class="lb-status-mark ${t.column==='Done'?'done':t.column==='Ready'?'progress':'ready'}"></span>${esc(t.phase)}</div>${t.reviewer?`<div class="lb-reviewer">${ico('scan-search')}${t.reviewPassed?'Review passed · archived':t.phase==='Reviewing'?t.review+' reviewing':'Reviewer retained'}</div>`:''}<div class="lb-location"><div class="lb-location-line">${ico(!c?'circle-dashed':c.role==='main'?'message-square':'corner-down-right')}${!c?'No chat yet':c.role==='main'?'Main chat':'Side chat'}</div>${c?.role==='side'?`<small>${esc(chat(c.parent)?.title||'Main parent')}</small>`:''}</div><div class="lb-card-action">${t.column==='Backlog'?button(ico('play')+(t.starts?' Resume':' Start'),'ready',t.id):t.column==='Ready'?button(ico('square')+' Stop','backlog',t.id):button('Review details','review-details',t.id,'ghost')}<span class="lb-key">${t.starts&&t.column==='Backlog'?'Same chat on resume':''}</span></div></article>`;}
+function board(){const visible=state.tickets.filter(t=>!state.query||`${key(t)} ${t.title}`.toLowerCase().includes(state.query.toLowerCase()));return `<div class="lb-heading"><div class="lb-grow"><h1>Board</h1><div class="lb-subtitle">Move to Ready to start. Move back to stop.</div></div>${button(ico('plus')+' New ticket','new-ticket','','primary')}</div><div class="lb-toolbar"><span class="lb-tag">${ico('folder')}Luna</span><label class="lb-search">${ico('search')}<input data-field="query" value="${esc(state.query)}" placeholder="Search tickets…" aria-label="Search tickets"></label><span class="lb-toolbar-end lb-subtitle">${ico('scan-search')} Automatic agent review</span></div><div class="lb-board">${['Backlog','Ready','Done'].map((col,i)=>`<section class="lb-col" data-drop="${col}" aria-label="${col}"><div class="lb-col-heading"><span class="lb-status-mark ${['ready','progress','done'][i]}"></span>${col}<span class="lb-count">${visible.filter(t=>t.column===col).length}</span></div><div class="lb-col-hint">${['Held or stopped','Runs automatically','Verified and reviewed'][i]}</div>${visible.filter(t=>t.column===col).map(card).join('')||'<div class="lb-empty-col">Drop a ticket here</div>'}</section>`).join('')}</div><div class="lb-board-foot"><span>${ico('corner-down-right')}Reviewers are temporary side chats</span><span>${ico('archive')}Closed and archived after success</span></div>`;}
+function details(){const t=current(),c=chat(t.worker),r=chat(t.reviewer);return `<div class="lb-breadcrumb">${button(ico('arrow-left')+' Board','board','','ghost')} / ${key(t)}</div><div class="lb-detail-head"><div><span class="lb-tag ${t.column==='Done'?'good':t.column==='Ready'?'running':''}">${esc(t.column)} · ${esc(t.phase)}</span><h2>${esc(t.title)}</h2><div class="lb-subtitle">${c?'One working chat, preserved across stops':'No working chat until you move this to Ready'}</div></div></div><div class="lb-detail-grid"><div><section class="lb-section"><div class="lb-section-title">Description</div><p class="lb-bodytext">${esc(t.body)}</p></section><section class="lb-section"><div class="lb-section-title">Working chat</div>${c?`<button class="lb-worklink" data-action="chat" data-id="${c.id}">${ico(c.role==='side'?'corner-down-right':'message-square')}<span>${esc(c.title)}<small>${c.role==='main'?'Main chat in the sidebar':'Side chat in '+esc(chat(c.parent)?.title)}</small></span>${ico('arrow-up-right')}</button>`:'<p class="lb-subtitle">A first start from Board creates a new main chat.</p>'}</section><section class="lb-section"><div class="lb-section-title">Review</div>${r?`<button class="lb-worklink" data-action="chat" data-id="${r.id}">${ico('scan-search')}<span>${esc(r.title)}<small>${r.archived?'Passed · closed and archived':r.status+' · side chat in '+esc(chat(r.parent)?.title)}</small></span>${ico(r.archived?'archive':'arrow-up-right')}</button><p class="lb-state-note">${r.archived?'Review history is preserved. Opening it does not restart or unarchive the reviewer.':'Reports back to '+key(t)+'. The reviewer closes and archives only after review and ticket success.'}</p>`:`<p class="lb-subtitle">${esc(t.review)} will review the changes in a temporary side chat.</p>`}</section><details class="lb-instruction"><summary>Dispatch history · ${t.starts} start · ${t.resumes} continuation${t.resumes===1?'':'s'}</summary>${t.instructions.map(x=>`<p><strong>${esc(x.kind)}</strong><br>${esc(x.text)}</p>`).join('<br>')||'<p>No execution instruction sent.</p>'}</details></div><aside><div class="lb-property"><span>Implement with</span><span>${esc(t.build)}</span></div><div class="lb-property"><span>Review with</span><select class="lb-select" aria-label="Review model" data-field="review"><option ${t.review==='Opus 5.5'?'selected':''}>Opus 5.5</option><option ${t.review==='Project default'?'selected':''}>Project default</option></select></div><div class="lb-property"><span>Reasoning</span><span>High</span></div><div class="lb-property"><span>Completion</span><span>Automatic</span></div><div class="lb-launch"><h3>${t.column==='Backlog'?(t.starts?'Continue when ready':'Start when ready'):t.column==='Done'?'Work completed':'Ready means enabled'}</h3><p>${t.column==='Backlog'?(t.starts?'Your chat and partial work are kept. The next instruction continues the work.':'Moving to Ready creates the chat and sends the first instruction.') :t.column==='Done'?'Checks and review passed. The primary chat stays available.':'Move back to Backlog to use the same Stop action as the chat.'}</p>${t.column==='Backlog'?button(ico('play')+(t.starts?' Move to Ready & continue':' Move to Ready & start'),'ready',t.id,'primary'):t.column==='Ready'?button(ico('square')+' Stop & move to Backlog','backlog',t.id):button('Reopen in Backlog','backlog',t.id)}</div></aside></div>`;}
+function conversation(){const c=chat(state.chatId);if(!c)return board();const main=c.role==='side'?chat(c.parent):c;const t=ticket(c.ticket||c.reviewFor);const siblings=state.chats.filter(x=>x.parent===main.id&&!x.archived);return `<div class="lb-chat-head"><div class="lb-chat-head-top"><h2>${esc(main.title)}</h2>${button(ico('columns-3')+' Board','board','','ghost')}</div><div class="lb-chat-tabs"><button class="lb-chat-tab ${c.id===main.id?'active':''}" data-action="chat" data-id="${main.id}">Main</button>${siblings.map(s=>`<button class="lb-chat-tab ${s.id===c.id?'active':''}" data-action="chat" data-id="${s.id}" data-tooltip="${esc(s.title)}">${ico(s.reviewFor?'scan-search':s.ticket?'ticket':'message-square')}<span class="lb-tab-label">${esc(s.title)}</span></button>`).join('')}</div></div><div class="lb-chat-context">${t?badge(t,!!c.reviewFor):'<span>Main chat · coordinator</span>'}${c.archived?'<span class="lb-tag good">Archived review · read only</span>':c.reviewFor?`<span>Reviewer · ${esc(t.review)}</span>`:t?`<span>${esc(t.phase)}</span>`:''}</div><div class="lb-messages">${c.reviewFor?`<div class="lb-message"><div class="lb-message-label">Review brief</div><p class="lb-bodytext">Review ${key(t)} against its acceptance criteria and the current diff. Inspect the verification evidence, report concrete findings, and do not edit the implementation.</p></div><div class="lb-message"><div class="lb-message-label">${ico('scan-search')}${esc(t.review)}</div><p class="lb-bodytext">${c.status==='Passed'?'Review passed for the recorded revision. Required checks and acceptance criteria passed. The result was returned to the ticket before this reviewer was closed and archived.':c.status==='Stopped'?'Review stopped with the ticket. This conversation and its partial findings are retained.':'Reviewing the current changes and check results. Findings will be returned to the ticket’s working chat.'}</p></div>`:t?`${t.instructions.slice(-3).map(x=>`<div class="lb-message user"><div class="lb-message-label">${esc(x.kind)} instruction · from Board</div><p class="lb-bodytext">${esc(x.text)}</p></div>`).join('')}<div class="lb-receipt">${ico(t.phase==='Stopped'?'square':t.column==='Done'?'check-circle-2':'activity')}<div>${esc(t.phase)}<small>${t.resumes?'Continuing the same conversation.':t.column==='Done'?'Review result preserved on the ticket.':'Progress belongs to this ticket.'}</small></div>${button('Open ticket','ticket',t.id,'ghost')}</div>${t.reviewer?`<div class="lb-receipt">${ico('scan-search')}<div>${chat(t.reviewer)?.archived?'Reviewer archived':'Reviewer side chat'}<small>${esc(chat(t.reviewer)?.title||'')}</small></div>${button('Review details','review-details',t.id,'ghost')}</div>`:''}`:`<div class="lb-message user"><div class="lb-message-label">You</div><p class="lb-bodytext">Work on the reconnect ticket in a side chat and keep its review together with this project.</p></div><div class="lb-message"><div class="lb-message-label">Agent</div><p class="lb-bodytext">The ticket and its reviewer are sibling side chats here. The reviewer reports to the ticket and is archived after success.</p></div>`}</div>${c.archived?'':`<div class="lb-chat-actions">${t&&!c.reviewFor?(t.column==='Ready'?button(ico('square')+' Stop','backlog',t.id):t.column==='Backlog'?button(ico('play')+' Continue','ready',t.id):''):''}${t?button(ico('ticket')+' Open ticket','ticket',t.id):''}</div>`}`;}
+function profileFields(p,scope){
+ const prefix=scope==='ticket'?'Implementation':'Discussion';
+ const control=(label,k,values)=>`<label>${label}<select class="lb-select" aria-label="${prefix} ${label.toLowerCase()}" data-profile="${scope}" data-key="${k}">${values.map(v=>`<option ${p[k]===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`;
+ return `<div class="lb-config-grid">${control('Harness','harness',Object.keys(catalog))}${control('Model','model',catalog[p.harness]||catalog.Codex)}${control('Reasoning','effort',p.harness==='OpenCode'?['Default']:['Low','Medium','High'])}${control('Access','access',['Ask','Auto','Full'])}</div>`;
+}
+const profileText=p=>`${p.harness} · ${p.model} · ${p.effort} · ${p.access}`;
+function authoring(){
+ const initial='Tell me what is happening and what should happen instead. We can inspect the Luna project while we work out the ticket. Before saving, I’ll ask which model, reasoning and access you want for implementation.';
+ const c=state.candidate,p=state.ticketProfile;
+ return `<div class="lb-author"><div class="lb-author-header"><span class="lb-tag">${ico('message-square')}Temporary discussion</span><span class="lb-tag">${ico('folder')}Luna project attached</span></div><div class="lb-author-messages"><div class="lb-message"><div class="lb-message-label">Ticket assistant</div><p class="lb-bodytext">${initial}</p></div>${state.authorMessages.map(m=>`<div class="lb-message ${m.role==='user'?'user':''}"><div class="lb-message-label">${m.role==='user'?'You':'Ticket assistant'}</div><p class="lb-bodytext">${esc(m.text)}</p></div>`).join('')}${c&&!state.authorSaved?`<div class="lb-proposed-ticket"><div class="lb-ai-label">${ico('ticket')}Proposed ticket · read only</div><h3>${esc(c.title)}</h3><p class="lb-bodytext">${esc(c.body)}</p><p class="lb-state-note">Implement: ${esc(profileText(p))}<br>Review: ${esc(state.draftReview)}</p><span class="lb-subtitle">Tell the assistant what to change.</span></div>`:''}${c&&!state.profileConfirmed&&!state.authorSaved?`<div class="lb-author-options">${button('Use project defaults','author-defaults')}${button('Use Claude Code · High · Ask','author-claude')}</div>`:''}${state.authorSaved?`<div class="lb-receipt">${ico('ticket')}<div>LUN-${state.authorSaved} saved to Backlog<small>No working chat created. This temporary discussion can now close.</small></div>${button('Open ticket','ticket',state.authorSaved)}</div>`:''}</div>${state.authorSaved?`<div class="lb-draft-actions">${button('Close discussion','close-draft','','primary')}</div>`:`<details class="lb-instruction"><summary>Discussion assistant: ${esc(profileText(state.authorProfile))}</summary>${profileFields(state.authorProfile,'author')}<p class="lb-subtitle">These settings affect this temporary discussion, not the future ticket worker.</p></details><div class="lb-composer"><textarea data-field="draftPrompt" aria-label="Message temporary assistant" placeholder="Explain the issue, add details, or choose execution settings…">${esc(state.draftPrompt||'')}</textarea><div class="lb-composer-bottom"><span class="lb-subtitle">${ico('folder')}Project context available</span><span class="lb-spacer"></span>${button(ico('arrow-up'),'author-send','','primary','aria-label="Send to temporary assistant"')}</div></div><div class="lb-author-hint">This discussion never appears in chats, Settled or Archive. Closing keeps only an unfinished Board draft.</div><div class="lb-draft-actions">${button('Discard discussion','discard-draft')}${button('Create ticket','author-save','','primary',c&&state.profileConfirmed?'':'disabled')}</div>`}</div>`;
+}
+function draft(){return `<div class="lb-breadcrumb">${button(ico('arrow-left')+' Close','close-draft','','ghost')} / New ticket</div><div class="lb-heading"><div><h2>${state.draftMode==='ai'?'Discuss the ticket':'Create a ticket'}</h2><p class="lb-subtitle">${state.draftMode==='ai'?'A temporary, project-aware conversation':'Write the brief and choose how the ticket will run'}</p></div></div><div class="lb-draft"><div class="lb-draft-tabs"><button class="lb-draft-tab ${state.draftMode==='manual'?'active':''}" data-action="manual">Write manually</button><button class="lb-draft-tab ${state.draftMode==='ai'?'active':''}" data-action="ai">Discuss with AI</button></div></div>${state.draftMode==='ai'?authoring():`<div class="lb-draft"><label class="lb-field">Title<input data-field="draftTitle" value="${esc(state.draftTitle)}" placeholder="A clear outcome"></label><label class="lb-field">Description<textarea data-field="draftBody" placeholder="What should change, and how will we know it works?">${esc(state.draftBody)}</textarea></label><div class="lb-section-title">Ticket execution · project defaults shown</div>${profileFields(state.ticketProfile,'ticket')}<label class="lb-field">Review model<select class="lb-select" aria-label="Ticket review model" data-field="draftReview">${['Opus 5.5','Project default'].map(v=>`<option ${state.draftReview===v?'selected':''}>${v}</option>`).join('')}</select></label><p class="lb-state-note">Access applies to the ticket worker. Review uses the project's review-access policy.</p><div class="lb-draft-actions">${button('Save to Backlog','save-ticket','','primary')}</div></div>`}`;}
+function clearDraft(){state.draftTitle='';state.draftBody='';state.draftPrompt='';state.authorMessages=[];state.candidate=null;state.authorSaved=null;state.profileConfirmed=false;state.configAsked=false;state.ticketProfile=structuredClone(baseProfile);state.authorProfile=structuredClone(baseAuthor);state.draftReview='Opus 5.5';}
+function closeDraft(discard=false){
+ const keys=['draftTitle','draftBody','draftPrompt','draftMode','authorMessages','candidate','profileConfirmed','configAsked','ticketProfile','authorProfile','draftReview'];
+ if(!discard&&!state.authorSaved&&(state.draftTitle||state.draftBody||state.authorMessages.length))state.boardDraft=Object.fromEntries(keys.map(k=>[k,structuredClone(state[k])]));
+ else if(discard||state.authorSaved)state.boardDraft=null;
+ const saved=state.authorSaved;clearDraft();state.page='board';note(saved?'Temporary discussion ended. The saved ticket remains in Backlog.':discard?'Temporary discussion discarded. No chat was archived.':state.boardDraft?'Kept only as a Board draft. No sidebar, Settled or Archive entry.':'Temporary discussion closed.');
+}
+function createTicket(title,body,p,review,origin=null){const id=Math.max(...state.tickets.map(t=>t.id))+1;state.tickets.push({id,title,body,column:'Backlog',phase:'Not started',worker:null,reviewer:null,starts:0,resumes:0,generation:0,intent:0,build:p.harness,model:p.model,effort:p.effort,access:p.access,review,instructions:[],origin});state.selected=id;return id;}
+function authorMessage(text){
+ text=text.trim();if(!text)return;state.authorMessages.push({role:'user',text});
+ if(/\b(create|save)\b.*\bticket\b/i.test(text)&&state.candidate&&state.profileConfirmed){saveAuthor();return;}
+ const p=state.ticketProfile;
+ const config=/codex|claude code|opencode|gpt|opus|sonnet|use.*defaults|(?:low|medium|high)\s+(?:reasoning|effort)|(?:ask|auto|full)\s+(?:access|mode)|(?:reasoning|effort|access)\s*(?:to|is|:)?\s*(?:low|medium|high|ask|auto|full)/i.test(text);
+ if(config){
+  if(/use.*defaults/i.test(text))state.ticketProfile=structuredClone(baseProfile);
+  else{if(/opencode/i.test(text)){p.harness='OpenCode';p.model='Project default';p.effort='Default';}else if(/claude|opus|sonnet/i.test(text)){p.harness='Claude Code';p.model=/sonnet/i.test(text)?'Sonnet 5':'Opus 5.5';}else if(/codex|gpt/i.test(text)){p.harness='Codex';p.model=/gpt.?6.?luna/i.test(text)?'GPT-6 Luna':'GPT-6.1 Sol';}const effort=text.match(/\b(low|medium|high)\b/i);if(effort&&p.harness!=='OpenCode')p.effort=effort[1][0].toUpperCase()+effort[1].slice(1).toLowerCase();const access=text.match(/\b(ask|auto|full)\b/i);if(access)p.access=access[1][0].toUpperCase()+access[1].slice(1).toLowerCase();}
+  state.profileConfirmed=true;
+ }else if(/^change (?:the )?title to\s+/i.test(text)&&state.candidate)state.candidate.title=text.replace(/^change (?:the )?title to\s+/i,'').replace(/[.!]$/,'');
+ else if(!state.candidate)state.candidate={title:text.split(/[.!?\n]/)[0].slice(0,90),body:text};
+ else state.candidate.body+='\n\n'+text;
+ state.authorMessages.push({role:'assistant',text:state.profileConfirmed?`The ticket will use ${profileText(state.ticketProfile)}. Review will use ${state.draftReview}. Add any further details, ask me to change the wording, or create the ticket when ready.`:state.configAsked?'I’ve added that detail to the proposed ticket. Keep explaining what matters; the execution choices above are still available when you are ready.':'What should count as fixed? Also, which implementation model, reasoning and access should this ticket use? The current project defaults are Codex / GPT-6.1 Sol, High reasoning, Auto access, with Opus 5.5 for review. You can use those or tell me different settings.'});
+ state.configAsked=true;
+ state.draftPrompt='';
+}
+function saveAuthor(){if(!state.candidate||!state.profileConfirmed)return;if(state.authorSaved){note('This discussion already created its ticket.');return;}state.authorSaved=createTicket(state.candidate.title,state.candidate.body,state.ticketProfile,state.draftReview,'temporary-board-discussion');state.boardDraft=null;note(`LUN-${state.authorSaved} created by the board action. No working chat or archived discussion.`);}
+function render(){
+ const t=current();root.innerHTML=`<div class="lb-app"><div class="lb-top"><div class="lb-lights" aria-hidden="true"><span></span><span></span><span></span></div><div class="lb-top-title">LUNA / Design preview · sample tasks</div></div><div class="lb-layout">${sidebar()}<main class="lb-main">${state.page==='board'?board():state.page==='ticket'?details():state.page==='draft'?draft():conversation()}</main></div>${state.toast?`<div class="lb-toast" role="status">${ico('check-circle-2')}<span>${esc(state.toast)}</span>${button(ico('x'),'dismiss','','ghost','aria-label="Dismiss notification"')}</div>`:''}</div><div class="lb-demo"><span class="lb-demo-label">Preview workflow · ${key(t)}</span>${button('Simulate review','simulate-review',t.id,'',t.column==='Ready'&&t.phase==='Working'?'':'disabled')}${button('Simulate success & cleanup','simulate-success',t.id,'',t.column==='Ready'&&t.phase==='Reviewing'?'':'disabled')}</div>`;
+ if(state.page==='chat'){
+  const c=chat(state.chatId);
+  if(c?.role==='main'&&!c.ticket&&c.id!=='planning')root.querySelector('.lb-messages').innerHTML='<div class="lb-empty-chat"><h3>New conversation</h3><p>No conversation history was copied.</p></div>';
+  if(c?.reviewFor){const label=root.querySelector('.lb-messages .lb-message:last-child .lb-message-label');if(label)label.textContent=c.model||ticket(c.reviewFor).review;const context=root.querySelector('.lb-chat-context > span');if(context&&!c.archived)context.textContent='Reviewer · '+(c.model||ticket(c.reviewFor).review);}
+ }
+ if(state.page==='board')state.tickets.filter(x=>x.phase==='Reviewing').forEach(x=>{const label=root.querySelector(`[data-ticket="${x.id}"] .lb-reviewer`);if(label)label.innerHTML=ico('scan-search')+esc(chat(x.reviewer)?.model||x.review)+' reviewing';});
+ if(state.page==='board'&&state.boardDraft)root.querySelector('.lb-toolbar').insertAdjacentHTML('beforeend',button(ico('message-square')+' Board draft (1)','resume-draft'));
+ if(state.page==='draft')root.querySelector('.lb-demo').style.display='none';
+ if(state.page==='ticket'){
+  const props=[...root.querySelectorAll('.lb-detail-grid aside .lb-property')];
+  props.forEach(row=>{if(row.firstElementChild?.textContent==='Reasoning')row.lastElementChild.textContent=t.effort||'High';});
+  if(props[0])props[0].insertAdjacentHTML('afterend',`<div class="lb-property"><span>Model</span><span>${esc(t.model||'Project default')}</span></div><div class="lb-property"><span>Access</span><span>${esc(t.access||'Auto')}</span></div>`);
+ }
+ if(state.page==='chat'){
+  const c=chat(state.chatId);const actions=root.querySelector('.lb-chat-actions');
+  if(c&&!c.reviewFor&&!c.archived&&actions)actions.insertAdjacentHTML('beforeend',button(ico('ticket')+' Create ticket from this chat','create-in-chat'));
+  const created=state.chatReceipts[c?.id];if(created)root.querySelector('.lb-messages').insertAdjacentHTML('beforeend',`<div class="lb-receipt">${ico('ticket')}<div>Created LUN-${created} in Backlog<small>Used project execution defaults. No additional chat was created.</small></div>${button('Open created ticket','ticket',created,'ghost')}</div>`);
+ }
+ iconize();
+}
+function dispatch(t){if(t.column!=='Ready'||t.phase==='Stopping')return;if(!t.worker){const id='work-'+t.id;state.chats.push({id,title:t.title,role:'main',ticket:t.id});t.worker=id;}t.generation++;t.reviewPassed=false;t.phase='Working';const initial=t.starts===0;const text=initial?`Work on ticket ${key(t)}: ${t.title}. ${t.body} Preserve unrelated changes, run the required checks and use ${t.review} for review. Complete only after checks and review pass.`:`Continue ticket ${key(t)} from the work already started in this chat. The previous run was stopped. Inspect the current files, partial results and latest brief; preserve completed work and do not restart from scratch. Resolve outstanding findings and finish checks and review.`;if(initial)t.starts++;else t.resumes++;t.instructions.push({kind:initial?'Start':'Continue',text});t.instructions=t.instructions.slice(-8);note(`${key(t)} ${initial?'started':'continued'} in the ${initial?'linked':'same'} chat. ${initial?'One initial instruction sent.':'A continuation instruction was sent.'}`);}
+function finishStop(id,token){const t=ticket(id);if(!t||t.stopToken!==token)return;timers.delete(id);t.phase='Stopped';const r=chat(t.reviewer);if(r&&!r.archived)r.status='Stopped';if(t.column==='Ready')dispatch(t);else note(`${key(t)} stopped. Its chat and partial work are preserved.`);commit();}
+function move(id,column){const t=ticket(id);if(!t||column===t.column)return;state.selected=t.id;t.intent++;if(column==='Done'){note('Done follows successful checks and review. Use the preview workflow controls to simulate that outcome.');return;}const was=t.column;t.column=column;if(column==='Ready'){if(t.phase==='Stopping'){note('Ready requested. Waiting for the previous run to stop before continuing.');}else dispatch(t);}else if(was==='Ready'&&['Working','Reviewing','Checking','Fixing','Starting'].includes(t.phase)){t.phase='Stopping';const token=(t.stopToken||0)+1;t.stopToken=token;const r=chat(t.reviewer);if(r&&!r.archived)r.status='Stopping';note(`${key(t)} Stop requested for the ticket and its owned review. No chat is archived.`);timers.set(t.id,setTimeout(()=>finishStop(t.id,token),1100));}else if(was==='Done'){t.phase='Stopped';t.reviewPassed=false;note(`${key(t)} reopened in Backlog. History is preserved.`);}else note(`${key(t)} remains held in Backlog.`);}
+function review(t){if(t.column!=='Ready'||t.phase!=='Working')return;let r=chat(t.reviewer);if(!r||r.archived){const id='review-'+t.id+'-'+t.generation;r={id,title:'Review · '+key(t),role:'side',parent:mainFor(t),reviewFor:t.id,owner:t.worker,status:'Running',archived:false};state.chats.push(r);t.reviewer=id;}r.status='Running';r.generation=t.generation;r.model=t.review;t.phase='Reviewing';note(`${r.title} created as ${chat(t.worker).role==='main'?'a side chat under the ticket':'a sibling under '+chat(r.parent).title}.`);}
+function succeed(t){const r=chat(t.reviewer);if(t.column!=='Ready'||t.phase!=='Reviewing'||!r||r.generation!==t.generation)return;r.status='Passed';t.reviewPassed=true;t.phase='Complete';t.column='Done';r.archived=true;r.closed=true;if(state.page==='chat'&&state.chatId===r.id)state.chatId=t.worker;note(`${key(t)} complete. ${r.title} closed and archived; the primary chat and review history remain.`);}
+root.addEventListener('input',ev=>{const k=ev.target.dataset.field;if(!k)return;if(k==='query'){state.query=ev.target.value;const region=root.querySelector('.lb-board');const div=document.createElement('div');div.innerHTML=board();region.replaceWith(div.querySelector('.lb-board'));iconize();}else state[k]=ev.target.value;});
+root.addEventListener('change',ev=>{
+ const el=ev.target;if(el.dataset.profile){const p=el.dataset.profile==='ticket'?state.ticketProfile:state.authorProfile;p[el.dataset.key]=el.value;if(el.dataset.key==='harness'){p.model=catalog[p.harness][0];p.effort=p.harness==='OpenCode'?'Default':'High';}commit();}
+ else if(el.dataset.field==='review'){current().review=el.value;note('Review preference saved for the next review run.');commit();}
+ else if(el.dataset.field==='draftReview'){state.draftReview=el.value;persist();}
+});
+root.addEventListener('click',ev=>{const el=ev.target.closest('[data-action]');if(!el)return;const action=el.dataset.action,id=el.dataset.id;
+ if(action==='board'){if(state.page==='draft')closeDraft();else state.page='board';}
+ else if(action==='ticket'){if(state.page==='draft'&&state.authorSaved){state.boardDraft=null;clearDraft();}state.selected=Number(id);state.page='ticket';}
+ else if(action==='chat'){if(state.page==='draft')closeDraft();state.chatId=id;state.page='chat';const c=chat(id);if(c?.ticket||c?.reviewFor)state.selected=c.ticket||c.reviewFor;}
+ else if(action==='ready'||action==='backlog')move(id,action==='ready'?'Ready':'Backlog');
+ else if(action==='simulate-review')review(ticket(id));
+ else if(action==='simulate-success')succeed(ticket(id));
+ else if(action==='review-details'){const t=ticket(id);if(t.reviewer){state.selected=t.id;state.chatId=t.reviewer;state.page='chat';}}
+ else if(action==='dismiss')state.toast='';
+ else if(action==='automations')note('Board stays directly below Automations.');
+ else if(action==='new-ticket'){if(state.boardDraft){Object.assign(state,structuredClone(state.boardDraft));state.authorSaved=null;state.page='draft';note('Resumed the unfinished Board draft. Save or discard it before starting another.');}else{clearDraft();state.page='draft';state.draftMode='manual';}}
+ else if(action==='manual'||action==='ai')state.draftMode=action;
+ else if(action==='author-send')authorMessage(state.draftPrompt||'');
+ else if(action==='author-defaults')authorMessage('Use project defaults.');
+ else if(action==='author-claude')authorMessage('Use Claude Code with Opus 5.5, High reasoning and Ask access.');
+ else if(action==='author-save')saveAuthor();
+ else if(action==='close-draft')closeDraft();
+ else if(action==='discard-draft')closeDraft(true);
+ else if(action==='resume-draft'){if(state.boardDraft){Object.assign(state,structuredClone(state.boardDraft));state.authorSaved=null;state.page='draft';}}
+ else if(action==='save-ticket'){if(!state.draftTitle.trim())note('Add a ticket title first.');else{const id=createTicket(state.draftTitle.trim(),state.draftBody.trim(),state.ticketProfile,state.draftReview);state.boardDraft=null;clearDraft();state.page='board';note(`LUN-${id} saved to Backlog with its model, reasoning and access. No chat created.`);}}
+ else if(action==='create-in-chat'){const c=chat(state.chatId);if(state.chatReceipts[c.id]){note('This preview action already created LUN-'+state.chatReceipts[c.id]+'.');}else{const id=createTicket('Follow-up: '+c.title,'Capture the follow-up work from this conversation, preserving the agreed scope and acceptance criteria.',baseProfile,'Opus 5.5',c.id);state.chatReceipts[c.id]=id;note(`LUN-${id} created in Backlog from this chat. Existing conversations are unchanged.`);}}
+ else if(action==='new-main'){if(state.page==='draft')closeDraft();const id='main-'+Date.now();state.chats.push({id,title:'New conversation',role:'main',ticket:null});state.chatId=id;state.page='chat';note('New independent main chat.');}
+ commit();});
+root.addEventListener('dragstart',ev=>{const el=ev.target.closest('[data-ticket]');if(!el)return;draggedId=Number(el.dataset.ticket);ev.dataTransfer.setData('text/plain',String(draggedId));ev.dataTransfer.effectAllowed='move';el.classList.add('dragging');});
+root.addEventListener('dragover',ev=>{const col=ev.target.closest('[data-drop]');if(!col)return;ev.preventDefault();ev.dataTransfer.dropEffect='move';root.querySelectorAll('.lb-col.over').forEach(e=>e.classList.remove('over'));col.classList.add('over');});
+root.addEventListener('drop',ev=>{const col=ev.target.closest('[data-drop]');if(!col)return;ev.preventDefault();const id=Number(ev.dataTransfer.getData('text/plain'))||draggedId;move(id,col.dataset.drop);draggedId=null;commit();});
+root.addEventListener('dragend',()=>{draggedId=null;root.querySelectorAll('.dragging,.over').forEach(e=>e.classList.remove('dragging','over'));});
+window.addEventListener('openai:set_globals',ev=>{const v=ev.detail?.globals?.widgetState;if(v&&JSON.stringify(v.privateContent)!==lastPublished){restore(v);render();}});
+render();
+state.tickets.filter(t=>t.phase==='Stopping').forEach(t=>timers.set(t.id,setTimeout(()=>finishStop(t.id,t.stopToken),1100)));
+})();
+</script>

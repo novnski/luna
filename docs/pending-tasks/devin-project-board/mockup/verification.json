@@ -1,0 +1,142 @@
+{
+  "date": "2026-10-08",
+  "kind": "UI design simulation; no live AI, project reads, MCP calls or production mutations",
+  "files": {
+    "board.fragment.html": {
+      "sha256": "0b83f8212eabb7293b29aa2b1ec1295347bcac241a9d9543b18881db2ef60ce1",
+      "bytes": 64677
+    },
+    "board.html": {
+      "sha256": "26f61fc95d6751900a9b9d96abe8848e764de1c69ab640f06a1393341adb1783",
+      "bytes": 154572
+    }
+  },
+  "checks": [
+    {
+      "flow": "Manual creation selects Claude Code / Sonnet 5 / Medium / Ask",
+      "observed": "Saved ticket detail matched all selections; main-chat count remained two.",
+      "status": "passed"
+    },
+    {
+      "flow": "Discuss with AI opens a temporary conversational view",
+      "observed": "Zero editable Title or Description textboxes; normal-chat count unchanged.",
+      "status": "passed"
+    },
+    {
+      "flow": "Two-turn issue discussion",
+      "observed": "Two user turns preserved, candidate updated, one execution-settings question, and Create disabled until preferences were supplied.",
+      "status": "passed"
+    },
+    {
+      "flow": "Close and resume unfinished discussion",
+      "observed": "Only Board draft (1) appeared; normal-chat count stayed two; conversation resumed.",
+      "status": "passed"
+    },
+    {
+      "flow": "Independent authoring and execution profiles",
+      "observed": "Discussion model changed to Claude Code / Sonnet 5 while ticket profile stayed Codex / GPT-6.1 Sol / High / Auto.",
+      "status": "passed"
+    },
+    {
+      "flow": "Create ticket from temporary discussion, then close",
+      "observed": "LUN-46 saved to Backlog with No chat yet; temporary discussion ended; no remaining Board draft or extra normal chat.",
+      "status": "passed"
+    },
+    {
+      "flow": "Create from an ordinary main chat",
+      "observed": "LUN-47 receipt appeared in Release planning; repeated preview action did not duplicate the ticket; parent and chat count remained.",
+      "status": "passed"
+    },
+    {
+      "flow": "Discard temporary discussion",
+      "observed": "No Board draft remained and no chat was archived; main-chat count unchanged.",
+      "status": "passed"
+    },
+    {
+      "flow": "Final authoring-surface regression",
+      "observed": "No Title input in AI mode; unrelated workflow simulation controls hidden while authoring.",
+      "status": "passed"
+    }
+  ],
+  "priorLifecycleVerification": {
+    "files": {
+      "board.fragment.html": {
+        "sha256": "a627e834bf96e0f080c476aa01ae1a143b335e7a87d7aca64ffa270bfbb35d2c",
+        "bytes": 51584
+      },
+      "board.html": {
+        "sha256": "6218a66bb7651343b3fd71fe88d5780cd89c3bb5317f3cbb4796ad1fea929c8e",
+        "bytes": 138631
+      }
+    },
+    "checks": [
+      {
+        "flow": "Drag LUN-42 Backlog to Ready",
+        "observed": "One new main chat; card moved to Ready with Working phase.",
+        "status": "passed"
+      },
+      {
+        "flow": "Drag LUN-42 Ready to Backlog",
+        "observed": "Stopping then Stopped; working chat retained.",
+        "status": "passed"
+      },
+      {
+        "flow": "Drag LUN-42 to Ready again",
+        "observed": "Same work-42 link, one initial start and one continuation, no extra main chat.",
+        "status": "passed"
+      },
+      {
+        "flow": "Stop then immediately continue through the equivalent controls",
+        "observed": "Waiting-for-stop state; no immediate second send; history became one start and two continuations after stop barrier.",
+        "status": "passed"
+      },
+      {
+        "flow": "Review a main ticket",
+        "observed": "Reviewer side chat under work-42; no independent reviewer sidebar row.",
+        "status": "passed"
+      },
+      {
+        "flow": "Complete review and ticket",
+        "observed": "Reviewer tab removed and archived result readable; primary chat and main-chat count unchanged.",
+        "status": "passed"
+      },
+      {
+        "flow": "Review a side ticket LUN-41",
+        "observed": "review-41 displayed beside work-41 under Release planning; Stop reached the reviewer; resume reused work-41.",
+        "status": "passed"
+      },
+      {
+        "flow": "Complete side ticket and review",
+        "observed": "review-41 closed/archived; Release planning and its two primary ticket side chats remained.",
+        "status": "passed"
+      },
+      {
+        "flow": "New main chat after final render changes",
+        "observed": "Fresh conversation; no copied history.",
+        "status": "passed"
+      },
+      {
+        "flow": "Final drag-handle smoke check",
+        "observed": "LUN-42 moved to Ready with the final fragment.",
+        "status": "passed"
+      },
+      {
+        "flow": "Save a new ticket to Backlog",
+        "observed": "LUN-45 showed Not started / No chat yet; main-chat count stayed four.",
+        "status": "passed"
+      }
+    ]
+  },
+  "retention": "Confirmed: unfinished discussions resume only as Board drafts; no normal chat history entry.",
+  "limitations": [
+    "Model lists and assistant replies are local sample fixtures, not live account catalogs or an AI backend.",
+    "Internal board-tool delivery and real project-capable authoring are specified in ticket-authoring.md and need real provider E2E.",
+    "Large preview state remains in the current window rather than exceeding the host state-size limit."
+  ],
+  "reproduction": "Follow mockup/README.md using a fresh preview.",
+  "confirmedProductDefaults": {
+    "reviewer": "Implementation model in a separate review chat when no project/ticket review override exists",
+    "repairRounds": 2,
+    "ticketParent": "Original parent/container is immutable, even when idle"
+  }
+}
