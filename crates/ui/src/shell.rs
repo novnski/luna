@@ -2295,10 +2295,12 @@ pub struct Shell {
     /// One normalized service response shared by the full page and sidebar.
     usage_snapshot: Option<UsageSnapshot>,
     usage_environment_snapshots: Vec<(String, UsageSnapshot)>,
+    usage_scope_keys: std::collections::HashMap<String, String>,
     usage_page_environment_ids: Option<std::collections::HashSet<String>>,
     usage_environment_menu_open: bool,
     usage_error: Option<String>,
     usage_refreshing: bool,
+    usage_background_refreshing: bool,
     usage_card_open: bool,
     usage_alerted: Vec<(String, UsageProvider)>,
     usage_provider_filter: Option<UsageProvider>,
@@ -2833,10 +2835,12 @@ impl Shell {
             route,
             usage_snapshot: None,
             usage_environment_snapshots: Vec::new(),
+            usage_scope_keys: Default::default(),
             usage_page_environment_ids: None,
             usage_environment_menu_open: false,
             usage_error: None,
             usage_refreshing: false,
+            usage_background_refreshing: false,
             usage_card_open: false,
             usage_alerted: Vec::new(),
             usage_provider_filter: None,
@@ -3149,10 +3153,12 @@ impl Shell {
             self.usage_last_refresh_attempt_ms = None;
             self.usage_task = None;
             self.usage_refreshing = false;
+            self.usage_background_refreshing = false;
             self.usage_snapshot = None;
             self.usage_environment_snapshots.clear();
+            self.usage_scope_keys.clear();
             self.usage_alerted.clear();
-            self.usage_error = Some("Engine changed · refresh usage for this environment".into());
+            self.usage_error = None;
         }
         self.reconcile_session_history_scope(engine_changed, cx);
         if matches!(state.read(cx).connection, ConnectionStatus::Ready)
@@ -5248,7 +5254,7 @@ impl Shell {
         self.route = Route::Settings(section);
         if section == SettingsSection::Usage {
             self.usage_card_open = false;
-            self.refresh_usage(cx);
+            self.request_usage(false, cx);
         }
         self.nav.push(NavEntry::Settings(section));
         self.close_chat_menu(cx);

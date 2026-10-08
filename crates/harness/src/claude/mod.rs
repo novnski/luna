@@ -346,6 +346,30 @@ impl ClaudeHarness {
         .inspect(|response| runtime_controls::remember_catalog(&exe, response))
     }
 
+    /// Provider-owned subscription read. Sends only initialization and
+    /// `get_usage`; the CLI owns credential storage and renewal. No model turn,
+    /// saved conversation, user hook, project tools or MCP discovery is needed.
+    pub async fn subscription_usage(&self) -> Result<Value, HarnessError> {
+        let exe = self.resolve_executable()?;
+        let home = self.config_home.clone();
+        discovery::usage_probe(
+            &exe,
+            |cmd| {
+                coordination::scrub_inherited_session_env(cmd);
+                cmd.arg("--settings")
+                    .arg(Value::Object(profile::discovery_settings()).to_string());
+                cmd.env("ENABLE_CLAUDEAI_MCP_SERVERS", "false")
+                    .env("CLAUDE_CODE_AUTO_CONNECT_IDE", "0")
+                    .env("CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "1");
+                if let Some(home) = &home {
+                    cmd.env("CLAUDE_CONFIG_DIR", home);
+                }
+            },
+            self.kill_grace,
+        )
+        .await
+    }
+
     /// The CLI's read-only initialization response contains its current model
     /// aliases and account-visible resolved models. No user message is sent.
     pub async fn live_models(&self) -> Result<Vec<Model>, HarnessError> {

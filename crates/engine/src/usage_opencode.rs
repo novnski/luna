@@ -41,6 +41,12 @@ struct Credential {
 }
 
 impl Credential {
+    fn scope_signature(&self) -> String {
+        self.verified_account_id
+            .clone()
+            .unwrap_or_else(|| self.signature())
+    }
+
     fn signature(&self) -> String {
         format!(
             "{:x}",
@@ -105,49 +111,97 @@ fn store() -> Result<Store, &'static str> {
     })
 }
 
-/// OpenCode 2's saved Go key: the newest `credential` row of the
-/// `opencode-go` integration. OpenCode lists an integration's rows oldest
-/// first and selects the last one, ahead of its credential variables.
+/// Match the selected active credential in current and legacy OpenCode stores.
 fn saved_go_key(db: &Connection) -> Result<Option<Credential>, ()> {
-    let columns: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('credential') \
-             WHERE name IN ('integration_id', 'value', 'time_created')",
-            [],
-            |row| row.get(0),
-        )
+    let mut statement = db
+        .prepare("SELECT name FROM pragma_table_info('credential')")
         .map_err(|_| ())?;
-    if columns != 3 {
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .map_err(|_| ())?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|_| ())?;
+    if !["integration_id", "value", "time_created"]
+        .iter()
+        .all(|c| columns.iter().any(|v| v == c))
+    {
         return Ok(None);
     }
-    let value: Option<String> = db
-        .query_row(
-            "SELECT value FROM credential WHERE integration_id = 'opencode-go' \
-             ORDER BY time_created DESC, rowid DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|_| ())?;
-    let Some(value) = value else {
-        return Ok(None);
+    let active = if columns.iter().any(|v| v == "active") {
+        " AND active = 1"
+    } else {
+        ""
     };
-    let value: Value = serde_json::from_str(&value).map_err(|_| ())?;
-    if value.get("type").and_then(Value::as_str) != Some("key") {
-        return Err(());
+    let tie = if columns.iter().any(|v| v == "id") {
+        "id"
+    } else {
+        "rowid"
+    };
+    let query = format!(
+        "SELECT value FROM credential WHERE integration_id = ?1{active} ORDER BY time_created DESC, {tie} DESC LIMIT 1"
+    );
+    for provider in ["opencode-go", "opencode"] {
+        let value: Option<String> = db
+            .query_row(&query, [provider], |row| row.get(0))
+            .optional()
+            .map_err(|_| ())?;
+        let Some(value) = value else { continue };
+        let value: Value = serde_json::from_str(&value).map_err(|_| ())?;
+        match value["type"].as_str() {
+            Some("key" | "api") => {
+                let token = value["key"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .ok_or(())?;
+                return Ok(Some(Credential {
+                    token: token.into(),
+                    organization: None,
+                    verified_account_id: None,
+                    endpoint: GO_KEY_ENDPOINT,
+                }));
+            }
+            Some("oauth") if value["methodID"] == "device" => {
+                let metadata = &value["metadata"];
+                let issuer = metadata["server"]
+                    .as_str()
+                    .unwrap_or("https://opencode.ai/console");
+                if !official_console(issuer) {
+                    continue;
+                }
+                let token = value["access"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .ok_or(())?;
+                let account = metadata["accountID"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .ok_or(())?;
+                let org = metadata["orgID"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .ok_or(())?;
+                return Ok(Some(Credential {
+                    token: token.into(),
+                    organization: Some(org.into()),
+                    verified_account_id: Some(format!(
+                        "opencode-go:{:x}",
+                        Sha256::digest(format!("{org}:{account}").as_bytes())
+                    )),
+                    endpoint: "https://opencode.ai/inference/go/v1/usage",
+                }));
+            }
+            _ => continue,
+        }
     }
-    let token = value
-        .get("key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .ok_or(())?;
-    Ok(Some(Credential {
-        token: token.into(),
-        organization: None,
-        verified_account_id: None,
-        endpoint: GO_KEY_ENDPOINT,
-    }))
+    Ok(None)
+}
+
+fn official_console(issuer: &str) -> bool {
+    reqwest::Url::parse(issuer).is_ok_and(|url| {
+        url.origin().ascii_serialization() == "https://opencode.ai"
+            && matches!(url.path(), "/" | "/console" | "/console/")
+    })
 }
 
 /// The active OpenCode console account (`account` and `account_state`).
@@ -183,16 +237,11 @@ fn active_account_credential(db: &Connection) -> Result<Option<Credential>, ()> 
     let Some((id, url, token, expiry, Some(organization))) = row else {
         return Ok(None);
     };
-    let valid_issuer = reqwest::Url::parse(&url).is_ok_and(|url| {
-        url.origin().ascii_serialization() == "https://opencode.ai"
-            && matches!(url.path(), "/" | "/console" | "/console/")
-    });
+    let valid_issuer = official_console(&url);
     if !valid_issuer || id.is_empty() || organization.is_empty() || token.is_empty() {
         return Ok(None);
     }
-    if expiry.is_some_and(|expiry| expiry <= now_ms()) {
-        return Err(());
-    }
+    let _ = expiry;
     let verified_account_id = format!(
         "opencode-go:{:x}",
         Sha256::digest(format!("{organization}:{id}").as_bytes())
@@ -279,6 +328,21 @@ fn credential() -> Result<Option<Credential>, &'static str> {
         Some(account) => Ok(Some(account)),
         None => api_credential(&store).map_err(|_| FAILED),
     }
+}
+
+pub(crate) fn selection_signature() -> Result<String, &'static str> {
+    let location = store()?;
+    let selected = credential()?;
+    let account = match selected {
+        Some(credential) => credential.scope_signature(),
+        None => "no-selected-account".into(),
+    };
+    // Two CLI profiles may use the same Go account but have different local
+    // history. Fence the shared snapshot by both its owner and selected store.
+    Ok(format!(
+        "{:?}:{:?}:{account}",
+        location.database, location.auth_file
+    ))
 }
 
 fn now_ms() -> i64 {
@@ -368,7 +432,7 @@ pub(crate) async fn read_go_limits() -> UsageLimitSnapshot {
         );
     };
     let id = selected.verified_account_id.clone();
-    let signature = selected.signature();
+    let signature = selected.scope_signature();
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .redirect(Policy::none())
@@ -457,7 +521,7 @@ pub(crate) async fn read_go_limits() -> UsageLimitSnapshot {
         .ok()
         .and_then(Result::ok)
         .flatten()
-        .is_none_or(|current| current.signature() != signature)
+        .is_none_or(|current| current.scope_signature() != signature)
     {
         return unavailable(
             LimitAvailability::Unverified,

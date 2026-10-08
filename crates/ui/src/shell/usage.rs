@@ -126,7 +126,6 @@ struct CompactUsagePalette {
     selected_icon: gpui::Hsla,
     idle_icon: gpui::Hsla,
     control_icon: gpui::Hsla,
-    refresh_active: gpui::Hsla,
     opencode_icon: gpui::Hsla,
     badge: gpui::Hsla,
     badge_text: gpui::Hsla,
@@ -151,7 +150,6 @@ impl CompactUsagePalette {
             selected_icon: theme.text,
             idle_icon: theme.text_muted,
             control_icon: theme.text_muted,
-            refresh_active: theme.text,
             opencode_icon: theme.accent,
             badge: theme.surface_raised,
             badge_text: theme.text_muted,
@@ -989,12 +987,10 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
             continue;
         }
         has_section = true;
-        let ready: Vec<_> = accounts
+        let with_windows: Vec<_> = accounts
             .iter()
             .copied()
-            .filter(|limit| {
-                limit.availability == LimitAvailability::Ready && !limit.windows.is_empty()
-            })
+            .filter(|limit| !limit.windows.is_empty())
             .collect();
         // The header carries the brand mark beside the kit header, on the
         // title's line; the header keeps its own text edge after the mark.
@@ -1035,7 +1031,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     .pl(crate::typography::ui_rems(10.0)),
                 ),
         );
-        let mut windows: Vec<(String, String, Option<u64>)> = ready
+        let mut windows: Vec<(String, String, Option<u64>)> = with_windows
             .iter()
             .flat_map(|limit| {
                 limit.windows.iter().map(|window| {
@@ -1055,7 +1051,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
         });
         windows.dedup_by(|left, right| left.0 == right.0);
         for (window_id, label, _) in windows {
-            let reported: Vec<_> = ready
+            let reported: Vec<_> = with_windows
                 .iter()
                 .filter_map(|limit| {
                     limit
@@ -1080,7 +1076,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 .flex()
                 .items_center()
                 .gap(crate::typography::ui_rems(4.0));
-            for limit in &ready {
+            for limit in &with_windows {
                 if let Some(window) = limit.windows.iter().find(|window| window.id == window_id) {
                     let left = (100.0 - window.used_percent).clamp(0.0, 100.0);
                     let account = limit
@@ -1105,7 +1101,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     segments = segments.child(usage_meter(0.0, theme));
                 }
             }
-            let status = if ready.iter().all(|limit| limit.is_fresh(now_ms)) {
+            let status = if with_windows.iter().all(|limit| limit.is_fresh(now_ms)) {
                 reset
             } else {
                 format!("{reset} · some account values are last reported")
@@ -1125,8 +1121,8 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                             format!(
                                 "{} · {} {}",
                                 status,
-                                ready.len(),
-                                if ready.len() == 1 {
+                                with_windows.len(),
+                                if with_windows.len() == 1 {
                                     "account"
                                 } else {
                                     "accounts"
@@ -1160,7 +1156,10 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     .child(widgets::row_block().child(segments)),
             );
         }
-        let credits: u64 = ready.iter().filter_map(|limit| limit.reset_credits).sum();
+        let credits: u64 = with_windows
+            .iter()
+            .filter_map(|limit| limit.reset_credits)
+            .sum();
         if credits > 0 {
             section = section.child(
                 widgets::card_row(theme, false).child(widgets::row_text(
@@ -1217,20 +1216,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
 }
 
 fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'static str> {
-    match limit.availability {
-        LimitAvailability::Ready if limit.checked_at_ms.is_none() => Some("Check time unknown"),
-        LimitAvailability::Ready if limit.checked_age_ms(now_ms).is_none() => {
-            Some("Check time unverified")
-        }
-        LimitAvailability::Ready if !limit.is_fresh(now_ms) => Some("Stale · refresh to verify"),
-        LimitAvailability::Ready => None,
-        LimitAvailability::ProbeFailed if limit.windows.is_empty() => {
-            Some("Refresh failed · quota unavailable")
-        }
-        LimitAvailability::ProbeFailed => Some("Refresh failed · last good values"),
-        LimitAvailability::Unsupported => Some("Quota unsupported"),
-        LimitAvailability::Unverified => Some("Quota unverified"),
-    }
+    (!limit.windows.is_empty() && !limit.is_fresh(now_ms)).then_some("Last reported")
 }
 
 fn compact_reset_time(window: &luna_proto::UsageLimitWindow, now_ms: i64) -> String {
@@ -1344,7 +1330,7 @@ fn compact_limit_row(
             div()
                 .text_size(crate::typography::ui_rems(11.0))
                 .text_color(palette.quiet)
-                .child("Quota unavailable"),
+                .child("—"),
         );
     }
     for window in &limit.windows {
@@ -1402,7 +1388,7 @@ fn compact_limit_row(
             div()
                 .truncate()
                 .text_size(crate::typography::ui_rems(11.0))
-                .text_color(palette.status)
+                .text_color(palette.quiet)
                 .child(status),
         );
     }
@@ -1578,7 +1564,7 @@ impl Shell {
     pub(super) fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
         self.usage_card_open = !self.usage_card_open;
         if self.usage_card_open {
-            self.refresh_usage(cx);
+            self.request_usage(false, cx);
         }
         cx.notify();
     }
@@ -1745,136 +1731,113 @@ impl Shell {
     }
 
     pub(super) fn refresh_usage(&mut self, cx: &mut Context<Self>) {
+        self.request_usage(true, cx);
+    }
+
+    pub(super) fn request_usage(&mut self, force: bool, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.usage_error = Some("Engine not connected".into());
-            self.usage_refreshing = false;
-            cx.notify();
             return;
         };
         self.usage_last_refresh_attempt_ms = Some(Utc::now().timestamp_millis());
-        self.usage_request_epoch += 1;
+        self.usage_request_epoch = self.usage_request_epoch.wrapping_add(1);
         let epoch = self.usage_request_epoch;
-        let engine_generation = self.state.read(cx).engine_generation();
-        let local = engine.engine_info().device_id.clone();
-        let mut targets = vec![local];
-        for device in &self.state.read(cx).devices {
-            if !targets.contains(&device.id) && targets.len() < 8 {
-                targets.push(device.id.clone());
+        let generation = self.state.read(cx).engine_generation();
+        let page = matches!(self.route, super::Route::Settings(SettingsSection::Usage));
+        let include_history =
+            (page && self.settings.usage_metric != "limits") || self.usage_snapshot.is_none();
+        let include_limits = !page || self.settings.usage_metric == "limits";
+        let mut targets = vec![engine.engine_info().device_id.clone()];
+        if page {
+            for device in &self.state.read(cx).devices {
+                if !targets.contains(&device.id) && targets.len() < 8 {
+                    targets.push(device.id.clone());
+                }
             }
         }
         let days = self.settings.usage_days;
-        let (period_starts_ms, until_ms) = usage_period_window(days, Utc::now().timestamp_millis());
-        let include_limits = !matches!(self.route, super::Route::Settings(SettingsSection::Usage))
-            || self.settings.usage_metric == "limits";
-        let price_overrides = self.settings.usage_price_overrides.clone();
+        let (periods, until) = usage_period_window(days, Utc::now().timestamp_millis());
+        let prices = self.settings.usage_price_overrides.clone();
         self.usage_refreshing = true;
         self.usage_error = None;
-        // RpcClient and tokio::time both require the Tokio reactor. A GPUI
-        // task may await this bridge, but must not poll the RPC fan-out itself.
-        // Dropping usage_task drops `fetch`, which aborts the Tokio task.
+        let (sender, mut updates) = futures::channel::mpsc::unbounded();
+        // Publish each host as it answers. An offline remote must never hold
+        // back this machine's quota card or another completed environment.
         let fetch = gpui_tokio::Tokio::spawn(cx, async move {
             futures::future::join_all(targets.into_iter().map(|device| {
-                let engine = engine.clone();
-                let price_overrides = price_overrides.clone();
-                let period_starts_ms = period_starts_ms.clone();
+                let engine = engine.clone(); let prices = prices.clone(); let periods = periods.clone(); let sender = sender.clone();
                 async move {
-                    let result = tokio::time::timeout(
-                        std::time::Duration::from_secs(120),
-                        engine.client().call(
-                            methods::GET_USAGE_SNAPSHOT,
-                            serde_json::json!({"days": days, "periodStartsMs": period_starts_ms, "untilMs": until_ms, "includeLimits": include_limits, "targetDeviceId": device, "priceOverrides": price_overrides}),
-                        ),
-                    )
-                    .await;
-                    (device, result)
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(3), engine.client().call(methods::GET_USAGE_SNAPSHOT,
+                        serde_json::json!({"days":days,"periodStartsMs":periods,"untilMs":until,"priceOverrides":prices,
+                            "includeHistory":include_history,"includeLimits":include_limits,"background":true,"refresh":force,"targetDeviceId":device}))).await;
+                    let _ = sender.unbounded_send((device,result));
                 }
-            }))
-            .await
+            })).await;
         });
         self.usage_task = Some(cx.spawn(async move |this, cx| {
-            let result = fetch.await;
-            this.update(cx, |shell, cx| {
-                if shell.usage_request_epoch != epoch
-                    || shell.state.read(cx).engine_generation() != engine_generation
-                {
-                    return;
-                }
-                shell.usage_refreshing = false;
-                let Ok(results) = result else {
-                    shell.usage_error =
-                        Some("Usage refresh stopped; showing last good data".into());
+            let mut refreshing = false;
+            let mut failures = 0;
+            while let Some((device,result)) = futures::StreamExt::next(&mut updates).await {
+                this.update(cx, |shell, cx| {
+                    if shell.usage_request_epoch != epoch || shell.state.read(cx).engine_generation() != generation { return; }
+                    let value = result.ok().and_then(Result::ok).and_then(|value| serde_json::from_value::<luna_proto::UsageReadResponse>(value).ok())
+                        .filter(|value| value.snapshot.summary.contract_version == USAGE_CONTRACT_VERSION);
+                    if let Some(value) = value {
+                        refreshing |= value.refreshing;
+                        let same_scope = shell.usage_scope_keys.get(&device).is_none_or(|scope| scope == &value.scope);
+                        shell.usage_scope_keys.insert(device.clone(), value.scope);
+                        let mut snapshot = value.snapshot;
+                        if let Some((_,previous)) = shell.usage_environment_snapshots.iter().find(|(id,_)| id == &device).filter(|_| same_scope) {
+                            if !include_history || (snapshot.summary.read_at_ms == 0 && previous.summary.days == days) { snapshot.summary = previous.summary.clone(); }
+                            if !include_limits { snapshot.limits = previous.limits.clone(); }
+                        }
+                        if include_limits {
+                            snapshot.summary.sources.retain(|source| snapshot.limits.iter().any(|limit| limit.provider == source.provider));
+                            snapshot.summary.buckets.retain(|bucket| snapshot.limits.iter().any(|limit| limit.provider == bucket.provider));
+                        }
+                        shell.usage_environment_snapshots.retain(|(id,_)| id != &device);
+                        shell.usage_environment_snapshots.push((device,snapshot));
+                        shell.usage_snapshot = luna_proto::merge_usage_snapshots(shell.usage_environment_snapshots.iter().map(|(_,snapshot)| snapshot.clone()).collect());
+                        shell.usage_background_refreshing = refreshing;
+                        shell.maybe_open_low_usage_card(cx);
+                    } else {
+                        failures += 1;
+                        shell.usage_error = Some(format!("{failures} environment reads did not complete; keeping last reported data"));
+                    }
                     cx.notify();
-                    return;
-                };
-                let mut snapshots = Vec::new();
-                let mut failures = 0;
-                for (device, result) in results {
-                    match result {
-                        Ok(Ok(value)) => match serde_json::from_value::<UsageSnapshot>(value) {
-                            Ok(snapshot)
-                                if snapshot.summary.contract_version == USAGE_CONTRACT_VERSION =>
-                            {
-                                snapshots.push((device, snapshot))
-                            }
-                            _ => failures += 1,
-                        },
-                        _ => failures += 1,
-                    }
+                }).ok();
+            }
+            let _ = fetch.await;
+            this.update(cx, |shell, cx| {
+                if shell.usage_request_epoch == epoch && shell.state.read(cx).engine_generation() == generation {
+                    shell.usage_refreshing = false;
+                    shell.usage_background_refreshing = refreshing;
+                    cx.notify();
                 }
-                if let Some(mut merged) = luna_proto::merge_usage_snapshots(
-                    snapshots
-                        .iter()
-                        .map(|(_, snapshot)| snapshot.clone())
-                        .collect(),
-                ) {
-                    if failures > 0 {
-                        merged.summary.partial = true;
-                        merged
-                            .summary
-                            .warnings
-                            .push(format!("{failures} environment usage requests failed"));
-                    }
-                    shell.usage_environment_snapshots = snapshots;
-                    shell.usage_snapshot = Some(merged);
-                    let local = shell.local_usage_snapshot(cx);
-                    if shell.usage_provider_filter.is_some_and(|provider| {
-                        !Self::usage_card_providers(local.as_ref()).contains(&provider)
-                    }) {
-                        shell.usage_provider_filter = None;
-                    }
-                    if failures > 0 {
-                        shell.usage_error = Some(format!(
-                            "{failures} environments unavailable; showing partial usage"
-                        ));
-                    }
-                    shell.maybe_open_low_usage_card(cx);
-                } else {
-                    shell.usage_error = Some("Usage refresh failed; showing last good data".into());
-                }
-                cx.notify();
-            })
-            .ok();
+            }).ok();
         }));
         cx.notify();
     }
 
     pub(super) fn maybe_auto_refresh_usage(&mut self, cx: &mut Context<Self>) {
         self.maybe_open_low_usage_card(cx);
-        let visible = (!self.settings.usage_sidebar_hidden && self.usage_card_open)
-            || matches!(&self.route, super::Route::Settings(SettingsSection::Usage));
-        let watching = self.can_show_usage_alert() && !self.working_usage_targets(cx).is_empty();
-        if (!visible && !watching)
-            || self.usage_refreshing
-            || self.state.read(cx).engine().is_none()
-        {
+        if self.usage_refreshing || self.state.read(cx).engine().is_none() {
             return;
         }
-        let now_ms = Utc::now().timestamp_millis();
+        let visible = self.usage_card_open
+            || matches!(self.route, super::Route::Settings(SettingsSection::Usage));
+        let interval = if self.usage_background_refreshing && visible {
+            1_000
+        } else if visible {
+            5_000
+        } else {
+            60_000
+        };
+        let now = Utc::now().timestamp_millis();
         if self
             .usage_last_refresh_attempt_ms
-            .is_none_or(|last| now_ms.saturating_sub(last) >= USAGE_LIMIT_FRESHNESS_MS)
+            .is_none_or(|last| now.saturating_sub(last) >= interval)
         {
-            self.refresh_usage(cx);
+            self.request_usage(false, cx);
         }
     }
 
@@ -1904,7 +1867,9 @@ impl Shell {
         let limits_view = metric == "limits";
         let tokens_view = metric == "tokens";
         let hourly = self.settings.usage_days == 1;
-        let snapshot = self.page_usage_snapshot();
+        let snapshot = self.page_usage_snapshot().filter(|snapshot| {
+            snapshot.summary.read_at_ms > 0 || self.settings.usage_metric == "limits"
+        });
         let environment_label = match &self.usage_page_environment_ids {
             None => "All environments".to_string(),
             Some(ids) if ids.len() == 1 => {
@@ -2768,7 +2733,7 @@ impl Shell {
                         .into_any_element(),
                 );
             }
-        } else if self.usage_refreshing {
+        } else if self.usage_refreshing || self.usage_background_refreshing {
             // Loading: skeleton rows in place of the content.
             sections.push(
                 widgets::section_card(&theme)
@@ -2986,7 +2951,7 @@ impl Shell {
                         .p(px(10.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(palette.quiet)
-                        .child("No verified account limits available"),
+                        .child("—"),
                 );
             }
             for limit in limits {
@@ -2998,11 +2963,7 @@ impl Shell {
                     .p(px(10.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(palette.quiet)
-                    .child(if self.usage_refreshing {
-                        "Refreshing usage…"
-                    } else {
-                        "No verified account limits available"
-                    }),
+                    .child("—"),
             );
         }
         div()
@@ -3025,37 +2986,6 @@ impl Shell {
                     .gap(px(4.0))
                     .child(tabs)
                     .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("usage-card-refresh")
-                            .role(gpui::Role::Button)
-                            .aria_label(if self.usage_refreshing {
-                                "Refreshing usage"
-                            } else {
-                                "Refresh usage"
-                            })
-                            .tab_index(0)
-                            .size(px(26.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover_fill(
-                                "usage-card-refresh",
-                                palette.hover.opacity(0.0),
-                                palette.hover,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
-                            .on_key_down(crate::swallow_activation_key)
-                            .child(icon(icons::REFRESH).size(px(15.0)).text_color(
-                                if self.usage_refreshing {
-                                    palette.refresh_active
-                                } else {
-                                    palette.control_icon
-                                },
-                            )),
-                    )
                     .child(
                         div()
                             .id("usage-card-collapse")
@@ -3083,16 +3013,6 @@ impl Shell {
                     .border_color(palette.divider)
                     .child(content),
             )
-            .when_some(self.usage_error.clone(), |el, error| {
-                el.child(
-                    div()
-                        .px(px(10.0))
-                        .pb(px(7.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(palette.status)
-                        .child(error),
-                )
-            })
             .into_any_element()
     }
 
@@ -3217,20 +3137,17 @@ mod tests {
         };
         assert_eq!(compact_limit_status(&limit, 60_000), None);
         limit.checked_at_ms = Some(2 * 60_000);
-        assert_eq!(
-            compact_limit_status(&limit, 60_000),
-            Some("Check time unverified")
-        );
+        assert_eq!(compact_limit_status(&limit, 60_000), Some("Last reported"));
         assert_eq!(limits_status(&limit, 60_000), "Check time unverified");
         limit.checked_at_ms = Some(0);
         assert_eq!(
             compact_limit_status(&limit, 6 * 60_000),
-            Some("Stale · refresh to verify")
+            Some("Last reported")
         );
         limit.availability = LimitAvailability::ProbeFailed;
         assert_eq!(
             compact_limit_status(&limit, 6 * 60_000),
-            Some("Refresh failed · last good values")
+            Some("Last reported")
         );
         limit.windows[0].resets_at_ms = Some(10 * 60_000);
         let last_reported =
@@ -3238,15 +3155,9 @@ mod tests {
         assert!(last_reported.starts_with("Last reported reset"));
         assert!(!last_reported.contains("Resets in"));
         limit.windows.clear();
-        assert_eq!(
-            compact_limit_status(&limit, 6 * 60_000),
-            Some("Refresh failed · quota unavailable")
-        );
+        assert_eq!(compact_limit_status(&limit, 6 * 60_000), None);
         limit.availability = LimitAvailability::Unsupported;
-        assert_eq!(
-            compact_limit_status(&limit, 6 * 60_000),
-            Some("Quota unsupported")
-        );
+        assert_eq!(compact_limit_status(&limit, 6 * 60_000), None);
     }
 
     #[test]

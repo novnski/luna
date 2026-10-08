@@ -171,6 +171,7 @@ pub mod titles;
 mod transcript_history;
 pub mod uploads;
 pub mod usage;
+mod usage_cache;
 mod usage_opencode;
 pub mod workspace_files;
 pub mod workspace_host;
@@ -321,6 +322,7 @@ pub struct EngineCore {
     pub uploads: Uploads,
     pub agent_accounts: AgentAccounts,
     model_cache: Arc<model_cache::ModelCache>,
+    usage_cache: Arc<usage_cache::UsageCache>,
     pub task_identity: TaskIdentityService,
     pub device_id: String,
     remote_auth: Option<Arc<luna_rpc::RemoteAuthStore>>,
@@ -565,6 +567,7 @@ impl EngineCore {
         )?;
         let agent_accounts_config =
             agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));
+        let native_usage_probes = matches!(&codex_metadata, CodexMetadataAssembly::Native);
         let task_identity = match codex_metadata {
             CodexMetadataAssembly::Native => TaskIdentityService::open(
                 store.clone(),
@@ -689,6 +692,11 @@ impl EngineCore {
             registry.clone(),
             agent_accounts.clone(),
         ));
+        let usage_cache = usage_cache::UsageCache::new(
+            agent_accounts.clone(),
+            registry.clone(),
+            native_usage_probes,
+        );
         titles.set_model_cache(model_cache.clone());
         let chat_workbenches =
             chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
@@ -716,6 +724,7 @@ impl EngineCore {
             uploads,
             agent_accounts,
             model_cache,
+            usage_cache,
             task_identity,
             device_id,
             remote_auth,
@@ -903,6 +912,7 @@ impl EngineCore {
             self.uploads.clone(),
             self.agent_accounts.clone(),
             self.model_cache.clone(),
+            self.usage_cache.clone(),
             self.task_identity.clone(),
             self.workspace_scope,
             self.cleanup_boot_id.clone(),
@@ -975,6 +985,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) -> bool {
+        self.usage_cache.shutdown();
         self.model_cache.shutdown();
         self.cleanup_cancel.cancel();
         let cleanup = self
@@ -1036,6 +1047,7 @@ impl EngineCore {
 
 impl Drop for EngineCore {
     fn drop(&mut self) {
+        self.usage_cache.shutdown();
         self.model_cache.shutdown();
         self.cleanup_cancel.cancel();
         if let Some((_, task)) = self

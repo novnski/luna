@@ -115,20 +115,13 @@ pub enum LoadTrigger {
     PostAction,
 }
 
-/// Whether a load should ask the engine to probe usage (`forceUsage`). The
-/// engine only hits the provider when forced; non-forced lists serve the 60s
-/// usage cache or nothing (engine/src/agent_accounts.rs module docs — the
-/// design expects the UI to force "on page mount/refresh"). The visit's first
-/// list (mount, or retry after a failure) must force, or every first open
-/// renders "Usage unavailable" until a manual Refresh — the old app fetched
-/// usage on every list. Post-Switch/Forget lists ride the still-warm cache.
+/// Navigation reads the shared background cache. Explicit refresh/retry or a
+/// completed login can request a fresh probe without discarding cached rows.
 pub fn force_usage_for(trigger: LoadTrigger) -> bool {
-    match trigger {
-        LoadTrigger::Mount | LoadTrigger::Retry | LoadTrigger::Refresh | LoadTrigger::PostLogin => {
-            true
-        }
-        LoadTrigger::PostAction => false,
-    }
+    matches!(
+        trigger,
+        LoadTrigger::Retry | LoadTrigger::Refresh | LoadTrigger::PostLogin
+    )
 }
 
 /// Compact absolute reset moment (luna settings.agents.tsx `formatReset`):
@@ -249,6 +242,9 @@ pub struct AccountsPage {
     target_device: Option<String>,
     device_menu: popover::Popup<()>,
     snapshot: Loadable<AgentAccountsSnapshot>,
+    refreshing: bool,
+    engine_generation: u64,
+    _usage_poll: Task<()>,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     opencode_usage: Loadable<UsageSnapshot>,
     provider_updates: Loadable<Vec<ProviderUpdateStatus>>,
@@ -285,7 +281,7 @@ impl AccountsPage {
         self.reload_new_chat_provider(cx);
         // `load` marks every provider's defaults stale; they reread once the
         // harness list says which cards show them.
-        self.load(true, cx);
+        self.load(false, cx);
     }
 
     pub fn provider_update_statuses(&self) -> Option<Vec<ProviderUpdateStatus>> {
@@ -294,11 +290,7 @@ impl AccountsPage {
 
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let mut page = Self::build(state, Loadable::Idle, cx);
-        // Force the usage probe on the visit's first list — a plain list
-        // returns no usage windows on a cold engine cache, which rendered
-        // every account as "Usage unavailable" until a manual Refresh. The
-        // Loading skeleton (meter ghosts) covers the probe latency, so
-        // "Usage unavailable" is reserved for a probe that genuinely failed.
+        // Read the engine-owned cache immediately; missing data warms there.
         page.load(force_usage_for(LoadTrigger::Mount), cx);
         page
     }
@@ -397,7 +389,33 @@ impl AccountsPage {
         snapshot: Loadable<AgentAccountsSnapshot>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        let observe = cx.observe(&state, |page: &mut Self, state, cx| {
+            let generation = state.read(cx).engine_generation();
+            if page.engine_generation != generation {
+                page.engine_generation = generation;
+                page.snapshot = Loadable::Idle;
+                page.opencode_usage = Loadable::Idle;
+                page.refreshing = false;
+                page.load(false, cx);
+            }
+            cx.notify();
+        });
+        let usage_poll = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(5)).await;
+                if this
+                    .update(cx, |page, cx| {
+                        if !page.refreshing && page.state.read(cx).engine().is_some() {
+                            page.load_accounts(false, cx);
+                            page.load_opencode_usage(cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let code_input = cx.new(|cx| ComposerInput::new("Paste the authorization code", cx));
         let code_events = cx.subscribe(&code_input, |this: &mut Self, _, event, cx| {
             if matches!(event, ComposerInputEvent::Submitted) {
@@ -422,7 +440,11 @@ impl AccountsPage {
             .data_dir
             .as_deref()
             .and_then(super::provider_defaults::new_chat_provider);
+        let engine_generation = state.read(cx).engine_generation();
         Self {
+            refreshing: false,
+            engine_generation,
+            _usage_poll: usage_poll,
             defaults_panels,
             new_chat_provider,
             state,
@@ -475,13 +497,18 @@ impl AccountsPage {
             return;
         }
         self.target_device = target;
+        self.snapshot = Loadable::Idle;
+        self.opencode_usage = Loadable::Idle;
+        self.load_task = None;
+        self.usage_task = None;
+        self.refreshing = false;
         if let Some(page) = &self.advanced_page {
             let target = self.target_device.clone();
             page.update(cx, |page, cx| page.set_target_device(target, cx));
         }
         // A different device = a different accounts world: drop in-flight
-        // login/action state and reload with a forced usage probe (the new
-        // device's cache is cold).
+        // login/action state and read the new host's own cached data (the new
+        // device's cache may still be warming).
         self.login = None;
         self.rename = None;
         self.busy_account = None;
@@ -721,30 +748,47 @@ impl AccountsPage {
     }
 
     fn load(&mut self, force_usage: bool, cx: &mut Context<Self>) {
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.snapshot = Loadable::Error("Engine not connected".into());
-            return;
-        };
-        self.snapshot = Loadable::Loading;
-        // Catalogs can change with the device, a login or an account switch.
         self.mark_defaults_stale(cx);
         self.load_harnesses(cx);
         self.load_opencode_usage(cx);
         self.load_provider_updates(force_usage, cx);
-        let params = self.params(serde_json::json!({ "forceUsage": force_usage }));
+        self.load_accounts(force_usage, cx);
+    }
+
+    fn load_accounts(&mut self, force_usage: bool, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        if !matches!(self.snapshot, Loadable::Ready(_)) {
+            self.snapshot = Loadable::Loading;
+        }
+        self.refreshing = true;
+        let target = self.target_device.clone();
+        let generation = self.engine_generation;
+        let params = self.params(serde_json::json!({"forceUsage":force_usage,"background":true}));
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(methods::LIST_AGENT_ACCOUNTS, params)
                 .await;
             this.update(cx, |page, cx| {
-                page.snapshot = match result {
-                    Ok(value) => match serde_json::from_value::<AgentAccountsSnapshot>(value) {
-                        Ok(snapshot) => Loadable::Ready(snapshot),
-                        Err(err) => Loadable::Error(err.to_string()),
-                    },
-                    Err(err) => Loadable::Error(err.to_string()),
-                };
+                if page.target_device != target || page.engine_generation != generation {
+                    return;
+                }
+                page.refreshing = false;
+                match result.and_then(|v| {
+                    serde_json::from_value::<AgentAccountsSnapshot>(v)
+                        .map_err(|e| luna_rpc::RpcError::Failed(e.to_string()))
+                }) {
+                    Ok(snapshot) => {
+                        page.snapshot = Loadable::Ready(snapshot);
+                    }
+                    Err(error) => {
+                        if !matches!(page.snapshot, Loadable::Ready(_)) {
+                            page.snapshot = Loadable::Error(error.to_string());
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -777,23 +821,35 @@ impl AccountsPage {
 
     fn load_opencode_usage(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.opencode_usage = Loadable::Error("Engine not connected".into());
             return;
         };
-        self.opencode_usage = Loadable::Loading;
-        let params = self.params(serde_json::json!({"days": 7, "priceOverrides": {}}));
+        if !matches!(self.opencode_usage, Loadable::Ready(_)) {
+            self.opencode_usage = Loadable::Loading;
+        }
+        let target = self.target_device.clone();
+        let generation = self.engine_generation;
+        let params =
+            self.params(serde_json::json!({"days":7,"includeHistory":false,"background":true}));
         self.usage_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(methods::GET_USAGE_SNAPSHOT, params)
                 .await;
             this.update(cx, |page, cx| {
-                page.opencode_usage = match result {
-                    Ok(value) => serde_json::from_value::<UsageSnapshot>(value)
-                        .map(Loadable::Ready)
-                        .unwrap_or_else(|error| Loadable::Error(error.to_string())),
-                    Err(error) => Loadable::Error(error.to_string()),
-                };
+                if page.target_device != target || page.engine_generation != generation {
+                    return;
+                }
+                match result.and_then(|v| {
+                    serde_json::from_value::<UsageSnapshot>(v)
+                        .map_err(|e| luna_rpc::RpcError::Failed(e.to_string()))
+                }) {
+                    Ok(snapshot) => page.opencode_usage = Loadable::Ready(snapshot),
+                    Err(error) => {
+                        if !matches!(page.opencode_usage, Loadable::Ready(_)) {
+                            page.opencode_usage = Loadable::Error(error.to_string());
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -1510,8 +1566,8 @@ impl AccountsPage {
 
         let usage: AnyElement = if account.usage_windows.is_empty() {
             // Meters XOR the quiet fallback line — never both (luna:
-            // `usage ? meters : "Usage unavailable"…`).
-            widgets::row_description(theme, "Usage unavailable").into_any_element()
+            // A missing observation is not a zero or a refresh instruction.
+            widgets::row_description(theme, "—").into_any_element()
         } else {
             div()
                 .mt(ui_rems(4.0))
@@ -2640,7 +2696,7 @@ impl Render for AccountsPage {
         } else {
             self.render_rename_dialog(window.viewport_size(), cx)
         };
-        let refreshing = matches!(self.snapshot, Loadable::Loading);
+        let refreshing = self.refreshing;
         let local = self.targets_local_device(cx);
         let advanced_sections = self
             .advanced_open
@@ -2799,10 +2855,9 @@ mod tests {
     }
 
     #[test]
-    fn first_load_of_a_visit_forces_the_usage_probe() {
-        // The engine only probes usage when forced (M5c); without forcing on
-        // mount, the first Accounts open always rendered "Usage unavailable".
-        assert!(force_usage_for(LoadTrigger::Mount));
+    fn page_navigation_reads_the_shared_background_usage_cache() {
+        // The engine warms and refreshes independently of page navigation.
+        assert!(!force_usage_for(LoadTrigger::Mount));
         // A retry after a failed load is still the visit's first successful
         // list — same requirement.
         assert!(force_usage_for(LoadTrigger::Retry));

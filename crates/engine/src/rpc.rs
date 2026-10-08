@@ -1059,6 +1059,8 @@ struct ListAgentAccountsParams {
     force_usage: Option<bool>,
     #[serde(default)]
     harness: Option<HarnessId>,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1292,9 +1294,7 @@ pub struct EngineRpc {
     uploads: Uploads,
     agent_accounts: AgentAccounts,
     model_cache: std::sync::Arc<crate::model_cache::ModelCache>,
-    codex_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
-    opencode_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
-    claude_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
+    usage_cache: std::sync::Arc<crate::usage_cache::UsageCache>,
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
     remote_auth: Option<std::sync::Arc<luna_rpc::RemoteAuthStore>>,
@@ -1445,143 +1445,6 @@ impl EngineRpc {
             .any(|source| source.status == luna_proto::UsageSourceStatus::Partial);
     }
 
-    fn attach_account_live_limits(
-        snapshot: &mut luna_proto::UsageSnapshot,
-        observed: luna_proto::UsageLimitSnapshot,
-        last_good: &std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
-        failure_detail: &'static str,
-    ) {
-        let Some(index) = snapshot
-            .limits
-            .iter()
-            .position(|limit| limit.provider == observed.provider)
-        else {
-            return;
-        };
-        match observed.availability {
-            luna_proto::LimitAvailability::Ready => {
-                *last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = observed
-                    .verified_account_id
-                    .as_ref()
-                    .map(|_| observed.clone());
-                snapshot.limits[index] = observed;
-            }
-            luna_proto::LimitAvailability::Unsupported => {
-                *last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                snapshot.limits[index] = observed;
-            }
-            luna_proto::LimitAvailability::ProbeFailed => {
-                let last_good = last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                if let Some(mut last_good) = last_good.filter(|last_good| {
-                    observed.verified_account_id.is_some()
-                        && last_good.verified_account_id == observed.verified_account_id
-                }) {
-                    last_good.availability = luna_proto::LimitAvailability::ProbeFailed;
-                    last_good.detail = Some(failure_detail.into());
-                    snapshot.limits[index] = last_good;
-                } else {
-                    snapshot.limits[index] = observed;
-                }
-            }
-            luna_proto::LimitAvailability::Unverified => {
-                snapshot.limits[index] = observed;
-            }
-        }
-    }
-
-    async fn attach_codex_live_limits(
-        &self,
-        snapshot: &mut luna_proto::UsageSnapshot,
-        selected: Option<&(std::path::PathBuf, bool)>,
-    ) {
-        if crate::usage::synthetic_mode_requested() {
-            return;
-        }
-        let Some(index) = snapshot
-            .limits
-            .iter()
-            .position(|limit| limit.provider == luna_proto::UsageProvider::Codex)
-        else {
-            return;
-        };
-        let Some((home, force_file_auth)) = selected else {
-            snapshot.limits[index].detail = Some("Selected Codex account is unavailable".into());
-            return;
-        };
-        if !home.is_dir() {
-            snapshot.limits[index].detail =
-                Some("Selected Codex account home is unavailable".into());
-            return;
-        }
-        let client = luna_harness::codex::native::CodexNativeClient::new(home)
-            .for_execution_home(home, *force_file_auth);
-        let outcome =
-            tokio::time::timeout(Duration::from_secs(8), client.read_account_rate_limits()).await;
-        // A user can switch named Codex accounts while the provider replies.
-        // Never publish a different selected home under the old selection.
-        if self.agent_accounts.codex_usage_target().ok().as_ref() != selected {
-            snapshot.limits[index].availability = luna_proto::LimitAvailability::Unverified;
-            snapshot.limits[index].detail =
-                Some("Codex account selection changed during refresh".into());
-            return;
-        }
-        use luna_harness::codex::native::CodexQuotaObservation;
-        match outcome {
-            Ok(Ok(CodexQuotaObservation::Ready(read))) => {
-                let limit = crate::usage::live_codex_limit(read);
-                *self
-                    .codex_usage_last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    limit.verified_account_id.as_ref().map(|_| limit.clone());
-                snapshot.limits[index] = limit;
-            }
-            Ok(Ok(CodexQuotaObservation::Unsupported)) => {
-                *self
-                    .codex_usage_last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                snapshot.limits[index].detail = Some(
-                    "Selected Codex account did not report ChatGPT subscription limits".into(),
-                );
-            }
-            Ok(Ok(CodexQuotaObservation::Failed {
-                verified_account_id: Some(id),
-            })) => {
-                let last_good = self
-                    .codex_usage_last_good
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                if let Some(mut limit) = last_good
-                    .filter(|limit| limit.verified_account_id.as_deref() == Some(id.as_str()))
-                {
-                    limit.availability = luna_proto::LimitAvailability::ProbeFailed;
-                    limit.detail =
-                        Some("Codex app-server refresh failed · last good values".into());
-                    snapshot.limits[index] = limit;
-                } else {
-                    snapshot.limits[index].availability =
-                        luna_proto::LimitAvailability::ProbeFailed;
-                    snapshot.limits[index].detail =
-                        Some("Codex app-server refresh failed · quota unavailable".into());
-                }
-            }
-            _ => {
-                snapshot.limits[index].availability = luna_proto::LimitAvailability::ProbeFailed;
-                snapshot.limits[index].detail =
-                    Some("Codex app-server usage check failed · quota unavailable".into());
-            }
-        }
-    }
-
     #[allow(clippy::too_many_arguments)] // engine assembly seam, not a public API
     pub(crate) fn new(
         store: std::sync::Arc<DocsStore>,
@@ -1597,6 +1460,7 @@ impl EngineRpc {
         uploads: Uploads,
         agent_accounts: AgentAccounts,
         model_cache: std::sync::Arc<crate::model_cache::ModelCache>,
+        usage_cache: std::sync::Arc<crate::usage_cache::UsageCache>,
         task_identity: crate::TaskIdentityService,
         workspace_scope: WorkspaceScope,
         cleanup_boot_id: String,
@@ -1643,9 +1507,7 @@ impl EngineRpc {
             uploads,
             agent_accounts,
             model_cache,
-            codex_usage_last_good: std::sync::Mutex::new(None),
-            opencode_usage_last_good: std::sync::Mutex::new(None),
-            claude_usage_last_good: std::sync::Mutex::new(None),
+            usage_cache,
             task_identity,
             auth: None,
             remote_auth: None,
@@ -1660,6 +1522,7 @@ impl EngineRpc {
         };
         rpc.spawn_activity_bootstrap();
         rpc.model_cache.start_background_refresh();
+        rpc.usage_cache.start();
         rpc
     }
 
@@ -9604,100 +9467,17 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&page)
             }
             methods::GET_USAGE_SNAPSHOT => {
-                let request: UsageRequest = parse_params(params)?;
-                let include_limits = request.include_limits;
-                let synthetic = crate::usage::synthetic_mode_requested();
-                let enabled = Self::usage_providers_for(&self.registry.enabled_set());
-                let selection = (!synthetic).then(|| self.agent_accounts.usage_history_selection());
-                let codex_target = selection.as_ref().and_then(|(target, _, _)| target.clone());
-                let homes = selection
-                    .map(|(codex, claude, data)| (codex.map(|(home, _)| home), claude, data));
-                let opencode = (include_limits
-                    && !synthetic
-                    && enabled.contains(&luna_proto::UsageProvider::OpenCodeGo))
-                .then(|| tokio::spawn(crate::usage_opencode::read_go_limits()));
-                let claude_accounts = self.agent_accounts.clone();
-                let claude = (include_limits
-                    && !synthetic
-                    && enabled.contains(&luna_proto::UsageProvider::Claude))
-                .then(|| {
-                    tokio::spawn(async move { claude_accounts.read_claude_usage_limit().await })
-                });
-                if let Some((_, _, data_dir)) = homes.as_ref().filter(|_| {
-                    enabled.contains(&luna_proto::UsageProvider::Codex)
-                        || enabled.contains(&luna_proto::UsageProvider::Claude)
-                        || enabled.contains(&luna_proto::UsageProvider::OpenCodeGo)
-                }) {
-                    crate::usage::refresh_live_prices(data_dir).await;
-                }
-                let scan_enabled = enabled.clone();
-                let mut snapshot = tokio::task::spawn_blocking(move || match homes {
-                    Some((codex, claude, data_dir)) => {
-                        crate::usage::snapshot_live(request, codex, claude, data_dir, scan_enabled)
-                    }
-                    None => crate::usage::snapshot(request),
-                })
-                .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
-                let ensure_codex_selection = || {
-                    if !synthetic
-                        && enabled.contains(&luna_proto::UsageProvider::Codex)
-                        && self.agent_accounts.codex_usage_target().ok() != codex_target
-                    {
-                        Err(RpcError::Failed(
-                            "Codex account selection changed during usage refresh; refresh again"
-                                .into(),
-                        ))
-                    } else {
-                        Ok(())
-                    }
-                };
-                // Do not start a quota probe for a selection already retired
-                // during price refresh or the history scan.
-                ensure_codex_selection()?;
-                if include_limits && enabled.contains(&luna_proto::UsageProvider::Codex) {
-                    self.attach_codex_live_limits(&mut snapshot, codex_target.as_ref())
-                        .await;
-                }
-                if let Some(opencode) = opencode
-                    && let Ok(limit) = opencode.await
-                {
-                    Self::attach_account_live_limits(
-                        &mut snapshot,
-                        limit,
-                        &self.opencode_usage_last_good,
-                        "OpenCode Go refresh failed · last good values",
-                    );
-                }
-                if let Some(claude) = claude
-                    && let Ok(limit) = claude.await
-                {
-                    Self::attach_account_live_limits(
-                        &mut snapshot,
-                        limit,
-                        &self.claude_usage_last_good,
-                        "Claude refresh failed · last good values",
-                    );
-                }
-                // Fence the whole refresh, including history-only requests
-                // and waits for other providers after Codex quota completes.
-                ensure_codex_selection()?;
-                // Provider enablement can also change during the refresh.
+                let request: luna_proto::UsageReadRequest = parse_params(params)?;
+                let include_limits = request.query.include_limits;
+                let mut response = self.usage_cache.read(request).await.map_err(RpcError::Failed)?;
+                let snapshot = &mut response.snapshot;
                 let still_enabled = Self::usage_providers_for(&self.registry.enabled_set());
-                Self::retain_enabled_usage(&mut snapshot, &still_enabled);
-                // CC-06: live stream accounting beside history (never summed in).
-                crate::live_usage::attach(
-                    &mut snapshot,
-                    self.sessions.live_usage(),
-                    &still_enabled,
-                    include_limits && !synthetic,
-                );
-                self.sessions
-                    .retain_owned_live_usage_rows(&mut snapshot.live_sessions);
-                for source in &mut snapshot.summary.sources {
-                    source.environment_id = self.engine_info.device_id.clone();
-                }
-                RpcReply::value(&snapshot)
+                Self::retain_enabled_usage(snapshot, &still_enabled);
+                crate::live_usage::attach(snapshot, self.sessions.live_usage(), &still_enabled,
+                    include_limits && !crate::usage::synthetic_mode_requested());
+                self.sessions.retain_owned_live_usage_rows(&mut snapshot.live_sessions);
+                for source in &mut snapshot.summary.sources { source.environment_id = self.engine_info.device_id.clone(); }
+                RpcReply::value(&response)
             }
             methods::REBUILD_SESSION_HISTORY => {
                 let request: HistoryRebuildRequest = parse_params(params)?;
@@ -12325,19 +12105,40 @@ impl RpcService for EngineRpc {
             }
             methods::LIST_AGENT_ACCOUNTS => {
                 let p: ListAgentAccountsParams = parse_params(params)?;
-                let snapshot = match p.harness {
-                    Some(harness) => {
-                        self.agent_accounts
-                            .list_harness(harness, p.force_usage.unwrap_or(false))
-                            .await
+                let usage_scope = p.harness.is_none().then(|| self.usage_cache.history_scope());
+                let force_direct = p.force_usage.unwrap_or(false) && !p.background;
+                let mut snapshot = match p.harness {
+                    Some(harness) => self.agent_accounts.list_harness(harness, force_direct).await,
+                    None => self.agent_accounts.list(force_direct).await,
+                }.map_err(|e| RpcError::Failed(e.to_string()))?;
+                // A provider-scoped Codex listing must not touch Claude.
+                if p.harness.is_none() {
+                    if !force_direct { self.usage_cache.queue_accounts(p.force_usage.unwrap_or(false)); }
+                    let usage = self.usage_cache.read(luna_proto::UsageReadRequest {
+                        query: UsageRequest { days: 7, period_starts_ms: vec![], until_ms: None, include_limits: true, price_overrides: Default::default() },
+                        include_history: false, background: p.background || !p.force_usage.unwrap_or(false), refresh: p.force_usage.unwrap_or(false),
+                    }).await.map_err(RpcError::Failed)?;
+                    if usage_scope.as_deref() != Some(usage.scope.as_str()) {
+                        return Err(RpcError::Failed("Provider account selection changed during account usage refresh".into()));
                     }
-                    None => {
-                        self.agent_accounts
-                            .list(p.force_usage.unwrap_or(false))
-                            .await
+                    for account in snapshot.accounts.iter_mut().filter(|a| a.active) {
+                        let provider = match account.harness { HarnessId::Codex => luna_proto::UsageProvider::Codex, HarnessId::ClaudeCode => luna_proto::UsageProvider::Claude, _ => continue };
+                        if let Some(limit) = usage.snapshot.limits.iter().find(|l| l.provider == provider) {
+                            account.usage_windows = limit.windows.iter().map(|w| luna_proto::AgentUsageWindow {
+                                label: w.label.clone(), used_fraction: w.used_percent / 100.0,
+                                resets_at: w.resets_at_ms.and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis),
+                            }).collect();
+                            if limit.plan.is_some() { account.plan_label = limit.plan.clone(); }
+                            if limit.is_fresh(chrono::Utc::now().timestamp_millis()) {
+                                account.authentication = luna_proto::AgentAuthenticationState::Authenticated;
+                                if account.email.is_none() { account.email = limit.account_label.clone().filter(|label| label.contains('@')); }
+                            }
+                        }
+                    }
+                    if snapshot.accounts.iter().any(|account| account.harness == HarnessId::Codex && account.active && account.authentication == luna_proto::AgentAuthenticationState::Authenticated) {
+                        snapshot.warnings.retain(|warning| !warning.message.starts_with("Codex may keep the native login in its provider-managed OS credential store."));
                     }
                 }
-                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&snapshot)
             }
             methods::ACTIVATE_AGENT_ACCOUNT => {

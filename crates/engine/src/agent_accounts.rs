@@ -18,11 +18,10 @@
 //! deletes provider credential material. Historical plaintext slot files are
 //! only detected and reported; they are not opened.
 //!
-//! Usage probes read provider-native rate limits (`/usage` in Claude Code,
-//! `/status` in Codex). Lists only hit the network when `force_usage` is set —
-//! the default list stays offline-fast and deterministic; the UI passes
-//! `forceUsage` on page mount/refresh. Cached results (60s TTL) are served to
-//! non-forced lists in between.
+//! Legacy explicit account probes remain available to non-UI callers. The
+//! engine's shared usage cache owns periodic native quota refreshes; UI lists
+//! use cached rows without waiting for the network. Successful account windows
+//! remain available across a transient failed refresh, scoped to account keys.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,7 +66,6 @@ const CLAUDE_SHARED_CREDENTIAL_KEYS: &[&str] = &[
     "pluginSecrets",
 ];
 
-const USAGE_TTL: Duration = Duration::from_secs(60);
 /// An abandoned login flow (dialog dismissed without Cancel) is reaped past this.
 const FLOW_TTL: Duration = Duration::from_secs(15 * 60);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
@@ -679,13 +677,6 @@ impl AgentAccounts {
         force_usage: bool,
         only_harness: Option<HarnessId>,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        if force_usage {
-            if let Some(harness) = only_harness {
-                self.invalidate_caches(harness);
-            } else {
-                lock(&self.inner.usage_cache).clear();
-            }
-        }
         let includes = |harness| only_harness.is_none_or(|only| only == harness);
         let state = lock(&self.inner.state).clone();
         let mut warnings: Vec<AgentAccountWarning> = Vec::new();
@@ -1502,107 +1493,104 @@ impl AgentAccounts {
 
     // ── remaining usage ─────────────────────────────────────────────────────
 
-    /// Read-only Claude subscription limits for the full Usage page. Reuses
-    /// the existing provider usage endpoint, but intentionally reads only the
-    /// credentials file. Usage never queries macOS Keychain or opens auth UI.
+    /// Ask Claude's native control channel, including native credential renewal.
+    /// LUNA never extracts Keychain secrets or starts a model turn for usage.
     pub async fn read_claude_usage_limit(&self) -> luna_proto::UsageLimitSnapshot {
         use luna_proto::{LimitAvailability, UsageLimitSnapshot, UsageProvider};
-        let unavailable = |availability, detail: String, verified_account_id| UsageLimitSnapshot {
+        let account = read_json(&self.inner.config.claude_config_file);
+        let oauth = account.as_ref().and_then(|v| v.get("oauthAccount"));
+        let account_key = oauth
+            .and_then(|v| str_field(v, "accountUuid").or_else(|| str_field(v, "emailAddress")));
+        let verified_id = account_key
+            .as_deref()
+            .map(|key| format!("claude:{:x}", Sha256::digest(key.as_bytes())));
+        let account_label = oauth.and_then(|v| str_field(v, "emailAddress"));
+        let plan = oauth.and_then(|v| {
+            claude_plan(
+                str_field(v, "organizationType").as_deref(),
+                str_field(v, "organizationRateLimitTier").as_deref(),
+            )
+        });
+        let unavailable = |availability, detail: &str| UsageLimitSnapshot {
             provider: UsageProvider::Claude,
-            verified_account_id,
-            account_label: None,
-            plan: None,
+            verified_account_id: verified_id.clone(),
+            account_label: account_label.clone(),
+            plan: plan.clone(),
             checked_at_ms: None,
             availability,
             windows: Vec::new(),
             reset_credits: None,
-            detail: Some(detail),
+            detail: Some(detail.into()),
         };
-        let account = read_json(&self.inner.config.claude_config_file);
-        let account_key = account
-            .as_ref()
-            .and_then(|config| config.get("oauthAccount"))
-            .and_then(|oauth| {
-                str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
-            });
-        let verified_id = account_key
-            .as_deref()
-            .map(|key| format!("claude:{:x}", Sha256::digest(key.as_bytes())));
-        let plan = account
-            .as_ref()
-            .and_then(|config| config.get("oauthAccount"))
-            .and_then(|oauth| {
-                claude_plan(
-                    str_field(oauth, "organizationType").as_deref(),
-                    str_field(oauth, "organizationRateLimitTier").as_deref(),
-                )
-            });
-        let account_label = account
-            .as_ref()
-            .and_then(|config| config.get("oauthAccount"))
-            .and_then(|oauth| str_field(oauth, "emailAddress"));
-        let credentials = read_json(&self.inner.config.claude_creds_file());
-        let Some(oauth) = credentials
-            .as_ref()
-            .and_then(|value| value.get("claudeAiOauth"))
-        else {
-            return unavailable(
-                LimitAvailability::Unsupported,
-                "Claude credentials file is unavailable; Usage does not access Keychain".into(),
-                verified_id,
-            );
-        };
-        let Some(token) = str_field(oauth, "accessToken") else {
-            return unavailable(
-                LimitAvailability::Unsupported,
-                "Claude Code OAuth usage is unavailable".into(),
-                verified_id,
-            );
-        };
-        if oauth
-            .get("expiresAt")
-            .and_then(serde_json::Value::as_i64)
-            .is_some_and(|expiry| expiry <= Utc::now().timestamp_millis())
+        if !lock(&self.inner.state).claude_enabled
+            || account_key.is_none()
+            || self
+                .inner
+                .config
+                .claude_config_dir
+                .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK)
+                .is_file()
         {
             return unavailable(
-                LimitAvailability::ProbeFailed,
-                "Claude Code login has expired; LUNA did not refresh it".into(),
-                verified_id,
+                LimitAvailability::Unsupported,
+                "No selected native Claude account; LUNA does not access Keychain directly",
             );
         }
-        let body = match self.claude_usage_response(&token).await {
-            Ok(body) => body,
+        let mut harness = luna_harness::claude::ClaudeHarness::new();
+        if self.inner.config.claude_config_dir != home_dir().join(".claude")
+            || self.inner.config.claude_config_file != home_dir().join(".claude.json")
+        {
+            harness = harness.with_config_dir(&self.inner.config.claude_config_dir);
+        }
+        let response = match harness.subscription_usage().await {
+            Ok(value) => value,
             Err(_) => {
                 return unavailable(
                     LimitAvailability::ProbeFailed,
-                    "Claude usage request failed without changing the login".into(),
-                    verified_id,
+                    "Claude's native usage read did not complete",
                 );
             }
         };
-        let current_key = read_json(&self.inner.config.claude_config_file)
+        let current = read_json(&self.inner.config.claude_config_file);
+        let current_key = current
             .as_ref()
-            .and_then(|config| config.get("oauthAccount"))
-            .and_then(|oauth| {
-                str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
-            });
-        if current_key != account_key {
+            .and_then(|v| v.get("oauthAccount"))
+            .and_then(|v| str_field(v, "accountUuid").or_else(|| str_field(v, "emailAddress")));
+        let native_email = response
+            .get("account")
+            .and_then(|v| v.get("email"))
+            .and_then(serde_json::Value::as_str);
+        if current_key != account_key
+            || native_email
+                .zip(account_label.as_deref())
+                .is_some_and(|(a, b)| !a.eq_ignore_ascii_case(b))
+        {
             return unavailable(
                 LimitAvailability::Unverified,
-                "Claude account changed during usage refresh".into(),
-                None,
+                "Claude account changed during the native usage read",
             );
         }
-        crate::usage::live_claude_limit(&body, verified_id.clone(), plan)
+        let usage = &response["usage"];
+        if usage["rate_limits_available"] != true {
+            return unavailable(
+                if plan.is_some() {
+                    LimitAvailability::ProbeFailed
+                } else {
+                    LimitAvailability::Unsupported
+                },
+                "Claude has not reported subscription windows",
+            );
+        }
+        crate::usage::live_claude_limit(&usage["rate_limits"], verified_id.clone(), plan.clone())
             .map(|mut limit| {
-                limit.account_label = account_label;
+                limit.account_label = account_label.clone();
+                limit.detail = Some("Claude native get_usage".into());
                 limit
             })
             .unwrap_or_else(|| {
                 unavailable(
-                    LimitAvailability::Unsupported,
-                    "Claude did not report subscription windows".into(),
-                    verified_id,
+                    LimitAvailability::ProbeFailed,
+                    "Claude's native usage response had no valid windows",
                 )
             })
     }
@@ -1615,8 +1603,8 @@ impl AgentAccounts {
         force: bool,
     ) -> Option<UsageSnapshot> {
         let key = format!("{}:{}", harness_slug(harness), slot.account_key);
-        if let Some((usage, at)) = lock(&self.inner.usage_cache).get(&key)
-            && at.elapsed() < USAGE_TTL
+        if let Some((usage, _at)) = lock(&self.inner.usage_cache).get(&key)
+            && !force
         {
             return usage.clone();
         }
@@ -1629,8 +1617,10 @@ impl AgentAccounts {
             HarnessId::Codex => self.codex_usage(slot).await,
             _ => None,
         };
-        lock(&self.inner.usage_cache).insert(key, (usage.clone(), Instant::now()));
-        usage
+        let mut cache = lock(&self.inner.usage_cache);
+        let retained = usage.or_else(|| cache.get(&key).and_then(|(value, _)| value.clone()));
+        cache.insert(key, (retained.clone(), Instant::now()));
+        retained
     }
 
     async fn claude_usage(&self, slot: &Slot) -> Option<UsageSnapshot> {

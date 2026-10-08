@@ -160,6 +160,23 @@ pub(super) async fn initialize_probe(
     configure: impl FnOnce(&mut Command),
     kill_grace: Duration,
 ) -> Result<Value, HarnessError> {
+    probe(exe, configure, kill_grace, false).await
+}
+
+pub(super) async fn usage_probe(
+    exe: &Path,
+    configure: impl FnOnce(&mut Command),
+    kill_grace: Duration,
+) -> Result<Value, HarnessError> {
+    probe(exe, configure, kill_grace, true).await
+}
+
+async fn probe(
+    exe: &Path,
+    configure: impl FnOnce(&mut Command),
+    kill_grace: Duration,
+    include_usage: bool,
+) -> Result<Value, HarnessError> {
     let mut cmd = Command::new(exe);
     crate::compose_child_path(&mut cmd, exe);
     cmd.args([
@@ -172,6 +189,9 @@ pub(super) async fn initialize_probe(
         // exits immediately with a usage error.
         "--verbose",
     ]);
+    if include_usage {
+        cmd.arg("--no-session-persistence");
+    }
     configure(&mut cmd);
     crate::mcp_isolation::claude_strict_empty(&mut cmd);
     cmd.stdin(Stdio::piped())
@@ -201,6 +221,7 @@ pub(super) async fn initialize_probe(
             .map_err(HarnessError::Io)?;
         stdin.flush().await.map_err(HarnessError::Io)?;
         let mut lines = BufReader::new(stdout).lines();
+        let mut initialized = None;
         while let Some(line) = lines.next_line().await.map_err(HarnessError::Io)? {
             let Ok(frame) = serde_json::from_str::<Value>(&line) else {
                 continue;
@@ -209,7 +230,12 @@ pub(super) async fn initialize_probe(
                 continue;
             }
             let response = frame.get("response").cloned().unwrap_or(Value::Null);
-            if response.get("request_id").and_then(Value::as_str) != Some(PROBE_ID) {
+            let expected = if initialized.is_some() {
+                "luna-usage-probe"
+            } else {
+                PROBE_ID
+            };
+            if response.get("request_id").and_then(Value::as_str) != Some(expected) {
                 continue;
             }
             if response.get("subtype").and_then(Value::as_str) == Some("error") {
@@ -219,13 +245,34 @@ pub(super) async fn initialize_probe(
                     .unwrap_or("initialize control request failed");
                 return Err(HarnessError::Protocol(msg.into()));
             }
-            return Ok(response);
+            if include_usage && initialized.is_none() {
+                let body = response.get("response").cloned().unwrap_or(Value::Null);
+                initialized = Some(body.get("account").cloned().unwrap_or(Value::Null));
+                let request = serde_json::json!({"type":"control_request", "request_id":"luna-usage-probe", "request":{"subtype":"get_usage"}});
+                stdin
+                    .write_all(format!("{request}\n").as_bytes())
+                    .await
+                    .map_err(HarnessError::Io)?;
+                stdin.flush().await.map_err(HarnessError::Io)?;
+                continue;
+            }
+            return Ok(match initialized {
+                Some(account) => {
+                    serde_json::json!({"account":account, "usage":response.get("response")})
+                }
+                None => response,
+            });
         }
         Err(HarnessError::Protocol(
             "claude exited before answering the initialize control request".into(),
         ))
     };
-    let result = tokio::time::timeout(PROBE_TIMEOUT, discovery).await;
+    let timeout = if include_usage {
+        Duration::from_secs(20)
+    } else {
+        PROBE_TIMEOUT
+    };
+    let result = tokio::time::timeout(timeout, discovery).await;
     shutdown_child(&mut child, kill_grace).await;
     match result {
         Ok(inner) => inner,

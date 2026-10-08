@@ -220,7 +220,24 @@ struct CachedFile {
 #[derive(Default, Serialize, Deserialize)]
 struct ScanCache {
     version: u32,
+    #[serde(default)]
+    generation: u64,
     files: HashMap<String, CachedFile>,
+    #[serde(skip)]
+    dirty: HashSet<String>,
+    #[serde(skip)]
+    removed: HashSet<String>,
+    #[serde(skip)]
+    base_digest: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CacheUpdate {
+    version: u32,
+    generation: u64,
+    base_digest: String,
+    key: String,
+    file: Option<CachedFile>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -709,17 +726,20 @@ fn safe_cache_file(path: &Path) -> bool {
     }
 }
 
-fn write_cache_bytes(path: &Path, bytes: &[u8]) {
-    let Some(parent) = path.parent() else { return };
+fn write_cache_bytes(path: &Path, bytes: &[u8]) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
     if !safe_cache_file(path) {
-        return;
+        return false;
     }
     let Ok(mut temporary) = tempfile::NamedTempFile::new_in(parent) else {
-        return;
+        return false;
     };
     if temporary.write_all(bytes).is_ok() && temporary.as_file().sync_all().is_ok() {
-        let _ = temporary.persist(path);
+        return temporary.persist(path).is_ok();
     }
+    false
 }
 
 fn synthetic_file(variable: &str) -> Option<PathBuf> {
@@ -925,7 +945,14 @@ fn load_cache(path: Option<&Path>) -> ScanCache {
     let mut cache = path
         .filter(|path| safe_cache_file(path))
         .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<ScanCache>(&bytes).ok())
+        .and_then(|bytes| {
+            serde_json::from_slice::<ScanCache>(&bytes)
+                .ok()
+                .map(|mut cache| {
+                    cache.base_digest = format!("{:x}", Sha256::digest(&bytes));
+                    cache
+                })
+        })
         .filter(|cache| cache.version == CACHE_VERSION || cache.version == 2)
         .unwrap_or_default();
     if cache.version == 2 {
@@ -937,6 +964,37 @@ fn load_cache(path: Option<&Path>) -> ScanCache {
             file.legacy_parser = true;
             for record in &mut file.records {
                 record.legacy_parser = true;
+            }
+        }
+    }
+    if let Some(path) = path.filter(|_| cache.version == CACHE_VERSION || cache.version == 2) {
+        let updates = path.with_extension("updates.jsonl");
+        if safe_cache_file(&updates)
+            && let Ok(file) = File::open(updates)
+        {
+            // A torn final line is ignored. Every appended batch starts with
+            // a newline, so a crash cannot swallow the next valid update.
+            for line in BufReader::new(file.take(64 * 1024 * 1024))
+                .split(b'\n')
+                .map_while(Result::ok)
+            {
+                let Ok(update) = serde_json::from_slice::<CacheUpdate>(&line) else {
+                    continue;
+                };
+                if update.version != CACHE_VERSION
+                    || update.generation != cache.generation
+                    || update.base_digest != cache.base_digest
+                {
+                    continue;
+                }
+                match update.file {
+                    Some(file) => {
+                        cache.files.insert(update.key, file);
+                    }
+                    None => {
+                        cache.files.remove(&update.key);
+                    }
+                }
             }
         }
     }
@@ -972,12 +1030,75 @@ fn discard_superseded_legacy_records(records: &mut Vec<(UsageProvider, Record)>)
     });
 }
 
-fn save_cache(path: Option<&Path>, cache: &ScanCache) {
+fn save_cache(path: Option<&Path>, cache: &mut ScanCache, checkpoint: bool) {
     let Some(path) = path else { return };
-    let Ok(bytes) = serde_json::to_vec(cache) else {
+    let updates = path.with_extension("updates.jsonl");
+    if !safe_cache_file(path) || !safe_cache_file(&updates) {
+        return;
+    }
+    if checkpoint || !path.exists() || updates.metadata().is_ok_and(|m| m.len() > 16 * 1024 * 1024)
+    {
+        let previous_generation = cache.generation;
+        cache.generation = cache.generation.wrapping_add(1);
+        let Ok(bytes) = serde_json::to_vec(cache) else {
+            return;
+        };
+        if write_cache_bytes(path, &bytes) {
+            cache.base_digest = format!("{:x}", Sha256::digest(&bytes));
+            // The checkpoint generation makes old journal entries harmless
+            // even if the process exits before the journal can be truncated.
+            let _ = write_cache_bytes(&updates, b"");
+            cache.dirty.clear();
+            cache.removed.clear();
+        } else {
+            cache.generation = previous_generation;
+        }
+        return;
+    }
+    if cache.dirty.is_empty() && cache.removed.is_empty() {
+        return;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let Ok(mut file) = options.open(updates) else {
         return;
     };
-    write_cache_bytes(path, &bytes);
+    let written = (|| -> std::io::Result<()> {
+        file.write_all(b"\n")?;
+        // Serialize references to only changed entries. Rewriting the full
+        // 90-day cache on each small append dominated warm reads in profiling.
+        for key in cache.dirty.iter().chain(cache.removed.iter()) {
+            #[derive(Serialize)]
+            struct Update<'a> {
+                version: u32,
+                generation: u64,
+                base_digest: &'a str,
+                key: &'a str,
+                file: Option<&'a CachedFile>,
+            }
+            serde_json::to_writer(
+                &mut file,
+                &Update {
+                    version: CACHE_VERSION,
+                    generation: cache.generation,
+                    base_digest: &cache.base_digest,
+                    key,
+                    file: cache.files.get(key),
+                },
+            )?;
+            file.write_all(b"\n")?;
+        }
+        file.sync_data()
+    })();
+    if written.is_ok() {
+        cache.dirty.clear();
+        cache.removed.clear();
+    }
 }
 
 fn add_source(
@@ -1085,6 +1206,7 @@ fn add_source_configured(
                         all.push((provider, record.clone()));
                     }
                 }
+                cache.dirty.insert(key.clone());
                 cache.files.insert(key, scanned);
             }
             Err(_) => {
@@ -1386,6 +1508,10 @@ fn limits() -> Vec<UsageLimitSnapshot> {
     };
     let last_good = cache_path().map(|path| path.with_file_name("usage-limits-last-good.json"));
     limits_from_fixture(&path, last_good.as_deref())
+}
+
+pub(crate) fn fixture_limits() -> Vec<UsageLimitSnapshot> {
+    limits()
 }
 
 fn aggregate_records(
@@ -1737,16 +1863,20 @@ fn snapshot_impl(
     }
     // Longest supported window plus one day of boundary slack.
     let retention = read_at - 91 * 86_400_000;
-    cache.files.retain(|_, file| {
-        (file.modified_ns / 1_000_000) as i64 >= retention
-            || file.records.iter().any(|record| record.at_ms >= retention)
+    cache.files.retain(|key, file| {
+        let keep = (file.modified_ns / 1_000_000) as i64 >= retention
+            || file.records.iter().any(|record| record.at_ms >= retention);
+        if !keep {
+            cache.removed.insert(key.clone());
+        }
+        keep
     });
     cache.version = CACHE_VERSION;
     if cache.version != cache_version
         || cache.files.len() != cache_file_count
         || sources.iter().any(|source| source.files_scanned > 0)
     {
-        save_cache(cache_file.as_deref(), cache);
+        save_cache(cache_file.as_deref(), cache, cache_version != CACHE_VERSION);
     }
     drop(cache_store);
 

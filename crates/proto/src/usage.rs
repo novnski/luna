@@ -94,6 +94,35 @@ fn default_include_limits() -> bool {
     true
 }
 
+/// Read policy for the owning engine's usage cache. Existing clients keep
+/// waiting for an initial complete snapshot; interactive views opt into the
+/// immediately available snapshot while the same work continues in background.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReadRequest {
+    #[serde(flatten)]
+    pub query: UsageRequest,
+    #[serde(default = "default_include_limits")]
+    pub include_history: bool,
+    #[serde(default)]
+    pub background: bool,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReadResponse {
+    #[serde(flatten)]
+    pub snapshot: UsageSnapshot,
+    #[serde(default)]
+    pub refreshing: bool,
+    /// Opaque selection fence for joining independently refreshed lanes.
+    /// Contains no provider credential or raw account identity.
+    #[serde(default)]
+    pub scope: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsagePriceRate {
