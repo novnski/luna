@@ -54,6 +54,16 @@ impl Shell {
         let scope = self.initial_board_scope(cx);
         let state = self.state.clone();
         let page = cx.new(|cx| BoardPage::new(state, scope, cx));
+        // Board surfaces (detail drawer, New ticket) navigate through the
+        // Shell: Go to chat, Needs attention, writeback.
+        let surfaces = page.read(cx).surfaces().clone();
+        cx.subscribe(
+            &surfaces,
+            |shell, _, event: &detail::BoardSurfacesEvent, cx| {
+                shell.on_board_surface_event(event, cx)
+            },
+        )
+        .detach();
         self.board_page = Some(page.clone());
         page
     }

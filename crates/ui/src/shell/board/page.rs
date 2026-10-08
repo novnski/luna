@@ -8,7 +8,9 @@ use gpui::{
 };
 use luna_proto::BoardScope;
 
+use super::detail::BoardSurfaces;
 use super::model::{BoardModel, BoardStatus};
+use crate::button::{self, ButtonKind, ControlSize};
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -17,6 +19,8 @@ pub struct BoardPage {
     state: Entity<AppState>,
     model: Entity<BoardModel>,
     scroll: ScrollHandle,
+    /// The detail drawer / New ticket overlay (Board detail slice, A9).
+    surfaces: Entity<BoardSurfaces>,
     _model: Subscription,
 }
 
@@ -24,12 +28,46 @@ impl BoardPage {
     pub fn new(state: Entity<AppState>, scope: BoardScope, cx: &mut Context<Self>) -> Self {
         let model = cx.new(|cx| BoardModel::new(state.clone(), scope, cx));
         let observer = cx.observe(&model, |_, _, cx| cx.notify());
+        let surfaces = cx.new(|cx| BoardSurfaces::new(state.clone(), model.clone(), cx));
         Self {
             state,
             model,
             scroll: ScrollHandle::new(),
+            surfaces,
             _model: observer,
         }
+    }
+
+    /// The overlay host (detail drawer, New ticket chooser and forms).
+    pub fn surfaces(&self) -> &Entity<BoardSurfaces> {
+        &self.surfaces
+    }
+
+    /// Open one ticket's detail drawer (card click / Enter on a card).
+    // Called by the Board page slice's cards (A8).
+    #[allow(dead_code)]
+    pub fn open_detail(
+        &mut self,
+        work_item_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.surfaces.update(cx, |surfaces, cx| {
+            surfaces.open_detail(work_item_id, window, cx)
+        });
+    }
+
+    /// Open the New ticket chooser for the current project scope (All
+    /// projects asks for the project explicitly).
+    pub fn open_new_ticket(
+        &mut self,
+        project_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.surfaces.update(cx, |surfaces, cx| {
+            surfaces.open_new_ticket(project_id, window, cx)
+        });
     }
 
     /// The data layer shared by every Board surface on this page.
@@ -69,6 +107,21 @@ impl Render for BoardPage {
         let theme = Theme::of(cx).clone();
         let scope = self.scope_label(cx);
         let notice = self.status_notice(&theme, cx);
+        let scope_project = self.model.read(cx).scope().project_id().map(str::to_owned);
+        let new_ticket = button::button(
+            "board-new-ticket",
+            ButtonKind::Primary,
+            ControlSize::Md,
+            true,
+            &theme,
+        )
+        .aria_label("New ticket")
+        .child(button::glyph(crate::icons::PLUS, ControlSize::Md).text_color(theme.on_solid))
+        .child("New ticket")
+        .on_click(cx.listener(move |page, _, window, cx| {
+            page.open_new_ticket(scope_project.clone(), window, cx)
+        }))
+        .into_any_element();
         let model = self.model.read(cx);
         let count = model.items().len();
         let body = if count == 0 && matches!(model.status(), BoardStatus::Live) {
@@ -82,7 +135,7 @@ impl Render for BoardPage {
         } else {
             super::columns::render_columns(model, &theme)
         };
-        div()
+        let page = div()
             .id("board-page")
             .size_full()
             .overflow_y_scroll()
@@ -104,12 +157,20 @@ impl Render for BoardPage {
                                 &theme,
                                 "Board",
                                 Some(count),
-                                vec![],
+                                vec![new_ticket],
                             ))
                             .child(widgets::page_subtitle(&theme, SharedString::from(scope))),
                     )
                     .children(notice)
                     .child(body),
-            )
+            );
+        // The overlay sits outside the scroller so the drawer never scrolls
+        // with the board.
+        div()
+            .id("board-page-frame")
+            .relative()
+            .size_full()
+            .child(page)
+            .child(self.surfaces.clone())
     }
 }
