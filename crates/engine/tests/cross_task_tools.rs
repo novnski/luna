@@ -1262,6 +1262,10 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         assert!(names.contains(name), "{name} missing from {names:?}");
     }
     for tool in tools {
+        // Board tools carry their own annotations (board_tools_e2e.rs).
+        if luna_proto::BOARD_TOOL_NAMES.contains(&tool["name"].as_str().unwrap_or_default()) {
+            continue;
+        }
         let read_only = !matches!(
             tool["name"].as_str(),
             Some(

@@ -305,10 +305,32 @@ fn role_text(context: &RuntimeContext, chat: &RuntimeChatIdentity) -> String {
     text
 }
 
+/// Attach the engine-derived board context to a run and grant the board
+/// scopes its role needs. Ordinary main/side chats (including ticket workers
+/// and reviewer side chats) and scoped authoring sessions get `board.read` and
+/// `board.write`; the engine still checks every call against the caller's
+/// canonical role. No context means no board scopes.
+pub fn attach_board_context(
+    context: &mut RuntimeContext,
+    board: Option<luna_proto::BoardRuntimeContext>,
+) {
+    use crate::rpc::board_engine::{BOARD_SCOPE_READ, BOARD_SCOPE_WRITE};
+    context
+        .granted_scopes
+        .retain(|scope| scope != BOARD_SCOPE_READ && scope != BOARD_SCOPE_WRITE);
+    if board.is_some() {
+        context.granted_scopes.push(BOARD_SCOPE_READ.into());
+        context.granted_scopes.push(BOARD_SCOPE_WRITE.into());
+    }
+    context.board = board;
+}
+
 fn context_text(context: &RuntimeContext) -> Result<String, EngineError> {
     // JSON quoting keeps user-controlled names from introducing headings or
     // pseudo-role delimiters in the privileged instruction channel.
     let mut safe = context.clone();
+    // The board context has its own section (no duplicate copy here).
+    safe.board = None;
     safe.project_name = safe.project_name.map(|name| one_line(&name));
     safe.machine_name = one_line(&safe.machine_name);
     safe.branch = safe.branch.map(|branch| one_line(&branch));
@@ -326,7 +348,7 @@ fn hash_contract(contract: &LunaAgentRuntimeContract) -> Result<String, EngineEr
 }
 
 fn assemble(
-    context: RuntimeContext,
+    mut context: RuntimeContext,
     user: &[InstructionContribution],
     workspace: &[InstructionContribution],
     delivery: RuntimeDelivery,
@@ -336,6 +358,18 @@ fn assemble(
 ) -> Result<LunaAgentRuntimeContract, EngineError> {
     let instructions_supported = delivery != RuntimeDelivery::Unsupported;
     let tools_supported = delivery.attaches_luna_tools();
+    // The board context lists exactly the board tools this delivery serves.
+    if let Some(board) = context.board.as_mut() {
+        board.tools = if tools_supported {
+            cross_task_tools
+                .iter()
+                .filter(|tool| crate::cross_task_tools::is_board_tool(&tool.name))
+                .map(|tool| tool.name.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+    }
     let tool = status_tool();
     let mut instructions = Vec::new();
     if instructions_supported {
@@ -425,6 +459,22 @@ fn assemble(
             provenance: "engine-authoritative task and workspace identity".into(),
             text: context_text(&context)?,
         });
+        if let Some(board) = context.board.as_ref() {
+            let workspace_tool = tools_supported
+                && cross_task_tools
+                    .iter()
+                    .any(|tool| tool.name == "get_workspace");
+            instructions.push(RuntimeInstructionSection {
+                name: "LUNA board context".into(),
+                source: RuntimeInstructionSource::Context,
+                provenance: "engine-authoritative chat role and board links".into(),
+                text: crate::rpc::board_engine::context::board_context_text(
+                    board,
+                    delivery,
+                    workspace_tool,
+                )?,
+            });
+        }
         instructions.extend_from_slice(context_sections);
     }
     let mut tools = if tools_supported {
@@ -625,6 +675,9 @@ pub async fn invoke_with_backend(
             "ask_user is handled by the live LUNA session".into(),
         ));
     }
+    if crate::cross_task_tools::is_board_tool(name) {
+        return invoke_board_tool(contract, tool, arguments, cancel, backend).await;
+    }
     let output = if name == STATUS_TOOL {
         if arguments != serde_json::json!({}) {
             return Err(EngineError::Other("Invalid LUNA tool input".into()));
@@ -659,6 +712,50 @@ pub async fn invoke_with_backend(
     Ok(output)
 }
 
+/// Board tools run detached from the provider call: a cancelled turn or an
+/// elapsed deadline never drops a half-applied board mutation. Its durable
+/// receipt stays reconcilable by repeating the call with the same requestId,
+/// and the model is told the outcome is unknown rather than failed.
+async fn invoke_board_tool(
+    contract: &LunaAgentRuntimeContract,
+    tool: &RuntimeToolDefinition,
+    arguments: serde_json::Value,
+    cancel: &CancellationToken,
+    backend: Option<Arc<dyn CrossTaskBackend>>,
+) -> Result<serde_json::Value, EngineError> {
+    use crate::rpc::board_engine::tools::{BOARD_TOOL_OUTPUT_BYTES, board_outcome_unknown_text};
+    let backend =
+        backend.ok_or_else(|| EngineError::Other("LUNA board backend is unavailable".into()))?;
+    let authority = CrossTaskAuthority::from_context(&contract.context, contract.delivery, false);
+    let request_id = arguments
+        .get("requestId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let unknown = |request_id: Option<String>, why: &str| {
+        EngineError::Other(board_outcome_unknown_text(request_id.as_deref(), why))
+    };
+    let name = tool.name.clone();
+    let task = tokio::spawn(async move {
+        CrossTaskTools::new(backend)
+            .invoke(&authority, &name, arguments, &CancellationToken::new())
+            .await
+    });
+    let output = tokio::select! {
+        _ = cancel.cancelled() => return Err(unknown(request_id, "call was cancelled; the operation may still complete")),
+        result = tokio::time::timeout(std::time::Duration::from_millis(tool.deadline_ms), task) => match result {
+            Err(_) => return Err(unknown(request_id, "deadline exceeded; the operation may still complete")),
+            Ok(Err(_)) => return Err(unknown(request_id, "task ended unexpectedly")),
+            Ok(Ok(result)) => result.map_err(|error| EngineError::Other(error.to_string()))?,
+        },
+    };
+    if serde_json::to_vec(&output)?.len() > BOARD_TOOL_OUTPUT_BYTES {
+        return Err(EngineError::Other(
+            "LUNA board tool output exceeds size limit".into(),
+        ));
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +784,7 @@ mod tests {
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
             chat: None,
+            board: None,
         }
     }
 

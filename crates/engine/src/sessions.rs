@@ -3227,7 +3227,7 @@ impl SessionsEngine {
                 .as_ref()
                 .and_then(|view| view.task.lineage.parent_task_id.clone())
         });
-        Ok(luna_proto::RuntimeContext {
+        let mut context = luna_proto::RuntimeContext {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: 1,
             thread_id: chat_id.into(),
@@ -3263,7 +3263,17 @@ impl SessionsEngine {
                 Vec::new()
             },
             chat: Some(chat_identity),
-        })
+            board: None,
+        };
+        // Board role/ticket context and its scopes come from the engine's
+        // durable lineage and board links for this exact local task.
+        if read_granted && let Some(backend) = self.cross_task_backend() {
+            crate::runtime_contract::attach_board_context(
+                &mut context,
+                backend.board_context(chat_id),
+            );
+        }
+        Ok(context)
     }
 
     /// Explicit role and static capabilities. Tool flags are filled from the

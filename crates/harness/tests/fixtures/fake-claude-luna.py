@@ -303,6 +303,30 @@ def fence_matrix():
         json.dump(steps, out, indent=1)
 
 
+def resolve(value, results):
+    """`"$ref:<step>.<path>"` names a field of an earlier step's JSON reply
+    (board tool plans chain ids this way); anything else passes through."""
+    if isinstance(value, str) and value.startswith("$ref:"):
+        index, _, path = value[len("$ref:"):].partition(".")
+        try:
+            node = json.loads(results[index]["text"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        for part in filter(None, path.split(".")):
+            if isinstance(node, list):
+                node = node[int(part)] if part.isdigit() and int(part) < len(node) else None
+            elif isinstance(node, dict):
+                node = node.get(part)
+            else:
+                return None
+        return node
+    if isinstance(value, list):
+        return [resolve(entry, results) for entry in value]
+    if isinstance(value, dict):
+        return {key: resolve(entry, results) for key, entry in value.items()}
+    return value
+
+
 def plan(label):
     plan_path = os.path.join(CWD, f".luna-claude-plan-{label}.json")
     with open(plan_path) as source:
@@ -313,9 +337,19 @@ def plan(label):
     results["handshake"] = hs
     init_frame()
     for index, item in enumerate(calls):
+        if "frame" in item:
+            # A raw stream-json frame (e.g. a compact_boundary) mid-turn.
+            emit({**item["frame"], "session_id": SESSION})
+            results[str(index)] = {"frame": item["frame"].get("subtype") or item["frame"].get("type")}
+            continue
+        if item.get("relist"):
+            # Rediscover the attached catalog on the same endpoint.
+            results[str(index)] = handshake()
+            continue
+        arguments = resolve(item["arguments"], results)
         tool_use_id = f"toolu_{label}_{index}"
-        tool_use(tool_use_id, TOOL_PREFIX + item["tool"], item["arguments"])
-        outcome = call(item["tool"], item["arguments"], tool_use_id)
+        tool_use(tool_use_id, TOOL_PREFIX + item["tool"], arguments)
+        outcome = call(item["tool"], arguments, tool_use_id)
         results[str(index)] = outcome
         tool_result(tool_use_id, outcome)
     assistant_text("Plan finished.")

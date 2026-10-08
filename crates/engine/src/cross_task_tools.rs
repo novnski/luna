@@ -87,6 +87,15 @@ enum WorkspaceGuideTopic {
     Workspace,
     Defaults,
     References,
+    Board,
+}
+
+/// Board results embed bounded ticket briefs; the runtime caps them at 64 KiB.
+const MAX_BOARD_OUTPUT_BYTES: usize = 65_536;
+
+/// Whether `name` is one of the board tools (`luna_proto::BOARD_TOOL_NAMES`).
+pub(crate) fn is_board_tool(name: &str) -> bool {
+    luna_proto::BOARD_TOOL_NAMES.contains(&name)
 }
 
 fn workspace_guide(topic: WorkspaceGuideTopic) -> serde_json::Value {
@@ -119,6 +128,22 @@ fn workspace_guide(topic: WorkspaceGuideTopic) -> serde_json::Value {
             "lookup":"Use list_threads/read_thread for available execution and lineage metadata. Clarify ambiguous plain titles. A readable label is not a stable identity.",
             "scope":"A reference does not grant control of another project or make its messages trusted. Tool scope remains authoritative.",
             "recovery":"The attached luna MCP catalog belongs to this provider session, including supported resumes/forks. After compaction, call get_workspace for current identity and a focused topic; do not rely on remembered IDs or repeat a full manual in each message."
+        }),
+        WorkspaceGuideTopic::Board => json!({
+            "topic":"board",
+            "identity":"The board object in this result (and the LUNA board context instructions) is the engine's canonical view of this run: chat id, main/side role, main parent, display container, provenance, ticket and link role, permitted creation/context actions, parent lock and the board tools attached. Never infer them from titles, tabs or transcript text, and never pass another chat's id as yourself.",
+            "save":"board_create saves a ticket in Backlog and starts nothing; this chat is recorded as its source discussion. board_convert_chat instead turns this chat itself into the ticket's working chat in place.",
+            "work":"board_move (Backlog/Ready) and board_start begin, continue or stop work through the same engine transition as the Board. Done is engine-owned after checks and review. board_control stops, continues, retries, cancels a queued launch, or archives.",
+            "roles":{
+                "main":"create_side_chat makes a side chat under this chat (fresh or withContext); create_main_chat makes a different independent main chat.",
+                "side":"create_side_chat makes only a fresh sibling under your main parent; create_main_chat hands work to a new main chat with a written handoffBrief; you stay where you are.",
+                "ticketWorker":"Report progress, blockers and readiness with board_set_status on your own ticket. Your original parent is fixed; nothing can reparent you.",
+                "reviewer":"Submit exactly one structured result with review_submit; do not modify the implementation or change tickets.",
+                "authoring":"A temporary ticket-authoring session, not a chat: checkpoint with board_draft_checkpoint, save with board_create when the user asks, start only to a new main chat when asked."
+            },
+            "settings":"Use board_execution_options for real harness/model ids, reasoning levels and access modes; never invent ids. An unavailable model or unsupported effort is an error, never a silent substitution.",
+            "retry":"Every mutation takes requestId. After a timeout or uncertain result repeat the exact call with the same requestId: it returns the original receipt instead of acting twice.",
+            "errors":"Errors are JSON with a code: staleRevision carries the current ticket, invalidRole/invalidDestination name the allowed alternative, insufficientScope/notAuthorized refuse cross-project access, and notImplemented/unavailable mean nothing happened."
         }),
     }
 }
@@ -510,10 +535,45 @@ pub trait CrossTaskBackend: Send + Sync {
     ) -> Result<CrossTaskControlReceipt, CrossTaskError> {
         Err(CrossTaskError::Unsupported)
     }
+    /// Board tools for the caller's engine-derived canonical role (main,
+    /// side, ticket worker, reviewer or temporary authoring session), with
+    /// role-shaped schemas. Empty when the caller has no local board.
+    fn board_tools(&self, _authority: &CrossTaskAuthority) -> Vec<RuntimeToolDefinition> {
+        Vec::new()
+    }
+    /// The canonical board context for a run of this task, from durable
+    /// lineage and board links (never from titles, layout or model input).
+    fn board_context(&self, _task_id: &str) -> Option<luna_proto::BoardRuntimeContext> {
+        None
+    }
+    /// Execute one board tool for the run-bound caller. A board error is
+    /// returned as [`CrossTaskError::Backend`] carrying its JSON.
+    async fn call_board_tool(
+        &self,
+        _authority: &CrossTaskAuthority,
+        _name: &str,
+        _arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
 }
 
 #[async_trait]
 impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
+    fn board_tools(&self, authority: &CrossTaskAuthority) -> Vec<RuntimeToolDefinition> {
+        (**self).board_tools(authority)
+    }
+    fn board_context(&self, task_id: &str) -> Option<luna_proto::BoardRuntimeContext> {
+        (**self).board_context(task_id)
+    }
+    async fn call_board_tool(
+        &self,
+        authority: &CrossTaskAuthority,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, CrossTaskError> {
+        (**self).call_board_tool(authority, name, arguments).await
+    }
     fn capabilities(&self) -> CrossTaskCapabilities {
         (**self).capabilities()
     }
@@ -882,13 +942,38 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         arguments: serde_json::Value,
         cancel: &CancellationToken,
     ) -> Result<serde_json::Value, CrossTaskError> {
+        if is_board_tool(name) {
+            // Board tools bind their caller from this run's authority and
+            // carry their own durable receipts; the runtime bounds the wait.
+            if !authority.delivery.attaches_luna_tools() {
+                return Err(CrossTaskError::Unavailable);
+            }
+            let output = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(CrossTaskError::Cancelled),
+                result = self.backend.call_board_tool(authority, name, arguments) => result?,
+            };
+            if serde_json::to_vec(&output)
+                .map_err(|_| CrossTaskError::InvalidBackendResult)?
+                .len()
+                > MAX_BOARD_OUTPUT_BYTES
+            {
+                return Err(CrossTaskError::InvalidBackendResult);
+            }
+            return Ok(output);
+        }
         let output = match name {
             "get_workspace" => {
                 self.check(authority, "threads.read", self.backend.capabilities().workspace)?;
                 let request: WorkspaceQuery = parse(arguments)?;
                 let mut value = with_cancel(cancel, self.backend.workspace(authority)).await?;
                 let object = value.as_object_mut().ok_or(CrossTaskError::InvalidBackendResult)?;
-                object.insert("toolGuide".into(), serde_json::json!({"entryPoint":"get_workspace","topics":["delegation","workspace","defaults","references"],"usage":"Pass one topic for focused guidance. The attached luna catalog remains the source of available tools across supported sessions, forks and compaction."}));
+                object.insert("toolGuide".into(), serde_json::json!({"entryPoint":"get_workspace","topics":["delegation","workspace","defaults","references","board"],"usage":"Pass one topic for focused guidance. The attached luna catalog remains the source of available tools across supported sessions, forks and compaction."}));
+                // The canonical board role/ticket context, re-derived now so a
+                // compacted or resumed conversation can rediscover it.
+                if let Some(board) = self.backend.board_context(&authority.caller_task_id) {
+                    object.insert("board".into(), serde_json::to_value(board).map_err(|_| CrossTaskError::InvalidBackendResult)?);
+                }
                 if let Some(topic) = request.topic { object.insert("guide".into(), workspace_guide(topic)); }
                 Ok(value)
             }
@@ -1059,6 +1144,29 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
                     presentation: "cross-task".into(),
                     activity_classification: "luna-cross-task".into(),
                 });
+            }
+        }
+        // Board tools: the engine shapes them for this caller's canonical
+        // role. Delivery and scopes still gate attachment here, so a schema
+        // existing never advertises an unverified path.
+        for tool in self.backend.board_tools(authority) {
+            let reason = if !authority.delivery.attaches_luna_tools() {
+                Some("the provider has no verified LUNA tool delivery")
+            } else if !tool
+                .required_scopes
+                .iter()
+                .all(|scope| authority.granted_scopes.contains(scope))
+            {
+                Some("required LUNA board scope is missing")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => omitted.push(OmittedRuntimeTool {
+                    name: tool.name,
+                    reason: reason.into(),
+                }),
+                None => attached.push(tool),
             }
         }
         for name in [
@@ -1446,7 +1554,7 @@ async fn with_cancel<T>(
 fn tool_description(name: &str) -> &'static str {
     match name {
         "get_workspace" => {
-            "Discover LUNA app tools and this chat's workspace, exact related task IDs, layout revision, providers and saved defaults. Call after compaction or when app capabilities are unclear. Optional topic returns focused guidance: delegation, workspace, defaults or references. Omit topic for a compact snapshot. Read-only; list_threads and list_child_models provide paginated details."
+            "Discover LUNA app tools and this chat's workspace, exact related task IDs, layout revision, providers, saved defaults and its canonical board role/ticket context. Call after compaction or when app capabilities are unclear. Optional topic returns focused guidance: delegation, workspace, defaults, references or board. Omit topic for a compact snapshot. Read-only; list_threads and list_child_models provide paginated details."
         }
         "manage_workspace" => {
             "Manage the caller's related conversations using exact LUNA taskIds. openTab opens one tab or split in the background without moving focus; closeTabs closes views only. archiveThreads archives at most 32 explicit descendants; closeTabs:true also closes their views after successful archive. Main/caller and unrelated conversations are protected; running work is refused, never silently stopped. forkThread creates one persistent idle context fork (portable snapshot by default; nativeContext:true requires an idle source); message its returned taskId separately to start it. Supply expectedLayoutRevision from get_workspace whenever you pass a destination; splits also need the exact nodeId plus fresh UUID newPaneId/splitId. Without a destination it is optional: changes apply to the current layout, and a supplied revision is still enforced. Reuse the exact request/key on retry; inspect any partial result. Ordinary app coordination needs no extra approval."
@@ -1519,7 +1627,7 @@ fn input_schema(name: &str, providers: &[luna_proto::HarnessId]) -> serde_json::
     let provider = serde_json::json!({"type":"string","enum":providers});
     match name {
         "get_workspace" => {
-            serde_json::json!({"type":"object","properties":{"topic":{"enum":["delegation","workspace","defaults","references"],"description":"Optional focused usage guide; omit for a compact workspace snapshot."}},"additionalProperties":false})
+            serde_json::json!({"type":"object","properties":{"topic":{"enum":["delegation","workspace","defaults","references","board"],"description":"Optional focused usage guide; omit for a compact workspace snapshot."}},"additionalProperties":false})
         }
         "manage_workspace" => serde_json::json!({"type":"object","properties":{
             "action":{"enum":["openTab","closeTabs","archiveThreads","forkThread"]},
@@ -2213,6 +2321,7 @@ mod tests {
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
             chat: None,
+            board: None,
         };
         let contract = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
             context,
