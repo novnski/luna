@@ -2357,6 +2357,9 @@ pub struct Shell {
     automations_settings: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
     /// The Board page, created on first open.
     board_page: Option<Entity<board::BoardPage>>,
+    /// Ticket identity on chat surfaces: badges, roles, receipts, Go to
+    /// chat and the chat's board dialogs (Board slice A10).
+    board_chat: board::chat_badges::ChatBoardUi,
     /// Composers of chats shown in the right pane's shared chat view, cached
     /// per chat so drafts and sends in flight outlive the pane.
     pane_composers: Entity<pane_chat::PaneComposers>,
@@ -2922,6 +2925,7 @@ impl Shell {
             automations_conversation: None,
             automations_settings: None,
             board_page: None,
+            board_chat: Default::default(),
             pane_composers,
             workbench: workbench::WorkbenchState::new(cx),
             _pane_composers_observe: pane_composers_observe,
@@ -3422,6 +3426,7 @@ impl Shell {
         // A fork just created opens once its ordinary row is published.
         self.open_created_side_chat(cx);
         self.migrate_side_chat_marks(cx);
+        self.board_chat_state_changed(cx);
         if self
             .side_chat_panel
             .as_ref()
@@ -4575,6 +4580,13 @@ impl Shell {
                 message_id,
                 text,
             } => {
+                if board::chat_badges::context_forks_blocked(self.state.read(cx), task_id) {
+                    self.sidebar_notice = Some(SidebarNotice::transient_error(
+                        board::chat_badges::SIDE_FORK_REFUSAL,
+                    ));
+                    cx.notify();
+                    return;
+                }
                 let visible_child = self.child_chat_panel.as_ref().is_some_and(|panel| {
                     let panel = panel.read(cx);
                     panel.is_current(cx) && panel.open_chat_id() == Some(task_id.as_str())
@@ -6209,6 +6221,12 @@ impl Shell {
             return;
         };
         let title = dialog.input.read(cx).text().trim().to_string();
+        // A ticket's working chat renames through its ticket: one engine
+        // operation changes both titles (Board A10).
+        if !title.is_empty() && self.board_rename_working_chat(&dialog.chat_id, &title, cx) {
+            cx.notify();
+            return;
+        }
         if !title.is_empty() {
             let chat_id = dialog.chat_id;
             self.mutate_task(
@@ -6228,6 +6246,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
+        // One level of side chats: a side chat never forks (the engine
+        // refuses it too; this says why before anything is prepared).
+        if board::chat_badges::context_forks_blocked(self.state.read(cx), &source_task_id) {
+            self.sidebar_notice = Some(SidebarNotice::transient_error(
+                board::chat_badges::SIDE_FORK_REFUSAL,
+            ));
+            cx.notify();
+            return;
+        }
         self.cancel_history_flow(cx);
         let generation = self.history_flow_generation;
         let (engine, origin, chat, message_text) = {
@@ -7259,6 +7286,7 @@ impl Shell {
         self.command_palette.is_some()
             || self.add_space.is_some()
             || self.workbench.chooser.is_some()
+            || self.board_chat.owns_keyboard()
             || self.transfer_dialog.is_some()
             || self
                 .visible_composers(cx)
@@ -9392,6 +9420,7 @@ impl Shell {
         };
         let select_id = id.clone();
         let menu_id = id.clone();
+        let ticket_badge = self.board_row_badge(&id, &row_id, theme);
         let child_chats_chip = (child_chats > 0 && search_query.is_none()).then(|| {
             let label: SharedString = format!(
                 "Open {child_chats} related chat{}",
@@ -9618,6 +9647,8 @@ impl Shell {
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .child(popover::search_highlight(title, search_query, theme)),
                         ))
+                        // A ticket's working chat or reviewer: its compact key.
+                        .children(ticket_badge)
                         .when_some(child_chats_chip, |el, chip| el.child(chip))
                         // An open tab in the workbench: click focuses it.
                         .when(workbench_open == Some(true), |el| {
@@ -10119,6 +10150,8 @@ impl Shell {
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
         let terminal_inventory = self.render_terminal_inventory(theme, cx);
+        // Recent ticket activity (Board A10): each row goes to its chat.
+        let board_activity = self.render_board_activity(theme, cx);
         let activity_load_state = self.render_activity_load_state(theme);
         let top = if !list_items.is_empty() {
             self.sidebar_probed(
@@ -10189,6 +10222,7 @@ impl Shell {
             usize::from(activity_load_state.is_some())
                 + 1
                 + usize::from(terminal_inventory.is_some())
+                + usize::from(board_activity.is_some())
                 + 1
         });
         if let Some(index) = shelves_index
@@ -10206,6 +10240,7 @@ impl Shell {
                 .into_iter()
                 .chain(["top".to_owned()])
                 .chain(terminal_inventory.as_ref().map(|_| "terminals".to_owned()))
+                .chain(board_activity.as_ref().map(|_| "board".to_owned()))
                 .chain(shelves.as_ref().map(|_| "spacer".to_owned()))
                 .chain(shelves.as_ref().map(|_| "shelves".to_owned()))
                 .collect();
@@ -10235,6 +10270,7 @@ impl Shell {
                     .when_some(activity_load_state, |el, state| el.child(state))
                     .child(top)
                     .children(terminal_inventory)
+                    .children(board_activity)
                     .when(has_shelves, |el| el.child(div().flex_1().min_h_0()))
                     .children(shelves),
             ),
@@ -11802,9 +11838,30 @@ impl Shell {
             // A host with explicit transfers previews a new task with context
             // (the row below takes it when there is no native fork; otherwise
             // it gets its own row).
+            // A side chat never forks or carries its context (one level of
+            // side chats): its menu offers New side chat and Hand off instead.
+            let side_origin =
+                board::chat_badges::context_forks_blocked(self.state.read(cx), &chat_id);
+            self.board_mark(
+                || format!("chat-menu-fork:{chat_id}"),
+                || vec![if side_origin { "hidden" } else { "shown" }.into()],
+            );
             let portable_source = (native_history_fork
+                && !side_origin
                 && self.new_task_with_context_available(&chat_id, cx))
             .then(|| chat_id.clone());
+            self.board_chat_ensure_identity(&chat_id, cx);
+            let board_rows = match menu_state.page {
+                ChatMenuPage::Root => self.board_chat_menu_rows(
+                    &chat_id,
+                    archived,
+                    Shell::close_chat_menu,
+                    "chat",
+                    &theme,
+                    cx,
+                ),
+                ChatMenuPage::Copy => Vec::new(),
+            };
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -11936,43 +11993,47 @@ impl Shell {
                                 .child("Review code…"),
                         )
                     })
-                    .child(
-                        popover::menu_row(&theme, false, format!("chat-menu-fork-{chat_id}"))
-                            .id("chat-menu-fork")
-                            .when(native_history_fork, |row| {
-                                row.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_history_fork(
-                                        fork_task_id.clone(),
-                                        ConversationForkBoundaryKind::Tip,
-                                        None,
-                                        cx,
-                                    )
-                                }))
-                            })
-                            .when(!native_history_fork, |row| {
-                                row.on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.new_task_with_context_available(&context_task_id, cx) {
-                                        this.open_new_task_with_context(
-                                            context_task_id.clone(),
+                    .when(!side_origin, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-fork-{chat_id}"))
+                                .id("chat-menu-fork")
+                                .when(native_history_fork, |row| {
+                                    row.on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_history_fork(
+                                            fork_task_id.clone(),
+                                            ConversationForkBoundaryKind::Tip,
+                                            None,
                                             cx,
-                                        );
-                                    } else {
-                                        this.close_chat_menu(cx);
-                                        this.start_new_task_with_context(&context_task_id, cx);
-                                    }
-                                }))
-                            })
-                            .child(
-                                icon(icons::GIT_BRANCH)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(SharedString::from(if native_history_fork {
-                                "Create side chat from here…"
-                            } else {
-                                "Start new task with context…"
-                            })),
-                    )
+                                        )
+                                    }))
+                                })
+                                .when(!native_history_fork, |row| {
+                                    row.on_click(cx.listener(move |this, _, _, cx| {
+                                        if this
+                                            .new_task_with_context_available(&context_task_id, cx)
+                                        {
+                                            this.open_new_task_with_context(
+                                                context_task_id.clone(),
+                                                cx,
+                                            );
+                                        } else {
+                                            this.close_chat_menu(cx);
+                                            this.start_new_task_with_context(&context_task_id, cx);
+                                        }
+                                    }))
+                                })
+                                .child(
+                                    icon(icons::GIT_BRANCH)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(SharedString::from(if native_history_fork {
+                                    "Side chat with context from here…"
+                                } else {
+                                    "Start new task with context…"
+                                })),
+                        )
+                    })
                     .when_some(portable_source, |menu, source| {
                         menu.child(
                             popover::menu_row(
@@ -12011,6 +12072,7 @@ impl Shell {
                             .child(SharedString::from("Send findings to source…")),
                         )
                     })
+                    .children(board_rows)
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-recover-{chat_id}"))
                             .id("chat-menu-recover")
@@ -12179,6 +12241,7 @@ impl Shell {
         if let Some(chooser) = self.render_creation_chooser(window, cx) {
             overlays.push(chooser);
         }
+        overlays.extend(self.render_board_chat_overlays(viewport, window, cx));
 
         if let Some(dialog) = &mut self.rename_dialog {
             if std::mem::take(&mut dialog.focus_pending) {
@@ -12252,7 +12315,7 @@ impl Shell {
                         cx.stop_propagation();
                     }
                 }))
-                .child(popover::dialog_title(&theme, "Create side chat from here"))
+                .child(popover::dialog_title(&theme, "Side chat with context from here"))
                 .child(
                     div()
                         .mt(px(8.0))
@@ -13116,7 +13179,7 @@ impl Shell {
                                     true,
                                     &theme,
                                 )
-                                .aria_label("Open parent chat")
+                                .aria_label("Open main chat")
                                 .child(crate::button::glyph(
                                     icons::ARROW_UP,
                                     crate::button::ControlSize::Sm,

@@ -57,12 +57,12 @@ pub(super) enum TabRole {
 }
 
 impl TabRole {
-    /// What the UI calls this role: a context-carrying Side chat, or a fresh
-    /// New thread created from a parent.
+    /// What the UI calls this role: every chat a main chat started is a
+    /// Side chat, fresh (a child) or with its context (a fork).
     pub(super) fn display(self) -> &'static str {
         match self {
             Self::Main => "Main",
-            Self::Child => "New thread",
+            Self::Child => "Side chat",
             Self::Side => "Side chat",
             Self::Alongside => "Alongside",
         }
@@ -689,8 +689,9 @@ pub(super) fn tab_help(state: &AppState, main: &str, tab: &TabRef) -> (SharedStr
             (format!("Side chat of {parent_name}").into(), details.into())
         }
         TabRole::Child => (
-            format!("New thread created from {parent_name}").into(),
-            format!("New threads do not carry the context of the parent.{main_note}").into(),
+            format!("Side chat of {parent_name}").into(),
+            format!("Started fresh: it does not carry the main chat's conversation.{main_note}")
+                .into(),
         ),
         TabRole::Alongside => (
             title,
@@ -731,7 +732,7 @@ pub(super) fn tab_title(state: &AppState, tab: &TabRef, role: TabRole) -> Shared
         .filter(|title| !title.trim().is_empty());
     asked
         .unwrap_or_else(|| match role {
-            TabRole::Child => "New thread".to_string(),
+            TabRole::Child => "Side chat".to_string(),
             TabRole::Side => "Side chat".to_string(),
             _ => "Untitled chat".to_string(),
         })
@@ -2457,6 +2458,13 @@ impl Shell {
             return;
         }
         let pane_id = pane_id.unwrap_or_else(|| self.workbench.layout().focused_pane_id.clone());
+        // One level of side chats: a side chat's group starts a fresh
+        // sibling under the same main chat, never a nested child.
+        let source = self.workbench_group_source(&pane_id);
+        if self.board_chat_role(&source, cx).role == luna_proto::BoardChatRole::Side {
+            self.board_create_sibling(source, cx);
+            return;
+        }
         self.workbench.child_failure = None;
         let request = ChildRequest {
             key: uuid::Uuid::new_v4().to_string(),
@@ -2554,7 +2562,7 @@ impl Shell {
                 );
                 if !opened && !self.workbench.layout().contains_chat(&receipt.task_id) {
                     self.sidebar_notice = Some(SidebarNotice::status(
-                        "The new thread was created. Open it from Related chats.",
+                        "The new side chat was created. Open it from Related chats.",
                     ));
                 }
             }
@@ -2565,10 +2573,10 @@ impl Shell {
                 );
                 let message = if ambiguous {
                     format!(
-                        "The new thread may have been created ({error}). Check its status before creating another."
+                        "The new side chat may have been created ({error}). Check its status before creating another."
                     )
                 } else {
-                    format!("Couldn't create the new thread: {error}")
+                    format!("Couldn't create the new side chat: {error}")
                 };
                 self.workbench.child_blocked = false;
                 self.workbench.child_failure = Some(ChildFailure {
@@ -3208,6 +3216,8 @@ impl Shell {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        // Its board rows follow the chat's canonical role.
+        self.board_chat_ensure_identity(&chat_id, cx);
         self.workbench.menu.open(TabMenu {
             chat_id,
             pane_id,
@@ -3370,10 +3380,10 @@ pub(super) enum WorkbenchAction {
 impl WorkbenchAction {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Chooser => "New thread or side chat…",
-            Self::SideChat => "Side chat…",
-            Self::NewChild => "New thread",
-            Self::NewThreadSplit => "New thread in split",
+            Self::Chooser => "Side chat…",
+            Self::SideChat => "Side chat with context…",
+            Self::NewChild => "New side chat (fresh)",
+            Self::NewThreadSplit => "Side chat in split",
             Self::NextGroup => "Focus next group",
             Self::PreviousGroup => "Focus previous group",
             Self::CloseGroup => "Close group",

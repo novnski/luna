@@ -1,11 +1,11 @@
 //! Related chats: one right-pane list of the chats a conversation spawned.
 //!
-//! Two kinds share it, each marked on its row:
-//! - **Child chats** start with fresh context, linked to the conversation:
-//!   the user opens a blank one with `+` (New child chat), or the
-//!   conversation's agent starts one (`create_thread`).
-//! - **Side chats** are persistent forks the user started from a copy of
-//!   the conversation's context. Once created a fork is an ordinary thread
+//! Both are **Side chats** to the user (one vocabulary, Board A10); the row
+//! says how each started:
+//! - fresh (a child record): the user opens one with `+` (Side chat →
+//!   Fresh), or the conversation's agent starts one (`create_thread`);
+//! - with context (a persistent fork the user started from a copy of the
+//!   conversation's context). Once created a fork is an ordinary thread
 //!   (also a sidebar row); its source is a link, never a lifetime.
 //!
 //! The library covers the whole lineage below a conversation: children and
@@ -36,7 +36,7 @@ impl RelatedKind {
     /// What the UI calls this kind.
     pub(super) fn display(self) -> &'static str {
         match self {
-            Self::Child => "New thread",
+            Self::Child => "Side chat",
             Self::Side => "Side chat",
             Self::Alongside => "Alongside",
         }
@@ -61,9 +61,9 @@ impl RelatedKind {
 
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::Child => "A new thread from this chat; its context is not carried over",
+            Self::Child => "Started fresh from this chat; its conversation is not carried over",
             // A nested row says its actual source separately.
-            Self::Side => "Carries this chat's context, captured when it was created",
+            Self::Side => "Started with this chat's context, captured when it was created",
             Self::Alongside => "Your own chat, listed beside this one (not its child)",
         }
     }
@@ -79,12 +79,12 @@ pub(super) fn child_origin(chat: &luna_proto::Chat) -> &'static str {
         .map(|provisioning| provisioning.created_by)
     {
         Some(luna_proto::ChildCreator::User) => {
-            "A new thread you started from this chat; its context is not carried over"
+            "A side chat you started fresh from this chat; its conversation is not carried over"
         }
         Some(luna_proto::ChildCreator::Agent) => {
-            "A new thread this chat's agent started; its context is not carried over"
+            "A side chat this chat's agent started fresh; its conversation is not carried over"
         }
-        None => "A new thread from this chat; its context is not carried over",
+        None => "A side chat started fresh from this chat; its conversation is not carried over",
     }
 }
 
@@ -97,12 +97,12 @@ pub(super) fn parent_origin(chat: &luna_proto::Chat) -> &'static str {
         .map(|provisioning| provisioning.created_by)
     {
         Some(luna_proto::ChildCreator::User) => {
-            "This thread's parent: you started this new thread from it"
+            "This side chat's main chat: you started it from there"
         }
         Some(luna_proto::ChildCreator::Agent) => {
-            "This thread's parent: its agent started this new thread"
+            "This side chat's main chat: its agent started this side chat"
         }
-        None => "This thread's parent: the chat it was created from",
+        None => "This side chat's main chat: the chat it was created from",
     }
 }
 
@@ -556,7 +556,7 @@ impl Shell {
                 !settled && spaces::can_manually_settle_chat(&chat, status, has_attention, false);
             let archived = chat.archived || matches!(pending, Some(TaskConfirmation::Archive));
             let untitled = match kind {
-                RelatedKind::Child => "New thread",
+                RelatedKind::Child => "Side chat",
                 RelatedKind::Side => "Side chat",
                 RelatedKind::Alongside => "Untitled chat",
             };
@@ -695,7 +695,16 @@ impl Shell {
             None => Self::related_header_button(
                 "related-chats-new-side",
                 icons::PLUS,
-                "New side chat",
+                // A main chat's button forks with context; a side chat's
+                // starts a fresh sibling (side chats never fork).
+                if super::board::chat_badges::context_forks_blocked(
+                    self.state.read(cx),
+                    &self.active_chat,
+                ) {
+                    "New side chat"
+                } else {
+                    "Side chat with context"
+                },
                 &theme,
             )
             .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(false, cx))),
@@ -864,18 +873,25 @@ impl Shell {
             )
             .child(kind_line(
                 RelatedKind::Child,
-                "New threads start fresh: they don't carry this chat's context. Start one with +, or this chat's agent may start one.",
+                "Fresh side chats don't carry this chat's conversation. Start one with + (Side chat, Fresh), or this chat's agent may start one.",
             ))
             .child(kind_line(
                 RelatedKind::Side,
-                "Side chats carry this chat's context, captured when you start one; later messages here are not copied.",
+                "Side chats with context carry this chat's context, captured when you start one; later messages here are not copied.",
             ))
             .child(
                 div().pt(px(2.0)).child(
                     Self::related_header_button(
                         "related-chats-empty-new-side",
                         icons::PLUS,
-                        "New side chat",
+                        if super::board::chat_badges::context_forks_blocked(
+                            self.state.read(cx),
+                            &self.active_chat,
+                        ) {
+                            "New side chat"
+                        } else {
+                            "Side chat with context"
+                        },
                         theme,
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(false, cx))),

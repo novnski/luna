@@ -3266,7 +3266,7 @@ fn main() -> anyhow::Result<()> {
                 press(window, cx, (sx + 12.0, sy + sh - 12.0), MouseButton::Left, false, 1)?;
                 settle(cx, 200).await;
                 wait_for(window, cx, "the second empty group focused", |rb| rb["focusedPane"] == second_pane.as_str()).await?;
-                let started = window.update(cx, |shell, _, cx| shell.fixture_workbench_action("New thread", cx))?;
+                let started = window.update(cx, |shell, _, cx| shell.fixture_workbench_action("New side chat (fresh)", cx))?;
                 anyhow::ensure!(started, "the palette offers New thread");
                 let child_landed = wait_for(window, cx, "the new child in the focused empty group", |rb| {
                     all_panes(rb).iter().any(|pane| pane["id"] == second_pane.as_str() && tabs_of(pane).len() == 1)
@@ -3874,8 +3874,8 @@ fn main() -> anyhow::Result<()> {
                 };
                 let child_main_help = tab_json(&child_main, &fork_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
                 anyhow::ensure!(
-                    child_main_help["title"].as_str().is_some_and(|title| title.starts_with("New thread created from ") && title != "New thread created from a deleted chat")
-                        && child_main_help["details"] == format!("New threads do not carry the context of the parent. {MAIN_NOTE}").as_str(),
+                    child_main_help["title"].as_str().is_some_and(|title| title.starts_with("Side chat of ") && title != "Side chat of a deleted chat")
+                        && child_main_help["details"] == format!("Started fresh: it does not carry the main chat's conversation. {MAIN_NOTE}").as_str(),
                     "a New thread as its own Main keeps its New thread help: {child_main_help}"
                 );
                 // Deleted sources: the orphan Side chat (its source was
@@ -3932,10 +3932,10 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(engine_has(&reader, &orphan_child).await?, "deleting a parent keeps its New thread");
                 let orphan_child_help = {
                     let id = orphan_child.clone();
-                    let rb = wait_for(window, cx, "the New thread names its deleted parent", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["help"]["title"] == "New thread created from a deleted chat")).await?;
+                    let rb = wait_for(window, cx, "the New thread names its deleted parent", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["help"]["title"] == "Side chat of a deleted chat")).await?;
                     tab_json(&rb, &orphan_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null)
                 };
-                anyhow::ensure!(orphan_child_help["details"] == format!("New threads do not carry the context of the parent. {MAIN_NOTE}").as_str(), "a New thread as Main with a deleted parent: {orphan_child_help}");
+                anyhow::ensure!(orphan_child_help["details"] == format!("Started fresh: it does not carry the main chat's conversation. {MAIN_NOTE}").as_str(), "a New thread as Main with a deleted parent: {orphan_child_help}");
                 shot(window, cx, output.join("w20c-lineage-as-main.png")).await?;
                 progress(&output, &mut record, "lineageAsMain".into(), serde_json::json!({"sideMain": fork_main_help, "childMain": child_main_help, "orphanSideMain": orphan_main_help, "orphanChildMain": orphan_child_help}));
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(MAIN, cx))?;

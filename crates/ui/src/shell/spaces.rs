@@ -2513,7 +2513,7 @@ impl Shell {
                     device,
                     branch.clone().map(SharedString::from),
                     match &parent {
-                        Some(parent) => Some(format!("New thread from {parent}").into()),
+                        Some(parent) => Some(format!("Side chat of {parent}").into()),
                         None => (status == ChatIndicator::Completed).then(|| "Done".into()),
                     },
                 );

@@ -984,6 +984,10 @@ impl Shell {
         let main = frame.layout.main_chat_id.clone();
         let focused = frame.multi && frame.layout.focused_pane_id == pane.id;
         let strip = self.render_workbench_strip(pane, frame, focused, cx);
+        // The active chat's board strip (ticket badge and status control,
+        // reviewer badge, related-ticket receipts); nothing for an
+        // ordinary chat.
+        let board_strip = self.render_board_chat_strip(pane.active_chat_id, &frame.theme, cx);
         let body: AnyElement = match pane.active_chat_id {
             Some(chat) if chat == main => {
                 // Main: the shell's own transcript and composer at this
@@ -1065,6 +1069,7 @@ impl Shell {
                 .inset_0(),
             )
             .child(strip)
+            .children(board_strip)
             .child(
                 div()
                     .id(SharedString::from(format!("wb-pane-body-{}", pane.id)))
@@ -1211,9 +1216,9 @@ impl Shell {
         // The configured chord, not a static default label.
         let plus = strip_button_titled(
             SharedString::from(format!("wb-new-child-{}", pane.id)),
-            "New thread or side chat…",
+            "Side chat…",
             self.shortcut_badge(crate::settings::ShortcutId::NewThreadChooser),
-            Some("Choose a fresh New thread or a Side chat that carries this group's chat context. Nothing is created until you choose Create."),
+            Some("A side chat from this group's chat: fresh, or with its context (from a side chat: a fresh side chat under the same main chat, or a handoff). Nothing is created until you choose."),
             icons::PLUS,
             &theme,
         )
@@ -1266,10 +1271,10 @@ impl Shell {
         };
         let split = strip_button_titled(
             SharedString::from(format!("wb-split-right-{}", pane.id)),
-            "New thread in a split",
+            "Side chat in a split",
             self.shortcut_badge(crate::settings::ShortcutId::NewThreadSplit),
             Some(
-                "A fresh thread from this group's chat, in a new group to the right. Its context is not carried over; nothing starts until you send.",
+                "A fresh side chat from this group's chat, in a new group to the right. Its context is not carried over; nothing starts until you send.",
             ),
             icons::SPLIT_COLUMNS,
             &theme,
@@ -1313,7 +1318,7 @@ impl Shell {
         let more = strip_button(
             SharedString::from(format!("wb-group-more-{}", pane.id)),
             "Group actions",
-            Some("New thread or side chat, New thread in a split, Close group, and this tab's actions"),
+            Some("Side chat, Side chat in a split, Close group, and this tab's actions"),
             icons::MORE_HORIZONTAL,
             &theme,
         )
@@ -1327,8 +1332,10 @@ impl Shell {
             );
         }))
         .when(crate::perf_counters::probes_enabled(), |more| {
-            more.relative()
-                .child(crate::perf_counters::probe(format!("strip:{}:more", pane.id)))
+            more.relative().child(crate::perf_counters::probe(format!(
+                "strip:{}:more",
+                pane.id
+            )))
         });
         let more_geometry = self.workbench.geometry.clone();
         let more_measure = pane.id.to_string();
@@ -1482,8 +1489,10 @@ impl Shell {
         let menu_pane = pane_id.to_string();
         let tooltip_title = heading.clone();
         let tooltip_details = details.clone();
+        let ticket_badge = self.board_tab_badge(&tab.chat_id, theme);
+        let ticket_accessible = self.board_tab_accessible(&tab.chat_id).unwrap_or_default();
         let accessible: SharedString = format!(
-            "{}{}: {title}",
+            "{}{}{ticket_accessible}: {title}",
             role.display(),
             match status {
                 luna_proto::ChatIndicator::Working => ", running",
@@ -1730,6 +1739,7 @@ impl Shell {
                 )
             })
             .child(div().min_w_0().truncate().child(title))
+            .children(ticket_badge)
             .children(status_mark)
             .children(close_slot)
             .child(
@@ -1813,13 +1823,13 @@ impl Shell {
                             })),
                     )
                     .child(
-                        popover::btn_ghost(theme, "New thread", "wb-btn-new-child-chat")
+                        popover::btn_ghost(theme, "New side chat", "wb-btn-new-child-chat")
                             .id(SharedString::from(format!(
                                 "wb-empty-new-child-{}",
                                 pane.id
                             )))
                             .role(gpui::Role::Button)
-                            .aria_label("New thread")
+                            .aria_label("New side chat (fresh)")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.workbench_new_child(Some(pane_id.clone()), cx);
                             })),
@@ -1954,15 +1964,18 @@ impl Shell {
         if let Some(failure) = self.workbench.child_failure.clone() {
             let unresolved = self.workbench_child_unresolved();
             let (retry_label, retry_aria) = if unresolved {
-                ("Check status", "Check whether the new thread was created")
+                (
+                    "Check status",
+                    "Check whether the new side chat was created",
+                )
             } else {
-                ("Retry", "Retry creating the new thread")
+                ("Retry", "Retry creating the new side chat")
             };
             let blocked = (unresolved && self.workbench.child_blocked).then(|| {
                 div()
                     .id("wb-child-blocked")
                     .text_color(theme.text_muted)
-                    .child("A new thread can't start until this one's status is checked.")
+                    .child("A new side chat can't start until this one's status is checked.")
             });
             return Some(
                 div()
@@ -2490,16 +2503,16 @@ impl Shell {
             if model::pane(&layout, &menu.pane_id).is_some() {
                 let pane = menu.pane_id.clone();
                 card = card.child(
-                    row("wb-menu-new-child", icons::PLUS, "New thread or side chat…").on_click(
-                        cx.listener(move |this, _, _, cx| {
+                    row("wb-menu-new-child", icons::PLUS, "Side chat…").on_click(cx.listener(
+                        move |this, _, _, cx| {
                             this.close_workbench_menu(cx);
                             this.workbench_open_chooser(
                                 Some(pane.clone()),
                                 super::CreationKind::NewThread,
                                 cx,
                             );
-                        }),
-                    ),
+                        },
+                    )),
                 );
                 if self.workbench_available() {
                     let pane = menu.pane_id.clone();
@@ -2507,7 +2520,7 @@ impl Shell {
                         row(
                             "wb-menu-new-split",
                             icons::SPLIT_COLUMNS,
-                            "New thread in a split",
+                            "Side chat in a split",
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_workbench_menu(cx);
@@ -2594,7 +2607,7 @@ impl Shell {
             let text = if role == TabRole::Side {
                 "Go to source chat"
             } else {
-                "Go to parent chat"
+                "Go to main chat"
             };
             card = card.child(popover::menu_separator()).child(
                 row("wb-menu-show-parent", role.icon(), text).on_click(cx.listener(
@@ -2619,6 +2632,25 @@ impl Shell {
                     this.open_findings_dialog(fork.clone(), cx);
                 })),
             );
+        }
+        // The tab's board rows: Open ticket, Convert, Create ticket, and a
+        // side chat's New side chat / Hand off (never a reattach).
+        if tab {
+            let archived = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| chat.id == menu.chat_id)
+                .is_some_and(|chat| chat.archived);
+            card = card.children(self.board_chat_menu_rows(
+                &menu.chat_id,
+                archived,
+                Shell::close_workbench_menu,
+                "tab",
+                &theme,
+                cx,
+            ));
         }
         // Any thread but Main (a fork too) can become its own workbench Main.
         if tab && role != TabRole::Main {
