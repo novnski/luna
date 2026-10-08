@@ -194,6 +194,45 @@ async fn click_probe(window: Win, cx: &mut AsyncApp, name: &str) -> anyhow::Resu
     click_at(window, cx, center).await
 }
 
+/// Scroll the preview with the wheel until `name` is inside its visible
+/// area, then click it (a person scrolls before clicking).
+async fn click_in_preview(window: Win, cx: &mut AsyncApp, name: &str) -> anyhow::Result<()> {
+    // Wheel direction conventions differ; flip when a step moved it away.
+    let mut step = -120.0_f32;
+    let mut last_distance = f32::MAX;
+    for _ in 0..24 {
+        let painted = probes(window, cx)?;
+        let area = painted
+            .iter()
+            .find(|(probe, _)| probe == &format!("{PROBES}preview-scroll"))
+            .map(|(_, bounds)| *bounds)
+            .ok_or_else(|| anyhow::anyhow!("preview area not painted"))?;
+        let (x, y) = center_of(&painted, name)?;
+        let (top, bottom) = (area[1] + 8.0, area[1] + area[3] - 8.0);
+        if y > top && y < bottom {
+            return click_at(window, cx, (x, y)).await;
+        }
+        let distance = if y >= bottom { y - bottom } else { top - y };
+        if distance > last_distance {
+            step = -step;
+        }
+        last_distance = distance;
+        input(
+            window,
+            cx,
+            PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                position: point(px(area[0] + area[2] / 2.0), px(area[1] + area[3] / 2.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(step))),
+                modifiers: Default::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            }),
+        )?;
+        draw(window, cx)?;
+        settle(cx, 80).await;
+    }
+    anyhow::bail!("{name} never scrolled into the preview")
+}
+
 /// Wait until the readback satisfies `done` (engine round trips are async).
 async fn until(
     window: Win,
@@ -447,10 +486,10 @@ fn main() -> anyhow::Result<()> {
                 let previewed = until(window, cx, "preview", |r| r["picker"]["detail"]["number"] == 1).await?;
                 anyhow::ensure!(previewed["picker"]["detail"]["url"] == "https://github.com/acme/widgets/issues/1", "canonical link: {previewed}");
                 anyhow::ensure!(previewed["picker"]["detail"]["omitted"].as_str().unwrap_or("").contains("image/attachment"), "attachment notice: {previewed}");
-                click_probe(window, cx, "load-comments").await?;
+                click_in_preview(window, cx, "load-comments").await?;
                 let commented = until(window, cx, "comments", |r| r["picker"]["comments"].as_array().map(Vec::len) == Some(3)).await?;
                 record.insert("comments".into(), commented);
-                click_probe(window, cx, "comment:7001").await?;
+                click_in_preview(window, cx, "comment:7001").await?;
                 click_probe(window, cx, "prompt").await?;
                 type_text(window, cx, "Respect the Include archived toggle.").await?;
                 let ready = until(window, cx, "selection and prompt", |r| r["picker"]["selectedComments"] == serde_json::json!(["7001"]) && r["picker"]["prompt"] == "Respect the Include archived toggle.").await?;

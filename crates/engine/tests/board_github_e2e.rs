@@ -116,7 +116,15 @@ impl Harness for Peer {
         &[]
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-        Ok(vec![])
+        // One catalog model so Start session can resolve its settings.
+        Ok(vec![Model {
+            id: "fixture".into(),
+            label: "Fixture".into(),
+            description: None,
+            reasoning_levels: Vec::new(),
+            options: Vec::new(),
+            first_seen_at_ms: None,
+        }])
     }
     async fn run(
         &self,

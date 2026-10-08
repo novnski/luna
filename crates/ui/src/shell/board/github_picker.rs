@@ -43,7 +43,7 @@ use crate::typography::ui_rems;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const PAGE_LIMIT: u32 = 25;
 const PICKER_WIDTH: f32 = 880.0;
-const PICKER_HEIGHT: f32 = 620.0;
+const PICKER_HEIGHT: f32 = 700.0;
 /// Layout-probe prefix for native QA (`perf_counters::probes`).
 pub const PROBE_PREFIX: &str = "board-gh:";
 
@@ -1166,13 +1166,14 @@ impl GitHubIssuePicker {
         list.into_any_element()
     }
 
+    /// Issue content scrolls; the prompt and the actions stay in view below.
     fn render_preview(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut pane = div()
             .id("board-gh-preview")
             .flex()
             .flex_col()
             .gap(ui_rems(10.0))
-            .h_full()
+            .size_full()
             .overflow_y_scroll();
         let Some(detail) = &self.detail else {
             let text = if let Some(error) = &self.detail_error {
@@ -1356,6 +1357,7 @@ impl GitHubIssuePicker {
                                     .text_size(ui_rems(12.0))
                                     .text_color(theme.text)
                                     .whitespace_normal()
+                                    .line_clamp(6)
                                     .child(comment.body.clone()),
                             )
                             .children(comment.body_truncated.then(|| {
@@ -1365,12 +1367,7 @@ impl GitHubIssuePicker {
                     .children(probe(format!("comment:{}", comment.id))),
             );
         }
-        if let Some(cursor) = self
-            .comments_next
-            .clone()
-            .filter(|_| self.comments_task.is_none())
-        {
-            let _ = cursor;
+        if self.comments_next.is_some() && self.comments_task.is_none() {
             pane = pane.child(
                 action_button(
                     theme,
@@ -1383,7 +1380,15 @@ impl GitHubIssuePicker {
             );
         }
         // The user's editable initial prompt (additions to the brief).
-        pane = pane.child(
+        let mut footer = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(8.0))
+            .pt(ui_rems(8.0))
+            .border_t_1()
+            .border_color(theme.border);
+        footer = footer.child(
             div()
                 .flex()
                 .flex_col()
@@ -1402,15 +1407,22 @@ impl GitHubIssuePicker {
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.input_bg)
+                        .cursor_text()
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                window.focus(&this.prompt.focus_handle(cx), cx)
+                            }),
+                        )
                         .child(self.prompt.clone())
                         .children(probe("prompt")),
                 ),
         );
         if let Some(error) = &self.import_error {
-            pane = pane.child(notice(theme, error.clone(), true));
+            footer = footer.child(notice(theme, error.clone(), true));
         }
         if let Some(status) = self.import_status() {
-            pane = pane.child(notice(theme, status, false));
+            footer = footer.child(notice(theme, status, false));
         }
         let busy = self.import_task.is_some();
         let actions = match linked {
@@ -1459,7 +1471,21 @@ impl GitHubIssuePicker {
                         .on_click(cx.listener(|this, _, _, cx| this.import(false, cx))),
                 ),
         };
-        pane.child(actions).into_any_element()
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(8.0))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(pane)
+                    .children(probe("preview-scroll")),
+            )
+            .child(footer.child(actions))
+            .into_any_element()
     }
 }
 
@@ -1541,6 +1567,13 @@ impl Render for GitHubIssuePicker {
                             .flex_row()
                             .items_center()
                             .gap(ui_rems(6.0))
+                            .cursor_text()
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    window.focus(&this.search.focus_handle(cx), cx)
+                                }),
+                            )
                             .child(
                                 icon(icons::PALETTE_SEARCH)
                                     .size(px(14.0))
