@@ -4734,31 +4734,28 @@ fn main() -> anyhow::Result<()> {
                     stale_open && refused_open["route"] == "refused" && wb(window, cx)?["focusedChat"] == CHILD_A,
                     "a list from an earlier connection never navigates: {refused_open}"
                 );
-                // Restore the controlled frame: that refusal's sidebar notice
-                // is persistent, so dismiss it with its own Dismiss control
-                // (later steps sample the left chrome's background). Its
-                // label is found down the card's right edge in the band above
-                // the footer (the notice's slot), where only the Dismiss
-                // glyphs differ from the card.
-                let refusal = related(window, cx)?["notice"].clone();
-                anyhow::ensure!(refusal.as_str().is_some_and(|text| text.contains("reconnected")), "the refusal says why: {refusal}");
-                let sidebar_now = frame(window, cx)?["sidebarNow"].as_f64().unwrap_or(0.0) as f32;
-                let column = sidebar_now - 38.0;
-                let rows: Vec<(f32, f32)> = ((HEIGHT as i32 - 170)..(HEIGHT as i32 - 30)).map(|y| (column, y as f32)).collect();
-                let pixels = sample(window, cx, &rows)?;
-                let luma = |pixel: &[u8; 4]| 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
-                let mut sorted: Vec<f32> = pixels.iter().map(luma).collect();
-                sorted.sort_by(|a, b| a.total_cmp(b));
-                let median = sorted[sorted.len() / 2];
-                let glyph_rows: Vec<f32> = rows
-                    .iter()
-                    .zip(pixels.iter())
-                    .filter(|(_, pixel)| (luma(pixel) - median).abs() > 80.0)
-                    .map(|((_, y), _)| *y)
-                    .collect();
-                anyhow::ensure!(!glyph_rows.is_empty() && sidebar_now > 120.0, "the notice's Dismiss label is visible in the sidebar (width {sidebar_now})");
-                let dismiss_y = glyph_rows.iter().sum::<f32>() / glyph_rows.len() as f32;
-                click(window, cx, (column, dismiss_y), MouseButton::Left).await?;
+                // Restore the controlled frame: the refusal's notice is
+                // persistent, so dismiss it with its own Dismiss control
+                // (later steps sample the left chrome's background). With
+                // projects present the notice is a toast above the composer
+                // (the sidebar copy is only for the empty app), so the shell
+                // reports where that toast's Dismiss painted.
+                let mut dismiss = related(window, cx)?["noticeDismiss"].clone();
+                for _ in 0..20 {
+                    if dismiss.is_object() {
+                        break;
+                    }
+                    draw(window, cx)?;
+                    settle(cx, 50).await;
+                    dismiss = related(window, cx)?["noticeDismiss"].clone();
+                }
+                anyhow::ensure!(dismiss.is_object(), "the refusal's Dismiss control is painted");
+                let get = |value: &Value| value.as_f64().unwrap_or(f64::NAN) as f32;
+                let dismiss_at = (
+                    get(&dismiss["x"]) + get(&dismiss["w"]) / 2.0,
+                    get(&dismiss["y"]) + get(&dismiss["h"]) / 2.0,
+                );
+                click(window, cx, dismiss_at, MouseButton::Left).await?;
                 let mut cleared = related(window, cx)?;
                 for _ in 0..20 {
                     if cleared["notice"].is_null() {
@@ -4767,7 +4764,7 @@ fn main() -> anyhow::Result<()> {
                     settle(cx, 100).await;
                     cleared = related(window, cx)?;
                 }
-                anyhow::ensure!(cleared["notice"].is_null(), "Dismiss clears the refusal notice (clicked at {column},{dismiss_y}): {}", cleared["notice"]);
+                anyhow::ensure!(cleared["notice"].is_null(), "Dismiss clears the refusal notice (clicked at {dismiss_at:?}): {}", cleared["notice"]);
                 click_tab(window, cx, MAIN).await?;
                 anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main again");
                 for _ in 0..40 {

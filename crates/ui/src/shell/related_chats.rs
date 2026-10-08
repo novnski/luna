@@ -925,6 +925,21 @@ impl Shell {
                 "target": drag.target.as_ref().map(|(anchor, place)| serde_json::json!([anchor, format!("{place:?}")])),
             })),
             "notice": self.sidebar_notice.as_ref().map(|notice| notice.message.to_string()),
+            // The current notice's toast Dismiss control, as last painted.
+            "noticeDismiss": self
+                .sidebar_notice
+                .as_ref()
+                .and_then(|notice| {
+                    self.toast_dismiss_bounds
+                        .get()
+                        .filter(|(id, _)| *id == notice.id)
+                })
+                .map(|(_, bounds)| serde_json::json!({
+                    "x": f32::from(bounds.origin.x),
+                    "y": f32::from(bounds.origin.y),
+                    "w": f32::from(bounds.size.width),
+                    "h": f32::from(bounds.size.height),
+                })),
             "rightActive": format!("{:?}", self.resolved_right_active(cx)),
             "pickerOpen": self.panels.get(&key).picker_open,
             "rightTabs": self

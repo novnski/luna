@@ -2139,6 +2139,11 @@ enum SidebarNoticeTone {
     Error,
 }
 
+/// QA readback: the notice whose toast Dismiss last painted, and where.
+#[cfg(feature = "appshots-fixture")]
+type ToastDismissProbe =
+    std::rc::Rc<std::cell::Cell<Option<(uuid::Uuid, gpui::Bounds<gpui::Pixels>)>>>;
+
 /// Clones retain ownership; every newly published notice has its own identity,
 /// including consecutive progress messages with identical text.
 #[derive(Clone, Debug)]
@@ -2244,6 +2249,10 @@ pub struct Shell {
     /// fixture only (off until it opts in).
     #[cfg(feature = "appshots-fixture")]
     sidebar_probe: Option<spaces::SidebarProbe>,
+    /// Where the notice toast's Dismiss control last painted, with the id of
+    /// the notice it belonged to (QA readback only).
+    #[cfg(feature = "appshots-fixture")]
+    toast_dismiss_bounds: ToastDismissProbe,
     /// Which drill-in the Related chats surface shows when a child and a
     /// side chat are both open (the most recently opened).
     pub(super) related_focus: related_chats::RelatedKind,
@@ -2841,6 +2850,8 @@ impl Shell {
             sidebar_shelf_reveal: None,
             #[cfg(feature = "appshots-fixture")]
             sidebar_probe: None,
+            #[cfg(feature = "appshots-fixture")]
+            toast_dismiss_bounds: Default::default(),
             related_focus: related_chats::RelatedKind::Child,
             sidebar_drag: None,
             sidebar_drag_rows: Vec::new(),
@@ -13403,6 +13414,50 @@ impl Shell {
             theme.accent
         };
         let ring = theme.focus_ring();
+        let dismiss = div()
+            .id("toast-dismiss")
+            .role(gpui::Role::Button)
+            .aria_label("Dismiss notice")
+            .tab_index(0)
+            .size(px(24.0))
+            .flex_none()
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover_wash("toast-dismiss")
+            .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this
+                    .sidebar_notice
+                    .as_ref()
+                    .is_some_and(|current| current.id == notice_id)
+                {
+                    this.sidebar_notice = None;
+                    cx.notify();
+                }
+            }))
+            .on_key_down(crate::swallow_activation_key)
+            .child(
+                icons::icon(icons::CLOSE)
+                    .size(px(10.0))
+                    .text_color(theme.text_muted),
+            );
+        // QA: record where Dismiss painted, so fixtures click the control
+        // itself rather than searching pixels for it.
+        #[cfg(feature = "appshots-fixture")]
+        let dismiss = {
+            let store = self.toast_dismiss_bounds.clone();
+            dismiss.child(
+                gpui::canvas(
+                    move |bounds, _, _| store.set(Some((notice_id, bounds))),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+        };
         let capsule = div()
             .id("toast")
             .role(gpui::Role::Status)
@@ -13433,38 +13488,7 @@ impl Shell {
                 .text_color(tone),
             )
             .child(div().min_w_0().truncate().child(notice.message))
-            .child(
-                div()
-                    .id("toast-dismiss")
-                    .role(gpui::Role::Button)
-                    .aria_label("Dismiss notice")
-                    .tab_index(0)
-                    .size(px(24.0))
-                    .flex_none()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover_wash("toast-dismiss")
-                    .focus_visible(move |style| crate::theme::focus_ring(style, ring))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this
-                            .sidebar_notice
-                            .as_ref()
-                            .is_some_and(|current| current.id == notice_id)
-                        {
-                            this.sidebar_notice = None;
-                            cx.notify();
-                        }
-                    }))
-                    .on_key_down(crate::swallow_activation_key)
-                    .child(
-                        icons::icon(icons::CLOSE)
-                            .size(px(10.0))
-                            .text_color(theme.text_muted),
-                    ),
-            );
+            .child(dismiss);
         let capsule = gpui::AnimationExt::with_animation(
             div().relative().child(capsule),
             SharedString::from(format!("toast-in-{notice_id}")),
