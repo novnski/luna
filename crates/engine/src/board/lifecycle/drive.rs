@@ -998,6 +998,7 @@ impl EngineRpc {
                         &ticket.item.id,
                         ticket.intent.intent_revision,
                         admission_label(&reason),
+                        ticket.version,
                     ))?;
                     self.board_lifecycle_commit(
                         ticket,

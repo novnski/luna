@@ -586,23 +586,25 @@ impl EngineRpc {
     /// effect, never a revision or intent change.
     fn board_rank_only(
         &self,
-        caller: &BoardCaller,
         ticket: &Ticket,
-        request_id: &str,
-        payload_hash: &str,
-        operation: BoardOperation,
+        request: OuterRequest,
         placement: Option<BoardRankPlacement>,
         rows: Vec<BoardRowWrite>,
     ) -> BoardResult<BoardMutationReceipt> {
         let now = crate::now_ms();
-        let receipt = self.board_lifecycle_receipt(caller.actor(), operation, &ticket.item, None);
+        let receipt = self.board_lifecycle_receipt(
+            request.actor.clone(),
+            request.operation,
+            &ticket.item,
+            None,
+        );
         let (item, event) = match placement {
             Some(placement) => (
                 BoardItemWrite::Rank {
                     work_item_id: ticket.item.id.clone(),
                     placement,
                     at_ms: now,
-                    actor: caller.actor(),
+                    actor: request.actor.clone(),
                 },
                 Some((
                     WorkItemEventKind::Reordered {
@@ -622,8 +624,8 @@ impl EngineRpc {
             ),
         };
         self.board_commit(BoardCommit {
-            request_id: request_id.into(),
-            payload_hash: payload_hash.into(),
+            request_id: request.request_id,
+            payload_hash: request.payload_hash,
             committed_at_ms: now,
             item,
             rows,
@@ -700,11 +702,13 @@ impl EngineRpc {
                 BoardMoveEffect::Coalesced
             };
             let mutation = self.board_rank_only(
-                caller,
                 &ticket,
-                &request_id,
-                &hash,
-                BoardOperation::Move,
+                OuterRequest {
+                    request_id: request_id.clone(),
+                    payload_hash: hash.clone(),
+                    operation: BoardOperation::Move,
+                    actor: caller.actor(),
+                },
                 placement,
                 Vec::new(),
             )?;
@@ -845,11 +849,13 @@ impl EngineRpc {
                 rows.push(row);
             }
             let mutation = self.board_rank_only(
-                caller,
                 &ticket,
-                &request_id,
-                &hash,
-                BoardOperation::Start,
+                OuterRequest {
+                    request_id: request_id.clone(),
+                    payload_hash: hash.clone(),
+                    operation: BoardOperation::Start,
+                    actor: caller.actor(),
+                },
                 None,
                 rows,
             )?;
@@ -1424,11 +1430,13 @@ impl EngineRpc {
         });
         if identical {
             return self.board_rank_only(
-                caller,
                 &ticket,
-                &request_id,
-                &hash,
-                BoardOperation::SetStatus,
+                OuterRequest {
+                    request_id: request_id.clone(),
+                    payload_hash: hash.clone(),
+                    operation: BoardOperation::SetStatus,
+                    actor: caller.actor(),
+                },
                 None,
                 Vec::new(),
             );

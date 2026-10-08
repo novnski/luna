@@ -59,6 +59,9 @@
 //! 15. "Start it and report back here" delivers the outcome twice (e.g.
 //!     again after restart), delivers it to the wrong chat, or wakes the
 //!     source agent when only a report was requested.
+//! 16. Settings the user deliberately deferred are silently filled with
+//!     defaults (or broader access) at dispatch; Ready must hold the ticket
+//!     with a visible SettingsUnresolved reason until they are chosen.
 //!
 //! Scenarios that create workers depend on the chat-model slice (A3:
 //! `board_create_main_chat` / `board_create_side_chat` with a ticket
@@ -1462,6 +1465,50 @@ async fn report_back_is_delivered_once_across_restart() {
         json!({"reports":reports(&b).len(),"events":count(&event_kinds(&b,&id).await,"resultDelivered"),"delivered":subscription["deliveredId"].is_string(),"sourceTurns":f.peer.for_key("chat").len()}),
         Some(&detail),
     );
+    ev.write();
+    stop(b).await;
+}
+
+/// Case 16: deferred settings hold Ready with a visible reason and start
+/// only after they are chosen; nothing is guessed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deferred_settings_hold_ready_until_chosen() {
+    let f = fixture();
+    let b = boot(&f);
+    let mut ev = Evidence::new("deferred-settings-unresolved");
+    space(&b, &f, "project-orbit", "orbit").await;
+    let saved = ok(
+        &b.c,
+        "BoardCreate",
+        json!({"requestId":"ticket-a","projectId":"project-orbit","title":"Choose settings later","description":BRIEF,"implementation":{"deferred":true}}),
+    )
+    .await;
+    let id = saved["workItemId"].as_str().unwrap().to_owned();
+    let key = saved["key"].as_str().unwrap().to_owned();
+    f.peer.hold(&key);
+    let moved = mv(&b, "ready-1", &id, "ready").await;
+    let held = read(&b, &id).await;
+    ev.step(
+        "Ready holds with the unresolved fields; no chat, no prompt",
+        json!({"effect":"queued","reason":"settingsUnresolved","fields":["harness","model","permissionMode"],"attention":true,"chat":null,"prompts":0}),
+        json!({"effect":moved["effect"]["kind"],"reason":held["view"]["queueReason"]["kind"],"fields":held["view"]["queueReason"]["fields"],"attention":attention_kinds(&held).contains(&"settingsUnresolved".to_owned()),"chat":worker(&held),"prompts":f.peer.prompts().len()}),
+        Some(&held),
+    );
+    ok(
+        &b.c,
+        "BoardUpdate",
+        json!({"requestId":"choose","workItemId":id,"expectedRevision":held["view"]["item"]["revision"],"changes":{"implementation":{"harness":"mock","model":"fixture-pro","permissionMode":"ask"}}}),
+    )
+    .await;
+    let started = wait_phase(&b, &id, "working").await;
+    let launch = launches(&started)[0].clone();
+    ev.step(
+        "after the choice the ticket starts once with exactly the chosen settings",
+        json!({"firstStarts":1,"model":"fixture-pro","permissionMode":"ask","reasoning":"high"}),
+        json!({"firstStarts":f.peer.count(&key,"first start"),"model":launch["resolved"]["model"],"permissionMode":launch["resolved"]["permissionMode"],"reasoning":launch["resolved"]["reasoning"]}),
+        Some(&launch),
+    );
+    f.peer.release(&key);
     ev.write();
     stop(b).await;
 }
