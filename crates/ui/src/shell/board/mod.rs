@@ -29,7 +29,7 @@ pub(crate) mod settings_controls;
 pub use api::{BoardApi, BoardCallError};
 #[allow(unused_imports)]
 pub use model::{BoardListFilters, BoardModel, BoardModelEvent, BoardStatus};
-pub use page::BoardPage;
+pub use page::{BoardPage, BoardPageEvent};
 
 impl Shell {
     /// The scope a newly opened Board starts with: the sidebar's explicit
@@ -46,16 +46,82 @@ impl Shell {
             .unwrap_or_default()
     }
 
-    /// The Board page entity, created on first open.
+    /// The Board page entity, created on first open. An explicit change of
+    /// the sidebar's project filter carries over to an existing page (the
+    /// Board opened from that project); otherwise it keeps its own scope.
     pub(super) fn board_page(&mut self, cx: &mut Context<Self>) -> Entity<BoardPage> {
+        let filter = self.settings.space_filter.clone();
         if let Some(page) = &self.board_page {
-            return page.clone();
+            let page = page.clone();
+            page.update(cx, |page, cx| page.follow_sidebar_filter(filter, cx));
+            return page;
         }
         let scope = self.initial_board_scope(cx);
         let state = self.state.clone();
-        let page = cx.new(|cx| BoardPage::new(state, scope, cx));
+        let page = cx.new(|cx| {
+            let mut page = BoardPage::new(state, scope, cx);
+            page.note_sidebar_filter(filter);
+            page
+        });
+        // Lives as long as the page, which the Shell keeps for its lifetime.
+        cx.subscribe(&page, |shell, _, event: &BoardPageEvent, cx| {
+            shell.on_board_page_event(event, cx)
+        })
+        .detach();
+        page.update(cx, |page, cx| page.sync_prefs(cx));
         self.board_page = Some(page.clone());
         page
+    }
+
+    fn on_board_page_event(&mut self, event: &BoardPageEvent, cx: &mut Context<Self>) {
+        match event {
+            BoardPageEvent::PrefsChanged(prefs) => {
+                if self.settings.board != *prefs {
+                    self.settings.board = prefs.clone();
+                    self.schedule_save(cx);
+                }
+            }
+            BoardPageEvent::OpenChat(target) => self.open_board_chat(target, cx),
+        }
+    }
+
+    /// Go to chat from a ticket: reopen the view, never relaunch or reparent.
+    /// A side worker opens in its main parent's workbench.
+    pub(super) fn open_board_chat(
+        &mut self,
+        target: &luna_proto::BoardNavigationTarget,
+        cx: &mut Context<Self>,
+    ) {
+        use luna_proto::BoardNavigationTarget as Target;
+        match target {
+            Target::MainChat { task_id } | Target::Direct { task_id, .. } => {
+                self.open_chat(task_id.clone(), cx)
+            }
+            Target::SideChat {
+                main_task_id,
+                side_task_id,
+            } => {
+                self.open_chat(main_task_id.clone(), cx);
+                self.open_side_chat_in_pane(side_task_id.clone(), cx);
+            }
+            Target::NoChat { .. } => {}
+        }
+    }
+
+    /// Open the Board prefiltered to a project (a project shortcut), or to
+    /// All projects with `None`.
+    #[allow(dead_code)]
+    pub(crate) fn open_board_for_project(
+        &mut self,
+        project_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let page = self.board_page(cx);
+        let scope = project_id
+            .map(|project_id| luna_proto::BoardScope::Project { project_id })
+            .unwrap_or_default();
+        page.update(cx, |page, cx| page.set_scope(scope, cx));
+        self.open_sidebar_page(SidebarPage::Board, cx);
     }
 
     /// Keep the persisted sidebar page in step with the route, so a restart
@@ -75,5 +141,14 @@ impl Shell {
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_board_page(&self) -> Option<Entity<BoardPage>> {
         self.board_page.clone()
+    }
+
+    /// QA: the Board page's readback (`Value::Null` before it mounts).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_board_readback(&self, window: &Window, cx: &App) -> serde_json::Value {
+        self.board_page
+            .as_ref()
+            .map(|page| page.read(cx).fixture_readback(window, cx))
+            .unwrap_or(serde_json::Value::Null)
     }
 }

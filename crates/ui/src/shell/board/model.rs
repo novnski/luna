@@ -71,6 +71,17 @@ impl EventEmitter<BoardModelEvent> for BoardModel {}
 
 impl BoardModel {
     pub fn new(state: Entity<AppState>, scope: BoardScope, cx: &mut Context<Self>) -> Self {
+        Self::with_filters(state, scope, BoardListFilters::default(), cx)
+    }
+
+    /// [`Self::new`] with initial filters (restored presentation), so the
+    /// first read already applies them.
+    pub fn with_filters(
+        state: Entity<AppState>,
+        scope: BoardScope,
+        filters: BoardListFilters,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let observer = cx.observe(&state, |model, state, cx| {
             if state.read(cx).engine_generation() != model.engine_generation {
                 model.refresh(cx);
@@ -79,7 +90,7 @@ impl BoardModel {
         let mut model = Self {
             state,
             scope,
-            filters: BoardListFilters::default(),
+            filters,
             items: Vec::new(),
             projects: Vec::new(),
             next_cursor: None,
@@ -172,6 +183,42 @@ impl BoardModel {
             && view.item.revision <= receipt.item.revision
         {
             view.item = receipt.item.clone();
+            cx.emit(BoardModelEvent::Changed);
+            cx.notify();
+        }
+        self.refresh(cx);
+    }
+
+    /// Show a committed move at once: its record (column, rank) and the
+    /// phase the engine reported with it, in board order. The engine's
+    /// derived view replaces it on the following re-read.
+    pub fn apply_move(&mut self, receipt: &luna_proto::BoardMoveReceipt, cx: &mut Context<Self>) {
+        self.apply_committed(&receipt.mutation.item, Some(receipt.phase), cx);
+    }
+
+    /// [`Self::apply_receipt`] that also restores board order, so a rank or
+    /// column change shows in its new place before the re-read.
+    pub fn apply_committed(
+        &mut self,
+        item: &luna_proto::WorkItem,
+        phase: Option<luna_proto::BoardPhase>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.items.iter_mut().find(|view| view.item.id == item.id)
+            && view.item.revision <= item.revision
+        {
+            view.item = item.clone();
+            if let Some(phase) = phase {
+                view.phase = phase;
+            }
+            self.items.sort_by(|left, right| {
+                left.item
+                    .project_id
+                    .cmp(&right.item.project_id)
+                    .then(left.item.column.order().cmp(&right.item.column.order()))
+                    .then_with(|| luna_proto::compare_pin_order(&left.item.rank, &right.item.rank))
+                    .then_with(|| left.item.id.cmp(&right.item.id))
+            });
             cx.emit(BoardModelEvent::Changed);
             cx.notify();
         }
