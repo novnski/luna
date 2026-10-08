@@ -340,12 +340,14 @@ impl EngineRpc {
     ) -> BoardResult<()> {
         let bytes = serde_json::to_vec(value).map_err(storage)?;
         let key = Self::board_reply_key(kind, request_id);
+        // As in `board_kv_save`: the store decides whether it needs the
+        // permit; an admitted save on an unguarded store always mismatches.
         let permit = self.board_write_permit()?;
-        match &permit {
-            Some(permit) => self
+        match (self.store.save_snapshot(&key, &bytes), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => self
                 .store
                 .save_snapshot_admitted(permit.ticket(), &key, &bytes),
-            None => self.store.save_snapshot(&key, &bytes),
+            (result, _) => result,
         }
         .map_err(storage)
     }

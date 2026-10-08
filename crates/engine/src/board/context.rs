@@ -13,23 +13,19 @@
 //! prompt, OpenCode's session instruction entry), and `get_workspace` returns
 //! it re-derived so a compacted conversation can rediscover it.
 //!
-//! The role comes from A3's `board_chat_identity`; until that slice lands the
-//! same durable lineage rules (side-chat row or `ChildThread` metadata, walked
-//! to the top-level main; purpose from active board links) are applied here.
+//! The role and ticket come from A3's `board_canonical_identity` and
+//! `board_ticket_context` (durable lineage and board links only).
 //!
 //! Contract: docs/design/project-board/pb0-contract.md §6, §7.2 and §7.5.
 use super::*;
 use luna_proto::{
-    AuthoringState, BoardChatIdentityRequest, BoardChatRole, BoardCompletionMode,
-    BoardContextOrigin, BoardRuntimeContext, BoardTicketContext, BoardToolAudience,
-    CanonicalChatIdentity, ChatPermittedActions, ChatProvenance, ChatProvenanceRelation,
-    ChatPurpose, OriginalContainer, RuntimeDelivery, TaskLinkRole,
+    AuthoringState, BoardChatRole, BoardCompletionMode, BoardRuntimeContext, BoardTicketContext,
+    BoardToolAudience, ChatPermittedActions, ChatProvenance, ChatProvenanceRelation, ChatPurpose,
+    OriginalContainer, RuntimeDelivery, TaskLinkRole,
 };
 
 /// Longest one-line label (ticket title, requested outcome) in the context.
 const LABEL_CHARS: usize = 200;
-/// Most parents a legacy nested chat walks to reach its main ancestor.
-const MAX_LINEAGE_DEPTH: usize = 16;
 /// Launch snapshots read to find the brief this chat was last given.
 const LAUNCH_LOOKBACK: usize = 20;
 
@@ -72,34 +68,6 @@ fn requested_outcome(description: &str) -> Option<String> {
         .filter(|line| !line.is_empty())
 }
 
-/// The confirmed creation rules (§6): main → side fresh/with context, new
-/// main (optionally with a handoff), convert, start; side → fresh sibling
-/// only, new main with a written handoff, convert, start. Never reparenting.
-fn permitted_for(role: BoardChatRole, worker: bool) -> ChatPermittedActions {
-    match role {
-        BoardChatRole::Main => ChatPermittedActions {
-            create_side_fresh: true,
-            create_side_with_context: true,
-            create_sibling_fresh: false,
-            create_main: true,
-            create_main_with_handoff: true,
-            convert_to_ticket: !worker,
-            start_ticket: true,
-            reparent: false,
-        },
-        BoardChatRole::Side => ChatPermittedActions {
-            create_side_fresh: false,
-            create_side_with_context: false,
-            create_sibling_fresh: true,
-            create_main: false,
-            create_main_with_handoff: true,
-            convert_to_ticket: !worker,
-            start_ticket: true,
-            reparent: false,
-        },
-    }
-}
-
 impl EngineRpc {
     /// Canonical board context for an ordinary main/side chat run (`None`
     /// when the board has nothing to add: no chat row, another host, no
@@ -137,32 +105,28 @@ impl EngineRpc {
         if space.device_id != self.engine_info.device_id {
             return Ok(None);
         }
-        let identity = self.board_canonical_identity(task_id, &chat)?;
-        let (audience, ticket) = match &identity.purpose {
-            ChatPurpose::TicketWorker { work_item_id, .. } => (
-                BoardToolAudience::TicketWorker,
-                self.board_ticket_context(task_id, work_item_id, TaskLinkRole::Working, None)?,
-            ),
-            ChatPurpose::Reviewer {
-                work_item_id,
-                review_run_id,
-                ..
-            } => (
-                BoardToolAudience::Reviewer,
-                self.board_ticket_context(
-                    task_id,
-                    work_item_id,
-                    TaskLinkRole::Reviewer,
-                    Some(review_run_id),
-                )?,
-            ),
-            ChatPurpose::Ordinary => (
-                match identity.role {
-                    BoardChatRole::Main => BoardToolAudience::MainChat,
-                    BoardChatRole::Side => BoardToolAudience::SideChat,
-                },
-                None,
-            ),
+        let identity = match self.board_canonical_identity(task_id) {
+            Ok(identity) => identity,
+            // Not an ordinary chat (or gone): no board context.
+            Err(BoardError::InvalidRole { .. } | BoardError::InvalidInput { .. }) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let audience = match &identity.purpose {
+            ChatPurpose::TicketWorker { .. } => BoardToolAudience::TicketWorker,
+            ChatPurpose::Reviewer { .. } => BoardToolAudience::Reviewer,
+            ChatPurpose::Ordinary => match identity.role {
+                BoardChatRole::Main => BoardToolAudience::MainChat,
+                BoardChatRole::Side => BoardToolAudience::SideChat,
+            },
+        };
+        let ticket = match audience {
+            BoardToolAudience::TicketWorker | BoardToolAudience::Reviewer => self
+                .board_ticket_context(task_id)?
+                .map(|ticket| self.board_launched_brief(task_id, ticket))
+                .transpose()?,
+            _ => None,
         };
         // A ticket of another project is never this chat's context.
         let ticket = ticket.filter(|ticket| ticket.project_id == project_id);
@@ -268,249 +232,29 @@ impl EngineRpc {
         }
     }
 
-    /// A3's canonical identity, or — until that slice lands — the same rules
-    /// applied to durable lineage here.
-    fn board_canonical_identity(
+    /// A worker sees the brief it was last given (its latest launch), so an
+    /// edit of the ticket mid-run neither rewrites its instructions nor
+    /// changes its contract; `board_read` shows the current brief.
+    fn board_launched_brief(
         &self,
         task_id: &str,
-        chat: &luna_proto::Chat,
-    ) -> BoardResult<CanonicalChatIdentity> {
-        let engine = BoardCaller::Engine {
-            component: "board.context",
-        };
-        match self.board_chat_identity(
-            &engine,
-            BoardChatIdentityRequest {
-                task_id: task_id.into(),
-            },
-        ) {
-            Err(BoardError::NotImplemented { .. }) => self.board_lineage_identity(task_id, chat),
-            other => other,
+        mut ticket: BoardTicketContext,
+    ) -> BoardResult<BoardTicketContext> {
+        if ticket.link_role != TaskLinkRole::Working {
+            return Ok(ticket);
         }
-    }
-
-    /// The parent recorded by durable lineage: the workspace side-chat row,
-    /// the local side-chat store, or `ChildThread` metadata.
-    fn board_lineage_parent(
-        &self,
-        task_id: &str,
-        chat: Option<&luna_proto::Chat>,
-    ) -> Option<String> {
-        self.workspace
-            .side_chat_parent(task_id)
-            .or_else(|| {
-                self.side_chats
-                    .as_ref()
-                    .and_then(|side_chats| side_chats.layout_identity(task_id).ok().flatten())
-                    .map(|(parent, _)| parent)
-            })
-            .or_else(|| {
-                chat.and_then(|chat| chat.child_thread.as_ref())
-                    .map(|child| child.parent_task_id.clone())
-            })
-            .filter(|parent| !parent.is_empty() && parent != task_id)
-    }
-
-    fn board_lineage_identity(
-        &self,
-        task_id: &str,
-        chat: &luna_proto::Chat,
-    ) -> BoardResult<CanonicalChatIdentity> {
-        let side_row = self.workspace.side_chat_parent(task_id).is_some()
-            || self
-                .side_chats
-                .as_ref()
-                .is_some_and(|side_chats| side_chats.contains(task_id));
-        let direct_parent = self.board_lineage_parent(task_id, Some(chat));
-        let (role, main_parent_id, legacy_nested) = match direct_parent.clone() {
-            None => (BoardChatRole::Main, None, false),
-            Some(parent) => {
-                // Legacy nested records: walk to the first top-level main.
-                let mut seen = HashSet::from([task_id.to_owned(), parent.clone()]);
-                let mut current = parent;
-                let mut depth = 0;
-                while depth < MAX_LINEAGE_DEPTH {
-                    let row = self.workspace.chat(&current).ok().flatten();
-                    match self.board_lineage_parent(&current, row.as_ref()) {
-                        Some(next) if seen.insert(next.clone()) => {
-                            current = next;
-                            depth += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                (BoardChatRole::Side, Some(current), depth > 0)
-            }
-        };
-        let links = self
+        if let Some(launch) = self
             .store
-            .board_task_links_for_task(task_id, true)
-            .map_err(board_store_error)?;
-        let working = links.iter().find(|link| link.role == TaskLinkRole::Working);
-        let reviewer = links
-            .iter()
-            .find(|link| link.role == TaskLinkRole::Reviewer);
-        let key_of = |work_item_id: &str| {
-            self.store
-                .board_item(work_item_id)
-                .ok()
-                .flatten()
-                .map(|item| item.key)
-                .unwrap_or_default()
-        };
-        let purpose = if let Some(link) = working {
-            ChatPurpose::TicketWorker {
-                work_item_id: link.work_item_id.clone(),
-                key: key_of(&link.work_item_id),
-            }
-        } else if let Some(link) = reviewer {
-            let runs = self
-                .store
-                .board_review_runs_for_reviewer(task_id)
-                .map_err(board_store_error)?;
-            let run = runs
-                .iter()
-                .find(|run| run.work_item_id == link.work_item_id && !run.state.terminal())
-                .or_else(|| {
-                    runs.iter()
-                        .find(|run| run.work_item_id == link.work_item_id)
-                });
-            match run {
-                Some(run) => ChatPurpose::Reviewer {
-                    work_item_id: link.work_item_id.clone(),
-                    key: key_of(&link.work_item_id),
-                    review_run_id: run.id.clone(),
-                },
-                None => ChatPurpose::Ordinary,
-            }
-        } else {
-            ChatPurpose::Ordinary
-        };
-        let worker = matches!(purpose, ChatPurpose::TicketWorker { .. });
-        let lineage = self
-            .task_identity
-            .view(task_id)
-            .map(|view| view.task.lineage);
-        let child = chat.child_thread.is_some() && !side_row;
-        let (creator, source, context_origin) = match (&direct_parent, child, side_row) {
-            (Some(parent), true, _) => (
-                Some(ChatProvenance {
-                    task_id: parent.clone(),
-                    relation: ChatProvenanceRelation::CreatedBy,
-                }),
-                None,
-                BoardContextOrigin::Fresh,
-            ),
-            (Some(parent), _, true) => (
-                None,
-                Some(ChatProvenance {
-                    task_id: parent.clone(),
-                    relation: ChatProvenanceRelation::ForkedFrom,
-                }),
-                BoardContextOrigin::ContextSnapshot,
-            ),
-            _ => match lineage
-                .as_ref()
-                .and_then(|lineage| lineage.source_task_id.clone())
-            {
-                Some(source) => (
-                    None,
-                    Some(ChatProvenance {
-                        task_id: source,
-                        relation: ChatProvenanceRelation::ForkedFrom,
-                    }),
-                    BoardContextOrigin::NativeFork,
-                ),
-                None => (None, None, BoardContextOrigin::Fresh),
-            },
-        };
-        let parent_unavailable = main_parent_id.as_deref().is_some_and(|parent| {
-            self.workspace
-                .chat(parent)
-                .ok()
-                .flatten()
-                .is_none_or(|parent| parent.archived)
-        });
-        Ok(CanonicalChatIdentity {
-            task_id: task_id.into(),
-            role,
-            display_container_id: main_parent_id.clone().unwrap_or_else(|| task_id.into()),
-            main_parent_id,
-            creator,
-            source,
-            context_origin,
-            original_container: working.and_then(|link| link.original_container.clone()),
-            parent_locked: worker,
-            parent_unavailable,
-            legacy_nested,
-            permitted: permitted_for(role, worker),
-            purpose,
-        })
-    }
-
-    /// The ticket this chat works on or reviews. A worker sees the brief it
-    /// was last given (its latest launch), so editing the ticket mid-run does
-    /// not rewrite its instructions; `board_read` shows the current brief.
-    fn board_ticket_context(
-        &self,
-        task_id: &str,
-        work_item_id: &str,
-        link_role: TaskLinkRole,
-        review_run_id: Option<&str>,
-    ) -> BoardResult<Option<BoardTicketContext>> {
-        let Some(item) = self
-            .store
-            .board_item(work_item_id)
+            .board_launches(&ticket.work_item_id, LAUNCH_LOOKBACK)
             .map_err(board_store_error)?
-        else {
-            return Ok(None);
-        };
-        let generation = match review_run_id {
-            Some(run) => self
-                .store
-                .board_review_run(run)
-                .map_err(board_store_error)?
-                .map(|run| run.execution_generation),
-            None => self
-                .store
-                .board_intent(&item.id)
-                .map_err(board_store_error)?
-                .map(|intent| intent.execution_generation),
-        };
-        let launch = if link_role == TaskLinkRole::Working {
-            self.store
-                .board_launches(&item.id, LAUNCH_LOOKBACK)
-                .map_err(board_store_error)?
-                .into_iter()
-                .find(|launch| launch.task_id == task_id)
-        } else {
-            None
-        };
-        let (title, description, brief_revision) = match &launch {
-            Some(launch) => (
-                launch.sent_title.as_str(),
-                launch.sent_description.as_str(),
-                launch.brief_revision,
-            ),
-            None => (
-                item.title.as_str(),
-                item.description.as_str(),
-                item.brief_revision,
-            ),
-        };
-        Ok(Some(BoardTicketContext {
-            work_item_id: item.id.clone(),
-            key: item.key.clone(),
-            title: one_line_label(title),
-            project_id: item.project_id.clone(),
-            link_role,
-            brief_revision,
-            column: item.column,
-            execution_generation: generation.unwrap_or(0),
-            completion: item.completion.mode,
-            review_run_id: review_run_id.map(str::to_owned),
-            requested_outcome: requested_outcome(description),
-        }))
+            .into_iter()
+            .find(|launch| launch.task_id == task_id)
+        {
+            ticket.title = launch.sent_title;
+            ticket.brief_revision = launch.brief_revision;
+            ticket.requested_outcome = requested_outcome(&launch.sent_description);
+        }
+        Ok(ticket)
     }
 }
 
@@ -610,7 +354,7 @@ pub(crate) fn board_context_text(
         && let Some(ticket) = &board.ticket
     {
         text.push_str(&format!(
-            " You are the working chat of ticket {} ({}). Brief revision {} is the brief you were given; board_read shows the current one. Completion requires {}. Report progress, blockers and readiness for review with board_set_status on {}; Done is set only by the engine.",
+            " You are the working chat of ticket {} ({}). Brief revision {} is the brief you were given; board_read shows the current one. Completion requires {}. Report progress and blockers with board_set_status on {}, and submit your result for review with review_start (the checks and evidence you ran); Done is set only by the engine.",
             id(&ticket.key),
             id(&ticket.work_item_id),
             ticket.brief_revision,
@@ -647,7 +391,7 @@ pub(crate) fn board_context_text(
         ));
         if workspace_tool {
             text.push_str(
-                " After compaction, call get_workspace with topic board to re-read this context.",
+                " get_workspace with topic board re-reads this context (after compaction too) and lists the settings shapes and board_control actions.",
             );
         }
     }

@@ -156,12 +156,15 @@ impl EngineRpc {
 
     pub(crate) fn board_kv_save<T: Serialize>(&self, key: &str, value: &T) -> BoardResult<()> {
         let bytes = serde_json::to_vec(value).map_err(storage)?;
+        // The permit fences retired writers; the store decides whether it
+        // needs it (like `board_commit`). An engine's store is unguarded, and
+        // an admitted save on it is always `AdmissionMismatch`.
         let permit = self.board_write_permit()?;
-        match permit {
-            Some(permit) => self
+        match (self.store.save_snapshot(key, &bytes), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => self
                 .store
                 .save_snapshot_admitted(permit.ticket(), key, &bytes),
-            None => self.store.save_snapshot(key, &bytes),
+            (result, _) => result,
         }
         .map_err(board_store_error)
     }

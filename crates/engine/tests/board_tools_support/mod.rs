@@ -43,10 +43,23 @@ pub const MAIN_TOOLS: &[&str] = &[
     "board_move",
     "board_start",
     "board_control",
-    "board_set_status",
-    "board_send_update",
-    "board_link_thread",
     "board_convert_chat",
+    "create_side_chat",
+    "create_main_chat",
+    "board_issue_search",
+    "board_issue_import",
+];
+/// A ticket's working chat: no conversion, plus status reports and review.
+pub const WORKER_TOOLS: &[&str] = &[
+    "board_list",
+    "board_read",
+    "board_execution_options",
+    "board_create",
+    "board_update",
+    "board_move",
+    "board_start",
+    "board_control",
+    "board_set_status",
     "review_start",
     "review_status",
     "review_cancel",
@@ -54,7 +67,6 @@ pub const MAIN_TOOLS: &[&str] = &[
     "create_main_chat",
     "board_issue_search",
     "board_issue_import",
-    "board_set_dependency",
 ];
 /// The board tools that change nothing.
 pub const READ_ONLY_TOOLS: &[&str] = &[
@@ -64,7 +76,7 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "review_status",
     "board_issue_search",
 ];
-pub const REVIEWER_TOOLS: &[&str] = &["board_list", "board_read", "review_status", "review_submit"];
+pub const REVIEWER_TOOLS: &[&str] = &["board_read", "review_status", "review_submit"];
 pub const AUTHORING_TOOLS: &[&str] = &[
     "board_list",
     "board_read",
@@ -73,6 +85,9 @@ pub const AUTHORING_TOOLS: &[&str] = &[
     "board_start",
     "board_draft_checkpoint",
 ];
+/// Serialized board tools (`name`, `description`, `inputSchema`, as MCP
+/// lists them) an ordinary main or side chat may carry: about 4k tokens.
+pub const CATALOG_BUDGET_BYTES: usize = 16 * 1024;
 const NOT_ATTACHED: &str = "not attached";
 
 /// How one provider's fake CLI reads plans and reports results.
@@ -174,12 +189,12 @@ pub fn boot(provider: Provider, harness: Arc<dyn Harness>) -> Fixture {
     let root = TempDir::new().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
     registry.register(harness);
+    // A local profile is the one the board chat model and review E2Es run
+    // on: its store carries the write epoch board writes are admitted by.
+    let engine_root = root.path().join("engine");
+    std::fs::create_dir_all(&engine_root).unwrap();
     let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
-        EngineProfile::development(
-            &root.path().join("engine"),
-            "synthetic-org",
-            "synthetic-user",
-        ),
+        EngineProfile::local(&engine_root).unwrap(),
         registry,
         provider.harness,
         None,
@@ -590,6 +605,42 @@ fn has_board_block(instructions: &str, audience: &str, task: &str) -> Result<Val
     Ok(json!({"audience": audience, "taskId": task, "chars": instructions.chars().count()}))
 }
 
+/// The board tools the engine attaches for an authority, sorted, and their
+/// serialized size as an MCP `tools/list` carries them (name, description,
+/// input schema) — the per-chat schema cost of the board.
+fn board_catalog(
+    tools: &CrossTaskTools<Arc<EngineRpc>>,
+    authority: &CrossTaskAuthority,
+) -> (Vec<String>, usize) {
+    let (attached, _) = tools.catalog(authority);
+    let board: Vec<_> = attached
+        .iter()
+        .filter(|tool| luna_proto::BOARD_TOOL_NAMES.contains(&tool.name.as_str()))
+        .collect();
+    let bytes = board
+        .iter()
+        .map(|tool| {
+            serde_json::to_vec(&json!({
+                "name": tool.name, "description": tool.description, "inputSchema": tool.input_schema,
+            }))
+            .unwrap()
+            .len()
+        })
+        .sum();
+    let mut names: Vec<String> = board.iter().map(|tool| tool.name.clone()).collect();
+    names.sort();
+    (names, bytes)
+}
+
+fn catalog_size(audience: &str, names: &[String], bytes: usize) -> Value {
+    eprintln!(
+        "[board tools] {audience}: {} tools, {bytes} bytes (~{} tokens)",
+        names.len(),
+        bytes / 4
+    );
+    json!({"audience": audience, "tools": names.len(), "bytes": bytes, "approxTokens": bytes / 4})
+}
+
 fn tool(name: &str, arguments: Value) -> Value {
     json!({"tool": name, "arguments": arguments})
 }
@@ -904,7 +955,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
                 || format!("{receipt:#}"),
             )
             .map(|_| json!({"implemented": true, "effect": receipt["effect"]["kind"]})),
-            None => Ok(json!({"implemented": false, "code": moved.code()})),
+            None => Ok(json!({"implemented": false, "code": moved.code(), "reply": moved.text})),
         }),
     );
     let started = matches!(move_receipt, Ok(Some(_)));
@@ -1006,7 +1057,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
     let side_ctx_created = side_ctx.receipt_or_board_error().ok().flatten().cloned();
     evidence.check(
         "a main chat may create a side chat with context",
-        "a side chat under this chat, or notImplemented",
+        "a side chat under this chat, or notImplemented, or the fork's typed mid-turn refusal",
         side_ctx
             .receipt_or_board_error()
             .and_then(|receipt| match receipt {
@@ -1015,6 +1066,14 @@ pub async fn board_tools_scenario(f: &Fixture) {
                     || format!("{created:#}"),
                 )
                 .map(|_| json!({"implemented": true, "contextOrigin": created["contextOrigin"]})),
+                // The caller is mid-turn when it calls a tool, and the
+                // with-context fork refuses to copy unsettled history. Recorded
+                // as a known chat-model limitation, never as a created chat.
+                None if side_ctx.code() == Some("unavailable")
+                    && side_ctx.text.contains("settle") =>
+                {
+                    Ok(json!({"implemented": false, "limitation": side_ctx.text}))
+                }
                 None => expect(side_ctx.code() == Some("notImplemented"), || {
                     side_ctx.text.into()
                 })
@@ -1192,7 +1251,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
         ), // 6
         tool(
             "create_side_chat",
-            json!({"requestId":"sibling-1","title":"Sibling","prompt":"Continue the search fix","start":false}),
+            json!({"requestId":"sibling-1","title":"Sibling","start":false}),
         ), // 7
         tool(
             "create_main_chat",
@@ -1221,8 +1280,8 @@ pub async fn board_tools_scenario(f: &Fixture) {
         has_board_block(&side_instructions, "sideChat", &child),
     );
     evidence.check(
-        "a side chat's schemas offer no context forks and no side-of-self",
-        "no create_side_chat.context; destination has sibling, not sideChat; handoffBrief required",
+        "a side chat's schemas offer no context forks, no side-of-self and no create_thread",
+        "no create_side_chat.context; destination has sibling, not sideChat; handoffBrief required; create_thread not listed",
         {
             let listed = &side["0"];
             let schemas = &listed["schemas"];
@@ -1230,6 +1289,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
             let required = schemas["create_main_chat"]["required"].clone();
             expect(
                 board_names(listed) == sorted(MAIN_TOOLS)
+                    && !names(listed).iter().any(|name| name == "create_thread")
                     && schemas["create_side_chat"]["properties"]
                         .get("context")
                         .is_none()
@@ -1426,19 +1486,42 @@ pub async fn board_tools_scenario(f: &Fixture) {
             other => Err(format!("{other:?}")),
         },
     );
-    let (attached, _) = tools.catalog(&f.authority(&main));
+    let (board, main_bytes) = board_catalog(&tools, &f.authority(&main));
     evidence.check(
-        "the engine catalog for the main chat matches what the provider listed",
-        "the main-chat board tools",
+        "the engine catalog for the main chat matches what the provider listed, within budget",
+        "the main-chat board tools in at most 16 KiB (about 4k tokens)",
+        expect(
+            board == sorted(MAIN_TOOLS) && main_bytes <= CATALOG_BUDGET_BYTES,
+            || format!("{board:?} {main_bytes} bytes"),
+        )
+        .map(|_| catalog_size("mainChat", &board, main_bytes)),
+    );
+    let (board, side_bytes) = board_catalog(&tools, &f.authority(&child));
+    evidence.check(
+        "the side chat's catalog is its own, within budget, without create_thread",
+        "the side-chat board tools in at most 16 KiB; no legacy create_thread",
         {
-            let mut board: Vec<String> = attached
-                .iter()
-                .filter(|tool| luna_proto::BOARD_TOOL_NAMES.contains(&tool.name.as_str()))
-                .map(|tool| tool.name.clone())
-                .collect();
-            board.sort();
-            expect(board == sorted(MAIN_TOOLS), || format!("{board:?}")).map(|_| json!(board.len()))
+            let (attached, _) = tools.catalog(&f.authority(&child));
+            expect(
+                board == sorted(MAIN_TOOLS)
+                    && side_bytes <= CATALOG_BUDGET_BYTES
+                    && !attached.iter().any(|tool| tool.name == "create_thread"),
+                || format!("{board:?} {side_bytes} bytes"),
+            )
+            .map(|_| catalog_size("sideChat", &board, side_bytes))
         },
+    );
+    let (main_attached, _) = tools.catalog(&f.authority(&main));
+    evidence.check(
+        "a main chat keeps create_thread",
+        "create_thread attached for the main chat",
+        expect(
+            main_attached
+                .iter()
+                .any(|tool| tool.name == "create_thread"),
+            || "create_thread missing".into(),
+        )
+        .map(|_| json!(true)),
     );
     let diagnostics = f.rpc_ok("BoardToolCatalog", json!({"taskId": main})).await;
     evidence.check(
@@ -1455,36 +1538,218 @@ pub async fn board_tools_scenario(f: &Fixture) {
         .map(|_| diagnostics["acknowledged"]["delivery"].clone()),
     );
 
-    // ---- reviewer and authoring audiences (when their slices landed) -----
-    let mut reviewer_task: Option<String> = None;
-    match f
-        .rpc_call(
-            "BoardReviewStart",
-            json!({"requestId":"review-1","workItemId": ticket}),
+    // ---- worker, reviewer and authoring audiences (their slices' flows) ----
+    // The other main chat converts itself into a ticket's working chat with
+    // its own board_convert_chat tool (A3): its catalog becomes the worker's,
+    // its context parent-locked.
+    let mut review_ticket = ticket.clone();
+    match tools
+        .invoke(
+            &f.authority(&other),
+            "board_convert_chat",
+            json!({"requestId":"convert-other","title":"Cover the archived toggle",
+                "description":"Keep the archived-project toggle covered by tests."}),
+            &cancel,
         )
         .await
     {
-        Ok(receipt) => {
-            if let Some(reviewer) = receipt["run"]["reviewerTaskId"].as_str() {
+        Ok(converted) => {
+            review_ticket = converted["mutation"]["workItemId"]
+                .as_str()
+                .unwrap_or(&ticket)
+                .to_owned();
+            let context = CrossTaskBackend::board_context(&*f.rpc, &other).expect("worker context");
+            let (board, bytes) = board_catalog(&tools, &f.authority(&other));
+            evidence.check(
+                "a ticket's working chat gets the worker tools and a parent-locked context",
+                "ticketWorker: status and review tools, no conversion; parent locked; its ticket",
+                expect(
+                    context.audience == luna_proto::BoardToolAudience::TicketWorker
+                        && context.parent_locked
+                        && context
+                            .ticket
+                            .as_ref()
+                            .is_some_and(|ticket| ticket.work_item_id == review_ticket)
+                        && board == sorted(WORKER_TOOLS),
+                    || format!("{context:?} {board:?}"),
+                )
+                .map(|_| catalog_size("ticketWorker", &board, bytes)),
+            );
+            let direct = tools
+                .invoke(
+                    &f.authority(&main),
+                    "board_set_status",
+                    json!({"requestId":"main-status","workItemId": review_ticket,"kind":"progress","summary":"x"}),
+                    &cancel,
+                )
+                .await;
+            evidence.check(
+                "status reports are a working chat's tool, not an ordinary chat's",
+                "invalidRole for the main chat",
+                match direct {
+                    Err(luna_engine::cross_task_tools::CrossTaskError::Backend(text))
+                        if text.contains("\"code\":\"invalidRole\"") =>
+                    {
+                        Ok(json!("invalidRole"))
+                    }
+                    other => Err(format!("{other:?}")),
+                },
+            );
+        }
+        Err(error) => evidence.check(
+            "worker audience (chat-model slice conversion)",
+            "a conversion receipt or a structured board error",
+            match error {
+                luna_engine::cross_task_tools::CrossTaskError::Backend(text) => {
+                    serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .filter(|error| error["code"].is_string())
+                        .map(|error| json!({"skipped": error["code"], "reason": error["reason"]}))
+                        .ok_or(text)
+                }
+                other => Err(format!("{other:?}")),
+            },
+        ),
+    }
+    // Review needs a live started execution (a generation that was not
+    // stopped). With the lifecycle slice present, the main chat creates and
+    // starts a fresh ticket with its own tools, and that ticket's worker
+    // submits it with review_start (checks and summary). Otherwise the
+    // converted ticket shows the typed refusal through the owner's RPC.
+    let mut review_worker: Option<String> = None;
+    let mut reviewer_task: Option<String> = None;
+    let review_started = if started {
+        let created = tools
+            .invoke(
+                &f.authority(&main),
+                "board_create",
+                json!({"requestId":"review-target","title":"Review target",
+                    "description":"Exercise the reviewer audience."}),
+                &cancel,
+            )
+            .await
+            .expect("board_create for the review target");
+        let id = created["workItemId"].as_str().unwrap().to_owned();
+        let start = tools
+            .invoke(
+                &f.authority(&main),
+                "board_start",
+                json!({"requestId":"review-target-start","workItemId": id,"destination":"sideChat"}),
+                &cancel,
+            )
+            .await;
+        evidence.check(
+            "the main chat starts a ticket for the reviewer audience",
+            "a start receipt",
+            start
+                .map(|receipt| json!(receipt["mutation"]["column"]))
+                .map_err(|error| format!("{error:?}")),
+        );
+        let read = f.rpc_ok("BoardRead", json!({"workItemId": id})).await;
+        review_worker = read["links"].as_array().and_then(|links| {
+            links
+                .iter()
+                .find(|link| link["role"] == "working")
+                .and_then(|link| link["taskId"].as_str().map(str::to_owned))
+        });
+        let worker = review_worker
+            .clone()
+            .expect("the started ticket's working chat");
+        tools
+            .invoke(
+                &f.authority(&worker),
+                "review_start",
+                json!({"requestId":"review-1",
+                    "checks":[{"name":"unit","command":"cargo test","passed":true,"exitCode":0}],
+                    "summary":"Toggle respected; checks pass."}),
+                &cancel,
+            )
+            .await
+            .map(|receipt| (id, receipt))
+            .map_err(|error| match error {
+                luna_engine::cross_task_tools::CrossTaskError::Backend(text) => text,
+                other => format!("{other:?}"),
+            })
+    } else {
+        f.rpc_call(
+            "BoardReviewStart",
+            json!({"requestId":"review-1","workItemId": review_ticket}),
+        )
+        .await
+        .map(|receipt| (review_ticket.clone(), receipt))
+        .map_err(|error| match error {
+            luna_rpc::RpcError::Failed(message) => message,
+            other => other.to_string(),
+        })
+    };
+    match review_started {
+        Ok((review_ticket, receipt)) => {
+            evidence.check(
+                "review_start carries the worker's checks and summary",
+                "a review run for the ticket",
+                expect(receipt["run"]["workItemId"] == json!(review_ticket), || {
+                    format!("{receipt:#}")
+                })
+                .map(|_| json!(receipt["run"]["state"])),
+            );
+            // The reviewer chat may be created after the receipt.
+            let mut reviewer = receipt["run"]["reviewerTaskId"].as_str().map(str::to_owned);
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            while reviewer.is_none() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let status = f
+                    .rpc_call("BoardReviewStatus", json!({"workItemId": review_ticket}))
+                    .await
+                    .unwrap_or_default();
+                reviewer = status["runs"].as_array().and_then(|runs| {
+                    runs.iter()
+                        .find_map(|run| run["reviewerTaskId"].as_str().map(str::to_owned))
+                });
+            }
+            if let Some(reviewer) = reviewer.as_deref() {
                 reviewer_task = Some(reviewer.to_owned());
                 let context =
                     CrossTaskBackend::board_context(&*f.rpc, reviewer).expect("reviewer context");
-                let (attached, _) = tools.catalog(&f.authority(reviewer));
-                let mut board: Vec<String> = attached
-                    .iter()
-                    .filter(|tool| luna_proto::BOARD_TOOL_NAMES.contains(&tool.name.as_str()))
-                    .map(|tool| tool.name.clone())
-                    .collect();
-                board.sort();
+                let (board, bytes) = board_catalog(&tools, &f.authority(reviewer));
                 evidence.check(
                     "a reviewer side chat gets only reviewer tools",
-                    "board_list, board_read, review_status, review_submit",
+                    "board_read, review_status, review_submit",
                     expect(
                         context.audience == luna_proto::BoardToolAudience::Reviewer
                             && board == sorted(REVIEWER_TOOLS),
                         || format!("{context:?} {board:?}"),
                     )
-                    .map(|_| json!(board)),
+                    .map(|_| catalog_size("reviewer", &board, bytes)),
+                );
+                // Authorized by its recorded run (the run id defaults from
+                // the reviewer's context); A5 then judges the submission.
+                let submitted = tools
+                    .invoke(
+                        &f.authority(reviewer),
+                        "review_submit",
+                        json!({"requestId":"submit-1","verdict":"passed",
+                            "basisPacketHash":"not-the-packet","summary":"Looks right."}),
+                        &cancel,
+                    )
+                    .await;
+                evidence.check(
+                    "review_submit reaches the review slice for the recorded reviewer",
+                    "a receipt or a review-slice refusal, never notAuthorized/invalidRole",
+                    match submitted {
+                        Ok(receipt) => Ok(json!({"accepted": receipt["run"]["state"]})),
+                        Err(luna_engine::cross_task_tools::CrossTaskError::Backend(text)) => {
+                            serde_json::from_str::<Value>(&text)
+                                .ok()
+                                .filter(|error| {
+                                    error["code"].is_string()
+                                        && error["code"] != "notAuthorized"
+                                        && error["code"] != "invalidRole"
+                                })
+                                .map(|error| json!({"refused": error["code"]}))
+                                .ok_or(text)
+                        }
+                        Err(other) => Err(format!("{other:?}")),
+                    },
                 );
             } else {
                 evidence.check(
@@ -1494,16 +1759,17 @@ pub async fn board_tools_scenario(f: &Fixture) {
                 );
             }
         }
-        Err(error) => evidence.check(
+        Err(message) => evidence.check(
             "reviewer audience (review slice)",
             "a review run or a structured board error",
-            match error {
-                luna_rpc::RpcError::Failed(message) => {
-                    luna_proto::BoardError::from_rpc_message(&message)
-                        .map(|error| json!({"skipped": error.code()}))
-                        .ok_or(message)
-                }
-                other => Err(other.to_string()),
+            match luna_proto::BoardError::from_rpc_message(&message) {
+                Some(error) => Ok(json!({"skipped": error.code(), "reason": error.to_string()})),
+                // A tool error is the board error's JSON text.
+                None => serde_json::from_str::<Value>(&message)
+                    .ok()
+                    .filter(|error| error["code"].is_string())
+                    .map(|error| json!({"skipped": error["code"], "reason": error["reason"]}))
+                    .ok_or(message),
             },
         ),
     }
@@ -1518,13 +1784,8 @@ pub async fn board_tools_scenario(f: &Fixture) {
             let session_id = session["id"].as_str().unwrap().to_owned();
             let context =
                 CrossTaskBackend::board_context(&*f.rpc, &session_id).expect("authoring context");
-            let (attached, _) = tools.catalog(&f.authority(&session_id));
-            let mut board: Vec<String> = attached
-                .iter()
-                .filter(|tool| luna_proto::BOARD_TOOL_NAMES.contains(&tool.name.as_str()))
-                .map(|tool| tool.name.clone())
-                .collect();
-            board.sort();
+            let (board, bytes) = board_catalog(&tools, &f.authority(&session_id));
+            catalog_size("authoring", &board, bytes);
             evidence.check(
                 "a ticket discussion gets only authoring tools and no chat role",
                 "authoring audience, no role/task id, the authoring tool set",
@@ -1585,7 +1846,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
             match error {
                 luna_rpc::RpcError::Failed(message) => {
                     luna_proto::BoardError::from_rpc_message(&message)
-                        .map(|error| json!({"skipped": error.code()}))
+                        .map(|error| json!({"skipped": error.code(), "reason": error.to_string()}))
                         .ok_or(message)
                 }
                 other => Err(other.to_string()),
@@ -1615,8 +1876,8 @@ pub async fn board_tools_scenario(f: &Fixture) {
     if let Some(worker) = &worker {
         allowed.insert(worker.clone());
     }
-    if let Some(reviewer) = &reviewer_task {
-        allowed.insert(reviewer.clone());
+    for task in [&reviewer_task, &review_worker].into_iter().flatten() {
+        allowed.insert(task.clone());
     }
     let after = f.chat_ids();
     let unexpected: Vec<_> = after.difference(&allowed).cloned().collect();

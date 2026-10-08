@@ -1693,7 +1693,13 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         .await
         .1,
     );
-    assert!(failed && text.contains("four levels"), "{text}");
+    // A nested chat is a side chat: create_thread is not even offered to it
+    // (side chats create siblings with create_side_chat), so the fence
+    // refuses the call before any approval or depth check.
+    assert!(
+        failed && (text.contains("not attached") || text.contains("four levels")),
+        "{text}"
+    );
 
     // Stop while create_thread is parked: the provider gets an error result
     // before the session retires its endpoint, and no child is created.

@@ -2547,7 +2547,14 @@ impl SessionsEngine {
             || !authority.delivery.attaches_luna_tools()
             || authority.explicit_user_request
             || authority.allow_projectless
-            || authority.granted_scopes.len() != 1
+            // Only the automatic read grant; the board scopes never reach
+            // another chat (board tools check them on their own path).
+            || authority
+                .granted_scopes
+                .iter()
+                .filter(|scope| !scope.starts_with("board."))
+                .count()
+                != 1
             || !authority.granted_scopes.contains("threads.read")
             || authority.visible_project_ids.len() != 1
             || target_task_id == claim.source_task_id

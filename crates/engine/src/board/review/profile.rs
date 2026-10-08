@@ -75,13 +75,15 @@ impl EngineRpc {
     ) -> BoardResult<()> {
         let bytes = serde_json::to_vec(&profile).map_err(storage)?;
         let key = format!("{PROJECT_REVIEW_KEY}{project_id}");
-        match self.board_write_permit()? {
-            Some(permit) => self
+        // The store decides whether it needs the permit (see `board_kv_save`).
+        let permit = self.board_write_permit()?;
+        match (self.store.save_snapshot(&key, &bytes), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => self
                 .store
-                .save_snapshot_admitted(permit.ticket(), &key, &bytes)
-                .map_err(storage),
-            None => self.store.save_snapshot(&key, &bytes).map_err(storage),
+                .save_snapshot_admitted(permit.ticket(), &key, &bytes),
+            (result, _) => result,
         }
+        .map_err(storage)
     }
 
     /// Resolve the reviewer for a ticket's current workflow. Never fails:
