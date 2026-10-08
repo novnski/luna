@@ -740,6 +740,10 @@ pub struct BoardAuthoringPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<u64>,
     pub working: bool,
+    /// The discussion assistant's effective access on this host now (its
+    /// requested mode after machine/provider ceilings), for the composer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_access: Option<crate::PermissionMode>,
 }
 
 /// The assistant's draft proposal/configuration checkpoint. Creates no

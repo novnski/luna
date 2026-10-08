@@ -18,17 +18,26 @@ pub struct BoardPage {
     model: Entity<BoardModel>,
     scroll: ScrollHandle,
     _model: Subscription,
+    /// Discuss with AI (A6): the open temporary discussion, if any.
+    pub(super) authoring: Option<super::authoring_pane::AuthoringMount>,
+    /// Resumable Board drafts and the Discuss with AI entry (A6).
+    pub(super) drafts: Entity<super::authoring_pane::AuthoringDrafts>,
 }
 
 impl BoardPage {
     pub fn new(state: Entity<AppState>, scope: BoardScope, cx: &mut Context<Self>) -> Self {
         let model = cx.new(|cx| BoardModel::new(state.clone(), scope, cx));
         let observer = cx.observe(&model, |_, _, cx| cx.notify());
+        let page = cx.entity().downgrade();
+        let drafts =
+            cx.new(|cx| super::authoring_pane::AuthoringDrafts::new(model.clone(), page, cx));
         Self {
             state,
             model,
             scroll: ScrollHandle::new(),
             _model: observer,
+            authoring: None,
+            drafts,
         }
     }
 
@@ -66,6 +75,14 @@ impl BoardPage {
 
 impl Render for BoardPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(mount) = &self.authoring {
+            // Discuss with AI replaces the board body while it is open.
+            return div()
+                .id("board-page")
+                .size_full()
+                .child(mount.pane.clone())
+                .into_any_element();
+        }
         let theme = Theme::of(cx).clone();
         let scope = self.scope_label(cx);
         let notice = self.status_notice(&theme, cx);
@@ -109,7 +126,9 @@ impl Render for BoardPage {
                             .child(widgets::page_subtitle(&theme, SharedString::from(scope))),
                     )
                     .children(notice)
+                    .child(self.drafts.clone())
                     .child(body),
             )
+            .into_any_element()
     }
 }

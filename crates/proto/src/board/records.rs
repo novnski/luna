@@ -858,6 +858,10 @@ pub struct TicketAuthoringSession {
     /// to ordinary history discovery; kept to block re-import.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_binding: Option<String>,
+    /// Earlier provider bindings of this session (a provider that replaced
+    /// its session id). Exclusion metadata only, like `runtime_binding`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_bindings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub created_at_ms: i64,

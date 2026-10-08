@@ -610,6 +610,18 @@ impl LocalImporter {
         permit: Option<&DeviceWritePermit>,
         side_parent: Option<&str>,
     ) -> Result<bool, EngineError> {
+        // A temporary Board discussion (or its provider binding) is never a
+        // chat in either profile; never carry such a row across.
+        // (A source profile from before the board has no such table.)
+        if source_store.board_authoring_owns(&chat.id).unwrap_or(false)
+            || self
+                .inner
+                .target_store
+                .board_authoring_owns(&chat.id)
+                .unwrap_or(false)
+        {
+            return Ok(false);
+        }
         // Doc bytes may be absent (a chat row created but never opened) — the
         // row alone is still worth carrying; a doc materializes on first open.
         if let Some(bytes) = source_store.load_snapshot(&chat.id)?
