@@ -1,9 +1,11 @@
 //! The Board page (A8): header and toolbar, Backlog / Ready / Done columns
 //! (or the List view, also chosen automatically at narrow widths), drag and
-//! keyboard moves, card menus, Board drafts and the empty state. The detail
-//! drawer, New ticket chooser, Write manually and Discuss with AI live in
-//! the one overlay host the page mounts, [`BoardSurfaces`] (A9; it embeds
-//! A6's pane); From GitHub issue opens A7's picker through the Shell.
+//! keyboard moves, card menus and the empty state. The detail drawer, New
+//! ticket chooser and Write manually live in the one overlay host the page
+//! mounts, [`BoardSurfaces`] (A9). Discuss with AI is A6's conversation,
+//! mounted in place of the board body ([`BoardPage::open_authoring`]), with
+//! A6's Board drafts list; From GitHub issue opens A7's picker through the
+//! Shell.
 //!
 //! Every move is one engine operation: a drop or a keyboard move between
 //! columns calls `BoardMove` once (no confirmation; the engine resolves
@@ -24,11 +26,10 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use luna_proto::{
-    AuthoringState, BoardAdmissionReason, BoardArchiveRequest, BoardAuthoringListRequest,
-    BoardAuthoringSessionRequest, BoardColumn, BoardConvertChatRequest, BoardError,
+    BoardAdmissionReason, BoardArchiveRequest, BoardColumn, BoardConvertChatRequest, BoardError,
     BoardMoveEffect, BoardMoveReceipt, BoardMoveRequest, BoardNavigationRequest,
-    BoardNavigationTarget, BoardOutcomesRequest, BoardRankRequest, BoardReceiptRequest, BoardScope,
-    BoardSourceKind, HarnessId, OutcomeKind, TicketAuthoringSession, WorkItem, WorkItemView,
+    BoardOutcomesRequest, BoardRankRequest, BoardReceiptRequest, BoardScope, BoardSourceKind,
+    HarnessId, OutcomeKind, WorkItem, WorkItemView,
 };
 
 use super::api::BoardCallError;
@@ -57,8 +58,9 @@ const FOCUS_PATIENCE: u8 = 3;
 pub enum BoardPageEvent {
     /// Presentation preferences changed; persist them (`UiSettings.board`).
     PrefsChanged(BoardUiPrefs),
-    /// Open a ticket's working chat (Go to chat).
-    OpenChat(BoardNavigationTarget),
+    /// Go to chat: A10's one path (`Shell::board_go_to_chat`) resolves the
+    /// ticket's canonical chat and reveals it.
+    GoToChat(BoardNavigationRequest),
     /// From GitHub issue for one project (A7's picker, hosted by the Shell).
     OpenGitHubPicker { project_id: String },
 }
@@ -230,10 +232,6 @@ pub(super) enum SurfaceRequest {
     Detail(String),
     NewTicket(Option<String>),
     Manual(String),
-    Authoring {
-        project_id: String,
-        resume_session_id: Option<String>,
-    },
     Close,
 }
 
@@ -294,12 +292,17 @@ pub struct BoardPage {
     phases: HashMap<String, (BoardColumn, luna_proto::BoardPhase)>,
     /// The first live read seeded `phases` (nothing to announce before it).
     phases_seeded: bool,
-    pub(super) drafts: Vec<TicketAuthoringSession>,
+    /// Discuss with AI (A6): the open temporary discussion, if any. It
+    /// replaces the board body while open.
+    pub(super) authoring: Option<super::authoring_pane::AuthoringMount>,
+    /// Resumable Board drafts and the Discuss with AI entry (A6).
+    pub(super) drafts: Entity<super::authoring_pane::AuthoringDrafts>,
+    /// A6's Open ticket: the ticket to show once its conversation closed.
+    pub(super) authoring_then_open: Option<String>,
     pub(super) evidence: HashMap<String, CardEvidence>,
     evidence_supported: bool,
     evidence_dirty: bool,
     evidence_task: Option<Task<()>>,
-    drafts_task: Option<Task<()>>,
     search_task: Option<Task<()>>,
     scroll_task: Option<Task<()>>,
     /// Mutations in flight (moves, ranks, archives, conversions).
@@ -356,11 +359,14 @@ impl BoardPage {
         });
         let observer = cx.observe(&model, |_, _, cx| cx.notify());
         let surfaces = cx.new(|cx| BoardSurfaces::new(state.clone(), model.clone(), cx));
+        let page_handle = cx.entity().downgrade();
+        let drafts = cx
+            .new(|cx| super::authoring_pane::AuthoringDrafts::new(model.clone(), page_handle, cx));
         let surfaces_observer = cx.observe(&surfaces, |page, _, cx| page.on_surfaces_changed(cx));
         let model_events =
             cx.subscribe(&model, |page, _, event: &BoardModelEvent, cx| match event {
                 BoardModelEvent::Changed => page.on_model_changed(cx),
-                BoardModelEvent::Events(_) => page.load_drafts(cx),
+                BoardModelEvent::Events(_) => page.refresh_drafts(cx),
             });
         let requests = cx.subscribe(&model, |page, _, request: &BoardPageRequest, cx| {
             page.on_request(request.clone(), cx)
@@ -376,7 +382,7 @@ impl BoardPage {
         );
         let restore_scroll = (prefs.scroll_y > 0.0).then_some(prefs.scroll_y);
         let selected = prefs.selected_item.clone();
-        let mut page = Self {
+        let page = Self {
             state,
             model,
             persisted: saved,
@@ -401,12 +407,13 @@ impl BoardPage {
             announcement: SharedString::default(),
             phases: HashMap::new(),
             phases_seeded: false,
-            drafts: Vec::new(),
+            authoring: None,
+            drafts,
+            authoring_then_open: None,
             evidence: HashMap::new(),
             evidence_supported: true,
             evidence_dirty: false,
             evidence_task: None,
-            drafts_task: None,
             search_task: None,
             scroll_task: None,
             pending: 0,
@@ -424,7 +431,6 @@ impl BoardPage {
                 search_events,
             ],
         };
-        page.load_drafts(cx);
         page
     }
 
@@ -479,7 +485,6 @@ impl BoardPage {
             .update(cx, |model, cx| model.set_scope(scope, cx));
         self.drag_over = None;
         self.persist(cx);
-        self.load_drafts(cx);
         cx.notify();
     }
 
@@ -940,58 +945,10 @@ impl BoardPage {
         }));
     }
 
-    /// Resumable Board drafts (Discuss with AI sessions closed unfinished).
-    /// They are Board drafts only, never chats.
-    pub(super) fn load_drafts(&mut self, cx: &mut Context<Self>) {
-        let Some(api) = self.model.read(cx).api(cx) else {
-            return;
-        };
-        let project_id = self.scope(cx).project_id().map(str::to_owned);
-        self.drafts_task = Some(cx.spawn(async move |this, cx| {
-            let result = api
-                .authoring_list(BoardAuthoringListRequest { project_id })
-                .await;
-            this.update(cx, |page, cx| {
-                page.drafts_task = None;
-                if let Ok(list) = result {
-                    page.drafts = list
-                        .sessions
-                        .into_iter()
-                        .filter(|session| {
-                            matches!(
-                                session.state,
-                                AuthoringState::Draft | AuthoringState::Active
-                            )
-                        })
-                        .collect();
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-    }
-
-    pub(super) fn discard_draft(&mut self, session_id: String, cx: &mut Context<Self>) {
-        let Some(api) = self.model.read(cx).api(cx) else {
-            return;
-        };
-        self.pending += 1;
-        cx.spawn(async move |this, cx| {
-            let result = api
-                .authoring_discard(BoardAuthoringSessionRequest { session_id })
-                .await;
-            this.update(cx, |page, cx| {
-                page.pending -= 1;
-                match result {
-                    Ok(_) => page.set_notice(NoticeTone::Info, "Draft discarded.", None),
-                    Err(error) => page.set_notice(NoticeTone::Error, error.message(), None),
-                }
-                page.load_drafts(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+    /// Re-read A6's Board drafts (after a journal event that may have
+    /// saved or closed a discussion).
+    pub(super) fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
+        self.drafts.update(cx, |drafts, cx| drafts.refresh(cx));
     }
 
     // ---- notices ----------------------------------------------------------
@@ -1065,14 +1022,6 @@ impl BoardPage {
                 surfaces.open_new_ticket(project_id, window, cx)
             }
             SurfaceRequest::Manual(project_id) => surfaces.open_manual_form(project_id, window, cx),
-            SurfaceRequest::Authoring {
-                project_id,
-                resume_session_id: Some(session_id),
-            } => surfaces.resume_authoring(project_id, session_id, window, cx),
-            SurfaceRequest::Authoring {
-                project_id,
-                resume_session_id: None,
-            } => surfaces.open_authoring(project_id, window, cx),
             SurfaceRequest::Close => surfaces.close(window, cx),
         });
         cx.notify();
@@ -1083,8 +1032,7 @@ impl BoardPage {
     }
 
     /// The host opened, switched or closed a surface: keep the drawer's
-    /// ticket selected, return focus to the card on close, and re-read the
-    /// drafts after a discussion.
+    /// ticket selected and return focus to the card on close.
     fn on_surfaces_changed(&mut self, cx: &mut Context<Self>) {
         let (shown, detail) = {
             let surfaces = self.surfaces.read(cx);
@@ -1107,9 +1055,6 @@ impl BoardPage {
         {
             self.pending_focus = Some((id, FOCUS_PATIENCE));
         }
-        if before == Some("authoring") && shown != Some("authoring") {
-            self.load_drafts(cx);
-        }
         cx.notify();
     }
 
@@ -1122,10 +1067,10 @@ impl BoardPage {
         cx: &mut Context<Self>,
     ) {
         let request = match self.scope(cx).project_id().map(str::to_owned) {
-            Some(project_id) if authoring => SurfaceRequest::Authoring {
-                project_id,
-                resume_session_id: None,
-            },
+            Some(project_id) if authoring => {
+                self.open_authoring(project_id, None, cx);
+                return;
+            }
             Some(project_id) => SurfaceRequest::Manual(project_id),
             None => SurfaceRequest::NewTicket(None),
         };
@@ -1144,7 +1089,8 @@ impl BoardPage {
         cx.emit(BoardPageEvent::OpenGitHubPicker { project_id });
     }
 
-    /// Discuss with AI (or resume a Board draft) from a model request.
+    /// Discuss with AI (or resume a Board draft) from a model request: A6's
+    /// conversation for a known project, else the chooser asks for one.
     fn request_authoring(
         &mut self,
         project_id: Option<String>,
@@ -1153,21 +1099,48 @@ impl BoardPage {
     ) {
         let draft_project = resume_session_id.as_ref().and_then(|session| {
             self.drafts
+                .read(cx)
+                .sessions()
                 .iter()
                 .find(|draft| &draft.id == session)
                 .map(|draft| draft.project_id.clone())
         });
-        let request = match project_id
+        match project_id
             .or(draft_project)
             .or_else(|| self.scope(cx).project_id().map(str::to_owned))
         {
-            Some(project_id) => SurfaceRequest::Authoring {
-                project_id,
-                resume_session_id,
-            },
-            None => SurfaceRequest::NewTicket(None),
-        };
-        self.request_surface(request, cx);
+            Some(project_id) => {
+                self.open_authoring(project_id, resume_session_id, cx);
+            }
+            None => self.request_surface(SurfaceRequest::NewTicket(None), cx),
+        }
+    }
+
+    /// A6's conversation closed (draft kept, discarded or ended): focus
+    /// returns to the selected card.
+    pub(super) fn authoring_closed(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected.clone() {
+            self.pending_focus = Some((id, FOCUS_PATIENCE));
+        }
+        self.refresh_drafts(cx);
+        cx.notify();
+    }
+
+    /// Open a ticket in its detail drawer from outside the page (a chat's
+    /// ticket badge, A6's receipt): selected, then opened on the next frame.
+    pub fn show_ticket(&mut self, work_item_id: String, cx: &mut Context<Self>) {
+        if self.selected.as_deref() != Some(work_item_id.as_str()) {
+            self.selected = Some(work_item_id.clone());
+            self.prefs.selected_item = Some(work_item_id.clone());
+            self.persist(cx);
+        }
+        self.request_surface(SurfaceRequest::Detail(work_item_id), cx);
+    }
+
+    /// The selected ticket (QA readbacks).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_selected(&self) -> Option<String> {
+        self.selected.clone()
     }
 
     pub(super) fn open_add_chat(&mut self, cx: &mut Context<Self>) {
@@ -1889,13 +1862,11 @@ impl BoardPage {
         .detach();
     }
 
-    /// Go to chat: the engine resolves the canonical location; a host
-    /// without that resolver falls back to the card's working chat summary.
+    /// Go to chat through the Shell's one path (A10), which resolves the
+    /// canonical location (main chat, or the parent workbench with the exact
+    /// side chat) and handles an unavailable parent.
     pub(super) fn open_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(view) = self.model.read(cx).item(id).cloned() else {
-            return;
-        };
-        let Some(api) = self.model.read(cx).api(cx) else {
             return;
         };
         if view.working_chat.is_none() && !view.actions.contains(&luna_proto::BoardAction::GoToChat)
@@ -1910,45 +1881,10 @@ impl BoardPage {
             );
             return;
         }
-        let fallback =
-            view.working_chat
-                .clone()
-                .map(|chat| match (chat.role, chat.main_parent_id) {
-                    (luna_proto::BoardChatRole::Side, Some(main)) if chat.parent_available => {
-                        BoardNavigationTarget::SideChat {
-                            main_task_id: main,
-                            side_task_id: chat.task_id,
-                        }
-                    }
-                    (luna_proto::BoardChatRole::Side, parent) => BoardNavigationTarget::Direct {
-                        task_id: chat.task_id,
-                        original_parent_id: parent,
-                    },
-                    (luna_proto::BoardChatRole::Main, _) => BoardNavigationTarget::MainChat {
-                        task_id: chat.task_id,
-                    },
-                });
-        let request = BoardNavigationRequest {
+        cx.emit(BoardPageEvent::GoToChat(BoardNavigationRequest {
             work_item_id: Some(id.to_owned()),
             task_id: None,
-        };
-        let key = view.item.key.clone();
-        cx.spawn(async move |this, cx| {
-            let target = match api.navigation(request).await {
-                Ok(target) => Some(target),
-                Err(_) => fallback,
-            };
-            this.update(cx, |page, cx| match target {
-                Some(BoardNavigationTarget::NoChat { .. }) | None => page.set_notice(
-                    NoticeTone::Info,
-                    format!("{key} has no chat yet. Move it to Ready to start one."),
-                    None,
-                ),
-                Some(target) => cx.emit(BoardPageEvent::OpenChat(target)),
-            })
-            .ok();
-        })
-        .detach();
+        }));
     }
 
     /// Add existing chat: convert it in place (same chat, nothing resent).
@@ -2246,6 +2182,15 @@ impl Render for BoardPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         self.sync_frame(window, cx);
+        if let Some(mount) = &self.authoring {
+            // Discuss with AI (A6) takes the page while open: the
+            // conversation needs the room, and the board is one Close away.
+            return div()
+                .id("board-page")
+                .size_full()
+                .child(mount.pane.clone())
+                .into_any_element();
+        }
         // The List view takes over below the narrow width: the last measured
         // page width, adjusted by how much the window changed since (so a
         // window resize switches in the same frame).
@@ -2261,7 +2206,6 @@ impl Render for BoardPage {
 
         let header = self.render_header(&theme, window, cx);
         let notice = self.render_notice(&theme, cx);
-        let drafts = self.render_drafts(&theme, cx);
         let body = self.render_body(&theme, window, cx);
         let card_menu = self.render_card_menu(&theme, cx);
         let status = div()
@@ -2331,7 +2275,7 @@ impl Render for BoardPage {
                             .gap(ui_rems(14.0))
                             .child(header)
                             .children(notice)
-                            .children(drafts)
+                            .child(self.drafts.clone())
                             .child(body),
                     ),
             )
@@ -2340,6 +2284,7 @@ impl Render for BoardPage {
             .child(self.surfaces.clone())
             .children(card_menu)
             .child(status)
+            .into_any_element()
     }
 }
 
@@ -2408,132 +2353,6 @@ impl BoardPage {
             );
         }
         Some(column.into_any_element())
-    }
-
-    /// Resumable Board drafts: never chats, resumable or discardable here.
-    fn render_drafts(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.drafts.is_empty() {
-            return None;
-        }
-        let drafts = self.drafts.clone();
-        let rows: Vec<AnyElement> = drafts
-            .into_iter()
-            .map(|draft| {
-                let title = draft
-                    .proposal
-                    .as_ref()
-                    .map(|proposal| proposal.title.trim().to_owned())
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| "Untitled discussion".into());
-                let state = if draft.state == AuthoringState::Active {
-                    "In progress"
-                } else {
-                    "Draft"
-                };
-                let meta = format!(
-                    "{state} · {} message{}",
-                    draft.message_count,
-                    if draft.message_count == 1 { "" } else { "s" }
-                );
-                let resume_id = draft.id.clone();
-                let discard_id = draft.id.clone();
-                let project = draft.project_id.clone();
-                div()
-                    .id(SharedString::from(format!("board-draft-{}", draft.id)))
-                    .role(gpui::Role::Group)
-                    .aria_label(SharedString::from(format!("Board draft: {title}, {meta}")))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(ui_rems(8.0))
-                    .px(ui_rems(10.0))
-                    .py(ui_rems(6.0))
-                    .rounded(px(crate::theme::radius::MD))
-                    .border_1()
-                    .border_color(theme.separator(true))
-                    .bg(theme.fill(crate::theme::FillTier::Quaternary))
-                    .child(
-                        crate::icons::icon(crate::icons::CHAT_ROUND_LINE)
-                            .size(ui_rems(14.0))
-                            .flex_none()
-                            .text_color(theme.readable_muted(0.85)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(ui_rems(12.0))
-                                    .text_color(theme.text)
-                                    .child(SharedString::from(title)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_rems(11.0))
-                                    .text_color(theme.readable_muted(0.8))
-                                    .child(SharedString::from(meta)),
-                            ),
-                    )
-                    .child(
-                        crate::button::button(
-                            format!("board-draft-resume-{resume_id}"),
-                            crate::button::ButtonKind::Secondary,
-                            crate::button::ControlSize::Sm,
-                            true,
-                            theme,
-                        )
-                        .aria_label("Resume draft")
-                        .child("Resume")
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.apply_surface(
-                                    SurfaceRequest::Authoring {
-                                        project_id: project.clone(),
-                                        resume_session_id: Some(resume_id.clone()),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
-                    .child(
-                        crate::button::button(
-                            format!("board-draft-discard-{discard_id}"),
-                            crate::button::ButtonKind::Ghost,
-                            crate::button::ControlSize::Sm,
-                            true,
-                            theme,
-                        )
-                        .aria_label("Discard draft")
-                        .child("Discard")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.discard_draft(discard_id.clone(), cx);
-                        })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        Some(
-            div()
-                .id("board-drafts")
-                .flex()
-                .flex_col()
-                .gap(ui_rems(6.0))
-                .child(
-                    div()
-                        .text_size(ui_rems(12.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
-                        .child("Board drafts"),
-                )
-                .children(rows)
-                .into_any_element(),
-        )
     }
 
     /// Columns, the List view, or the empty state.
@@ -2958,7 +2777,8 @@ impl BoardPage {
             "overlayItem": self.surfaces.read(cx).detail_work_item_id(cx),
             "notice": self.notice.as_ref().map(|notice| notice.text.to_string()),
             "announcement": self.announcement.to_string(),
-            "drafts": self.drafts.iter().map(|draft| draft.id.clone()).collect::<Vec<_>>(),
+            "drafts": self.drafts.read(cx).sessions().iter().map(|draft| draft.id.clone()).collect::<Vec<_>>(),
+            "authoring": self.authoring.is_some(),
             "pending": self.pending,
             "issued": self.issued,
             "dragOver": self.drag_over.as_ref().map(|target| serde_json::json!({

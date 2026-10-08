@@ -190,6 +190,7 @@ pub(crate) fn origin_label(origin: BoardSettingOrigin) -> &'static str {
         BoardSettingOrigin::ProviderDefault => "provider default",
         BoardSettingOrigin::CatalogDefault => "catalog default",
         BoardSettingOrigin::ImplementationFallback => "implementation model",
+        BoardSettingOrigin::ExistingWorker => "existing chat",
     }
 }
 

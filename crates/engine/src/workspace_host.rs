@@ -397,7 +397,8 @@ impl WorkspaceHost {
             capabilities: luna_proto::capabilities::current(),
         })?;
 
-        let state = doc.read_all()?;
+        let mut state = doc.read_all()?;
+        retain_ordinary_chats(&store, &mut state.chats);
         let (chats_tx, _) = watch::channel(state.chats);
         let (devices_tx, _) = watch::channel(state.devices);
         let (sessions_tx, _) = watch::channel(state.sessions);
@@ -1360,6 +1361,9 @@ impl WorkspaceHost {
 
     /// The chat row as currently known (overlay view).
     pub fn chat(&self, chat_id: &str) -> Result<Option<Chat>, EngineError> {
+        if is_board_authoring_id(&self.inner.store, chat_id) {
+            return Ok(None);
+        }
         Ok(self.read(|doc| doc.chat(chat_id))?)
     }
 
@@ -1378,7 +1382,9 @@ impl WorkspaceHost {
     }
 
     pub fn read_chats(&self) -> Result<Vec<Chat>, EngineError> {
-        Ok(self.read(|doc| doc.read_chats())?)
+        let mut chats = self.read(|doc| doc.read_chats())?;
+        retain_ordinary_chats(&self.inner.store, &mut chats);
+        Ok(chats)
     }
 
     /// The ticket title a board working chat carries (chat-model title
@@ -1623,6 +1629,7 @@ impl WorkspaceHost {
         config: Option<ChatConfig>,
         cwd: Option<String>,
     ) -> Result<(), EngineError> {
+        refuse_board_authoring_id(&self.inner.store, chat_id)?;
         if self.read(|doc| doc.chat(chat_id))?.is_some() {
             return Ok(()); // idempotent: optimistic client retries never duplicate
         }
@@ -1859,6 +1866,7 @@ impl WorkspaceHost {
     /// import). Same write path as every live mutation, so the row persists
     /// and pushes like any other; the caller fixes `room_gen` beforehand.
     pub fn import_chat_row(&self, chat: &Chat) -> Result<(), EngineError> {
+        refuse_board_authoring_id(&self.inner.store, &chat.id)?;
         self.mutate(|doc| doc.upsert_chat(chat))
     }
 
@@ -1868,6 +1876,7 @@ impl WorkspaceHost {
         parent: &str,
         permit: Option<&DeviceWritePermit>,
     ) -> Result<(), EngineError> {
+        refuse_board_authoring_id(&self.inner.store, &chat.id)?;
         self.mutate_with_permit(permit, |doc| doc.upsert_side_chat(chat, parent))
     }
 
@@ -1876,6 +1885,7 @@ impl WorkspaceHost {
         chat: &Chat,
         permit: &DeviceWritePermit,
     ) -> Result<(), EngineError> {
+        refuse_board_authoring_id(&self.inner.store, &chat.id)?;
         self.mutate_with_permit(Some(permit), |doc| doc.upsert_chat(chat))
     }
 
@@ -2075,6 +2085,7 @@ impl WorkspaceHostInner {
     fn publish_lists(&self, clock_tick: bool) {
         match lock(&self.reg).read_all() {
             Ok(mut state) => {
+                retain_ordinary_chats(&self.store, &mut state.chats);
                 self.overlay_presence(&mut state.devices);
                 // Retain the latest value even with no subscribers, but don't
                 // wake every list for unrelated registry/presence changes.
@@ -2433,6 +2444,29 @@ async fn workspace_task(weak: Weak<WorkspaceHostInner>, mut changed_rx: watch::R
             }
         }
     }
+}
+
+/// Whether `id` names a temporary Board discussion (never a chat). Only ids
+/// with the authoring prefix reach the store.
+fn is_board_authoring_id(store: &DocsStore, id: &str) -> bool {
+    id.starts_with(crate::rpc::board_engine::authoring::AUTHORING_ID_PREFIX)
+        && store.is_board_authoring_session(id).unwrap_or(false)
+}
+
+/// A Board discussion can never become a chat row (storage projection).
+fn refuse_board_authoring_id(store: &DocsStore, id: &str) -> Result<(), EngineError> {
+    if is_board_authoring_id(store, id) {
+        return Err(EngineError::Other(
+            "A temporary Board discussion is not a chat and cannot become one.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Chat listings and watches never show a Board discussion, even if a
+/// replicated registry row named one.
+fn retain_ordinary_chats(store: &DocsStore, chats: &mut Vec<Chat>) {
+    chats.retain(|chat| !is_board_authoring_id(store, &chat.id));
 }
 
 fn publish_if_changed<T: PartialEq>(sender: &watch::Sender<T>, value: T) {

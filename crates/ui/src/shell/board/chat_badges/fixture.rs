@@ -155,7 +155,12 @@ impl Shell {
                 crate::shell::Route::Settings(_) => "settings".to_string(),
             },
             "selectedChat": state.selected_chat,
-            "boardSelectedItem": self.settings.board.selected_item,
+            // The Board page owns its selection once it exists.
+            "boardSelectedItem": self
+                .board_page
+                .as_ref()
+                .and_then(|page| page.read(cx).fixture_selected())
+                .or_else(|| self.settings.board.selected_item.clone()),
             "notice": self.sidebar_notice.as_ref().map(|notice| notice.message.to_string()),
             "chatCount": state.chats.len(),
         })

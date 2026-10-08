@@ -972,6 +972,8 @@ impl EngineCore {
         let backend: Arc<dyn cross_task_tools::CrossTaskBackend> = rpc.clone();
         self.sessions
             .set_cross_task_backend(Arc::downgrade(&backend));
+        // Board discussion turns reach the board service through it (weakly).
+        rpc::board_engine::authoring::register_service(&rpc);
         rpc
     }
 
@@ -1009,6 +1011,8 @@ impl EngineCore {
         self.doc_host.pause_all_queues();
         let mut clean = self.side_chats.shutdown().await;
         clean &= self.sessions.shutdown().await;
+        // Temporary Board discussions never keep working after quit.
+        rpc::board_engine::authoring::shutdown_all(&self.board_hub).await;
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();

@@ -1450,6 +1450,15 @@ impl TaskIdentityService {
     ) -> Result<ProviderImportPreview, EngineError> {
         self.sweep_previews();
         let provider_task_id = provider_task.provider_task_id.as_str();
+        // A temporary Board discussion's provider session is never adopted
+        // as a chat (also after its draft was discarded or the engine
+        // restarted): its binding stays recorded as exclusion metadata.
+        if self.inner.store.board_authoring_owns(provider_task_id)? {
+            return Err(EngineError::Other(
+                "This provider session belongs to a temporary Board discussion and cannot be imported as a chat."
+                    .into(),
+            ));
+        }
         let (workspace, missing_root) =
             self.workspace_for_import_preview(space_id, device_id, &provider_task.cwd)?;
         let external_key = external_import_key(
