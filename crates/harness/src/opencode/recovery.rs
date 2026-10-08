@@ -22,12 +22,15 @@ const READBACK_PAGE_SIZE: u32 = 50;
 /// ids the bus already showed) bounds the window. `Ok(None)`: the anchor
 /// was not found within the pages read, so nothing is replayed rather than
 /// re-emitting older turns.
+/// A parked run sets `after_idle`: its completed turn through the first
+/// idle marker is skipped, leaving only background completions and wakes.
 pub(super) async fn readback_frames(
     server: &Server,
     session_id: &str,
     dir: Option<&str>,
     anchor: Option<&str>,
     known: &HashSet<String>,
+    after_idle: bool,
 ) -> Result<Option<Vec<Value>>, HarnessError> {
     let mut newer: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -56,6 +59,14 @@ pub(super) async fn readback_frames(
                 // the one that was streaming when the bus dropped.
                 newer.push(item);
                 newer.reverse();
+                if after_idle {
+                    let Some(idle) = newer.iter().position(|message| {
+                        message.get("type").and_then(Value::as_str) == Some("idle")
+                    }) else {
+                        return Ok(None);
+                    };
+                    newer.drain(..=idle);
+                }
                 return Ok(Some(message_frames(session_id, &newer)));
             }
             newer.push(item);
@@ -77,17 +88,45 @@ pub(super) async fn readback_frames(
 pub(super) fn message_frames(session_id: &str, messages: &[Value]) -> Vec<Value> {
     let frame = |kind: &str, data: Value| json!({ "type": kind, "data": data, "replayed": true });
     let mut frames = Vec::new();
+    let mut execution_open = false;
     for message in messages {
         let id = message
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        match message.get("type").and_then(Value::as_str).unwrap_or_default() {
-            "user" | "synthetic" => frames.push(frame(
-                "session.inbox.delivered",
-                json!({ "sessionID": session_id, "inboxID": id }),
-            )),
+        match message
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "user" | "synthetic" => {
+                if message.get("type").and_then(Value::as_str) == Some("synthetic") {
+                    frames.push(frame(
+                        "session.synthetic",
+                        json!({
+                            "sessionID": session_id,
+                            "metadata": message.get("metadata"),
+                            "text": message.get("text"),
+                            "description": message.get("description"),
+                        }),
+                    ));
+                }
+                frames.push(frame(
+                    "session.inbox.delivered",
+                    json!({ "sessionID": session_id, "inboxID": id }),
+                ));
+            }
             "assistant" => {
+                if !execution_open {
+                    // A wake may have started and finished entirely during
+                    // the gap. Its assistant history proves that execution
+                    // existed, so restore the boundary before its content.
+                    frames.push(frame(
+                        "session.execution.started",
+                        json!({ "sessionID": session_id }),
+                    ));
+                    execution_open = true;
+                }
                 let base = |extra: Value| {
                     let mut data = json!({ "sessionID": session_id, "assistantMessageID": id });
                     if let (Some(data), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
@@ -134,7 +173,8 @@ pub(super) fn message_frames(session_id: &str, messages: &[Value]) -> Vec<Value>
                                     "name": item.get("name").cloned().unwrap_or(Value::Null),
                                 })),
                             ));
-                            if let Some(input) = state.get("input").filter(|input| input.is_object())
+                            if let Some(input) =
+                                state.get("input").filter(|input| input.is_object())
                             {
                                 frames.push(frame(
                                     "session.tool.called",
@@ -172,7 +212,9 @@ pub(super) fn message_frames(session_id: &str, messages: &[Value]) -> Vec<Value>
             }
             // The idle marker closes the busy period: its outcome is the
             // execution terminal the bus missed.
-            "idle" => match message.get("outcome").and_then(Value::as_str) {
+            "idle" => {
+                execution_open = false;
+                match message.get("outcome").and_then(Value::as_str) {
                 Some("succeeded") => frames.push(frame(
                     "session.execution.succeeded",
                     json!({ "sessionID": session_id }),
@@ -192,7 +234,8 @@ pub(super) fn message_frames(session_id: &str, messages: &[Value]) -> Vec<Value>
                     json!({ "sessionID": session_id, "reason": "unknown" }),
                 )),
                 _ => {}
-            },
+            }
+            }
             _ => {}
         }
     }
@@ -207,38 +250,84 @@ pub(super) struct PendingRequest {
     pub(super) frame: Value,
 }
 
+/// Each successfully read list is authoritative for its own request kind.
+/// A failed/malformed read must not erase an ask whose state is unknown.
+pub(super) struct PendingRequestReadback {
+    pub(super) requests: Vec<PendingRequest>,
+    pub(super) permissions_read: bool,
+    pub(super) forms_read: bool,
+}
+
+impl PendingRequestReadback {
+    pub(super) fn reconcile(
+        &self,
+        pending: &mut HashMap<String, String>,
+        owns: impl Fn(&str) -> bool,
+    ) {
+        let upstream: HashSet<&str> = self
+            .requests
+            .iter()
+            .map(|request| request.id.as_str())
+            .collect();
+        pending.retain(|id, owner| {
+            owns(owner)
+                && (upstream.contains(id.as_str())
+                    || !((self.permissions_read && self.forms_read)
+                        || (self.permissions_read && id.starts_with("per"))
+                        || (self.forms_read && id.starts_with("frm_"))))
+        });
+        for request in self
+            .requests
+            .iter()
+            .filter(|request| owns(&request.session))
+        {
+            pending.insert(request.id.clone(), request.session.clone());
+        }
+    }
+}
+
 /// Pending permissions (`GET /api/permission/request`) and forms
 /// (`GET /api/form`) in the run's location, as the frames that announce
 /// them. The caller dedupes against ids it already saw.
 pub(super) async fn pending_request_frames(
     server: &Server,
     dir: Option<&str>,
-) -> Vec<PendingRequest> {
-    let mut out = Vec::new();
-    if let Ok(list) = server.get_json("/api/permission/request", dir).await {
-        for item in unwrap_data(list).as_array().into_iter().flatten() {
+) -> PendingRequestReadback {
+    let mut out = PendingRequestReadback {
+        requests: Vec::new(),
+        permissions_read: false,
+        forms_read: false,
+    };
+    if let Ok(list) = server.get_json("/api/permission/request", dir).await
+        && let Some(items) = unwrap_data(list).as_array()
+    {
+        out.permissions_read = true;
+        for item in items {
             let (Some(id), Some(session)) = (
                 item.get("id").and_then(Value::as_str),
                 item.get("sessionID").and_then(Value::as_str),
             ) else {
                 continue;
             };
-            out.push(PendingRequest {
+            out.requests.push(PendingRequest {
                 id: id.to_owned(),
                 session: session.to_owned(),
                 frame: json!({ "type": "permission.asked", "data": item, "replayed": true }),
             });
         }
     }
-    if let Ok(list) = server.get_json("/api/form", dir).await {
-        for item in unwrap_data(list).as_array().into_iter().flatten() {
+    if let Ok(list) = server.get_json("/api/form", dir).await
+        && let Some(items) = unwrap_data(list).as_array()
+    {
+        out.forms_read = true;
+        for item in items {
             let (Some(id), Some(session)) = (
                 item.get("id").and_then(Value::as_str),
                 item.get("sessionID").and_then(Value::as_str),
             ) else {
                 continue;
             };
-            out.push(PendingRequest {
+            out.requests.push(PendingRequest {
                 id: id.to_owned(),
                 session: session.to_owned(),
                 frame: json!({ "type": "form.created", "data": { "form": item }, "replayed": true }),

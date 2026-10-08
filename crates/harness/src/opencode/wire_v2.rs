@@ -154,7 +154,7 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
             "properties": { "sessionID": v2_session(data) }
         })],
         "session.execution.failed" => {
-            // The error chip, then a terminal that always settles Errored:
+            // The terminal reason, then a frame that always settles Errored:
             // an execution failure after streamed content is still a
             // failed turn.
             vec![
@@ -168,7 +168,7 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
         "session.step.failed" => {
             // An interrupt surfaces as step.failed{aborted}; the terminal
             // execution.interrupted frame settles the turn. Any other
-            // failure is a step-level provider error: surface it as a chip,
+            // failure is a step-level provider warning: surface it transiently,
             // the turn itself keeps going (execution.* decides its end).
             if data.pointer("/error/type").and_then(Value::as_str) == Some("aborted") {
                 return Some(Vec::new());
@@ -299,12 +299,23 @@ fn v2_inbox_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
 /// Streamed assistant items: text and reasoning snapshots and deltas.
 fn v2_stream_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
     let frames = match kind {
-        "session.text.started" | "session.text.ended" => {
-            vec![v2_stream_part(
+        "session.text.started"
+        | "session.text.ended"
+        | "session.reasoning.started"
+        | "session.reasoning.ended" => {
+            let mut part = v2_stream_part(
                 data,
-                "text",
+                if kind.starts_with("session.reasoning.") {
+                    "reasoning"
+                } else {
+                    "text"
+                },
                 data.get("text").cloned().unwrap_or(json!("")),
-            )]
+            );
+            if kind.ends_with(".ended") {
+                part["properties"]["part"]["completed"] = json!(true);
+            }
+            vec![part]
         }
         "session.text.delta" | "session.reasoning.delta" => vec![json!({
             "type": "message.part.delta",
@@ -316,11 +327,6 @@ fn v2_stream_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
                 "delta": data.get("delta").cloned().unwrap_or(json!("")),
             }
         })],
-        "session.reasoning.started" | "session.reasoning.ended" => vec![v2_stream_part(
-            data,
-            "reasoning",
-            data.get("text").cloned().unwrap_or(json!("")),
-        )],
         _ => return None,
     };
     Some(frames)

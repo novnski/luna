@@ -1040,9 +1040,9 @@ pub(super) async fn run_session(session: Session) {
                         turn_active: turn.active,
                     })
                     .await;
-                    if gap.needs_readback() && turn.active {
+                    if gap.needs_readback() && (turn.active || parked) {
                         let anchor = turn.inbox_id.clone();
-                        match readback_frames(&server, &session_id, dir, anchor.as_deref(), &known_messages.ids).await {
+                        match readback_frames(&server, &session_id, dir, anchor.as_deref(), &known_messages.ids, parked && !turn.active).await {
                             Ok(Some(frames)) => {
                                 let mut tools = HashMap::new();
                                 let count = frames.len();
@@ -1075,11 +1075,21 @@ pub(super) async fn run_session(session: Session) {
                         }
                     }
                     // Pending asks the gap may have swallowed: re-shown once.
-                    for pending in pending_request_frames(&server, dir).await {
-                        if !seen_requests.insert(&pending.id, MAX_SEEN_REQUESTS) {
+                    let readback = pending_request_frames(&server, dir).await;
+                    let owns_request = |owner: &str| requests.owns(owner)
+                        || (owner == GLOBAL_FORM_OWNER && turn.active);
+                    readback.reconcile(&mut pending_requests, owns_request);
+                    let _ = send(&event_tx, receipt_evidence("readback.requests", None, json!({
+                        "pending": pending_requests.len(),
+                        "permissionsRead": readback.permissions_read,
+                        "formsRead": readback.forms_read,
+                    }))).await;
+                    for pending in readback.requests {
+                        if !owns_request(&pending.session)
+                            || !seen_requests.insert(&pending.id, MAX_SEEN_REQUESTS)
+                        {
                             continue;
                         }
-                        pending_requests.insert(pending.id.clone(), pending.session.clone());
                         let mut tools = HashMap::new();
                         for payload in normalize_v2_frame(pending.frame, &mut tools) {
                             injected.push_back(BusMsg::Event(payload));
@@ -1092,7 +1102,8 @@ pub(super) async fn run_session(session: Session) {
                 BusMsg::Request { id, session, pending } => {
                     seen_requests.insert(&id, MAX_SEEN_REQUESTS);
                     // Only this run's sessions hold the turn up.
-                    let ours = children.owns(&session_id, &session);
+                    let ours = requests.owns(&session)
+                        || (session == GLOBAL_FORM_OWNER && turn.active);
                     if pending && ours {
                         pending_requests.insert(id, session);
                     } else if !pending {

@@ -673,12 +673,18 @@ async fn execution_failure_with_no_content_settles_errored() {
             "message": "no credentials for anthropic",
         }}),
     );
-    let ev = next_event(&mut stream).await;
-    assert!(matches!(
-        &ev,
-        AgentEvent::Error { message } if message.contains("no credentials")
-    ));
     let events = drain_to_done(&mut stream).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                AgentEvent::Error { .. } | AgentEvent::Done { error: Some(_), .. }
+            ))
+            .count(),
+        1,
+        "one terminal failure must produce one persistent error"
+    );
     assert!(matches!(
         events.last(),
         Some(AgentEvent::Done {

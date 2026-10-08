@@ -16,6 +16,9 @@ pub(super) struct PartState {
     /// Digest of the text already emitted: a snapshot whose prefix differs
     /// is a rewrite, never extended with a mismatched suffix.
     pub(super) digest: Sha256,
+    /// An ended text/reasoning snapshot is final. Reconnect readback can
+    /// overtake deltas already queued on the live subscription.
+    pub(super) text_done: bool,
     pub(super) tool_started: bool,
     pub(super) tool_done: bool,
     /// The native tool name and complete arguments, remembered from the
@@ -142,6 +145,10 @@ pub(super) fn part_snapshot_events(
                     kind: kind.to_owned(),
                     ..PartState::default()
                 });
+            if entry.text_done {
+                return Vec::new();
+            }
+            entry.text_done = part.get("completed").and_then(Value::as_bool) == Some(true);
             // The transcript is append-only: a snapshot that extends what
             // streamed adds its suffix; a rewrite (shorter, mid-character
             // or a different prefix) keeps the streamed text and is
@@ -282,7 +289,7 @@ pub(super) fn part_delta_events(
             kind: "text".to_owned(),
             ..PartState::default()
         });
-    if entry.kind == "tool" {
+    if entry.kind == "tool" || entry.text_done {
         return Vec::new();
     }
     entry.emitted += delta.len();

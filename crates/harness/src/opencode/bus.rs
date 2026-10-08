@@ -8,7 +8,7 @@ pub(super) enum BusOutcome {
     /// Our session's execution succeeded (idle).
     TurnIdle,
     /// Our session's execution failed: the turn settles Errored even after
-    /// content (the error chip was already emitted).
+    /// content, with its terminal error emitted once on Done.
     TurnFailed,
     /// Our session's execution was interrupted (`turn.interrupt_reason`
     /// holds a non-user reason).
@@ -187,19 +187,29 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         name.to_owned()
                     }
                 });
-            // opencode emits the same failure twice (once bare, once wrapped
-            // with an exception-name/stack prefix) — one chip per distinct
-            // failure: dedupe when either first line contains the other.
-            let first = |m: &str| m.lines().next().unwrap_or(m).trim().to_owned();
-            let line = first(&message);
-            let duplicate = turn.error.as_deref().is_some_and(|prev| {
-                let prev = first(prev);
-                !line.is_empty() && (prev.contains(&line) || line.contains(&prev))
-            });
             if kind == "session.error" {
-                turn.error = Some(message.clone());
+                // Execution failure (or a deleted session) is terminal.
+                // Done.error is both the transcript's single error part and
+                // the durable reason used by engine crash recovery.
+                turn.error = Some(message);
+                turn.failed = true;
+                return BusOutcome::Continue;
             }
-            if !duplicate && !send(event_tx, AgentEvent::Error { message }).await {
+            // A step can fail and recover, or be followed by the same
+            // execution failure. Keep its warning transient: emitting Error
+            // here would duplicate the later terminal Done.error.
+            if !send(
+                event_tx,
+                AgentEvent::ProviderNotice {
+                    notice: luna_proto::ProviderNotice {
+                        kind: luna_proto::ProviderNoticeKind::Warning,
+                        message,
+                        at_ms: unix_ms(),
+                    },
+                },
+            )
+            .await
+            {
                 return BusOutcome::ConsumerGone;
             }
             BusOutcome::Continue

@@ -203,11 +203,20 @@ pub(super) async fn bus_task(config: BusConfig, tx: mpsc::Sender<BusMsg>) {
         }
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
-                failures = 0;
-                state.generation += 1;
-                log_sse_connect(&config.base, state.generation, Ok(resp.status().as_u16()));
+                let previous_generation = state.generation;
+                log_sse_connect(
+                    &config.base,
+                    state.generation + 1,
+                    Ok(resp.status().as_u16()),
+                );
                 if !stream_bus(&tx, resp, &config, &client, &mut state).await {
                     return;
+                }
+                // A 200 whose body never arrived was not a live subscription.
+                // Keep its failure in the retry budget and preserve Connected
+                // for the first attempt that actually receives SSE bytes.
+                if state.generation != previous_generation {
+                    failures = 0;
                 }
                 if tx.is_closed() {
                     return;
@@ -286,7 +295,7 @@ async fn stream_bus(
     state: &mut BusState,
 ) -> bool {
     let base = config.base.as_str();
-    let generation = state.generation;
+    let generation = state.generation + 1;
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut announced = false;
@@ -306,8 +315,12 @@ async fn stream_bus(
             log_sse_end(base, generation, "transport error");
             return true;
         };
+        if bytes.is_empty() {
+            continue;
+        }
         if !announced {
             announced = true;
+            state.generation = generation;
             let msg = if generation == 1 {
                 BusMsg::Connected
             } else {

@@ -500,6 +500,7 @@ fn session_allowance_is_a_session_rule_and_replies_use_decision() {
 /// installed CLI is involved, so duplicate completion frames are reproducible.
 struct TurnWire {
     bus: mpsc::UnboundedSender<Value>,
+    responses: Arc<std::sync::Mutex<HashMap<String, Value>>>,
     posts: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
     requests: mpsc::UnboundedReceiver<String>,
     events: mpsc::Receiver<Result<AgentEvent, HarnessError>>,
@@ -527,7 +528,9 @@ impl TurnWire {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let (bus, bus_rx) = mpsc::unbounded_channel::<Value>();
-        let bus_rx = Arc::new(tokio::sync::Mutex::new(Some(bus_rx)));
+        let bus_rx = Arc::new(tokio::sync::Mutex::new(bus_rx));
+        let responses = Arc::new(std::sync::Mutex::new(HashMap::<String, Value>::new()));
+        let response_overrides = responses.clone();
         let (request_tx, requests) = mpsc::unbounded_channel();
         let posts = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = posts.clone();
@@ -538,6 +541,7 @@ impl TurnWire {
                 let bus_rx = bus_rx.clone();
                 let request_tx = request_tx.clone();
                 let recorded = recorded.clone();
+                let responses = response_overrides.clone();
                 connections.spawn(async move {
                     let mut request = Vec::new();
                     let mut buf = [0; 4096];
@@ -564,10 +568,18 @@ impl TurnWire {
                     if is_post { recorded.lock().unwrap().push((path.clone(), serde_json::from_slice(&request[header_end..header_end+length]).unwrap_or(Value::Null))); }
                     if path == "/api/event" {
                         socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: connected\n\n").await.unwrap();
-                        let mut events = bus_rx.lock().await.take().unwrap();
+                        let mut events = bus_rx.lock().await;
                         while let Some(event) = events.recv().await {
+                            // A null frame closes this subscription; a retry
+                            // resumes reading the same ordered event channel.
+                            if event.is_null() { break; }
                             if socket.write_all(format!("data: {event}\n\n").as_bytes()).await.is_err() { break; }
                         }
+                        return;
+                    }
+                    if path.starts_with("/api/experimental/session/fixture/log") {
+                        let body = "data: {\"type\":\"log.synced\",\"seq\":100}\n\n";
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                         return;
                     }
                     let session_record;
@@ -592,6 +604,8 @@ impl TurnWire {
                         "/api/model" => r#"{"data":[{"providerID":"opencode","id":"muse","name":"Muse","limit":{"context":1000},"variants":[{"id":"low"}],"enabled":true}]}"#,
                         _ => "{}",
                     };
+                    let override_body = responses.lock().unwrap().get(path.split('?').next().unwrap()).map(Value::to_string);
+                    let body = override_body.as_deref().unwrap_or(body);
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                     if path.ends_with("/prompt")
                         || path.ends_with("/interrupt")
@@ -656,6 +670,7 @@ impl TurnWire {
         }));
         Self {
             bus,
+            responses,
             posts,
             requests,
             events,
@@ -695,6 +710,302 @@ impl TurnWire {
         .await
         .unwrap()
     }
+}
+
+/// Failure case: a reconnect readback recovers the completed item before
+/// live bytes already waiting on the socket. Those bytes must not append
+/// again after the completed snapshot, including for reasoning.
+#[tokio::test]
+async fn completed_stream_snapshots_ignore_buffered_deltas() {
+    let mut wire = TurnWire::start(false).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
+    wire.v2(
+        "session.step.started",
+        json!({"sessionID": "fixture", "assistantMessageID": "msg_recovered"}),
+    );
+    for kind in ["text", "reasoning"] {
+        let data = json!({
+            "sessionID": "fixture", "assistantMessageID": "msg_recovered", "ordinal": 0,
+        });
+        wire.v2(&format!("session.{kind}.started"), data.clone());
+        let mut delta = data.clone();
+        delta["delta"] = json!("first");
+        wire.v2(&format!("session.{kind}.delta"), delta.clone());
+        let mut ended = data.clone();
+        ended["text"] = json!("first recovered");
+        wire.v2(&format!("session.{kind}.ended"), ended.clone());
+        // The subscription's buffered opening frame cannot reopen it either.
+        wire.v2(&format!("session.{kind}.started"), data);
+        delta["delta"] = json!(" recovered");
+        wire.v2(&format!("session.{kind}.delta"), delta);
+        wire.v2(&format!("session.{kind}.ended"), ended);
+    }
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID": "fixture"}),
+    );
+    let (status, text, reasoning) = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        loop {
+            match wire.events.recv().await.unwrap().unwrap() {
+                AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                AgentEvent::ReasoningDelta { text: delta } => reasoning.push_str(&delta),
+                AgentEvent::Done { status, .. } => return (status, text, reasoning),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, DoneStatus::Completed);
+    assert_eq!(text, "first recovered");
+    assert_eq!(reasoning, "first recovered");
+}
+
+/// Failure case: HTTP 200 without SSE bytes is not a live subscription.
+/// The first retry with bytes must still unlock prompt/compaction admission.
+#[tokio::test]
+async fn empty_sse_attempt_does_not_consume_initial_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut events = 0;
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut bytes).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&bytes[..n]);
+            }
+            if request.starts_with(b"GET /api/event ") {
+                events += 1;
+                if events == 1 {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                connections.spawn(async move {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: connected\n\n").await.unwrap();
+                    std::future::pending::<()>().await;
+                });
+            } else {
+                let body = "data: {\"type\":\"log.synced\",\"seq\":0}\n\n";
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        }
+    });
+    let (tx, mut rx) = mpsc::channel(16);
+    let bus = tokio::spawn(bus_task(
+        BusConfig {
+            base,
+            auth: None,
+            session_id: "fixture".into(),
+            directory: None,
+        },
+        tx,
+    ));
+    let first = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await;
+    bus.abort();
+    server.abort();
+    assert!(
+        matches!(first, Ok(Some(BusMsg::Connected))),
+        "first live SSE subscription must announce Connected"
+    );
+}
+
+#[tokio::test]
+async fn empty_sse_attempts_exhaust_reconnect_budget() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut bytes).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&bytes[..n]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        }
+    });
+    let (tx, mut rx) = mpsc::channel(16);
+    let bus = tokio::spawn(bus_task(
+        BusConfig {
+            base,
+            auth: None,
+            session_id: "fixture".into(),
+            directory: None,
+        },
+        tx,
+    ));
+    let deadline = BUS_RECONNECT_DELAY * (BUS_RECONNECT_ATTEMPTS + 1) + Duration::from_secs(5);
+    let outcome = tokio::time::timeout(deadline, rx.recv()).await;
+    bus.abort();
+    server.abort();
+    assert!(
+        matches!(outcome, Ok(Some(BusMsg::Disconnected))),
+        "empty successes must not reset the retry budget"
+    );
+}
+
+/// A dropped settlement and another session's pending asks must not leave
+/// this turn permanently exempt from its silence watchdog. An unreadable
+/// list still provides no evidence that a previously pending ask settled.
+#[tokio::test]
+async fn reconnect_reconciles_pending_request_ownership_and_settlement() {
+    let mut wire = TurnWire::start(false).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.responses.lock().unwrap().extend([
+        ("/api/session/active".into(), json!({"data":{"fixture":{}}})),
+        (
+            "/api/form".into(),
+            json!({"data":[{"id":"frm_foreign","sessionID":"foreign"}]}),
+        ),
+        // A malformed response is an unknown readback, not an empty list.
+        ("/api/permission/request".into(), json!({})),
+    ]);
+    wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
+    wire.v2(
+        "permission.asked",
+        json!({
+            "id":"per_stale", "sessionID":"fixture", "action":"shell", "resources":["echo safe"],
+        }),
+    );
+    for expected in [1, 0] {
+        if expected == 0 {
+            wire.responses
+                .lock()
+                .unwrap()
+                .insert("/api/permission/request".into(), json!({"data":[]}));
+        }
+        wire.bus.send(Value::Null).unwrap();
+        let pending = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AgentEvent::ProviderEvidence { kind, payload, .. } =
+                    wire.events.recv().await.unwrap().unwrap()
+                    && kind == "native:readback.requests"
+                {
+                    break payload["pending"].as_u64().unwrap();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(pending, expected);
+    }
+}
+
+/// The root already sent Done and is parked. Only history, not the live
+/// socket, contains the child's completion and the root's wake response.
+#[tokio::test]
+async fn reconnect_recovers_parked_child_completion_without_crossing_owners() {
+    let mut wire = TurnWire::start(false).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    let prompt_id = wire
+        .posts
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(path, _)| path.ends_with("/prompt"))
+        .unwrap()
+        .1["id"]
+        .clone();
+    wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
+    wire.v2(
+        "session.inbox.delivered",
+        json!({"sessionID":"fixture","inboxID":prompt_id}),
+    );
+    wire.v2(
+        "session.step.started",
+        json!({"sessionID":"fixture","assistantMessageID":"msg_parent"}),
+    );
+    for (call, child) in [("one", "child_one"), ("two", "child_two")] {
+        wire.v2("session.tool.input.started", json!({"sessionID":"fixture","assistantMessageID":"msg_parent","id":call,"name":"subagent"}));
+        wire.v2("session.tool.called", json!({"sessionID":"fixture","assistantMessageID":"msg_parent","id":call,"input":{"description":call,"prompt":"work","background":true}}));
+        wire.v2(
+            "session.created",
+            json!({"sessionID":child,"parentID":"fixture","title":call}),
+        );
+        wire.v2("session.tool.success", json!({"sessionID":"fixture","assistantMessageID":"msg_parent","id":call,"content":[{"type":"text","text":"started"}],"metadata":{"sessionID":child,"status":"running"}}));
+    }
+    wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_parent","ordinal":0,"text":"original"}));
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID":"fixture"}),
+    );
+    assert_eq!(
+        wire.done().await,
+        (DoneStatus::Completed, "original".into())
+    );
+
+    let history = json!([
+        {"id":prompt_id,"type":"user","text":"first"},
+        {"id":"msg_parent","type":"assistant","content":[{"type":"text","text":"original"}]},
+        {"id":"msg_idle","type":"idle","outcome":"succeeded"},
+        {"id":"msg_foreign","type":"synthetic","text":"foreign","metadata":{"source":"subagent","childID":"foreign_child","state":"completed"}},
+        {"id":"msg_completion","type":"synthetic","text":"complete","metadata":{"source":"subagent","childID":"child_one","state":"completed"}},
+        {"id":"msg_wake","type":"assistant","content":[{"type":"text","text":"wake response"}]},
+        {"id":"msg_wake_idle","type":"idle","outcome":"succeeded"},
+    ]);
+    let mut newest_first = history.as_array().unwrap().clone();
+    newest_first.reverse();
+    wire.responses.lock().unwrap().extend([
+        (
+            "/api/session/fixture/message".into(),
+            json!({"data":newest_first}),
+        ),
+        ("/api/permission/request".into(), json!({"data":[]})),
+        ("/api/form".into(), json!({"data":[]})),
+    ]);
+    wire.bus.send(Value::Null).unwrap();
+    let (children, text, turns) = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut children = Vec::new();
+        let mut text = String::new();
+        let mut turns = 0;
+        loop {
+            match wire.events.recv().await.unwrap().unwrap() {
+                AgentEvent::Subagent {
+                    parent_tool_use_id,
+                    event,
+                } if matches!(*event, AgentEvent::Done { .. }) => children.push(parent_tool_use_id),
+                AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                AgentEvent::ProviderTurnStarted { .. } => turns += 1,
+                AgentEvent::Done { status, .. } => {
+                    assert_eq!(status, DoneStatus::Completed);
+                    return (children, text, turns);
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(children, ["fixture:msg_parent:one"]);
+    assert_eq!(text, "wake response");
+    assert_eq!(turns, 1);
 }
 
 #[tokio::test]
@@ -927,6 +1238,137 @@ async fn v2_execution_failure_and_interrupt_settle_the_turn() {
         json!({"sessionID": "fixture", "reason": "user"}),
     );
     assert_eq!(wire.done().await.0, DoneStatus::Interrupted);
+}
+
+/// Replays the native S9Q failure ordering: one failed step, one failed
+/// execution. Each Error and Done.error becomes a separate transcript part,
+/// so only Done may carry the terminal reason needed by crash recovery.
+#[tokio::test]
+async fn v2_terminal_failures_emit_one_persistent_error() {
+    for (step_failure, partial_content, deleted) in [
+        (true, false, false),
+        (false, false, false),
+        (true, true, false),
+        (false, true, true),
+    ] {
+        let mut wire = TurnWire::start(false).await;
+        wire.request("/api/model").await;
+        wire.request("/prompt").await;
+        wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
+        wire.v2(
+            "session.step.started",
+            json!({"sessionID":"fixture","assistantMessageID":"msg_failed"}),
+        );
+        if partial_content {
+            wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_failed","ordinal":0,"text":"partial answer"}));
+        }
+        let error = json!({
+            "type":"provider.quota", "message":"Rate limit exceeded. Please try again later.", "status":429,
+            "response":{"body":"{\"type\":\"error\",\"error\":{\"type\":\"FreeUsageLimitError\",\"message\":\"Rate limit exceeded. Please try again later.\"},\"metadata\":{}}"},
+        });
+        if step_failure {
+            wire.v2(
+                "session.step.failed",
+                json!({"sessionID":"fixture","assistantMessageID":"msg_failed","error":error}),
+            );
+        }
+        wire.v2(
+            if deleted {
+                "session.deleted"
+            } else {
+                "session.execution.failed"
+            },
+            json!({"sessionID":"fixture","error":error}),
+        );
+        let (status, terminal, errors, warnings) =
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let mut errors = Vec::new();
+                let mut warnings = 0;
+                loop {
+                    match wire.events.recv().await.unwrap().unwrap() {
+                        AgentEvent::Error { message } => errors.push(message),
+                        AgentEvent::ProviderNotice { notice }
+                            if notice.kind == luna_proto::ProviderNoticeKind::Warning =>
+                        {
+                            warnings += 1
+                        }
+                        AgentEvent::Done { status, error, .. } => {
+                            return (status, error, errors, warnings);
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(status, DoneStatus::Errored);
+        assert!(
+            errors.is_empty(),
+            "terminal reason must only appear on Done: {errors:?}"
+        );
+        let terminal = terminal.expect("crash recovery requires the terminal reason");
+        assert!(
+            terminal.contains(if deleted {
+                "no longer exists"
+            } else {
+                "provider.quota"
+            }),
+            "{terminal}"
+        );
+        assert_eq!(warnings, usize::from(step_failure));
+    }
+}
+
+#[tokio::test]
+async fn v2_recovered_step_failure_is_a_transient_warning() {
+    let mut wire = TurnWire::start(false).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
+    let failure = json!({"sessionID":"foreign","error":{"type":"provider.quota","message":"foreign failure"}});
+    wire.v2("session.step.failed", failure);
+    wire.v2(
+        "session.step.failed",
+        json!({"sessionID":"fixture","error":{"type":"provider.rate_limit","message":"Retrying"}}),
+    );
+    wire.v2(
+        "session.step.started",
+        json!({"sessionID":"fixture","assistantMessageID":"msg_recovered"}),
+    );
+    wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_recovered","ordinal":0,"text":"recovered"}));
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID":"fixture"}),
+    );
+    let (status, terminal, errors, warnings, text) =
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut errors = Vec::new();
+            let mut warnings = Vec::new();
+            let mut text = String::new();
+            loop {
+                match wire.events.recv().await.unwrap().unwrap() {
+                    AgentEvent::Error { message } => errors.push(message),
+                    AgentEvent::ProviderNotice { notice }
+                        if notice.kind == luna_proto::ProviderNoticeKind::Warning =>
+                    {
+                        warnings.push(notice.message)
+                    }
+                    AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                    AgentEvent::Done { status, error, .. } => {
+                        return (status, error, errors, warnings, text);
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(status, DoneStatus::Completed);
+    assert!(terminal.is_none());
+    assert!(errors.is_empty());
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Retrying"));
+    assert_eq!(text, "recovered");
 }
 
 #[tokio::test]
