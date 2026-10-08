@@ -290,6 +290,18 @@ impl EngineRpc {
         let parent_config = parent.config.as_ref().ok_or_else(|| {
             crate::EngineError::Other("Parent execution configuration is unavailable".into())
         })?;
+        self.child_execution_from(parent_config, request).await
+    }
+
+    /// Resolve and validate a child-style execution from a source
+    /// configuration: provider/model/options against the account catalog and
+    /// access capped at the source's effective ceiling. The board's side
+    /// chats and handoffs pass the creating chat's own configuration.
+    pub(crate) async fn child_execution_from(
+        &self,
+        parent_config: &ChatConfig,
+        request: &CreateChildThreadRequest,
+    ) -> Result<ChatConfig, crate::EngineError> {
         let mut config = self.child_base_config(parent_config, request)?;
         if config.harness != HarnessId::Mock
             || request.model.is_some()
@@ -460,6 +472,13 @@ impl EngineRpc {
         {
             return Err(CrossTaskError::TargetScope);
         }
+        // Side chats own no side chats (chat-model §1): refuse before any
+        // approval card, with the allowed alternatives.
+        self.board_guard_legacy_creation(
+            &authority.caller_task_id,
+            luna_proto::BoardChatCreationKind::ChildThread,
+        )
+        .map_err(|error| CrossTaskError::Backend(error.to_rpc_message()))?;
         Ok(())
     }
 
@@ -657,6 +676,13 @@ impl EngineRpc {
             let before = self
                 .validate_child_parent(&parent_id)
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
+            // A side chat's `+` cannot create a nested child; the board's
+            // create_side_chat makes the fresh sibling under its main.
+            self.board_guard_legacy_creation(
+                &parent_id,
+                luna_proto::BoardChatCreationKind::ChildThread,
+            )
+            .map_err(|error| RpcError::Failed(error.to_rpc_message()))?;
             execution = Some(
                 self.prepare_child_execution_kind(&parent_id, &request, true)
                     .await
@@ -1288,6 +1314,10 @@ impl EngineRpc {
             if let Err(error) = self.sweep_child_thread(&chat).await {
                 tracing::warn!(child = %chat.id, %error, "child startup/outcome sweep deferred");
             }
+        }
+        // Legacy nested chats adopt their main container once quiescent.
+        if let Err(error) = self.board_migrate_legacy_nesting().await {
+            tracing::warn!(%error, "legacy nested chat migration deferred");
         }
         Ok(())
     }

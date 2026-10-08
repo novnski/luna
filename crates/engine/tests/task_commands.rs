@@ -5302,9 +5302,23 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         ),
     )
     .await;
-    assert_eq!(descendant.status, CommandReceiptStatus::Applied);
+    // A history fork is a side chat and never forks again (chat-model §1):
+    // the descendant is refused before any provider effect.
+    assert_eq!(
+        descendant.status,
+        CommandReceiptStatus::Failed,
+        "{descendant:?}"
+    );
+    assert!(
+        descendant
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.message.contains("cannot fork")),
+        "{descendant:?}"
+    );
+    assert!(core.workspace.chat(&descendant_task_id).unwrap().is_none());
     let calls = forks.lock().unwrap();
-    assert_eq!(calls.len(), 3);
+    assert_eq!(calls.len(), 2);
     assert!(matches!(
         calls[0].boundary,
         luna_proto::ProviderForkBoundary::Tip
@@ -5313,7 +5327,6 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         calls[1].boundary,
         luna_proto::ProviderForkBoundary::Tip
     ));
-    assert_eq!(calls[2].source_session_id, "synthetic-history-fork-2");
     drop(calls);
 
     let published = published_chats(&client).await;
@@ -5326,7 +5339,6 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         .unwrap();
     }
     assert_provenance(&published, &target_task_id, &source_task_id);
-    assert_provenance(&published, &descendant_task_id, &target_task_id);
     client
         .call(
             "Mutate",
@@ -5336,7 +5348,6 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         .unwrap();
     let after_delete = published_chats(&client).await;
     assert_provenance(&after_delete, &target_task_id, &source_task_id);
-    assert_provenance(&after_delete, &descendant_task_id, &target_task_id);
     assert!(
         !after_delete
             .as_array()
@@ -5352,7 +5363,6 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     let client = luna_rpc::memory_client(core.rpc_service());
     let restarted = published_chats(&client).await;
     assert_provenance(&restarted, &target_task_id, &source_task_id);
-    assert_provenance(&restarted, &descendant_task_id, &target_task_id);
     // Startup refreshes reconciliation observations. Every binding identity,
     // generation, provider, workspace and provenance field must stay identical.
     let stable_binding = |binding: &Option<luna_proto::ExecutionBinding>| {
@@ -5375,11 +5385,11 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     );
     assert_eq!(
         forks.lock().unwrap().len(),
-        3,
+        2,
         "publishing provenance never creates another provider fork"
     );
     if let Ok(dir) = std::env::var("UI_ALIGNMENT_EVIDENCE_DIR") {
-        std::fs::write(std::path::Path::new(&dir).join("history-fork-provenance.json"), serde_json::to_vec_pretty(&serde_json::json!({"published":published,"afterSourceDeletion":after_delete,"afterRestart":restarted,"binding":before_restart.current_binding,"providerForkCalls":3})).unwrap()).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join("history-fork-provenance.json"), serde_json::to_vec_pretty(&serde_json::json!({"published":published,"afterSourceDeletion":after_delete,"afterRestart":restarted,"binding":before_restart.current_binding,"providerForkCalls":2})).unwrap()).unwrap();
     }
     core.shutdown().await;
 }

@@ -194,7 +194,20 @@ async fn persistent_forks_are_nested_discoverable_and_independent_of_source() {
     let client = luna_rpc::memory_client(core.rpc_service());
     let created = client.call("CreateSideChat", json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
     let id = created["meta"]["id"].as_str().unwrap();
-    let nested = client.call("CreateSideChat", json!({"parentId":id,"requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+    // Side chats no longer nest (chat-model §1): a side chat of a side chat
+    // is refused with the allowed alternatives. A second side chat of the
+    // same main chat carries the independence checks below.
+    let refused = client.call("CreateSideChat", json!({"parentId":id,"requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap_err();
+    let refused = match refused {
+        luna_rpc::RpcError::Failed(message) => luna_proto::BoardError::from_rpc_message(&message)
+            .unwrap_or_else(|| panic!("not a board error: {message}")),
+        other => panic!("unexpected transport error: {other}"),
+    };
+    assert!(
+        matches!(&refused, luna_proto::BoardError::InvalidRole { allowed, .. } if !allowed.is_empty()),
+        "{refused:?}"
+    );
+    let nested = client.call("CreateSideChat", json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
     let nested_id = nested["meta"]["id"].as_str().unwrap();
     for target in [id, nested_id] {
         client

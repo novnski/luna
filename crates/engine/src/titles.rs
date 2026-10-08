@@ -210,6 +210,13 @@ impl TitleGenerator {
         if title.is_empty() {
             return Ok(());
         }
+        // A ticket's working chat shares the ticket title: auto-titling
+        // adopts it instead of drifting away (chat-model §4).
+        let title = self
+            .inner
+            .workspace
+            .board_working_title(chat_id)
+            .unwrap_or(title);
 
         // Re-read after the model call: a user may have named the chat or checked
         // out another branch while the throwaway generation was live.

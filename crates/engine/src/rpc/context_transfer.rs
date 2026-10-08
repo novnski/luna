@@ -110,6 +110,15 @@ impl EngineRpc {
         request: ContextTransferRequest,
     ) -> Result<ContextTransferPreview, crate::EngineError> {
         let source = self.context_transfer_task(&request.source_task_id)?;
+        // A portable copy is a context-carrying conversation: never from a
+        // side chat (chat-model §1). Handoff and send-back stay available.
+        if request.kind == ContextTransferKind::PortableFork {
+            self.board_guard_legacy_creation(
+                &source.id,
+                luna_proto::BoardChatCreationKind::SideWithContext,
+            )
+            .map_err(|error| crate::EngineError::Other(Self::board_error_text(&error)))?;
+        }
         let new_target = request.new_target.is_some();
         let target = if new_target {
             self.new_context_transfer_target(&request, &source)?
