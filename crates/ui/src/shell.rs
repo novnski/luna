@@ -9123,66 +9123,41 @@ impl Shell {
                 .unwrap_or("");
             self.sidebar_mark(format!("row:{id}"), || {
                 vec![
-                    format!("lead={lead}"),
+                    format!("status={lead}"),
                     format!("pill={pill}"),
                     format!("metaHarness={}", !compact && harness.is_some()),
                     format!("compact={compact}"),
                 ]
             });
         }
-        let status_slot: AnyElement = {
-            let glyph: Option<AnyElement> = if status_label.is_some() {
-                Some(if working {
-                    loaders::mini_glyph_spinner(
-                        format!("{row_id}-working"),
-                        2.0,
-                        theme.glyph,
-                        animation_view,
-                        cx,
-                    )
-                    .into_any_element()
-                } else {
-                    match waiting_glyph {
-                        Some(glyph) => icon(glyph)
-                            .size(crate::typography::ui_rems(14.0))
-                            .flex_none()
-                            .text_color(theme.readable_icon(status_color.opacity(1.0)))
-                            .into_any_element(),
-                        None => div()
-                            .size(px(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(status_color)
-                            .into_any_element(),
-                    }
-                })
-            } else if pinned && !archived {
-                Some(
-                    icon(icons::PIN)
-                        .size(px(crate::surface_chrome::ICON_S))
-                        .text_color(theme.readable_muted(0.5))
-                        .into_any_element(),
+        // The status sits at the row's right edge (user request): under the
+        // time on a two-line row, before it on a compact one. A row with
+        // nothing going on shows nothing there, so no row carries an empty
+        // column and every title starts on the same edge. Working keeps the
+        // square loader, Done its dot, an idle pin its pin; a task waiting on
+        // the user (or a send that did not go out) names the next step in one
+        // pill with the glyph of what it waits for, cut to the PR badge's
+        // cloth so the row keeps one badge system.
+        let status_badge: Option<AnyElement> = match status_label {
+            Some(_) if working => Some(
+                loaders::mini_glyph_spinner(
+                    format!("{row_id}-working"),
+                    2.0,
+                    theme.glyph,
+                    animation_view,
+                    cx,
                 )
-            } else {
-                None
-            };
-            div()
-                .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
-                .h(crate::typography::ui_rems(16.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .children(glyph)
-                .into_any_element()
-        };
-        // Done is told by its dot and Working by its loader; a task waiting
-        // on the user (or a send that did not go out) names the next step in
-        // a pill at the meta line's end, cut to the PR badge's cloth so the
-        // row keeps one badge system (Design A).
-        let status_word = status_label
-            .filter(|label| !matches!(*label, "Done" | "Working"))
-            .map(|label| {
+                .into_any_element(),
+            ),
+            Some("Done") => Some(
+                div()
+                    .size(px(6.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(status_color)
+                    .into_any_element(),
+            ),
+            Some(label) => {
                 let word = match label {
                     "Approval" => "Approve",
                     "Input" => "Reply",
@@ -9190,49 +9165,89 @@ impl Shell {
                 };
                 let tone = status_color.opacity(1.0);
                 // A compact row (All projects) spends no width on the
-                // pill's cloth: the coloured word alone, as Design D.
+                // pill's cloth: the glyph and coloured word alone.
                 let fill = if compact { 0.0 } else { 0.12 };
-                div()
-                    .h(px(16.0))
+                let backing = tone.opacity(fill);
+                Some(
+                    div()
+                        .h(px(16.0))
+                        .flex_none()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(3.0))
+                        .when(!compact, |pill| pill.px(px(5.0)))
+                        .rounded(px(4.0))
+                        .bg(backing)
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(crate::typography::ui_rems(14.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.readable_on(
+                            tone,
+                            backing,
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
+                        .when_some(waiting_glyph, |pill, glyph| {
+                            pill.child(
+                                icon(glyph)
+                                    .size(crate::typography::ui_rems(11.0))
+                                    .flex_none()
+                                    .text_color(theme.readable_on(
+                                        tone,
+                                        backing,
+                                        crate::theme::NON_TEXT_CONTRAST_TARGET,
+                                    )),
+                            )
+                        })
+                        .child(SharedString::from(word))
+                        .into_any_element(),
+                )
+            }
+            None if pinned && !archived => Some(
+                icon(icons::PIN)
+                    .size(px(crate::surface_chrome::ICON_S))
                     .flex_none()
-                    .flex()
-                    .items_center()
-                    .when(!compact, |pill| pill.px(px(5.0)))
-                    .rounded(px(4.0))
-                    .bg(tone.opacity(fill))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(crate::typography::ui_rems(14.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.readable_on(
-                        tone,
-                        tone.opacity(fill),
-                        crate::theme::TEXT_CONTRAST_TARGET,
-                    ))
-                    .child(SharedString::from(word))
+                    .text_color(theme.readable_muted(0.5))
+                    .into_any_element(),
+            ),
+            None => None,
+        };
+        // The sidebar QA probe records where a row's title, meta line and
+        // status painted (fixture builds only).
+        #[cfg(feature = "appshots-fixture")]
+        let probe_id = (!surface.in_pane() && search_query.is_none()).then(|| id.clone());
+        #[cfg(not(feature = "appshots-fixture"))]
+        let probe_id: Option<String> = None;
+        let probe_labels = |prefix: &'static str| {
+            let probe_id = probe_id.clone();
+            move || {
+                probe_id
+                    .map(|id| format!("{prefix}:{id}"))
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            }
+        };
+        let status_badge = status_badge.map(|badge| {
+            self.sidebar_probed(
+                div().flex_none().flex().items_center().child(badge),
+                probe_labels("status"),
+            )
+        });
+        // The harness mark opens the meta line, on the title's left edge.
+        let harness_mark = harness
+            .map(crate::pickers::harness_brand_icon)
+            .map(|(path, tint)| {
+                icon(path)
+                    .size(crate::typography::ui_rems(SIDEBAR_META_HARNESS_ICON_SIZE))
+                    .flex_none()
+                    .text_color(if theme.appearance.is_light() {
+                        theme.text_muted
+                    } else {
+                        tint.unwrap_or(theme.readable_muted(0.5)).opacity(0.8)
+                    })
             });
-        // The harness mark sits at the start of the meta line, in the same
-        // 16 pt column as the status glyph above it.
-        let harness_slot = div()
-            .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .when_some(
-                harness.map(crate::pickers::harness_brand_icon),
-                |el, (path, tint)| {
-                    el.child(
-                        icon(path)
-                            .size(crate::typography::ui_rems(SIDEBAR_META_HARNESS_ICON_SIZE))
-                            .flex_none()
-                            .text_color(if theme.appearance.is_light() {
-                                theme.text_muted
-                            } else {
-                                tint.unwrap_or(theme.readable_muted(0.5)).opacity(0.8)
-                            }),
-                    )
-                },
-            );
+        let title_probe = probe_labels("title");
+        let meta_probe = probe_labels("meta");
         // A single-project sidebar would repeat the project on every row.
         let show_project =
             !(self.settings.space_filter.is_some() && !surface.in_pane() && search_query.is_none());
@@ -9325,10 +9340,10 @@ impl Shell {
             text.opacity(0.8)
         };
         let hover_progress = motion::hover_t_or(&fade_key, if corner_hovered { 1.0 } else { 0.0 });
-        let (line_status_word, meta_status_word) = if compact {
-            (status_word, None)
+        let (line_status, meta_status) = if compact {
+            (status_badge, None)
         } else {
-            (None, status_word)
+            (None, status_badge)
         };
         let device_chip = device_tag.filter(|_| compact).map(|tag| {
             div()
@@ -9360,6 +9375,9 @@ impl Shell {
                 8.0
             }))
             .px(px(Theme::SPACE_SM))
+            // A compact row sits under its project header: the title starts
+            // on the project tile's left edge.
+            .when(compact, |row| row.pl(crate::typography::ui_rems(23.0)))
             .py(px(6.0))
             .text_color(motion::mix(rest_text, text, hover_progress))
             .bg(motion::mix(rest_bg, hover_bg, hover_progress))
@@ -9451,69 +9469,69 @@ impl Shell {
                 )
                 .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             })
-            // Line 1 (audit SH-13): the harness mark and the title lead, with
-            // the time (or the row's hover actions) at the right.
+            // Line 1: the title on the row's left edge, with the time (or
+            // the row's hover actions) at the right.
             .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
-                    // The status leads the title (Design A): what the task
-                    // is doing is the first thing read on every row.
-                    .child(status_slot)
-                    .child(sidebar_faded_label(
-                        format!("{row_id}-title").into(),
-                        true,
-                        div()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .line_height(crate::typography::ui_rems(17.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(popover::search_highlight(title, search_query, theme)),
-                    ))
-                    .when_some(child_chats_chip, |el, chip| el.child(chip))
-                    // An open tab in the workbench: click focuses it.
-                    .when(workbench_open == Some(true), |el| {
-                        let tone = theme.accent;
-                        el.child(
+                self.sidebar_probed(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
+                        .child(sidebar_faded_label(
+                            format!("{row_id}-title").into(),
+                            true,
                             div()
-                                .id(SharedString::from(format!("{row_id}-open")))
-                                .role(gpui::Role::Label)
-                                .aria_label("Open in the workbench")
-                                .h(px(16.0))
-                                .flex_none()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(3.0))
-                                .px(px(4.0))
-                                .rounded(px(4.0))
-                                .bg(tone.opacity(0.10))
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::ui_rems(13.0))
+                                .line_height(crate::typography::ui_rems(17.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.readable_on(
-                                    tone,
-                                    tone.opacity(0.10),
-                                    crate::theme::TEXT_CONTRAST_TARGET,
-                                ))
-                                .child(icon(icons::EYE).size(px(10.0)).flex_none().text_color(
-                                    theme.readable_on(
+                                .child(popover::search_highlight(title, search_query, theme)),
+                        ))
+                        .when_some(child_chats_chip, |el, chip| el.child(chip))
+                        // An open tab in the workbench: click focuses it.
+                        .when(workbench_open == Some(true), |el| {
+                            let tone = theme.accent;
+                            el.child(
+                                div()
+                                    .id(SharedString::from(format!("{row_id}-open")))
+                                    .role(gpui::Role::Label)
+                                    .aria_label("Open in the workbench")
+                                    .h(px(16.0))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(3.0))
+                                    .px(px(4.0))
+                                    .rounded(px(4.0))
+                                    .bg(tone.opacity(0.10))
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(theme.readable_on(
                                         tone,
                                         tone.opacity(0.10),
-                                        crate::theme::NON_TEXT_CONTRAST_TARGET,
-                                    ),
-                                ))
-                                .child("Open"),
-                        )
-                    })
-                    .when_some(line_status_word, |el, word| el.child(word))
-                    .when_some(device_chip, |el, chip| el.child(chip))
-                    .child(div().text_color(subline).child(corner)),
+                                        crate::theme::TEXT_CONTRAST_TARGET,
+                                    ))
+                                    .child(icon(icons::EYE).size(px(10.0)).flex_none().text_color(
+                                        theme.readable_on(
+                                            tone,
+                                            tone.opacity(0.10),
+                                            crate::theme::NON_TEXT_CONTRAST_TARGET,
+                                        ),
+                                    ))
+                                    .child("Open"),
+                            )
+                        })
+                        .when_some(line_status, |el, status| el.child(status))
+                        .when_some(device_chip, |el, chip| el.child(chip))
+                        .child(div().text_color(subline).child(corner)),
+                    title_probe,
+                ),
             )
-            // Line 2: a quiet meta line under the title — the harness, who
-            // started a related chat, project and branch or note — with the
-            // needs-you pill and optional PR badge pinned right.
+            // Line 2: a quiet meta line under the title, on its left edge —
+            // the harness, who started a related chat, project and branch or
+            // note — with the optional PR badge and the status at the right.
             .when(!compact, |row| {
                 row.child(
                     div()
@@ -9521,72 +9539,74 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
-                        .child(harness_slot)
+                        .gap(px(6.0))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.0))
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .line_height(crate::typography::ui_rems(14.0))
-                                .text_color(subline)
-                                .when_some(kind, |el, kind| {
-                                    el.child(related_kind_badge(kind, theme))
-                                })
-                                .when(show_project, |el| {
-                                    el.child(sidebar_faded_label(
-                                        format!("{row_id}-device").into(),
-                                        false,
-                                        div().child(popover::search_highlight(
-                                            space_name,
-                                            search_query,
-                                            theme,
-                                        )),
-                                    ))
-                                    .when(branch.is_some() || note.is_some(), |el| {
-                                        el.child(div().flex_none().child("·"))
+                            self.sidebar_probed(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .line_height(crate::typography::ui_rems(14.0))
+                                    .text_color(subline)
+                                    .when_some(harness_mark, |el, mark| el.child(mark))
+                                    .when_some(kind, |el, kind| {
+                                        el.child(related_kind_badge(kind, theme))
                                     })
-                                })
-                                .when_some(note, |el, note| {
-                                    el.child(
-                                        icon(icons::CHAT_ROUND_LINE)
-                                            .size(px(11.0))
-                                            .flex_none()
-                                            .text_color(subline),
-                                    )
-                                    .child(
-                                        sidebar_faded_label(
-                                            format!("{row_id}-note").into(),
-                                            false,
-                                            div().child(note),
-                                        ),
-                                    )
-                                })
-                                .when_some(branch, |el, branch| {
-                                    el.child(
-                                        icon(icons::GIT_BRANCH)
-                                            .size(px(11.0))
-                                            .flex_none()
-                                            .text_color(subline),
-                                    )
-                                    .child(
-                                        sidebar_faded_label(
-                                            format!("{row_id}-branch").into(),
+                                    .when(show_project, |el| {
+                                        el.child(sidebar_faded_label(
+                                            format!("{row_id}-device").into(),
                                             false,
                                             div().child(popover::search_highlight(
-                                                branch,
+                                                space_name,
                                                 search_query,
                                                 theme,
                                             )),
-                                        ),
-                                    )
-                                }),
+                                        ))
+                                        .when(branch.is_some() || note.is_some(), |el| {
+                                            el.child(div().flex_none().child("·"))
+                                        })
+                                    })
+                                    .when_some(note, |el, note| {
+                                        el.child(
+                                            icon(icons::CHAT_ROUND_LINE)
+                                                .size(px(11.0))
+                                                .flex_none()
+                                                .text_color(subline),
+                                        )
+                                        .child(
+                                            sidebar_faded_label(
+                                                format!("{row_id}-note").into(),
+                                                false,
+                                                div().child(note),
+                                            ),
+                                        )
+                                    })
+                                    .when_some(branch, |el, branch| {
+                                        el.child(
+                                            icon(icons::GIT_BRANCH)
+                                                .size(px(11.0))
+                                                .flex_none()
+                                                .text_color(subline),
+                                        )
+                                        .child(
+                                            sidebar_faded_label(
+                                                format!("{row_id}-branch").into(),
+                                                false,
+                                                div().child(popover::search_highlight(
+                                                    branch,
+                                                    search_query,
+                                                    theme,
+                                                )),
+                                            ),
+                                        )
+                                    }),
+                                meta_probe,
+                            ),
                         )
-                        .when_some(meta_status_word, |el, word| el.child(word))
                         .when_some(change_request, |el, summary| {
                             el.child(crate::change_requests::pull_request_badge_with_query(
                                 format!("{row_id}-pr").into(),
@@ -9595,7 +9615,8 @@ impl Shell {
                                 search_query,
                                 theme,
                             ))
-                        }),
+                        })
+                        .when_some(meta_status, |el, status| el.child(status)),
                 )
             })
             .into_any_element()

@@ -16,10 +16,10 @@
 //!    live counts (needs you, working), the current project not marked, the
 //!    All projects row missing its total, or "New project…" / "Manage
 //!    projects…" missing or unreachable by keyboard.
-//! 3. A single-project row puts the status in the wrong place: the working,
-//!    approval, input, failed or done glyph is not on the title line, the
-//!    harness mark is not on the meta line, or a needs-you row lacks its
-//!    Approve / Reply / Failed label.
+//! 3. A single-project row shows the wrong status: the working, approval,
+//!    input, failed or done state draws the wrong mark, the harness mark is
+//!    not on the meta line, or a needs-you row lacks its Approve / Reply /
+//!    Failed label.
 //! 4. The working glyph is not LUNA's existing square loader (a circle or a
 //!    static dot replaced it).
 //! 5. All projects is still one flat list: rows are not grouped under their
@@ -38,6 +38,11 @@
 //!    either view.
 //! 10. The Settled and Archived history is unreachable from the All projects
 //!     view, or a single project's shelves regress.
+//! 11. A row with nothing going on keeps an empty status column (user report:
+//!     a read, finished task left a gap above its provider icon): titles do
+//!     not all start on the same left edge across idle and busy rows, the
+//!     provider icon does not start under the title, a status is not at the
+//!     row's right edge, or an idle row still paints a status.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example sidebar-redesign-fixture
@@ -543,7 +548,7 @@ fn check_project(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_jso
     for (id, lead, pill) in expect {
         let marks = mark(rb, &format!("row:{id}"))?;
         let want = vec![
-            format!("lead={lead}"),
+            format!("status={lead}"),
             format!("pill={pill}"),
             "metaHarness=true".to_owned(),
             "compact=false".to_owned(),
@@ -579,6 +584,57 @@ fn check_project(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_jso
         "{step}: item 10, the project's Settled and Archived shelves are missing"
     );
     Ok(serde_json::json!({ "order": order, "trigger": trigger }))
+}
+
+/// Item 11: every listed row's title starts on one left edge, its provider
+/// icon (two-line rows) starts under the title, a status ends on the row's
+/// right inset, and a row with nothing going on paints no status at all.
+fn check_alignment(
+    rb: &serde_json::Value,
+    step: &str,
+    ids: &[String],
+    idle: &[&str],
+    compact: bool,
+) -> anyhow::Result<serde_json::Value> {
+    let mut left: Option<f32> = None;
+    let mut record = serde_json::Map::new();
+    for id in ids {
+        let title = bounds_of(rb, &format!("title:{id}"))?;
+        let x = num(&title["x"]);
+        let edge = *left.get_or_insert(x);
+        anyhow::ensure!(
+            (x - edge).abs() <= 0.5,
+            "{step}: item 11, {id}'s title starts at {x}, the others at {edge}"
+        );
+        if !compact {
+            let meta = num(&bounds_of(rb, &format!("meta:{id}"))?["x"]);
+            anyhow::ensure!(
+                (meta - x).abs() <= 0.5,
+                "{step}: item 11, {id}'s provider icon starts at {meta}, not under its title at {x}"
+            );
+        }
+        let status = &rb["bounds"][format!("status:{id}")];
+        if idle.contains(&id.as_str()) {
+            anyhow::ensure!(
+                status.is_null(),
+                "{step}: item 11, idle row {id} still paints a status: {status}"
+            );
+        } else {
+            anyhow::ensure!(status.is_object(), "{step}: item 11, {id} lost its status");
+            if let Some(row) = rb["bounds"][format!("c:{id}")].as_object() {
+                let right = (row["x"].as_f64().unwrap_or(f64::NAN)
+                    + row["w"].as_f64().unwrap_or(f64::NAN)) as f32;
+                let end = num(&status["x"]) + num(&status["w"]);
+                anyhow::ensure!(
+                    (right - 8.0 - end).abs() <= 1.0,
+                    "{step}: item 11, {id}'s status ends at {end}, not at the row's right inset {}",
+                    right - 8.0
+                );
+            }
+        }
+        record.insert(id.clone(), serde_json::json!(x));
+    }
+    Ok(serde_json::Value::Object(record))
 }
 
 /// Items 2: the picker's rows, tiles' data, counts and current project.
@@ -667,6 +723,13 @@ fn check_all(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_json::V
     }
     let order = strings(&rb["order"]);
     let rendered: Vec<String> = rows.into_iter().map(|(_, id)| id).collect();
+    let aligned = check_alignment(
+        rb,
+        step,
+        &rendered,
+        &["i-idle", "w-idle-1", "w-idle-2"],
+        true,
+    )?;
     anyhow::ensure!(
         order == ALL_ORDER && rendered == order,
         "{step}: item 9, order {order:?} / rendered {rendered:?}, expected {ALL_ORDER:?}"
@@ -728,7 +791,7 @@ fn check_all(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_json::V
             || rb["bounds"]["settled"].is_object(),
         "{step}: item 10, Settled and Archived are unreachable from All projects"
     );
-    Ok(serde_json::json!({ "order": order, "keys": keys }))
+    Ok(serde_json::json!({ "order": order, "keys": keys, "titleLeft": aligned }))
 }
 
 async fn scale_pass(
@@ -749,6 +812,40 @@ async fn scale_pass(
     let project = check_project(&rb, &format!("{px_size}px project"))?;
     capture(window, cx, output.join(format!("s{px_size}-project.png")))?;
 
+    // Item 11 over every row of the project, idle ones included.
+    let more = bounds_of(&rb, "more:active")?.clone();
+    let (mx, my) = (
+        num(&more["x"]) + 40.0,
+        num(&more["y"]) + num(&more["h"]) / 2.0,
+    );
+    click_at(window, cx, mx, my).await?;
+    let rb = readback(window, cx)?;
+    let ids: Vec<String> = active_rows(&rb).into_iter().map(|(_, id)| id).collect();
+    anyhow::ensure!(
+        ids.len() == 9,
+        "{px_size}px: Show more must list all nine luna rows: {ids:?}"
+    );
+    let aligned = check_alignment(
+        &rb,
+        &format!("{px_size}px project, all rows"),
+        &ids,
+        &["l-idle-1", "l-idle-2", "l-remote"],
+        false,
+    )?;
+    capture(
+        window,
+        cx,
+        output.join(format!("s{px_size}-project-all-rows.png")),
+    )?;
+    let more = bounds_of(&rb, "more:active")?.clone();
+    click_at(
+        window,
+        cx,
+        num(&more["x"]) + 40.0,
+        num(&more["y"]) + num(&more["h"]) / 2.0,
+    )
+    .await?;
+
     let trigger = bounds_of(&rb, "header-trigger")?.clone();
     let (tx, ty) = (
         num(&trigger["x"]) + num(&trigger["w"]) / 2.0,
@@ -765,7 +862,7 @@ async fn scale_pass(
     let rb = readback(window, cx)?;
     let all = check_all(&rb, &format!("{px_size}px all"))?;
     capture(window, cx, output.join(format!("s{px_size}-all.png")))?;
-    Ok(serde_json::json!({ "project": project, "all": all }))
+    Ok(serde_json::json!({ "project": project, "titleLeft": aligned, "all": all }))
 }
 
 async fn behaviour_pass(
@@ -1021,7 +1118,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("sidebar-redesign.pass"),
-                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and live counts and two-line rows that lead with the status (square loader, approval, question, failure, done dot) with Approve/Reply/Failed labels and the harness on the meta line; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable\n",
+                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and live counts and two-line rows whose titles and provider icons share one left edge, with the status at the right edge (square loader, done dot, Approve/Reply/Failed pills) and none at all on idle rows; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows on one title edge whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable\n",
                             )
                         });
                         if let Err(error) = written {
