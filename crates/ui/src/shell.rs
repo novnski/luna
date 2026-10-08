@@ -2450,6 +2450,8 @@ pub struct Shell {
     /// Space-row context menu (dropdown rows): (space id, window position).
     space_menu: popover::Popup<(String, Point<Pixels>)>,
     rename_space_dialog: Option<RenameSpaceDialog>,
+    /// Board "From GitHub issue" picker or issue writeback confirmation.
+    board_github: Option<board::github_picker::BoardGitHubHost>,
     /// Space id awaiting delete confirmation (hard delete + session cascade).
     delete_space_confirm: Option<String>,
     /// The add-space palette (device tabs + folder search), `Some`
@@ -3000,6 +3002,7 @@ impl Shell {
             pending_task_actions: std::collections::HashMap::new(),
             space_menu: popover::Popup::default(),
             rename_space_dialog: None,
+            board_github: None,
             delete_space_confirm: None,
             add_space: None,
             add_space_flow_seq: 0,
@@ -11700,6 +11703,7 @@ impl Shell {
         if let Some(review) = self.render_native_review(viewport, window, cx) {
             overlays.push(review);
         }
+        overlays.extend(self.render_board_github_overlay(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;

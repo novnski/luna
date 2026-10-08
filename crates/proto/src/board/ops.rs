@@ -788,6 +788,16 @@ pub struct IssueSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     pub default: bool,
+    /// Every remote that resolved to this repository (`origin`, `upstream`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_names: Vec<String>,
+    /// The repository is a fork; `parent` names its upstream (`owner/name`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fork: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -857,6 +867,9 @@ pub struct IssueFreshness {
     pub fetched_at_ms: i64,
     pub from_cache: bool,
     pub stale: bool,
+    /// The account (`gh` login) whose access produced this data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -896,6 +909,9 @@ pub struct BoardIssueDetailRequest {
     pub project_id: String,
     pub source_id: String,
     pub number: u64,
+    /// Revalidate now (still conditional) instead of serving a fresh cache.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -957,6 +973,10 @@ pub struct BoardIssueImportRequest {
     pub comment_ids: Vec<String>,
     #[serde(default)]
     pub start: Option<BoardImportStart>,
+    /// `updatedAt` of the previewed issue: a remote edit since the preview
+    /// is refused instead of silently importing different content.
+    #[serde(default)]
+    pub previewed_updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1053,7 +1073,14 @@ pub struct IssueWritebackPreview {
     pub account: Option<String>,
     pub repository: super::IssueRepository,
     pub number: u64,
+    /// The exact payload that will be sent (comments carry the hidden
+    /// reconciliation marker shown here).
     pub action: IssueWritebackAction,
+    #[serde(default)]
+    pub canonical_url: String,
+    /// The issue's remote state when previewed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

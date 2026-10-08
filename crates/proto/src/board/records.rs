@@ -160,6 +160,25 @@ pub struct IssueReference {
     pub active: bool,
     pub linked_by: BoardActor,
     pub linked_at_ms: i64,
+    /// Stable numeric GitHub account id behind `account` (cache and write
+    /// scoping); never a token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Exactly the issue context imported into the brief at import time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_snapshot: Option<IssueContextSnapshot>,
+    /// Hash of the import request that created this reference, so a retry of
+    /// the same key replays instead of conflicting on changed remote content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_request_hash: Option<String>,
+    /// When a remote edit or closure after import was first observed. The
+    /// local brief is never rewritten and nothing is sent to a chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_changed_at_ms: Option<i64>,
+    /// Stable id of the source this reference was read through
+    /// (`github:{host}:{owner}/{name}`), for refresh and writeback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
 }
 
 impl IssueReference {
@@ -193,6 +212,7 @@ impl IssueReference {
             ),
             canonical_url: self.canonical_url.clone(),
             remote_state: self.remote_state.clone(),
+            source_changed: self.source_changed_at_ms.is_some(),
         }
     }
 }
@@ -207,6 +227,9 @@ pub struct IssueReferenceSummary {
     pub canonical_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_state: Option<String>,
+    /// The issue was edited or closed remotely after import.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_changed: bool,
 }
 
 /// Exactly the issue context frozen into one launch (body plus selected

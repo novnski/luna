@@ -910,6 +910,8 @@ impl EngineRpc {
         let outcomes = self.store.board_outcomes(&id, limit).map_err(storage)?;
         let review_runs = self.store.board_review_runs(&id, limit).map_err(storage)?;
         let dependencies = self.store.board_dependencies(&id).map_err(storage)?;
+        // The other end of blocked-by links (A7): visible on both tickets.
+        let dependents = self.store.board_dependents(&id).map_err(storage)?;
         let intent = self.store.board_intent(&id).map_err(storage)?;
         let recent_events = self
             .store
@@ -923,6 +925,7 @@ impl EngineRpc {
             outcomes,
             review_runs,
             dependencies,
+            dependents,
             intent,
             recent_events,
         })

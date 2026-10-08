@@ -98,6 +98,10 @@ name = "chat-placement-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "board-github-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "chat-workbench-fixture"
 required-features = ["appshots-fixture"]
 
