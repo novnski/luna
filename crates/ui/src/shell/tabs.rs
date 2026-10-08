@@ -116,7 +116,8 @@ impl Shell {
             self.focus_composer(cx);
             self.state
                 .update(cx, |s, cx| s.select_chat(Some(first), cx));
-        } else {
+        } else if !matches!(self.route, Route::Page(_)) {
+            // A restored sidebar page (Board, Automations) stays open.
             self.open_new_session(cx);
         }
     }

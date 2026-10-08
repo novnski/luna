@@ -75,6 +75,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 mod activity_center;
 mod agents;
 mod automations_pane;
+pub(crate) mod board;
 pub(crate) mod child_chats;
 mod command_palette;
 mod findings;
@@ -593,13 +594,30 @@ pub enum Route {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPage {
     Automations,
+    /// Project board tickets (directly below Automations).
+    Board,
 }
 
 impl SidebarPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Automations => "Automations",
+            Self::Board => "Board",
         }
+    }
+
+    /// Stable key for element ids, QA probes and restart restoration.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Automations => "automations",
+            Self::Board => "board",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Automations, Self::Board]
+            .into_iter()
+            .find(|page| page.key() == key)
     }
 }
 
@@ -612,9 +630,10 @@ pub enum SidebarNavItem {
 }
 
 impl SidebarNavItem {
-    pub const ALL: [SidebarNavItem; 2] = [
+    pub const ALL: [SidebarNavItem; 3] = [
         SidebarNavItem::NewThread,
         SidebarNavItem::Page(SidebarPage::Automations),
+        SidebarNavItem::Page(SidebarPage::Board),
     ];
 
     pub fn label(self) -> &'static str {
@@ -628,6 +647,7 @@ impl SidebarNavItem {
         match self {
             Self::NewThread => icons::PEN_NEW_SQUARE,
             Self::Page(SidebarPage::Automations) => icons::STOPWATCH_PLAY,
+            Self::Page(SidebarPage::Board) => icons::CLIPBOARD_LIST,
         }
     }
 
@@ -635,7 +655,7 @@ impl SidebarNavItem {
     pub fn key(self) -> &'static str {
         match self {
             Self::NewThread => "new-thread",
-            Self::Page(SidebarPage::Automations) => "automations",
+            Self::Page(page) => page.key(),
         }
     }
 }
@@ -2335,6 +2355,8 @@ pub struct Shell {
     /// with the subscription that routes "Open conversation".
     automations_conversation: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
     automations_settings: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
+    /// The Board page, created on first open.
+    board_page: Option<Entity<board::BoardPage>>,
     /// Composers of chats shown in the right pane's shared chat view, cached
     /// per chat so drafts and sends in flight outlive the pane.
     pane_composers: Entity<pane_chat::PaneComposers>,
@@ -2793,10 +2815,17 @@ impl Shell {
             }
             // Automations left Settings for its own page.
             Some("automations" | "settings/automations") => Route::Page(SidebarPage::Automations),
+            Some("board") => Route::Page(SidebarPage::Board),
             Some(route) => SettingsSection::from_fixture_route(route)
                 .map(Route::Settings)
                 .unwrap_or(Route::Chat),
-            None => Route::Chat,
+            // Restart restoration: reopen the sidebar page that was open.
+            None => settings
+                .last_sidebar_page
+                .as_deref()
+                .and_then(SidebarPage::from_key)
+                .map(Route::Page)
+                .unwrap_or(Route::Chat),
         };
         // More capture knobs of the same kind: `LUNA_OPEN_DIALOG=rename|delete`
         // opens that dialog for the first chat once chats land; `=model` pops
@@ -2892,6 +2921,7 @@ impl Shell {
             child_chat_events: None,
             automations_conversation: None,
             automations_settings: None,
+            board_page: None,
             pane_composers,
             workbench: workbench::WorkbenchState::new(cx),
             _pane_composers_observe: pane_composers_observe,
@@ -5369,6 +5399,7 @@ impl Shell {
             SidebarPage::Automations => self
                 .automations_panel(crate::automations::AutomationScope::All, true, cx)
                 .into_any_element(),
+            SidebarPage::Board => self.board_page(cx).into_any_element(),
         }
     }
 
@@ -15501,6 +15532,7 @@ impl Render for Shell {
         self.reconcile_splash(cx);
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
+        self.sync_restored_page(cx);
         self.sync_execution_focus(cx);
         self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)

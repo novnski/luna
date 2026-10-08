@@ -900,6 +900,12 @@ pub struct UiSettings {
     pub new_thread_composer_background: Option<NewThreadComposerBackground>,
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
+    /// The sidebar page (`automations`, `board`) open when LUNA last ran, so
+    /// a restart lands there again. `None`: a chat or Settings was open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_sidebar_page: Option<String>,
+    /// Board presentation preferences (device-local; never ticket data).
+    pub board: BoardUiPrefs,
     /// Pre-theme settings used `accentColor`. Read it once, migrate to
     /// [`Self::accent`], and never write it again.
     #[serde(default, rename = "accentColor", skip_serializing)]
@@ -985,9 +991,45 @@ impl Default for UiSettings {
             surface: luna_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
+            last_sidebar_page: None,
+            board: BoardUiPrefs::default(),
             legacy_accent_color: None,
         }
     }
+}
+
+/// How the Board page is presented on this device. Scope, filters, view and
+/// selection are presentation only: they never change ticket ownership or
+/// an execution target.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BoardUiPrefs {
+    /// Last project scope (`None`: All projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Board columns or the narrow List view.
+    pub view: BoardViewMode,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub search: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub attention_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<luna_proto::HarnessId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<luna_proto::BoardSourceKind>,
+    /// The focused ticket, restored when it still exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_item: Option<String>,
+    /// Vertical scroll offset of the board, in logical pixels.
+    pub scroll_y: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardViewMode {
+    #[default]
+    Board,
+    List,
 }
 
 impl UiSettings {
@@ -2605,6 +2647,17 @@ mod tests {
                 name: "background.png".into(),
             }),
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
+            last_sidebar_page: Some("board".into()),
+            board: BoardUiPrefs {
+                project_id: Some("project-a".into()),
+                view: BoardViewMode::List,
+                search: "search".into(),
+                attention_only: true,
+                provider: Some(luna_proto::HarnessId::Codex),
+                source: Some(luna_proto::BoardSourceKind::GitHub),
+                selected_item: Some("wi-1".into()),
+                scroll_y: 120.0,
+            },
             legacy_accent_color: None,
         };
         settings.save(dir.path()).unwrap();

@@ -50,6 +50,7 @@ pub(super) enum ResultGroup {
 enum EntryIdentity {
     NewChat,
     NewProject,
+    OpenBoard,
     Settings,
     Activity,
     Theme,
@@ -75,6 +76,8 @@ enum PaletteSelection {
 pub(super) enum Entry {
     NewChat,
     NewProject,
+    /// The sidebar's Board page.
+    OpenBoard,
     Settings,
     Activity,
     Theme(AppearanceMode),
@@ -99,6 +102,7 @@ impl Entry {
             self,
             Self::NewChat
                 | Self::NewProject
+                | Self::OpenBoard
                 | Self::Settings
                 | Self::Activity
                 | Self::Theme(_)
@@ -114,6 +118,7 @@ impl Entry {
         match self {
             Self::NewChat => EntryIdentity::NewChat,
             Self::NewProject => EntryIdentity::NewProject,
+            Self::OpenBoard => EntryIdentity::OpenBoard,
             Self::Settings => EntryIdentity::Settings,
             Self::Activity => EntryIdentity::Activity,
             Self::Theme(_) => EntryIdentity::Theme,
@@ -130,6 +135,7 @@ impl Entry {
         match self {
             Self::NewChat => Some(("New task", icons::PEN_NEW_SQUARE)),
             Self::NewProject => Some(("New project", icons::FOLDER)),
+            Self::OpenBoard => Some(("Open Board", icons::CLIPBOARD_LIST)),
             Self::Settings => Some(("Open settings", icons::SETTINGS_MINIMALISTIC)),
             Self::Activity => Some(("Toggle activity view", icons::BELL)),
             Self::Theme(mode) => Some((
@@ -167,6 +173,7 @@ fn actions_for(query: &str, is_dark: bool) -> Vec<Entry> {
     [
         Entry::NewChat,
         Entry::NewProject,
+        Entry::OpenBoard,
         Entry::Settings,
         Entry::Activity,
         Entry::Theme(if is_dark {
@@ -607,6 +614,7 @@ impl Shell {
         match entry {
             Entry::NewChat => self.open_new_session(cx),
             Entry::NewProject => self.open_add_space(cx),
+            Entry::OpenBoard => self.open_sidebar_page(super::SidebarPage::Board, cx),
             Entry::Settings => self.open_settings(SettingsSection::DEFAULT, cx),
             Entry::Activity => self.toggle_activity(window, cx),
             Entry::Theme(_) => unreachable!(),
@@ -1239,11 +1247,13 @@ mod tests {
             vec![
                 Entry::NewChat,
                 Entry::NewProject,
+                Entry::OpenBoard,
                 Entry::Settings,
                 Entry::Activity,
                 Entry::Theme(AppearanceMode::Light)
             ]
         );
+        assert_eq!(actions_for("board", true), vec![Entry::OpenBoard]);
         assert_eq!(
             actions_for("new", true),
             vec![Entry::NewChat, Entry::NewProject]
