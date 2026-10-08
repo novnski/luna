@@ -2461,6 +2461,8 @@ impl EngineRpc {
                             additions: args.additions,
                             comment_ids: args.comment_ids,
                             start,
+                            // Agents import without a UI preview step.
+                            previewed_updated_at: None,
                         },
                     )
                     .await?;
