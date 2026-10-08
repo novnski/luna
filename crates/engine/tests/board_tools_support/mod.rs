@@ -955,7 +955,7 @@ pub async fn board_tools_scenario(f: &Fixture) {
                 || format!("{receipt:#}"),
             )
             .map(|_| json!({"implemented": true, "effect": receipt["effect"]["kind"]})),
-            None => Ok(json!({"implemented": false, "code": moved.code()})),
+            None => Ok(json!({"implemented": false, "code": moved.code(), "reply": moved.text})),
         }),
     );
     let started = matches!(move_receipt, Ok(Some(_)));
@@ -1611,16 +1611,102 @@ pub async fn board_tools_scenario(f: &Fixture) {
             },
         ),
     }
+    // Review needs a live started execution (a generation that was not
+    // stopped). With the lifecycle slice present, the main chat creates and
+    // starts a fresh ticket with its own tools, and that ticket's worker
+    // submits it with review_start (checks and summary). Otherwise the
+    // converted ticket shows the typed refusal through the owner's RPC.
+    let mut review_worker: Option<String> = None;
     let mut reviewer_task: Option<String> = None;
-    match f
-        .rpc_call(
+    let review_started = if started {
+        let created = tools
+            .invoke(
+                &f.authority(&main),
+                "board_create",
+                json!({"requestId":"review-target","title":"Review target",
+                    "description":"Exercise the reviewer audience."}),
+                &cancel,
+            )
+            .await
+            .expect("board_create for the review target");
+        let id = created["workItemId"].as_str().unwrap().to_owned();
+        let start = tools
+            .invoke(
+                &f.authority(&main),
+                "board_start",
+                json!({"requestId":"review-target-start","workItemId": id,"destination":"sideChat"}),
+                &cancel,
+            )
+            .await;
+        evidence.check(
+            "the main chat starts a ticket for the reviewer audience",
+            "a start receipt",
+            start
+                .map(|receipt| json!(receipt["mutation"]["column"]))
+                .map_err(|error| format!("{error:?}")),
+        );
+        let read = f.rpc_ok("BoardRead", json!({"workItemId": id})).await;
+        review_worker = read["links"].as_array().and_then(|links| {
+            links
+                .iter()
+                .find(|link| link["role"] == "working")
+                .and_then(|link| link["taskId"].as_str().map(str::to_owned))
+        });
+        let worker = review_worker
+            .clone()
+            .expect("the started ticket's working chat");
+        tools
+            .invoke(
+                &f.authority(&worker),
+                "review_start",
+                json!({"requestId":"review-1",
+                    "checks":[{"name":"unit","command":"cargo test","passed":true,"exitCode":0}],
+                    "summary":"Toggle respected; checks pass."}),
+                &cancel,
+            )
+            .await
+            .map(|receipt| (id, receipt))
+            .map_err(|error| match error {
+                luna_engine::cross_task_tools::CrossTaskError::Backend(text) => text,
+                other => format!("{other:?}"),
+            })
+    } else {
+        f.rpc_call(
             "BoardReviewStart",
             json!({"requestId":"review-1","workItemId": review_ticket}),
         )
         .await
-    {
-        Ok(receipt) => {
-            if let Some(reviewer) = receipt["run"]["reviewerTaskId"].as_str() {
+        .map(|receipt| (review_ticket.clone(), receipt))
+        .map_err(|error| match error {
+            luna_rpc::RpcError::Failed(message) => message,
+            other => other.to_string(),
+        })
+    };
+    match review_started {
+        Ok((review_ticket, receipt)) => {
+            evidence.check(
+                "review_start carries the worker's checks and summary",
+                "a review run for the ticket",
+                expect(receipt["run"]["workItemId"] == json!(review_ticket), || {
+                    format!("{receipt:#}")
+                })
+                .map(|_| json!(receipt["run"]["state"])),
+            );
+            // The reviewer chat may be created after the receipt.
+            let mut reviewer = receipt["run"]["reviewerTaskId"].as_str().map(str::to_owned);
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            while reviewer.is_none() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let status = f
+                    .rpc_call("BoardReviewStatus", json!({"workItemId": review_ticket}))
+                    .await
+                    .unwrap_or_default();
+                reviewer = status["runs"].as_array().and_then(|runs| {
+                    runs.iter()
+                        .find_map(|run| run["reviewerTaskId"].as_str().map(str::to_owned))
+                });
+            }
+            if let Some(reviewer) = reviewer.as_deref() {
                 reviewer_task = Some(reviewer.to_owned());
                 let context =
                     CrossTaskBackend::board_context(&*f.rpc, reviewer).expect("reviewer context");
@@ -1635,6 +1721,36 @@ pub async fn board_tools_scenario(f: &Fixture) {
                     )
                     .map(|_| catalog_size("reviewer", &board, bytes)),
                 );
+                // Authorized by its recorded run (the run id defaults from
+                // the reviewer's context); A5 then judges the submission.
+                let submitted = tools
+                    .invoke(
+                        &f.authority(reviewer),
+                        "review_submit",
+                        json!({"requestId":"submit-1","verdict":"passed",
+                            "basisPacketHash":"not-the-packet","summary":"Looks right."}),
+                        &cancel,
+                    )
+                    .await;
+                evidence.check(
+                    "review_submit reaches the review slice for the recorded reviewer",
+                    "a receipt or a review-slice refusal, never notAuthorized/invalidRole",
+                    match submitted {
+                        Ok(receipt) => Ok(json!({"accepted": receipt["run"]["state"]})),
+                        Err(luna_engine::cross_task_tools::CrossTaskError::Backend(text)) => {
+                            serde_json::from_str::<Value>(&text)
+                                .ok()
+                                .filter(|error| {
+                                    error["code"].is_string()
+                                        && error["code"] != "notAuthorized"
+                                        && error["code"] != "invalidRole"
+                                })
+                                .map(|error| json!({"refused": error["code"]}))
+                                .ok_or(text)
+                        }
+                        Err(other) => Err(format!("{other:?}")),
+                    },
+                );
             } else {
                 evidence.check(
                     "review start recorded without a reviewer chat yet",
@@ -1643,16 +1759,17 @@ pub async fn board_tools_scenario(f: &Fixture) {
                 );
             }
         }
-        Err(error) => evidence.check(
+        Err(message) => evidence.check(
             "reviewer audience (review slice)",
             "a review run or a structured board error",
-            match error {
-                luna_rpc::RpcError::Failed(message) => {
-                    luna_proto::BoardError::from_rpc_message(&message)
-                        .map(|error| json!({"skipped": error.code(), "reason": error.to_string()}))
-                        .ok_or(message)
-                }
-                other => Err(other.to_string()),
+            match luna_proto::BoardError::from_rpc_message(&message) {
+                Some(error) => Ok(json!({"skipped": error.code(), "reason": error.to_string()})),
+                // A tool error is the board error's JSON text.
+                None => serde_json::from_str::<Value>(&message)
+                    .ok()
+                    .filter(|error| error["code"].is_string())
+                    .map(|error| json!({"skipped": error["code"], "reason": error["reason"]}))
+                    .ok_or(message),
             },
         ),
     }
@@ -1759,8 +1876,8 @@ pub async fn board_tools_scenario(f: &Fixture) {
     if let Some(worker) = &worker {
         allowed.insert(worker.clone());
     }
-    if let Some(reviewer) = &reviewer_task {
-        allowed.insert(reviewer.clone());
+    for task in [&reviewer_task, &review_worker].into_iter().flatten() {
+        allowed.insert(task.clone());
     }
     let after = f.chat_ids();
     let unexpected: Vec<_> = after.difference(&allowed).cloned().collect();

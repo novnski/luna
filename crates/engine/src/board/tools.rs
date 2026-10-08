@@ -74,6 +74,8 @@ const REVIEW_SUMMARY_CHARS: usize = 4_000;
 const REVIEW_FINDINGS_MAX: usize = 50;
 /// Checks and evidence references one review_start reports (A5 bound).
 const REVIEW_REPORTS_MAX: usize = 16;
+
+type BoardToolFuture<'a> = futures::future::BoxFuture<'a, BoardResult<Value>>;
 const ERROR_DETAIL_CHARS: usize = 300;
 /// Serialized ceiling for one board tool result (the runtime refuses more).
 pub(crate) const BOARD_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
@@ -1597,735 +1599,996 @@ impl EngineRpc {
         let project = context.project_id.clone();
         match tool {
             BOARD_TOOL_LIST => {
-                let args: ListArgs = parse_args(arguments)?;
-                let limit = bounded_limit("limit", args.limit, LIST_DEFAULT, LIST_MAX)?;
-                let page = self
-                    .board_list(
-                        caller,
-                        BoardListRequest {
-                            scope: BoardScope::Project {
-                                project_id: args.project_id.unwrap_or(project),
-                            },
-                            columns: args.columns,
-                            archived: args.archived,
-                            text: args.text,
-                            attention_only: args.attention_only,
-                            provider: args.provider,
-                            source: args.source,
-                            cursor: args.cursor,
-                            limit: Some(limit),
-                        },
-                    )
-                    .await?;
-                Ok(list_output(&page))
+                self.board_tool_list_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_READ => {
-                let args: ReadArgs = parse_args(arguments)?;
-                let history = bounded_limit(
-                    "historyLimit",
-                    args.history_limit,
-                    HISTORY_DEFAULT,
-                    HISTORY_MAX,
-                )?;
-                let detail = self
-                    .board_read(
-                        caller,
-                        BoardReadRequest {
-                            work_item_id: args.work_item_id,
-                            project_id: args.project_id,
-                            history_limit: Some(history),
-                        },
-                    )
-                    .await?;
-                read_output(&detail)
+                self.board_tool_read_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_EXECUTION_OPTIONS => {
-                let args: OptionsArgs = parse_args(arguments)?;
-                if args
-                    .limit
-                    .is_some_and(|limit| limit == 0 || limit > OPTIONS_MAX)
-                {
-                    return Err(BoardError::invalid("limit", format!("use 1-{OPTIONS_MAX}")));
-                }
-                let options = self
-                    .board_execution_options(
-                        caller,
-                        BoardExecutionOptionsRequest {
-                            project_id: args.project_id.unwrap_or(project),
-                            harness: args.harness,
-                            query: args.query,
-                            offset: args.offset,
-                            limit: Some(args.limit.unwrap_or(OPTIONS_MAX)),
-                        },
-                    )
-                    .await?;
-                tool_output(&options)
+                self.board_tool_execution_options_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_CREATE => {
-                let args: CreateArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let origin = match (args.origin, args.source_message_id, context.task_id.clone()) {
-                    // A claimed origin is checked against the bound caller.
-                    (Some(origin), _, _) => Some(origin),
-                    (None, Some(message_id), Some(task_id)) => Some(BoardItemOrigin::Chat {
-                        task_id,
-                        message_id: Some(message_id),
-                    }),
-                    (None, Some(_), None) => {
-                        return Err(BoardError::invalid(
-                            "sourceMessageId",
-                            "a ticket discussion has no chat messages to cite",
-                        ));
-                    }
-                    (None, None, _) => None,
-                };
-                let receipt = self
-                    .board_create(
-                        caller,
-                        BoardCreateRequest {
-                            request_id: args.request_id,
-                            project_id: Some(args.project_id.unwrap_or(project)),
-                            title: args.title,
-                            description: args.description,
-                            implementation: args.implementation,
-                            review: args.review,
-                            completion: args.completion,
-                            labels: args.labels,
-                            priority: args.priority,
-                            context_refs: args.context_refs,
-                            origin,
-                            placement: args.placement,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
+                self.board_tool_create_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_UPDATE => {
-                let args: UpdateArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let changes = args.changes;
-                let priority = match (changes.priority, changes.clear_priority) {
-                    (Some(Some(_)), true) => {
-                        return Err(BoardError::invalid(
-                            "clearPriority",
-                            "pass either priority or clearPriority",
-                        ));
-                    }
-                    (_, true) => Some(None),
-                    (priority, false) => priority,
-                };
-                let receipt = self
-                    .board_update(
-                        caller,
-                        BoardUpdateRequest {
-                            request_id: args.request_id,
-                            work_item_id: args.work_item_id,
-                            expected_revision: args.expected_revision,
-                            changes: BoardItemChanges {
-                                title: changes.title,
-                                description: changes.description,
-                                implementation: changes.implementation,
-                                review: changes.review,
-                                completion: changes.completion,
-                                labels: changes.labels,
-                                priority,
-                                context_refs: changes.context_refs,
-                            },
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
+                self.board_tool_update_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_MOVE => {
-                let args: MoveArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                if args.to == BoardColumn::Done {
-                    return Err(BoardError::invalid(
-                        "to",
-                        "Done is engine-owned: it is set after current checks and review pass. Move to backlog (hold or stop) or ready (start or continue).",
-                    ));
-                }
-                let destination = bound_destination(&context, args.destination)?;
-                let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
-                let follow_up = bound_follow_up(&context, args.follow_up)?;
-                let receipt = self
-                    .board_move(
-                        caller,
-                        BoardMoveRequest {
-                            request_id: args.request_id,
-                            work_item_id: args.work_item_id,
-                            to: args.to,
-                            expected_revision: args.expected_revision,
-                            after_id: args.after_id,
-                            before_id: args.before_id,
-                            destination,
-                            context: mode,
-                            execution: args.execution,
-                            follow_up,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
+                self.board_tool_move_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_START => {
-                let args: StartArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let destination = bound_destination(&context, args.destination)?;
-                let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
-                let follow_up = bound_follow_up(&context, args.follow_up)?;
-                match (args.work_item_id, args.work_item_ids) {
-                    (Some(work_item_id), None) => {
-                        let receipt = self
-                            .board_start(
-                                caller,
-                                BoardStartRequest {
-                                    request_id: args.request_id,
-                                    work_item_id,
-                                    expected_revision: args.expected_revision,
-                                    destination,
-                                    context: mode,
-                                    execution: args.execution,
-                                    follow_up,
-                                    caller_task_id: context.task_id.clone(),
-                                },
-                            )
-                            .await?;
-                        tool_output(&receipt)
-                    }
-                    (None, Some(work_item_ids)) => {
-                        if work_item_ids.is_empty() || work_item_ids.len() > BOARD_BATCH_START_MAX {
-                            return Err(BoardError::invalid(
-                                "workItemIds",
-                                format!("name 1-{BOARD_BATCH_START_MAX} tickets"),
-                            ));
-                        }
-                        if args.expected_revision.is_some() {
-                            return Err(BoardError::invalid(
-                                "expectedRevision",
-                                "applies to one ticket; omit it with workItemIds",
-                            ));
-                        }
-                        let receipt = self
-                            .board_start_batch(
-                                caller,
-                                BoardStartBatchRequest {
-                                    request_id: args.request_id,
-                                    work_item_ids,
-                                    destination,
-                                    context: mode,
-                                    execution: args.execution,
-                                    follow_up,
-                                    caller_task_id: context.task_id.clone(),
-                                },
-                            )
-                            .await?;
-                        tool_output(&receipt)
-                    }
-                    _ => Err(BoardError::invalid(
-                        "workItemId",
-                        format!(
-                            "pass workItemId for one ticket or workItemIds for up to {BOARD_BATCH_START_MAX}"
-                        ),
-                    )),
-                }
+                self.board_tool_start_call(caller, context, tool, project, arguments)
+                    .await
             }
             BOARD_TOOL_CONTROL => {
-                let args: ControlArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                if args.adopt_latest_brief && args.action != ControlArg::Retry {
+                self.board_tool_control_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_SET_STATUS => {
+                self.board_tool_set_status_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_CONVERT_CHAT => {
+                self.board_tool_convert_chat_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_REVIEW_START => {
+                self.board_tool_review_start_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_REVIEW_STATUS => {
+                self.board_tool_review_status_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_REVIEW_CANCEL => {
+                self.board_tool_review_cancel_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_REVIEW_SUBMIT => {
+                self.board_tool_review_submit_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_CREATE_SIDE_CHAT => {
+                self.board_tool_create_side_chat_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_CREATE_MAIN_CHAT => {
+                self.board_tool_create_main_chat_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_AUTHORING_CHECKPOINT => {
+                self.board_tool_authoring_checkpoint_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_ISSUE_SEARCH => {
+                self.board_tool_issue_search_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            BOARD_TOOL_ISSUE_IMPORT => {
+                self.board_tool_issue_import_call(caller, context, tool, project, arguments)
+                    .await
+            }
+            _ => Err(BoardError::invalid("tool", "not a board tool")),
+        }
+    }
+
+    // One boxed future per tool keeps debug-build poll frames small: a
+    // tool call runs on a worker stack below the provider/RPC frames, and
+    // the inline match held every arm's callee future at once (~900 KiB).
+    fn board_tool_list_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        _context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ListArgs = parse_args(arguments)?;
+            let limit = bounded_limit("limit", args.limit, LIST_DEFAULT, LIST_MAX)?;
+            let page = self
+                .board_list(
+                    caller,
+                    BoardListRequest {
+                        scope: BoardScope::Project {
+                            project_id: args.project_id.unwrap_or(project),
+                        },
+                        columns: args.columns,
+                        archived: args.archived,
+                        text: args.text,
+                        attention_only: args.attention_only,
+                        provider: args.provider,
+                        source: args.source,
+                        cursor: args.cursor,
+                        limit: Some(limit),
+                    },
+                )
+                .await?;
+            Ok(list_output(&page))
+        })
+    }
+
+    fn board_tool_read_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        _context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ReadArgs = parse_args(arguments)?;
+            let history = bounded_limit(
+                "historyLimit",
+                args.history_limit,
+                HISTORY_DEFAULT,
+                HISTORY_MAX,
+            )?;
+            let detail = self
+                .board_read(
+                    caller,
+                    BoardReadRequest {
+                        work_item_id: args.work_item_id,
+                        project_id: args.project_id,
+                        history_limit: Some(history),
+                    },
+                )
+                .await?;
+            read_output(&detail)
+        })
+    }
+
+    fn board_tool_execution_options_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        _context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: OptionsArgs = parse_args(arguments)?;
+            if args
+                .limit
+                .is_some_and(|limit| limit == 0 || limit > OPTIONS_MAX)
+            {
+                return Err(BoardError::invalid("limit", format!("use 1-{OPTIONS_MAX}")));
+            }
+            let options = self
+                .board_execution_options(
+                    caller,
+                    BoardExecutionOptionsRequest {
+                        project_id: args.project_id.unwrap_or(project),
+                        harness: args.harness,
+                        query: args.query,
+                        offset: args.offset,
+                        limit: Some(args.limit.unwrap_or(OPTIONS_MAX)),
+                    },
+                )
+                .await?;
+            tool_output(&options)
+        })
+    }
+
+    fn board_tool_create_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: CreateArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let origin = match (args.origin, args.source_message_id, context.task_id.clone()) {
+                // A claimed origin is checked against the bound caller.
+                (Some(origin), _, _) => Some(origin),
+                (None, Some(message_id), Some(task_id)) => Some(BoardItemOrigin::Chat {
+                    task_id,
+                    message_id: Some(message_id),
+                }),
+                (None, Some(_), None) => {
                     return Err(BoardError::invalid(
-                        "adoptLatestBrief",
-                        "applies only to retry",
+                        "sourceMessageId",
+                        "a ticket discussion has no chat messages to cite",
                     ));
                 }
-                let revision = |action: &str| {
-                    args.expected_revision.ok_or_else(|| {
-                        BoardError::invalid(
-                            "expectedRevision",
-                            format!("{action} needs the ticket revision you read"),
+                (None, None, _) => None,
+            };
+            let receipt = self
+                .board_create(
+                    caller,
+                    BoardCreateRequest {
+                        request_id: args.request_id,
+                        project_id: Some(args.project_id.unwrap_or(project)),
+                        title: args.title,
+                        description: args.description,
+                        implementation: args.implementation,
+                        review: args.review,
+                        completion: args.completion,
+                        labels: args.labels,
+                        priority: args.priority,
+                        context_refs: args.context_refs,
+                        origin,
+                        placement: args.placement,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_update_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: UpdateArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let changes = args.changes;
+            let priority = match (changes.priority, changes.clear_priority) {
+                (Some(Some(_)), true) => {
+                    return Err(BoardError::invalid(
+                        "clearPriority",
+                        "pass either priority or clearPriority",
+                    ));
+                }
+                (_, true) => Some(None),
+                (priority, false) => priority,
+            };
+            let receipt = self
+                .board_update(
+                    caller,
+                    BoardUpdateRequest {
+                        request_id: args.request_id,
+                        work_item_id: args.work_item_id,
+                        expected_revision: args.expected_revision,
+                        changes: BoardItemChanges {
+                            title: changes.title,
+                            description: changes.description,
+                            implementation: changes.implementation,
+                            review: changes.review,
+                            completion: changes.completion,
+                            labels: changes.labels,
+                            priority,
+                            context_refs: changes.context_refs,
+                        },
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_move_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: MoveArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            if args.to == BoardColumn::Done {
+                return Err(BoardError::invalid(
+                    "to",
+                    "Done is engine-owned: it is set after current checks and review pass. Move to backlog (hold or stop) or ready (start or continue).",
+                ));
+            }
+            let destination = bound_destination(&context, args.destination)?;
+            let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
+            let follow_up = bound_follow_up(&context, args.follow_up)?;
+            let receipt = self
+                .board_move(
+                    caller,
+                    BoardMoveRequest {
+                        request_id: args.request_id,
+                        work_item_id: args.work_item_id,
+                        to: args.to,
+                        expected_revision: args.expected_revision,
+                        after_id: args.after_id,
+                        before_id: args.before_id,
+                        destination,
+                        context: mode,
+                        execution: args.execution,
+                        follow_up,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_start_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: StartArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let destination = bound_destination(&context, args.destination)?;
+            let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
+            let follow_up = bound_follow_up(&context, args.follow_up)?;
+            match (args.work_item_id, args.work_item_ids) {
+                (Some(work_item_id), None) => {
+                    let receipt = self
+                        .board_start(
+                            caller,
+                            BoardStartRequest {
+                                request_id: args.request_id,
+                                work_item_id,
+                                expected_revision: args.expected_revision,
+                                destination,
+                                context: mode,
+                                execution: args.execution,
+                                follow_up,
+                                caller_task_id: context.task_id.clone(),
+                            },
                         )
-                    })
-                };
-                let action = match args.action {
-                    ControlArg::Archive | ControlArg::Unarchive => {
-                        let receipt = self
-                            .board_archive(
-                                caller,
-                                BoardArchiveRequest {
-                                    request_id: args.request_id,
-                                    work_item_id: args.work_item_id,
-                                    archived: args.action == ControlArg::Archive,
-                                    expected_revision: args.expected_revision,
-                                },
-                            )
-                            .await?;
-                        return tool_output(&receipt);
+                        .await?;
+                    tool_output(&receipt)
+                }
+                (None, Some(work_item_ids)) => {
+                    if work_item_ids.is_empty() || work_item_ids.len() > BOARD_BATCH_START_MAX {
+                        return Err(BoardError::invalid(
+                            "workItemIds",
+                            format!("name 1-{BOARD_BATCH_START_MAX} tickets"),
+                        ));
                     }
-                    ControlArg::SendUpdate => {
-                        let receipt = self
-                            .board_send_update(
-                                caller,
-                                BoardSendUpdateRequest {
-                                    expected_revision: revision("sendUpdate")?,
-                                    request_id: args.request_id,
-                                    work_item_id: args.work_item_id,
-                                    mode: args.mode.unwrap_or_default(),
-                                },
-                            )
-                            .await?;
-                        return tool_output(&receipt);
+                    if args.expected_revision.is_some() {
+                        return Err(BoardError::invalid(
+                            "expectedRevision",
+                            "applies to one ticket; omit it with workItemIds",
+                        ));
                     }
-                    ControlArg::Link | ControlArg::Unlink => {
-                        let role = args.role.ok_or_else(|| {
-                            BoardError::invalid("role", "name source, reference or attempt")
-                        })?;
-                        if !matches!(
-                            role,
-                            TaskLinkRole::Source | TaskLinkRole::Reference | TaskLinkRole::Attempt
-                        ) {
-                            return Err(BoardError::invalid(
-                                "role",
-                                "working chats come only from Start or conversion and reviewers only from review runs; link a source, reference or attempt",
-                            ));
-                        }
-                        let task_id = args.task_id.clone().ok_or_else(|| {
-                            BoardError::invalid("taskId", "name the chat to link")
-                        })?;
-                        let receipt = self
-                            .board_link_chat(
-                                caller,
-                                BoardLinkChatRequest {
-                                    expected_revision: revision("link")?,
-                                    request_id: args.request_id,
-                                    work_item_id: args.work_item_id,
-                                    task_id,
-                                    role,
-                                    linked: args.action == ControlArg::Link,
-                                },
-                            )
-                            .await?;
-                        return tool_output(&receipt);
+                    let receipt = self
+                        .board_start_batch(
+                            caller,
+                            BoardStartBatchRequest {
+                                request_id: args.request_id,
+                                work_item_ids,
+                                destination,
+                                context: mode,
+                                execution: args.execution,
+                                follow_up,
+                                caller_task_id: context.task_id.clone(),
+                            },
+                        )
+                        .await?;
+                    tool_output(&receipt)
+                }
+                _ => Err(BoardError::invalid(
+                    "workItemId",
+                    format!(
+                        "pass workItemId for one ticket or workItemIds for up to {BOARD_BATCH_START_MAX}"
+                    ),
+                )),
+            }
+        })
+    }
+
+    fn board_tool_control_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ControlArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            if args.adopt_latest_brief && args.action != ControlArg::Retry {
+                return Err(BoardError::invalid(
+                    "adoptLatestBrief",
+                    "applies only to retry",
+                ));
+            }
+            let revision = |action: &str| {
+                args.expected_revision.ok_or_else(|| {
+                    BoardError::invalid(
+                        "expectedRevision",
+                        format!("{action} needs the ticket revision you read"),
+                    )
+                })
+            };
+            let action = match args.action {
+                ControlArg::Archive | ControlArg::Unarchive => {
+                    let receipt = self
+                        .board_archive(
+                            caller,
+                            BoardArchiveRequest {
+                                request_id: args.request_id,
+                                work_item_id: args.work_item_id,
+                                archived: args.action == ControlArg::Archive,
+                                expected_revision: args.expected_revision,
+                            },
+                        )
+                        .await?;
+                    return tool_output(&receipt);
+                }
+                ControlArg::SendUpdate => {
+                    let receipt = self
+                        .board_send_update(
+                            caller,
+                            BoardSendUpdateRequest {
+                                expected_revision: revision("sendUpdate")?,
+                                request_id: args.request_id,
+                                work_item_id: args.work_item_id,
+                                mode: args.mode.unwrap_or_default(),
+                            },
+                        )
+                        .await?;
+                    return tool_output(&receipt);
+                }
+                ControlArg::Link | ControlArg::Unlink => {
+                    let role = args.role.ok_or_else(|| {
+                        BoardError::invalid("role", "name source, reference or attempt")
+                    })?;
+                    if !matches!(
+                        role,
+                        TaskLinkRole::Source | TaskLinkRole::Reference | TaskLinkRole::Attempt
+                    ) {
+                        return Err(BoardError::invalid(
+                            "role",
+                            "working chats come only from Start or conversion and reviewers only from review runs; link a source, reference or attempt",
+                        ));
                     }
-                    ControlArg::Block | ControlArg::Unblock => {
-                        let blocked_by_id = args.blocked_by_id.clone().ok_or_else(|| {
-                            BoardError::invalid("blockedById", "name the ticket this one waits for")
-                        })?;
-                        let receipt = self
-                            .board_set_dependency(
-                                caller,
-                                BoardSetDependencyRequest {
-                                    request_id: args.request_id,
-                                    work_item_id: args.work_item_id,
-                                    blocked_by_id,
-                                    present: args.action == ControlArg::Block,
-                                },
-                            )
-                            .await?;
-                        return tool_output(&receipt);
-                    }
-                    ControlArg::Accept => {
-                        return Err(BoardError::InvalidRole {
+                    let task_id = args
+                        .task_id
+                        .clone()
+                        .ok_or_else(|| BoardError::invalid("taskId", "name the chat to link"))?;
+                    let receipt = self
+                        .board_link_chat(
+                            caller,
+                            BoardLinkChatRequest {
+                                expected_revision: revision("link")?,
+                                request_id: args.request_id,
+                                work_item_id: args.work_item_id,
+                                task_id,
+                                role,
+                                linked: args.action == ControlArg::Link,
+                            },
+                        )
+                        .await?;
+                    return tool_output(&receipt);
+                }
+                ControlArg::Block | ControlArg::Unblock => {
+                    let blocked_by_id = args.blocked_by_id.clone().ok_or_else(|| {
+                        BoardError::invalid("blockedById", "name the ticket this one waits for")
+                    })?;
+                    let receipt = self
+                        .board_set_dependency(
+                            caller,
+                            BoardSetDependencyRequest {
+                                request_id: args.request_id,
+                                work_item_id: args.work_item_id,
+                                blocked_by_id,
+                                present: args.action == ControlArg::Block,
+                            },
+                        )
+                        .await?;
+                    return tool_output(&receipt);
+                }
+                ControlArg::Accept => {
+                    return Err(BoardError::InvalidRole {
                             operation: "board_control.accept".into(),
                             reason: "Accepting a result under manual acceptance is the user's decision on the Board; ask the user to accept it.".into(),
                             allowed: ["stop", "continue", "retry", "cancelQueued", "archive", "unarchive"]
                                 .map(str::to_owned)
                                 .to_vec(),
                         });
-                    }
-                    ControlArg::Stop => BoardControlAction::Stop,
-                    ControlArg::Continue => BoardControlAction::Continue,
-                    ControlArg::Retry => BoardControlAction::Retry,
-                    ControlArg::CancelQueued => BoardControlAction::CancelQueued,
-                };
-                let receipt = self
-                    .board_control(
-                        caller,
-                        BoardControlRequest {
-                            request_id: args.request_id,
-                            work_item_id: args.work_item_id,
-                            action,
-                            expected_revision: args.expected_revision,
-                            adopt_latest_brief: args.adopt_latest_brief,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
+                }
+                ControlArg::Stop => BoardControlAction::Stop,
+                ControlArg::Continue => BoardControlAction::Continue,
+                ControlArg::Retry => BoardControlAction::Retry,
+                ControlArg::CancelQueued => BoardControlAction::CancelQueued,
+            };
+            let receipt = self
+                .board_control(
+                    caller,
+                    BoardControlRequest {
+                        request_id: args.request_id,
+                        work_item_id: args.work_item_id,
+                        action,
+                        expected_revision: args.expected_revision,
+                        adopt_latest_brief: args.adopt_latest_brief,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_set_status_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: StatusArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let summary = args.summary.trim();
+            if summary.is_empty() || summary.chars().count() > STATUS_SUMMARY_CHARS {
+                return Err(BoardError::invalid(
+                    "summary",
+                    format!("write 1-{STATUS_SUMMARY_CHARS} characters"),
+                ));
             }
-            BOARD_TOOL_SET_STATUS => {
-                let args: StatusArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let summary = args.summary.trim();
-                if summary.is_empty() || summary.chars().count() > STATUS_SUMMARY_CHARS {
-                    return Err(BoardError::invalid(
-                        "summary",
-                        format!("write 1-{STATUS_SUMMARY_CHARS} characters"),
-                    ));
-                }
-                if args.evidence.len() > STATUS_EVIDENCE_MAX {
-                    return Err(BoardError::invalid(
-                        "evidence",
-                        format!("at most {STATUS_EVIDENCE_MAX} references"),
-                    ));
-                }
-                let receipt = self
-                    .board_set_status(
-                        caller,
-                        BoardSetStatusRequest {
-                            request_id: args.request_id,
-                            work_item_id: args.work_item_id,
-                            expected_revision: args.expected_revision,
-                            execution_generation: args.execution_generation,
-                            report: BoardStatusReport {
-                                kind: args.kind,
-                                summary: summary.into(),
-                                evidence: args.evidence,
-                            },
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
+            if args.evidence.len() > STATUS_EVIDENCE_MAX {
+                return Err(BoardError::invalid(
+                    "evidence",
+                    format!("at most {STATUS_EVIDENCE_MAX} references"),
+                ));
             }
-            BOARD_TOOL_CONVERT_CHAT => {
-                let args: ConvertArgs = parse_args(arguments)?;
-                claimed_self(&context, "taskId", args.task_id.as_deref())?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let task_id =
-                    context
-                        .task_id
-                        .clone()
-                        .ok_or_else(|| BoardError::NotConvertible {
-                            reason: "Only an ordinary chat can become a ticket's working chat."
-                                .into(),
-                        })?;
-                let receipt = self
-                    .board_convert_chat(
-                        caller,
-                        BoardConvertChatRequest {
-                            request_id: args.request_id,
-                            task_id,
-                            title: args.title,
-                            description: args.description,
-                            implementation: args.implementation,
-                            review: args.review,
-                            completion: args.completion,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
-            }
-            BOARD_TOOL_REVIEW_START => {
-                let args: ReviewStartArgs = parse_args(arguments)?;
-                // A worker submits its own ticket by default; A5 authorizes
-                // the working chat and ties checks to the captured snapshot.
-                let work_item_id = args
-                    .work_item_id
-                    .or_else(|| {
-                        context
-                            .ticket
-                            .as_ref()
-                            .map(|ticket| ticket.work_item_id.clone())
-                    })
-                    .ok_or_else(|| {
-                        BoardError::invalid("workItemId", "name the ticket to review")
-                    })?;
-                if args.checks.len() > REVIEW_REPORTS_MAX
-                    || args.evidence.len() > REVIEW_REPORTS_MAX
-                {
-                    return Err(BoardError::invalid(
-                        "checks",
-                        format!(
-                            "report at most {REVIEW_REPORTS_MAX} checks and {REVIEW_REPORTS_MAX} evidence references"
-                        ),
-                    ));
-                }
-                if args
-                    .summary
-                    .as_ref()
-                    .is_some_and(|summary| summary.chars().count() > STATUS_SUMMARY_CHARS)
-                {
-                    return Err(BoardError::invalid(
-                        "summary",
-                        format!("use at most {STATUS_SUMMARY_CHARS} characters"),
-                    ));
-                }
-                let receipt = self
-                    .board_review_start(
-                        caller,
-                        BoardReviewStartRequest {
-                            request_id: args.request_id,
-                            work_item_id,
-                            execution_generation: args.execution_generation,
-                            profile: args.profile,
-                            checks: args.checks,
-                            summary: args.summary,
+            let receipt = self
+                .board_set_status(
+                    caller,
+                    BoardSetStatusRequest {
+                        request_id: args.request_id,
+                        work_item_id: args.work_item_id,
+                        expected_revision: args.expected_revision,
+                        execution_generation: args.execution_generation,
+                        report: BoardStatusReport {
+                            kind: args.kind,
+                            summary: summary.into(),
                             evidence: args.evidence,
                         },
-                    )
-                    .await?;
-                tool_output(&receipt)
-            }
-            BOARD_TOOL_REVIEW_STATUS => {
-                let args: ReviewStatusArgs = parse_args(arguments)?;
-                let own_run = context
-                    .ticket
-                    .as_ref()
-                    .and_then(|ticket| ticket.review_run_id.clone());
-                let (work_item_id, review_run_id) = match (args.work_item_id, args.review_run_id) {
-                    (None, None) if context.audience == BoardToolAudience::Reviewer => {
-                        (None, own_run)
-                    }
-                    (None, None) => {
-                        return Err(BoardError::invalid(
-                            "workItemId",
-                            "name a ticket (workItemId) or a review run (reviewRunId)",
-                        ));
-                    }
-                    other => other,
-                };
-                let status = self.board_review_status(
-                    caller,
-                    BoardReviewStatusRequest {
-                        work_item_id,
-                        review_run_id,
                     },
-                )?;
-                tool_output(&status)
-            }
-            BOARD_TOOL_REVIEW_CANCEL => {
-                let args: ReviewCancelArgs = parse_args(arguments)?;
-                let receipt = self
-                    .board_review_cancel(
-                        caller,
-                        BoardReviewCancelRequest {
-                            request_id: args.request_id,
-                            review_run_id: args.review_run_id,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
-            }
-            BOARD_TOOL_REVIEW_SUBMIT => {
-                let args: ReviewSubmitArgs = parse_args(arguments)?;
-                // The run defaults to this reviewer's recorded run; A5 then
-                // authorizes by that record (only its exact reviewer chat).
-                let review_run_id = args
-                    .review_run_id
-                    .clone()
-                    .or_else(|| {
-                        context
-                            .ticket
-                            .as_ref()
-                            .and_then(|ticket| ticket.review_run_id.clone())
-                    })
-                    .ok_or_else(|| BoardError::NotAuthorized {
-                        reason: "This chat has no recorded review run to submit for.".into(),
-                    })?;
-                if args.summary.trim().is_empty()
-                    || args.summary.chars().count() > REVIEW_SUMMARY_CHARS
-                {
-                    return Err(BoardError::invalid(
-                        "summary",
-                        format!("write 1-{REVIEW_SUMMARY_CHARS} characters"),
-                    ));
-                }
-                if args.findings.len() > REVIEW_FINDINGS_MAX {
-                    return Err(BoardError::invalid(
-                        "findings",
-                        format!("at most {REVIEW_FINDINGS_MAX} findings"),
-                    ));
-                }
-                let receipt = self
-                    .board_review_submit(
-                        caller,
-                        BoardReviewSubmitRequest {
-                            request_id: args.request_id,
-                            review_run_id,
-                            verdict: args.verdict,
-                            basis_packet_hash: args.basis_packet_hash,
-                            findings: args.findings,
-                            summary: args.summary,
-                        },
-                    )
-                    .await?;
-                tool_output(&receipt)
-            }
-            BOARD_TOOL_CREATE_SIDE_CHAT => {
-                let args: SideChatArgs = parse_args(arguments)?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let caller_task_id =
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_convert_chat_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ConvertArgs = parse_args(arguments)?;
+            claimed_self(&context, "taskId", args.task_id.as_deref())?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let task_id = context
+                .task_id
+                .clone()
+                .ok_or_else(|| BoardError::NotConvertible {
+                    reason: "Only an ordinary chat can become a ticket's working chat.".into(),
+                })?;
+            let receipt = self
+                .board_convert_chat(
+                    caller,
+                    BoardConvertChatRequest {
+                        request_id: args.request_id,
+                        task_id,
+                        title: args.title,
+                        description: args.description,
+                        implementation: args.implementation,
+                        review: args.review,
+                        completion: args.completion,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_review_start_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ReviewStartArgs = parse_args(arguments)?;
+            // A worker submits its own ticket by default; A5 authorizes
+            // the working chat and ties checks to the captured snapshot.
+            let work_item_id = args
+                .work_item_id
+                .or_else(|| {
                     context
-                        .task_id
-                        .clone()
-                        .ok_or_else(|| BoardError::InvalidRole {
-                            operation: tool.into(),
-                            reason: "Only chats create side chats.".into(),
-                            allowed: Vec::new(),
-                        })?;
-                let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
-                if args
-                    .prompt
-                    .as_ref()
-                    .is_some_and(|prompt| prompt.chars().count() > PROMPT_CHARS)
-                {
-                    return Err(BoardError::invalid(
-                        "prompt",
-                        format!("use at most {PROMPT_CHARS} characters"),
-                    ));
-                }
-                let created = self
-                    .board_create_side_chat(
-                        caller,
-                        BoardCreateSideChatRequest {
-                            request_id: args.request_id,
-                            caller_task_id,
-                            context: mode,
-                            title: args.title,
-                            prompt: args.prompt,
-                            start: args.start,
-                            ticket: args.ticket.map(Into::into),
-                            execution: args.execution,
-                        },
-                    )
-                    .await?;
-                tool_output(&created)
+                        .ticket
+                        .as_ref()
+                        .map(|ticket| ticket.work_item_id.clone())
+                })
+                .ok_or_else(|| BoardError::invalid("workItemId", "name the ticket to review"))?;
+            if args.checks.len() > REVIEW_REPORTS_MAX || args.evidence.len() > REVIEW_REPORTS_MAX {
+                return Err(BoardError::invalid(
+                    "checks",
+                    format!(
+                        "report at most {REVIEW_REPORTS_MAX} checks and {REVIEW_REPORTS_MAX} evidence references"
+                    ),
+                ));
             }
-            BOARD_TOOL_CREATE_MAIN_CHAT => {
-                let args: MainChatArgs = parse_args(arguments)?;
-                claimed_self(&context, "fromTaskId", args.from_task_id.as_deref())?;
-                claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
-                let brief = args
-                    .handoff_brief
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|brief| !brief.is_empty());
-                if context.role == Some(BoardChatRole::Side) && brief.is_none() {
-                    return Err(BoardError::invalid(
-                        "handoffBrief",
-                        "a side chat hands work to a new main chat with a written brief: goal, completed work, relevant files, decisions, constraints and the next step",
-                    ));
-                }
-                if brief.is_some_and(|brief| brief.chars().count() > PROMPT_CHARS) {
-                    return Err(BoardError::invalid(
-                        "handoffBrief",
-                        format!("use at most {PROMPT_CHARS} characters"),
-                    ));
-                }
-                let created = self
-                    .board_create_main_chat(
-                        caller,
-                        BoardCreateMainChatRequest {
-                            request_id: args.request_id,
-                            project_id: args.project_id.unwrap_or(project),
-                            from_task_id: context.task_id.clone(),
-                            handoff_brief: brief.map(str::to_owned),
-                            title: args.title,
-                            start: args.start,
-                            ticket: args.ticket.map(Into::into),
-                            execution: args.execution,
-                        },
-                    )
-                    .await?;
-                tool_output(&created)
+            if args
+                .summary
+                .as_ref()
+                .is_some_and(|summary| summary.chars().count() > STATUS_SUMMARY_CHARS)
+            {
+                return Err(BoardError::invalid(
+                    "summary",
+                    format!("use at most {STATUS_SUMMARY_CHARS} characters"),
+                ));
             }
-            BOARD_TOOL_AUTHORING_CHECKPOINT => {
-                let args: CheckpointArgs = parse_args(arguments)?;
-                let session_id = context.authoring_session_id.clone().ok_or_else(|| {
-                    BoardError::InvalidRole {
+            let receipt = self
+                .board_review_start(
+                    caller,
+                    BoardReviewStartRequest {
+                        request_id: args.request_id,
+                        work_item_id,
+                        execution_generation: args.execution_generation,
+                        profile: args.profile,
+                        checks: args.checks,
+                        summary: args.summary,
+                        evidence: args.evidence,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_review_status_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ReviewStatusArgs = parse_args(arguments)?;
+            let own_run = context
+                .ticket
+                .as_ref()
+                .and_then(|ticket| ticket.review_run_id.clone());
+            let (work_item_id, review_run_id) = match (args.work_item_id, args.review_run_id) {
+                (None, None) if context.audience == BoardToolAudience::Reviewer => (None, own_run),
+                (None, None) => {
+                    return Err(BoardError::invalid(
+                        "workItemId",
+                        "name a ticket (workItemId) or a review run (reviewRunId)",
+                    ));
+                }
+                other => other,
+            };
+            let status = self.board_review_status(
+                caller,
+                BoardReviewStatusRequest {
+                    work_item_id,
+                    review_run_id,
+                },
+            )?;
+            tool_output(&status)
+        })
+    }
+
+    fn board_tool_review_cancel_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        _context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ReviewCancelArgs = parse_args(arguments)?;
+            let receipt = self
+                .board_review_cancel(
+                    caller,
+                    BoardReviewCancelRequest {
+                        request_id: args.request_id,
+                        review_run_id: args.review_run_id,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_review_submit_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: ReviewSubmitArgs = parse_args(arguments)?;
+            // The run defaults to this reviewer's recorded run; A5 then
+            // authorizes by that record (only its exact reviewer chat).
+            let review_run_id = args
+                .review_run_id
+                .clone()
+                .or_else(|| {
+                    context
+                        .ticket
+                        .as_ref()
+                        .and_then(|ticket| ticket.review_run_id.clone())
+                })
+                .ok_or_else(|| BoardError::NotAuthorized {
+                    reason: "This chat has no recorded review run to submit for.".into(),
+                })?;
+            if args.summary.trim().is_empty() || args.summary.chars().count() > REVIEW_SUMMARY_CHARS
+            {
+                return Err(BoardError::invalid(
+                    "summary",
+                    format!("write 1-{REVIEW_SUMMARY_CHARS} characters"),
+                ));
+            }
+            if args.findings.len() > REVIEW_FINDINGS_MAX {
+                return Err(BoardError::invalid(
+                    "findings",
+                    format!("at most {REVIEW_FINDINGS_MAX} findings"),
+                ));
+            }
+            let receipt = self
+                .board_review_submit(
+                    caller,
+                    BoardReviewSubmitRequest {
+                        request_id: args.request_id,
+                        review_run_id,
+                        verdict: args.verdict,
+                        basis_packet_hash: args.basis_packet_hash,
+                        findings: args.findings,
+                        summary: args.summary,
+                    },
+                )
+                .await?;
+            tool_output(&receipt)
+        })
+    }
+
+    fn board_tool_create_side_chat_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: SideChatArgs = parse_args(arguments)?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let caller_task_id =
+                context
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| BoardError::InvalidRole {
+                        operation: tool.into(),
+                        reason: "Only chats create side chats.".into(),
+                        allowed: Vec::new(),
+                    })?;
+            let mode = bound_context(&context, tool, args.context, args.checkpoint_message_id)?;
+            if args
+                .prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.chars().count() > PROMPT_CHARS)
+            {
+                return Err(BoardError::invalid(
+                    "prompt",
+                    format!("use at most {PROMPT_CHARS} characters"),
+                ));
+            }
+            let created = self
+                .board_create_side_chat(
+                    caller,
+                    BoardCreateSideChatRequest {
+                        request_id: args.request_id,
+                        caller_task_id,
+                        context: mode,
+                        title: args.title,
+                        prompt: args.prompt,
+                        start: args.start,
+                        ticket: args.ticket.map(Into::into),
+                        execution: args.execution,
+                    },
+                )
+                .await?;
+            tool_output(&created)
+        })
+    }
+
+    fn board_tool_create_main_chat_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: MainChatArgs = parse_args(arguments)?;
+            claimed_self(&context, "fromTaskId", args.from_task_id.as_deref())?;
+            claimed_self(&context, "callerTaskId", args.caller_task_id.as_deref())?;
+            let brief = args
+                .handoff_brief
+                .as_deref()
+                .map(str::trim)
+                .filter(|brief| !brief.is_empty());
+            if context.role == Some(BoardChatRole::Side) && brief.is_none() {
+                return Err(BoardError::invalid(
+                    "handoffBrief",
+                    "a side chat hands work to a new main chat with a written brief: goal, completed work, relevant files, decisions, constraints and the next step",
+                ));
+            }
+            if brief.is_some_and(|brief| brief.chars().count() > PROMPT_CHARS) {
+                return Err(BoardError::invalid(
+                    "handoffBrief",
+                    format!("use at most {PROMPT_CHARS} characters"),
+                ));
+            }
+            let created = self
+                .board_create_main_chat(
+                    caller,
+                    BoardCreateMainChatRequest {
+                        request_id: args.request_id,
+                        project_id: args.project_id.unwrap_or(project),
+                        from_task_id: context.task_id.clone(),
+                        handoff_brief: brief.map(str::to_owned),
+                        title: args.title,
+                        start: args.start,
+                        ticket: args.ticket.map(Into::into),
+                        execution: args.execution,
+                    },
+                )
+                .await?;
+            tool_output(&created)
+        })
+    }
+
+    fn board_tool_authoring_checkpoint_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        tool: &'a str,
+        _project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: CheckpointArgs = parse_args(arguments)?;
+            let session_id =
+                context
+                    .authoring_session_id
+                    .clone()
+                    .ok_or_else(|| BoardError::InvalidRole {
                         operation: tool.into(),
                         reason: "Only a ticket discussion keeps a draft checkpoint.".into(),
                         allowed: Vec::new(),
-                    }
-                })?;
-                if args
-                    .session_id
-                    .as_ref()
-                    .is_some_and(|given| given != &session_id)
-                {
-                    return Err(BoardError::NotAuthorized {
-                        reason: format!(
-                            "This discussion can only checkpoint itself ({session_id})."
-                        ),
-                    });
+                    })?;
+            if args
+                .session_id
+                .as_ref()
+                .is_some_and(|given| given != &session_id)
+            {
+                return Err(BoardError::NotAuthorized {
+                    reason: format!("This discussion can only checkpoint itself ({session_id})."),
+                });
+            }
+            let session = self
+                .board_authoring_checkpoint(
+                    caller,
+                    BoardAuthoringCheckpointRequest {
+                        session_id,
+                        expected_version: args.expected_version,
+                        proposal: args.proposal,
+                    },
+                )
+                .await?;
+            // The private runtime binding never leaves the engine.
+            let mut session = session;
+            session.runtime_binding = None;
+            tool_output(&session)
+        })
+    }
+
+    fn board_tool_issue_search_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        _context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: IssueSearchArgs = parse_args(arguments)?;
+            let project_id = args.project_id.unwrap_or(project);
+            let Some(source_id) = args.source_id else {
+                let sources = self
+                    .board_issue_sources(caller, BoardIssueSourcesRequest { project_id })
+                    .await?;
+                let mut value = tool_output(&sources)?;
+                if let Some(object) = value.as_object_mut() {
+                    object.insert(
+                        "next".into(),
+                        json!("Pass one sources[].id as sourceId to search its issues."),
+                    );
                 }
-                let session = self
-                    .board_authoring_checkpoint(
-                        caller,
-                        BoardAuthoringCheckpointRequest {
-                            session_id,
-                            expected_version: args.expected_version,
-                            proposal: args.proposal,
-                        },
-                    )
-                    .await?;
-                // The private runtime binding never leaves the engine.
-                let mut session = session;
-                session.runtime_binding = None;
-                tool_output(&session)
-            }
-            BOARD_TOOL_ISSUE_SEARCH => {
-                let args: IssueSearchArgs = parse_args(arguments)?;
-                let project_id = args.project_id.unwrap_or(project);
-                let Some(source_id) = args.source_id else {
-                    let sources = self
-                        .board_issue_sources(caller, BoardIssueSourcesRequest { project_id })
-                        .await?;
-                    let mut value = tool_output(&sources)?;
-                    if let Some(object) = value.as_object_mut() {
-                        object.insert(
-                            "next".into(),
-                            json!("Pass one sources[].id as sourceId to search its issues."),
-                        );
-                    }
-                    return Ok(value);
-                };
-                let limit = bounded_limit("limit", args.limit, ISSUES_MAX, ISSUES_MAX)?;
-                let page = self
-                    .board_issue_search(
-                        caller,
-                        BoardIssueSearchRequest {
-                            project_id,
-                            source_id,
-                            query: args.query,
-                            state: args.state,
-                            labels: args.labels,
-                            assignee: args.assignee,
-                            cursor: args.cursor,
-                            limit: Some(limit),
-                            refresh: args.refresh,
-                        },
-                    )
-                    .await?;
-                Ok(untrusted(tool_output(&page)?))
-            }
-            BOARD_TOOL_ISSUE_IMPORT => {
-                let args: IssueImportArgs = parse_args(arguments)?;
-                let start = match args.start {
-                    Some(start) => Some(BoardImportStart {
-                        destination: bound_destination(&context, start.destination)?,
-                        execution: start.execution,
-                    }),
-                    None => None,
-                };
-                let receipt = self
-                    .board_issue_import(
-                        caller,
-                        BoardIssueImportRequest {
-                            request_id: args.request_id,
-                            project_id: args.project_id.unwrap_or(project),
-                            source_id: args.source_id,
-                            number: args.number,
-                            additions: args.additions,
-                            comment_ids: args.comment_ids,
-                            start,
-                            // Agents import without a UI preview step.
-                            previewed_updated_at: None,
-                        },
-                    )
-                    .await?;
-                Ok(untrusted(tool_output(&receipt)?))
-            }
-            _ => Err(BoardError::invalid("tool", "not a board tool")),
-        }
+                return Ok(value);
+            };
+            let limit = bounded_limit("limit", args.limit, ISSUES_MAX, ISSUES_MAX)?;
+            let page = self
+                .board_issue_search(
+                    caller,
+                    BoardIssueSearchRequest {
+                        project_id,
+                        source_id,
+                        query: args.query,
+                        state: args.state,
+                        labels: args.labels,
+                        assignee: args.assignee,
+                        cursor: args.cursor,
+                        limit: Some(limit),
+                        refresh: args.refresh,
+                    },
+                )
+                .await?;
+            Ok(untrusted(tool_output(&page)?))
+        })
+    }
+
+    fn board_tool_issue_import_call<'a>(
+        &'a self,
+        caller: &'a BoardCaller,
+        context: BoardRuntimeContext,
+        _tool: &'a str,
+        project: String,
+        arguments: Value,
+    ) -> BoardToolFuture<'a> {
+        Box::pin(async move {
+            let args: IssueImportArgs = parse_args(arguments)?;
+            let start = match args.start {
+                Some(start) => Some(BoardImportStart {
+                    destination: bound_destination(&context, start.destination)?,
+                    execution: start.execution,
+                }),
+                None => None,
+            };
+            let receipt = self
+                .board_issue_import(
+                    caller,
+                    BoardIssueImportRequest {
+                        request_id: args.request_id,
+                        project_id: args.project_id.unwrap_or(project),
+                        source_id: args.source_id,
+                        number: args.number,
+                        additions: args.additions,
+                        comment_ids: args.comment_ids,
+                        start,
+                        // Agents import without a UI preview step.
+                        previewed_updated_at: None,
+                    },
+                )
+                .await?;
+            Ok(untrusted(tool_output(&receipt)?))
+        })
     }
 
     /// Diagnostics for `BoardToolCatalog`: the chat's current board context,

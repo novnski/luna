@@ -348,16 +348,15 @@ impl EngineRpc {
 
     pub(super) fn review_store_packet(&self, run_id: &str, text: &str) -> BoardResult<()> {
         let key = format!("{PACKET_KEY}{run_id}");
-        match self.board_write_permit()? {
-            Some(permit) => self
+        // The store decides whether it needs the permit (see `board_kv_save`).
+        let permit = self.board_write_permit()?;
+        match (self.store.save_snapshot(&key, text.as_bytes()), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => self
                 .store
-                .save_snapshot_admitted(permit.ticket(), &key, text.as_bytes())
-                .map_err(storage),
-            None => self
-                .store
-                .save_snapshot(&key, text.as_bytes())
-                .map_err(storage),
+                .save_snapshot_admitted(permit.ticket(), &key, text.as_bytes()),
+            (result, _) => result,
         }
+        .map_err(storage)
     }
 
     pub(super) fn review_load_packet(&self, run_id: &str) -> BoardResult<Option<String>> {
