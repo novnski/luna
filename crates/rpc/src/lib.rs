@@ -40,6 +40,61 @@ pub mod methods {
     pub const PREVIEW_AUTOMATION: &str = "PreviewAutomation";
     pub const MUTATE_AUTOMATION: &str = "MutateAutomation";
     pub const GET_AUTOMATION_MUTATION_RECEIPT: &str = "GetAutomationMutationReceipt";
+    // Project board (docs/design/project-board/pb0-contract.md). One engine
+    // dispatcher serves every `Board*` method; all are owner-local (the
+    // project's owning host) and never relay-forwarded in PB-0.
+    pub const BOARD_LIST: &str = "BoardList";
+    pub const BOARD_READ: &str = "BoardRead";
+    pub const BOARD_CREATE: &str = "BoardCreate";
+    pub const BOARD_UPDATE: &str = "BoardUpdate";
+    pub const BOARD_RANK: &str = "BoardRank";
+    pub const BOARD_ARCHIVE: &str = "BoardArchive";
+    pub const BOARD_EVENTS: &str = "BoardEvents";
+    /// Stream of `BoardWatchFrame` for a scope (first frame immediately).
+    pub const BOARD_WATCH: &str = "BoardWatch";
+    pub const BOARD_GET_RECEIPT: &str = "BoardGetReceipt";
+    pub const BOARD_MOVE: &str = "BoardMove";
+    pub const BOARD_START: &str = "BoardStart";
+    pub const BOARD_START_BATCH: &str = "BoardStartBatch";
+    pub const BOARD_CONTROL: &str = "BoardControl";
+    pub const BOARD_SET_STATUS: &str = "BoardSetStatus";
+    pub const BOARD_SEND_UPDATE: &str = "BoardSendUpdate";
+    pub const BOARD_EXECUTION_OPTIONS: &str = "BoardExecutionOptions";
+    pub const BOARD_RESOLVE_SETTINGS: &str = "BoardResolveSettings";
+    pub const BOARD_CHAT_IDENTITY: &str = "BoardChatIdentity";
+    pub const BOARD_CHAT_BADGES: &str = "BoardChatBadges";
+    pub const BOARD_CREATE_SIDE_CHAT: &str = "BoardCreateSideChat";
+    pub const BOARD_CREATE_MAIN_CHAT: &str = "BoardCreateMainChat";
+    pub const BOARD_CONVERT_CHAT: &str = "BoardConvertChat";
+    pub const BOARD_LINK_CHAT: &str = "BoardLinkChat";
+    pub const BOARD_NAVIGATION: &str = "BoardNavigation";
+    pub const BOARD_REVIEW_START: &str = "BoardReviewStart";
+    pub const BOARD_REVIEW_STATUS: &str = "BoardReviewStatus";
+    pub const BOARD_REVIEW_CANCEL: &str = "BoardReviewCancel";
+    pub const BOARD_REVIEW_SUBMIT: &str = "BoardReviewSubmit";
+    pub const BOARD_OUTCOMES: &str = "BoardOutcomes";
+    pub const BOARD_AUTHORING_START: &str = "BoardAuthoringStart";
+    pub const BOARD_AUTHORING_SEND: &str = "BoardAuthoringSend";
+    pub const BOARD_AUTHORING_READ: &str = "BoardAuthoringRead";
+    /// Stream of `BoardAuthoringPage` frames for one authoring session.
+    pub const BOARD_AUTHORING_WATCH: &str = "BoardAuthoringWatch";
+    pub const BOARD_AUTHORING_CHECKPOINT: &str = "BoardAuthoringCheckpoint";
+    pub const BOARD_AUTHORING_INTERRUPT: &str = "BoardAuthoringInterrupt";
+    pub const BOARD_AUTHORING_CLOSE: &str = "BoardAuthoringClose";
+    pub const BOARD_AUTHORING_DISCARD: &str = "BoardAuthoringDiscard";
+    pub const BOARD_AUTHORING_LIST: &str = "BoardAuthoringList";
+    pub const BOARD_ISSUE_SOURCES: &str = "BoardIssueSources";
+    pub const BOARD_ISSUE_SEARCH: &str = "BoardIssueSearch";
+    pub const BOARD_ISSUE_DETAIL: &str = "BoardIssueDetail";
+    pub const BOARD_ISSUE_COMMENTS: &str = "BoardIssueComments";
+    pub const BOARD_ISSUE_IMPORT: &str = "BoardIssueImport";
+    pub const BOARD_ISSUE_LINK: &str = "BoardIssueLink";
+    pub const BOARD_ISSUE_UNLINK: &str = "BoardIssueUnlink";
+    pub const BOARD_SET_DEPENDENCY: &str = "BoardSetDependency";
+    pub const BOARD_ISSUE_WRITEBACK_PREVIEW: &str = "BoardIssueWritebackPreview";
+    pub const BOARD_ISSUE_WRITEBACK: &str = "BoardIssueWriteback";
+    /// Diagnostics: the board tools actually attached to a chat's runs.
+    pub const BOARD_TOOL_CATALOG: &str = "BoardToolCatalog";
     // L29: only the local IPC owner can administer pairings and sessions.
     // Redeem/authenticate are handled by the guarded remote dispatch itself.
     pub const CREATE_REMOTE_PAIRING: &str = "CreateRemotePairing";
@@ -351,8 +406,109 @@ pub mod methods {
     /// Download + apply the newest release on the target device (symlink-managed
     /// installs; the service restart is scheduled after the reply flushes).
     pub const APPLY_UPDATE: &str = "ApplyUpdate";
+    /// Every board method (the engine routes these to one dispatcher).
+    pub const BOARD_METHODS: &[&str] = &[
+        BOARD_LIST,
+        BOARD_READ,
+        BOARD_CREATE,
+        BOARD_UPDATE,
+        BOARD_RANK,
+        BOARD_ARCHIVE,
+        BOARD_EVENTS,
+        BOARD_WATCH,
+        BOARD_GET_RECEIPT,
+        BOARD_MOVE,
+        BOARD_START,
+        BOARD_START_BATCH,
+        BOARD_CONTROL,
+        BOARD_SET_STATUS,
+        BOARD_SEND_UPDATE,
+        BOARD_EXECUTION_OPTIONS,
+        BOARD_RESOLVE_SETTINGS,
+        BOARD_CHAT_IDENTITY,
+        BOARD_CHAT_BADGES,
+        BOARD_CREATE_SIDE_CHAT,
+        BOARD_CREATE_MAIN_CHAT,
+        BOARD_CONVERT_CHAT,
+        BOARD_LINK_CHAT,
+        BOARD_NAVIGATION,
+        BOARD_REVIEW_START,
+        BOARD_REVIEW_STATUS,
+        BOARD_REVIEW_CANCEL,
+        BOARD_REVIEW_SUBMIT,
+        BOARD_OUTCOMES,
+        BOARD_AUTHORING_START,
+        BOARD_AUTHORING_SEND,
+        BOARD_AUTHORING_READ,
+        BOARD_AUTHORING_WATCH,
+        BOARD_AUTHORING_CHECKPOINT,
+        BOARD_AUTHORING_INTERRUPT,
+        BOARD_AUTHORING_CLOSE,
+        BOARD_AUTHORING_DISCARD,
+        BOARD_AUTHORING_LIST,
+        BOARD_ISSUE_SOURCES,
+        BOARD_ISSUE_SEARCH,
+        BOARD_ISSUE_DETAIL,
+        BOARD_ISSUE_COMMENTS,
+        BOARD_ISSUE_IMPORT,
+        BOARD_ISSUE_LINK,
+        BOARD_ISSUE_UNLINK,
+        BOARD_SET_DEPENDENCY,
+        BOARD_ISSUE_WRITEBACK_PREVIEW,
+        BOARD_ISSUE_WRITEBACK,
+        BOARD_TOOL_CATALOG,
+    ];
     /// Inventory of shipped RPC names. Remote policy treats unlisted names as unknown.
     pub const ALL: &[&str] = &[
+        BOARD_LIST,
+        BOARD_READ,
+        BOARD_CREATE,
+        BOARD_UPDATE,
+        BOARD_RANK,
+        BOARD_ARCHIVE,
+        BOARD_EVENTS,
+        BOARD_WATCH,
+        BOARD_GET_RECEIPT,
+        BOARD_MOVE,
+        BOARD_START,
+        BOARD_START_BATCH,
+        BOARD_CONTROL,
+        BOARD_SET_STATUS,
+        BOARD_SEND_UPDATE,
+        BOARD_EXECUTION_OPTIONS,
+        BOARD_RESOLVE_SETTINGS,
+        BOARD_CHAT_IDENTITY,
+        BOARD_CHAT_BADGES,
+        BOARD_CREATE_SIDE_CHAT,
+        BOARD_CREATE_MAIN_CHAT,
+        BOARD_CONVERT_CHAT,
+        BOARD_LINK_CHAT,
+        BOARD_NAVIGATION,
+        BOARD_REVIEW_START,
+        BOARD_REVIEW_STATUS,
+        BOARD_REVIEW_CANCEL,
+        BOARD_REVIEW_SUBMIT,
+        BOARD_OUTCOMES,
+        BOARD_AUTHORING_START,
+        BOARD_AUTHORING_SEND,
+        BOARD_AUTHORING_READ,
+        BOARD_AUTHORING_WATCH,
+        BOARD_AUTHORING_CHECKPOINT,
+        BOARD_AUTHORING_INTERRUPT,
+        BOARD_AUTHORING_CLOSE,
+        BOARD_AUTHORING_DISCARD,
+        BOARD_AUTHORING_LIST,
+        BOARD_ISSUE_SOURCES,
+        BOARD_ISSUE_SEARCH,
+        BOARD_ISSUE_DETAIL,
+        BOARD_ISSUE_COMMENTS,
+        BOARD_ISSUE_IMPORT,
+        BOARD_ISSUE_LINK,
+        BOARD_ISSUE_UNLINK,
+        BOARD_SET_DEPENDENCY,
+        BOARD_ISSUE_WRITEBACK_PREVIEW,
+        BOARD_ISSUE_WRITEBACK,
+        BOARD_TOOL_CATALOG,
         CREATE_REMOTE_PAIRING,
         LIST_REMOTE_PAIRINGS,
         REVOKE_REMOTE_PAIRING,
