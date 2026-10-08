@@ -52,7 +52,7 @@ use sha2::{Digest, Sha256};
 
 const PROJECT: &str = "fixture-board";
 const WIDTH: f32 = 1280.0;
-const HEIGHT: f32 = 1000.0;
+const HEIGHT: f32 = 1100.0;
 const TITLE: &str = "Show open drafts on the Board";
 
 type Win = WindowHandle<shell::Shell>;

@@ -392,6 +392,18 @@ impl AuthoringPane {
         }));
     }
 
+    /// Take a session from an RPC reply unless a newer watch frame already
+    /// replaced it (versions only grow while the session is open).
+    fn adopt(&mut self, session: TicketAuthoringSession) {
+        if self
+            .session
+            .as_ref()
+            .is_none_or(|current| session.version >= current.version)
+        {
+            self.session = Some(session);
+        }
+    }
+
     fn state(&self) -> Option<AuthoringState> {
         self.session.as_ref().map(|session| session.state)
     }
@@ -440,10 +452,9 @@ impl AuthoringPane {
             this.update(cx, |pane, cx| {
                 pane.sending = false;
                 match result {
-                    Ok(session) => {
-                        pane.working = true;
-                        pane.session = Some(session);
-                    }
+                    // The watch reports the turn; a reply can be older
+                    // than a frame that already arrived.
+                    Ok(session) => pane.adopt(session),
                     Err(error) => {
                         pane.pending = None;
                         pane.notice = Some(error.message());
@@ -563,7 +574,7 @@ impl AuthoringPane {
                 pane.busy = false;
                 match result {
                     Ok(session) => {
-                        pane.session = Some(session);
+                        pane.adopt(session);
                         pane.notice = None;
                     }
                     Err(error) => pane.notice = Some(error.message()),
