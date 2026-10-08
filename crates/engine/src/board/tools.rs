@@ -159,7 +159,7 @@ fn audience_tools(context: &BoardRuntimeContext) -> Vec<&'static str> {
     BOARD_TOOL_NAMES
         .iter()
         .copied()
-        .filter(|name| allowed(*name))
+        .filter(|name| allowed(name))
         .collect()
 }
 
