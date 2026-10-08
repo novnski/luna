@@ -27,9 +27,10 @@ pub use registry::{
     ReconnectState, RegistryClient, RegistryEvent, RegistryTransport, RegistryTuning,
 };
 pub use store::{
-    AutomationAttentionSource, DocsStore, LocalExecutableAuthority, LocalExecutableChange,
-    LocalExecutableKind, StoreError, StoredTaskRecovery, TaskCommandBegin, TaskCommandBeginKind,
-    TaskRecoveryExpectation, TaskRecoveryTransition, WorkspaceMaterializationFence,
-    WorkspaceRepairFence,
+    AutomationAttentionSource, BoardCommit, BoardEventQuery, BoardItemWrite, BoardListCursor,
+    BoardListQuery, BoardRankPlacement, BoardRowWrite, DocsStore, LocalExecutableAuthority,
+    LocalExecutableChange, LocalExecutableKind, StoreError, StoredTaskRecovery, TaskCommandBegin,
+    TaskCommandBeginKind, TaskRecoveryExpectation, TaskRecoveryTransition,
+    WorkspaceMaterializationFence, WorkspaceRepairFence,
 };
 pub use types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};

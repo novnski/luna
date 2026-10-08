@@ -46,7 +46,10 @@ const CHUNK: usize = 64 * 1024;
 // that immutable snapshot so recovery still detects later configuration edits.
 // v18 preserves automation definitions, idempotent mutation receipts and
 // occurrence claims together, including deleted and blocked states.
-const CURRENT_SCHEMA: i64 = 18;
+// v19 preserves the project board: tickets, key counters, receipts, the
+// event journal and every linked record (links, issues, launches, outcomes,
+// intents, review runs, authoring drafts and dependencies).
+const CURRENT_SCHEMA: i64 = 19;
 
 // Serialized legacy labels are part of archive validation. The credentials/
 // directory, including the new device-local key, remains outside the allowlist.
@@ -1201,6 +1204,19 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         (18, "automations"),
         (18, "automation_mutations"),
         (18, "automation_runs"),
+        (19, "board_projects"),
+        (19, "board_items"),
+        (19, "board_mutations"),
+        (19, "board_events"),
+        (19, "board_task_links"),
+        (19, "board_issue_refs"),
+        (19, "board_launches"),
+        (19, "board_outcomes"),
+        (19, "board_intents"),
+        (19, "board_review_runs"),
+        (19, "board_authoring_sessions"),
+        (19, "board_authoring_entries"),
+        (19, "board_dependencies"),
     ] {
         if schema_version >= introduced && !has_table(conn, table)? {
             return Err(BackupError::Invalid(format!(

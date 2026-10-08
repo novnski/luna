@@ -22,6 +22,11 @@ use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
 
 mod automations;
 pub use automations::AutomationAttentionSource;
+mod board;
+pub use board::{
+    BoardCommit, BoardEventQuery, BoardItemWrite, BoardListCursor, BoardListQuery,
+    BoardRankPlacement, BoardRowWrite,
+};
 mod project_commands;
 mod workspace_repair;
 pub use workspace_repair::{
@@ -59,6 +64,17 @@ pub enum StoreError {
     AutomationConflict,
     #[error("maximum of 1000 active automation definitions reached")]
     AutomationLimit,
+    #[error("board request id was reused with different content")]
+    BoardRequestConflict,
+    #[error("board ticket {work_item_id} changed (now revision {current_revision})")]
+    BoardRevisionConflict {
+        work_item_id: String,
+        current_revision: u64,
+    },
+    #[error("board ticket {0} does not exist")]
+    BoardNotFound(String),
+    #[error("board record conflict: {0}")]
+    BoardConflict(String),
     #[error("attention projection revision changed before the requested mutation")]
     AttentionRevisionConflict,
     #[error("attention mutation command id was reused with different content")]
@@ -337,6 +353,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE task_execution_lineage ADD COLUMN configuration BLOB;",
     // v18 — host-owned automation definitions and atomic occurrence claims.
     include_str!("migrations/automations.sql"),
+    // v19 — project board tickets, receipts, journal and linked records.
+    include_str!("migrations/board.sql"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,6 +556,9 @@ pub struct DocsStore {
     // Other mutators on a guarded store fail closed on the read-only conn;
     // they still need admitted APIs before product wiring is possible.
     write_epoch: Option<WriteEpoch>,
+    // Bumped after every committed board mutation so in-process watchers wake
+    // without polling the journal.
+    board_changes: tokio::sync::watch::Sender<u64>,
     // Last field: release the path reservation after both connections close.
     _registration: OpenRegistration,
 }
@@ -603,6 +624,7 @@ impl DocsStore {
             activity_gate: Mutex::new(()),
             failed_publications: Mutex::new(HashSet::new()),
             write_epoch,
+            board_changes: tokio::sync::watch::channel(0).0,
             _registration: registration,
         })
     }

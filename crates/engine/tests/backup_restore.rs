@@ -79,7 +79,7 @@ fn automation_tables_survive_encrypted_archive_and_activation() {
     let backup = service(&root)
         .export(&backups.join("automations.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 18);
+    assert_eq!(backup.manifest.databases[0].schema_version, 19);
     let conn = Connection::open(&database).unwrap();
     conn.execute_batch(
         "DELETE FROM automations; DELETE FROM automation_mutations; DELETE FROM automation_runs;",
@@ -282,7 +282,7 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
     let backup = service(&root)
         .backup_now(&backups, 1_700_000_000_000)
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 18);
+    assert_eq!(backup.manifest.databases[0].schema_version, 19);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     service(&root).activate(staged).unwrap();
@@ -553,6 +553,19 @@ fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
         "automations",
         "automation_mutations",
         "automation_runs",
+        "board_projects",
+        "board_items",
+        "board_mutations",
+        "board_events",
+        "board_task_links",
+        "board_issue_refs",
+        "board_launches",
+        "board_outcomes",
+        "board_intents",
+        "board_review_runs",
+        "board_authoring_sessions",
+        "board_authoring_entries",
+        "board_dependencies",
     ] {
         let (_parent, root, _backups) = fixture();
         fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
@@ -610,6 +623,19 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
          DROP TABLE automation_runs;
          DROP TABLE automation_mutations;
          DROP TABLE automations;
+         DROP TABLE board_projects;
+         DROP TABLE board_items;
+         DROP TABLE board_mutations;
+         DROP TABLE board_events;
+         DROP TABLE board_task_links;
+         DROP TABLE board_issue_refs;
+         DROP TABLE board_launches;
+         DROP TABLE board_outcomes;
+         DROP TABLE board_intents;
+         DROP TABLE board_review_runs;
+         DROP TABLE board_authoring_sessions;
+         DROP TABLE board_authoring_entries;
+         DROP TABLE board_dependencies;
          ALTER TABLE task_command_state DROP COLUMN workspace_repair_revision;
          ALTER TABLE task_command_receipts DROP COLUMN workspace_repair_revision;
          DELETE FROM schema_migrations WHERE version > 9;",
@@ -635,7 +661,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 18);
+    assert_eq!(schema, 19);
 }
 
 #[test]
@@ -888,7 +914,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 18);
+    assert_eq!(backup.manifest.databases[0].schema_version, 19);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1383,7 +1409,7 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 18);
+    assert_eq!(backup.manifest.databases[0].schema_version, 19);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
