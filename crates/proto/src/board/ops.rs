@@ -618,7 +618,7 @@ pub struct BoardReconcileReport {
 // Review (PB-1R)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BoardReviewStartRequest {
     pub request_id: String,
@@ -627,6 +627,16 @@ pub struct BoardReviewStartRequest {
     pub execution_generation: Option<u64>,
     #[serde(default)]
     pub profile: Option<BoardReviewProfile>,
+    /// Checks the implementer ran for its current result (≤ 16). They are
+    /// tied to the snapshot captured when reported.
+    #[serde(default)]
+    pub checks: Vec<super::ReviewCheckReport>,
+    /// Optional implementer summary (untrusted; ≤ 2,000 characters).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Evidence references (PR link, artifacts, documents; ≤ 16).
+    #[serde(default)]
+    pub evidence: Vec<super::BoardEvidenceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

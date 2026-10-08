@@ -4,8 +4,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BoardActor, BoardChatRole, BoardColumn, BoardContextMode, BoardContextRef, BoardDestination,
-    BoardExecutionProfile, BoardFollowUp, BoardPhase, BoardReviewProfile,
+    BoardActor, BoardAttentionKind, BoardChatRole, BoardColumn, BoardContextMode, BoardContextRef,
+    BoardDestination, BoardEvidenceRef, BoardExecutionProfile, BoardFollowUp, BoardPhase,
+    BoardReviewProfile,
 };
 use crate::{CommandReceipt, HarnessId, PermissionMode, ReasoningLevel};
 
@@ -791,6 +792,88 @@ pub struct ReviewRun {
     pub cleanup: ReviewCleanup,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Why the run is unresolved, failed, stale or cancelled (shown with
+    /// Needs attention; never a success claim).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<BoardAttentionKind>,
+    /// Who asked for this pass (the implementer's run, the user, or the
+    /// engine's automatic re-review). Never the reviewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<BoardActor>,
+    /// Normalized request id of the accepted `review_submit` (once-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_request_id: Option<String>,
+    /// The result arrived after the run was cancelled, went stale or its
+    /// generation ended: kept as history, never applied.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub late_result: bool,
+    /// How the engine applied a completed result (once-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ReviewRunOutcome>,
+    /// Implementer-contributed summary (untrusted; never the only evidence).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implementer_summary: Option<String>,
+    /// Evidence the implementer referenced (PR link, artifacts, documents).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<BoardEvidenceRef>,
+    /// `OutcomeReference` ids of the checks reported for this pass; only
+    /// those whose basis equals the reviewed diff hash count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reported_check_ids: Vec<String>,
+    /// The run this pass replaces (stale basis, or a reviewer turn that
+    /// ended without a structured result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    /// Automatic relaunches already spent on this chain (bounded).
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub relaunches: u8,
+}
+
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+
+/// How a completed review result was applied. Recorded once; a restart
+/// retries only the missing delivery, never the decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewRunOutcome {
+    /// Findings returned to the implementer as a durable repair request.
+    RepairRequested {
+        launch_snapshot_id: String,
+        repair_round: u8,
+    },
+    /// Current checks and this review passed: the ticket moved to Done.
+    Completed { execution_generation: u64 },
+    /// Passed, but the completion policy needs a human acceptance.
+    AwaitingAcceptance,
+    /// Blockers remain or the contract cannot be met automatically.
+    NeedsAttention { reason: BoardAttentionKind },
+    /// The ticket's intent or generation changed: kept as history only.
+    Historical,
+}
+
+/// One check the implementer ran for its current result. Agent-reported:
+/// the engine ties it to the snapshot captured when it was reported, and the
+/// reviewer verifies it. A check from another snapshot never counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCheckReport {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Bounded output excerpt or evidence pointer (untrusted text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
