@@ -964,6 +964,7 @@ impl EngineCore {
                 );
                 rpc.start_child_thread_maintenance(self.cleanup_cancel.clone());
                 rpc.start_automation_maintenance(self.cleanup_cancel.clone());
+                rpc.start_board_lifecycle_maintenance(self.cleanup_cancel.clone());
                 *worker = Some((rpc.clone(), handle));
             }
         }

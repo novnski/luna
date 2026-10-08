@@ -294,6 +294,8 @@ pub enum BoardSettingOrigin {
     CatalogDefault,
     /// Reviewer only: no reviewer configured, so the implementation model.
     ImplementationFallback,
+    /// An existing working chat keeps its own configuration.
+    ExistingWorker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,6 +541,87 @@ pub struct BoardExecutionIntent {
     #[serde(default)]
     pub needs_reconcile: bool,
     pub updated_at_ms: i64,
+    /// The `intent_revision` last served by an admitted launch (or by reusing
+    /// an already-active worker). Ready with a newer revision still needs
+    /// admission; an equal one is never dispatched again.
+    #[serde(default)]
+    pub served_intent_revision: u64,
+    /// Delivery of the current generation's launch (`launch_snapshot_id`).
+    #[serde(default)]
+    pub launch_state: BoardLaunchState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_detail: Option<String>,
+    /// Engine boot that sent the current launch: a pending receipt from an
+    /// earlier boot can no longer prove acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_boot_id: Option<String>,
+    /// Why the latest dispatch attempt could not run (shown as Needs
+    /// attention until a new transition clears it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_failure: Option<super::BoardAttentionReason>,
+    /// The start request waiting for admission (destination, overrides and
+    /// the settings frozen when it was accepted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_start: Option<BoardPendingStart>,
+    /// The generation that reached Done (from verified current evidence).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_generation: Option<u64>,
+}
+
+/// Delivery of one launch instruction through the ordinary task command
+/// path. Only an applied receipt correlated with the exact message proves
+/// provider acceptance.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardLaunchState {
+    /// No launch for the current generation.
+    #[default]
+    None,
+    /// Frozen and persisted; the command has not been issued yet.
+    Unsent,
+    /// Command admitted; provider acceptance not yet observed.
+    Pending,
+    Delivered,
+    /// Acceptance can no longer be proven; reconcile by the original
+    /// command/message id before any new send.
+    Unknown,
+    /// The command was refused before reaching the provider.
+    Failed,
+    /// Cancelled before it was sent.
+    Cancelled,
+}
+
+/// A Start/Continue request accepted into the intent and waiting for (or
+/// served by) admission. The caller is recorded as provenance; authority was
+/// checked when the request was accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardPendingStart {
+    pub request_id: String,
+    pub actor: BoardActor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_task_id: Option<String>,
+    /// As requested, and as resolved for this caller (concrete form).
+    pub destination: BoardDestination,
+    pub resolved_destination: BoardDestination,
+    #[serde(default)]
+    pub context: BoardContextMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<BoardExecutionProfile>,
+    #[serde(default)]
+    pub follow_up: BoardFollowUp,
+    /// Settings frozen when accepted (new workers only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<ResolvedExecution>,
+    /// Deferred settings that must be chosen before dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved: Vec<String>,
+    /// A deliberate user-authorized retry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retry: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adopt_latest_brief: bool,
+    pub accepted_at_ms: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -900,6 +983,13 @@ impl BoardExecutionIntent {
             observed_phase: BoardPhase::NotStarted,
             needs_reconcile: false,
             updated_at_ms: now_ms,
+            served_intent_revision: 0,
+            launch_state: BoardLaunchState::None,
+            launch_detail: None,
+            launch_boot_id: None,
+            launch_failure: None,
+            pending_start: None,
+            completed_generation: None,
         }
     }
 }
