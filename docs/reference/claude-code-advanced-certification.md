@@ -1,6 +1,6 @@
 # Claude Code advanced lanes: certification ledger
 
-This ledger covers parity packages CC-13 (workflows, teams, channels and Claude's external sessions) and CC-16 (hosted and device integrations). It is pinned to Claude Code **2.1.286**, binary SHA-256 `75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433`.
+This ledger covers parity packages CC-13 (workflows, teams, channels and Claude's external sessions) and CC-16 (hosted and device integrations). The original evidence is pinned to Claude Code **2.1.286**, binary SHA-256 `75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433`. The two-writer resume check was additionally verified on **2.1.293** on 2026-10-08; that result does not recertify the other rows against the newer binary.
 
 The UI ledger (`crates/ui/src/claude_advanced.rs`, `CLAUDE_ADVANCED_LEDGER`) shows the same rows in Settings → Providers. Keep the two in step.
 
@@ -15,11 +15,11 @@ The UI ledger (`crates/ui/src/claude_advanced.rs`, `CLAUDE_ADVANCED_LEDGER`) sho
 | Externally gated | Needs an account, plan, OS permission or hosted service that LUNA does not embed. |
 | Native Claude Code only | Usable only in Claude Code itself. LUNA offers no embedded control and does not claim support. |
 
-No row was certified by running a model turn. Agents had no isolated login, and the default configuration would write into `~/.claude*`. Live acceptance steps for the lead are in the cc13 evidence (`live-acceptance.md`).
+No row below requires a model turn for its recorded certification. The original probes used isolated configuration. The 2026-10-08 two-writer check used an initialize-only, nonpersistent session with the normal provider home, disabled hooks and MCP, and a wrapper that refused any model-turn launch.
 
 ## CC-13 — workflows, teams, channels, external sessions
 
-**Decision (2026-10-08):** Claude's native workflow lanes are not pursued further. Their live QA, a workflow Stop and post-turn workflow approvals are dropped; LUNA will build its own workflow feature later. The decoding and display described below stay as they are. Two-writer protection on resume is the only open live check in this section.
+**Decision (2026-10-08):** Claude's native workflow lanes are not pursued further. Their live QA, a workflow Stop and post-turn workflow approvals are dropped; LUNA will build its own workflow feature later. The decoding and display described below stay as they are. The remaining two-writer resume check was completed in the 2026-10-08 audit.
 
 | Lane | Status | LUNA behaviour | Evidence |
 | --- | --- | --- | --- |
@@ -34,7 +34,7 @@ No row was certified by running a model turn. Agents had no isolated login, and 
 | Channels | Not enabled by LUNA | LUNA never passes the hidden `--channels` or `--dangerously-load-development-channels` flags. In stream-json without `--replay-user-messages`, inbound channel prompts are not echoed, so LUNA neither displays nor attributes them. | Binary flag list; live 2.1.228 capture (task-notification prompt not echoed) |
 | Cross-session peer messages | Unsupported in LUNA | LUNA-launched Claude children drop the messaging and bridge identity variables a parent Claude session exports (`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_JOB_DIR`). A LUNA chat therefore never joins a foreign session's peer bridge. Non-human prompts never become human permission. | Harness `launched_claude_child_drops_inherited_session_identity` |
 | Claude sessions outside LUNA (`claude agents --json`) | Certified (read-only) | Settings → Providers lists background and interactive sessions read-only, and marks LUNA's own print-mode processes. LUNA never attaches to, stops, removes or respawns them. An unreadable listing shows as unavailable, never as "no sessions". | `probes/bg/bg-lifecycle.json`, `probes/bg/print-session-listing.json`; harness `external_session_listing_maps_real_rows_and_explicit_unavailability`; fixture PNG 02/03 |
-| Two-writer protection on resume | Supported · live QA pending | A cold `--resume` checks the listing first. If another live, non-LUNA process holds the same session, the run is refused before launch (`RejectedBeforeAcceptance`) with the native handoff (`claude stop <id>`). LUNA's own children and stopped rows never block. The check fails open when the listing is unavailable. | Harness `resume_*` tests |
+| Two-writer protection on resume | Certified | A cold `--resume` checks the listing in the configured provider home first. If another live, non-LUNA process holds the same session, the run is refused before launch (`RejectedBeforeAcceptance`). History rewinds use the same guard. LUNA's own children and stopped rows never block. The check remains best effort and fails open when the listing is unavailable. | Harness `claude_coordination` and `claude_history`; [live 2.1.293 receipt](../audits/2026-10-08-claude-review/evidence/claude-writer-guard.json); repeat with `scripts/qa-claude-writer-guard.py` after building its harness example |
 | Remote agents (`remote_agent`) | Externally gated | These decode as a remote-agent kind when observed. They need Claude cloud access. | Binary task-type literals |
 
 ### Probe facts (no model turn)

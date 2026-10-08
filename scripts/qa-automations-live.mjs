@@ -8,16 +8,44 @@ import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
-const base = path.join(root, 'target/qa/harness-evolution/slice-5/native');
-const bundle = path.join(root, 'target/luna-macos-dev/LUNA QA Automations.app');
-const port = 59813;
+const defaultBase = path.join(root, 'target/qa/harness-evolution/slice-5/native');
+const identityKeys = ['LUNA_DEV_APP_NAME', 'LUNA_DEV_BUNDLE_ID', 'LUNA_DEV_IPC_PORT', 'LUNA_DEV_DATA_DIR'];
+const suppliedIdentity = identityKeys.filter(key => Object.hasOwn(process.env, key));
+assert.ok(suppliedIdentity.length === 0 || suppliedIdentity.length === 4, 'QA identity overrides require all four LUNA_DEV_* values');
+const overridden = suppliedIdentity.length === 4;
+for (const key of suppliedIdentity) assert.match(process.env[key], /^\S(?:[^\r\n]*\S)?$/, `${key} must be nonempty and single-line`);
+const appName = overridden ? process.env.LUNA_DEV_APP_NAME : 'LUNA QA Automations';
+const bundleId = overridden ? process.env.LUNA_DEV_BUNDLE_ID : 'com.novnski.luna.qa.automations';
+const portValue = overridden ? process.env.LUNA_DEV_IPC_PORT : '59813';
+assert.match(appName, /^LUNA QA [A-Za-z0-9][A-Za-z0-9 -]{0,48}$/);
+assert.match(bundleId, /^com\.novnski\.luna\.qa\.[a-z][a-z0-9-]{0,47}$/);
+assert.match(portValue, /^[1-9][0-9]{0,4}$/);
+const port = Number(portValue);
+assert.ok(port >= 1024 && port <= 65535 && port !== 59777, 'A separate QA IPC port is required');
+const dataDir = overridden ? process.env.LUNA_DEV_DATA_DIR : path.join(defaultBase, 'data');
+assert.ok(path.isAbsolute(dataDir));
+const bundle = path.join(root, 'target/luna-macos-dev', `${appName}.app`);
+if (overridden) {
+  const target = path.join(root, 'target');
+  assert.equal(fs.realpathSync(target), target, 'QA target must not redirect through symlinks');
+  assert.equal(fs.realpathSync(dataDir), dataDir, 'QA data path must be canonical');
+  assert.ok(dataDir.startsWith(`${target}${path.sep}`), 'QA data must be inside this checkout target');
+  const staging = path.join(target, 'luna-macos-dev');
+  assert.ok(dataDir !== staging && !dataDir.startsWith(`${staging}${path.sep}`), 'QA data must be outside bundle staging and primary data');
+  assert.equal(fs.realpathSync(bundle), bundle, 'QA bundle must not redirect through symlinks');
+}
+const auditBase = process.env.LUNA_AUDIT_NATIVE_BASE;
+if (auditBase !== undefined) assert.ok(path.isAbsolute(auditBase) && !/[\r\n]/.test(auditBase), 'LUNA_AUDIT_NATIVE_BASE must be an absolute single-line path');
+const base = auditBase === undefined ? defaultBase : path.join(auditBase, 'automations');
 const mode = process.argv[2] ?? 'run';
 assert.ok(['run', 'verify-restart', 'inspect'].includes(mode));
 execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
 const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist')], {encoding: 'utf8'}));
-assert.equal(plist.CFBundleIdentifier, 'com.novnski.luna.qa.automations');
+assert.equal(plist.CFBundleIdentifier, bundleId);
+assert.equal(plist.CFBundleDisplayName, appName);
 assert.equal(plist.LSEnvironment.LUNA_IPC_PORT, String(port));
-assert.equal(plist.LSEnvironment.LUNA_DATA_DIR, path.join(base, 'data'));
+assert.equal(plist.LSEnvironment.LUNA_DATA_DIR, dataDir);
+if (overridden) assert.equal(plist.LSEnvironment.LUNA_QA_MCP_ISOLATION, '1', 'QA override requires signed MCP isolation');
 const pids = [...new Set(execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'], {encoding: 'utf8'}).match(/^p\d+$/gm))];
 assert.equal(pids.length, 1);
 const pid = Number(pids[0].slice(1));
@@ -80,8 +108,10 @@ try {
     const spaceId = crypto.randomUUID(); await call('Mutate', {op: 'createSpace', spaceId, deviceId: info.deviceId, path: project});
     for (const provider of ['codex', 'claude-code']) {
       const catalog = await call('ListModels', {harness: provider}); save(`catalog-${provider}`, catalog);
-      const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : ['claude-sonnet-4-6', 'claude-sonnet-4-5'];
-      const model = preferred.map(id => catalog.find(m => m.id === id)).find(Boolean) ?? catalog.find(m => m.isDefault) ?? catalog[0]; assert.ok(model);
+      const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : ['claude-sonnet-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5'];
+      const requestedModel = process.env[provider === 'codex' ? 'LUNA_QA_CODEX_MODEL' : 'LUNA_QA_CLAUDE_MODEL'];
+      const model = requestedModel === undefined ? preferred.map(id => catalog.find(m => m.id === id)).find(Boolean) ?? catalog.find(m => m.isDefault) ?? catalog[0] : catalog.find(m => m.id === requestedModel);
+      assert.ok(model, requestedModel === undefined ? `${provider} has no live model` : `${provider} model override is not in the live catalog: ${requestedModel}`);
       const taskId = crypto.randomUUID(), automationId = crypto.randomUUID(), pausedId = crypto.randomUUID();
       const marker = `AUTOMATION_QA_${crypto.randomBytes(6).toString('hex')}`;
       const config = {harness: provider, model: model.id, reasoning: model.reasoningLevels?.includes('low') ? 'low' : model.reasoningLevels?.[0], permissionMode: 'ask', sandbox: 'workspace-write'};
@@ -106,7 +136,18 @@ try {
         return page.items.length === 1 && page.items[0].state === 'completed' && page;
       }, `${provider} one native scheduled run`);
       const run = ledger.items[0]; assert.equal(run.scheduledAtMs, atMs); assert.equal(run.coalesced, 0); assert.equal(run.taskId, taskId);
-      const entries = await transcript(taskId); assert.equal(entries.filter(e => e.id === run.messageId && e.role === 'user').length, 1);
+      // Ledger completion and transcript hydration are independent readbacks.
+      // Observe the exact scheduled exchange before asserting its contents;
+      // never replay the completed occurrence while waiting for projection.
+      const entries = await until(async () => {
+        const observed = await transcript(taskId);
+        const userIndex = observed.findIndex(e => e.id === run.messageId && e.role === 'user');
+        const completeMarker = userIndex >= 0 && observed.slice(userIndex + 1).some(e =>
+          e.role === 'assistant' && e.status === 'complete' &&
+          (e.parts ?? []).filter(p => p.kind === 'text').map(p => p.text).join('\n').trim() === marker);
+        return completeMarker && observed;
+      }, `${provider} completed scheduled transcript`, 30000);
+      assert.equal(entries.filter(e => e.id === run.messageId && e.role === 'user').length, 1);
       assert.ok(entries.some(e => e.role === 'assistant' && (e.parts ?? []).some(p => p.kind === 'text' && p.text.includes(marker))));
       assert.equal(entries.filter(e => e.role === 'user').length, 1);
       manifest.tasks[provider].run = run; save('manifest', manifest); save(`${provider}-completed`, {ledger, entries});

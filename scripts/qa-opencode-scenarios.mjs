@@ -13,6 +13,8 @@
 //        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
 //        [--capture-hold-ms <ms>]  (keep the S1 approval card, S1 question panel
 //        and S2X late card unanswered that long so the operator can capture them)
+//   S9Q also accepts --provider codex --tier T3 --model <explicit model>.
+//   Other scenarios and fake-engine parity remain OpenCode/Claude only.
 //   Live-only extras (never rehearsed): S2X background child ask after the
 //   root Done, parked follow-up and per-child Stop; S4X OpenCode server
 //   SIGSTOP/SIGCONT and SIGKILL with an approval or a form pending
@@ -59,6 +61,7 @@ const PROVIDERS = ['opencode', 'claude-code'];
 // shell, so the child never asked (e2e-paid-r2 S2X). Both providers have a
 // general-purpose type with a shell tool; the text stays provider-neutral.
 const SHELL_AGENT = 'Use the general-purpose subagent type (one that has a shell tool), not a read-only explore agent.';
+const BLOCKING_QUESTION = "Use your provider-native blocking question tool, not LUNA ask_user. This test requires the current turn to pause until my answer arrives.";
 
 // ------------------------------------------------------------------ context
 class ScenarioContext {
@@ -265,10 +268,10 @@ const SCENARIOS = {
       allow: `Use your shell tool to run exactly this command: python3 -c "print('S1-ALLOW-${n}')"\nThen reply with only the command's output. Do not run any other command.`,
       deny: `Use your shell tool to run exactly this command: python3 -c "print('S1-DENY-${n}')"\nIf you are not allowed to run it, do not retry; reply with exactly S1-DENIED-${n}.`,
       cancel: `Use your shell tool to run exactly this command: python3 -c "print('S1-CANCEL-${n}')"\nThen reply with only the command's output.`,
-      single: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly COLOR-${n}-<the color I chose>.`,
-      multi: `Use your tool for asking the user a multiple-choice question that allows multiple selections (do not ask in plain text). Ask me to choose one or more of these options: alpha, beta, gamma. After I answer, reply with exactly PICKED-${n}- followed by my choices joined with "+".`,
+      single: `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly COLOR-${n}-<the color I chose>.`,
+      multi: `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question that allows multiple selections (do not ask in plain text). Ask me to choose one or more of these options: alpha, beta, gamma. After I answer, reply with exactly PICKED-${n}- followed by my choices joined with "+".`,
       stale: `Use your shell tool to run exactly this command: python3 -c "print('S1-STALE-${n}')"\nThen reply with only the command's output.`,
-      free: `Use your tool for asking the user a question (do not ask in plain text). Ask me for my favourite colour, offering red, green and blue as options and letting me type my own answer instead. After I answer, reply with exactly FREE-${n}- followed by my answer in lowercase.`,
+      free: `${BLOCKING_QUESTION} Use your tool for asking the user a question (do not ask in plain text). Ask me for my favourite colour, offering red, green and blue as options and letting me type my own answer instead. After I answer, reply with exactly FREE-${n}- followed by my answer in lowercase.`,
     }),
     unverified: ['MCP elicitation forms need a mock MCP server fixture (not part of this runner); the answerer supports them (buildAnswers mcp policy).',
       'Question steps at T2 need a scripted mock entry; run them at T3.'],
@@ -511,7 +514,7 @@ const SCENARIOS = {
     steps: ['completed-turn', 'pending-approval', 'queued-row', '(operator restarts the QA app)', 'after-restart-readback', 'stale-or-live-answer', 'continue-after-restart'],
     prompts: n => ({
       before: `Reply with exactly S4-BEFORE-${n}. Do not use tools.`,
-      pending: `Use your shell tool to run exactly this command: echo S4-PENDING-${n}\nThen reply with only the command's output.`,
+      pending: `Use your shell tool to run exactly this command: python3 -c "print('S4-PENDING-${n}')"\nThen reply with only the command's output.`,
       queued: `Reply with exactly S4-QUEUED-${n}. Do not use tools.`,
       after: `Reply with exactly S4-AFTER-${n}. Do not use tools.`,
     }),
@@ -854,7 +857,9 @@ const SCENARIOS = {
         const before = JSON.stringify(mirror.latest.contextControl ?? null);
         const compact = await s.d.compact(s.chatId('root'));
         s.check('compact-receipt', 'compactContext applied (or truthfully refused)', {status: compact.receipt?.status, reason: compact.receipt?.reason?.code ?? null}, ['applied', 'rejected'].includes(compact.receipt?.status));
-        await mirror.waitFor(() => JSON.stringify(mirror.latest.contextControl ?? null) !== before, {timeoutMs: 120000, label: 'compaction lifecycle'}).catch(() => null);
+        if (compact.receipt?.status === 'applied') {
+          await mirror.waitFor(() => JSON.stringify(mirror.latest.contextControl ?? null) !== before, {timeoutMs: 120000, label: 'compaction lifecycle'}).catch(() => null);
+        }
         s.info('compaction-lifecycle', 'compaction shows as context-control lifecycle, not a turn end (OCF-110/156)', mirror.latest.contextControl, JSON.stringify(mirror.latest.contextControl ?? null) !== before);
         const t = await s.turn('root', P.luna, {mock: 'text', answer: allowAll});
         s.settled(t.wait);
@@ -890,7 +895,11 @@ const SCENARIOS = {
         s.settled(a.wait, 'skill-text-settled');
         s.modelCheck('skill-text-used', `a $${entry.name} pick sent as composer text reached the skill (SKILL-OK-${s.nonce})`, a.reply.slice(0, 120), a.reply.includes(`SKILL-OK-${s.nonce}`));
         // (b) The typed selection the adapters accept (ComposerInput::Skill).
-        const t = await s.turn('root', P.skill, {mock: `text:SKILL-OK-${s.nonce}`, inputItems: [{type: 'skill', name: entry.name, path: entry.path ?? ''}], answer: allowAll});
+        // ListCommands may omit a skill path. This scenario owns the exact
+        // project fixture, so use its real file rather than an empty path.
+        const skillPath = entry.path || path.join(s.fixture.dir, '.claude/skills/qa-skill/SKILL.md');
+        assert.ok(path.isAbsolute(skillPath) && fs.statSync(skillPath).isFile(), 'typed skill needs the existing absolute fixture path');
+        const t = await s.turn('root', P.skill, {mock: `text:SKILL-OK-${s.nonce}`, inputItems: [{type: 'skill', name: entry.name, path: skillPath}], answer: allowAll});
         s.settled(t.wait);
         const user = s.entries('root').find(e => e.id === t.messageId);
         s.info('skill-row', 'the user row records the typed skill selection', (user?.parts ?? []).map(p => p.kind), true);
@@ -1097,7 +1106,7 @@ const SCENARIOS = {
     steps: ['sigstop-approval', 'kill-approval', 'continue-after-kill', 'sigstop-form', 'kill-form', 'continue-after-form-kill'],
     prompts: n => ({
       approval: tag => `Use your shell tool to run exactly this command: echo S4X-${tag}-${n}\nThen reply with only the command's output. Do not run any other command.`,
-      form: tag => `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly S4X-${tag}-${n}-<the color I chose>.`,
+      form: tag => `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly S4X-${tag}-${n}-<the color I chose>.`,
       after: tag => `Reply with exactly S4X-${tag}-${n}. Do not use tools.`,
     }),
     unverified: ['Only the chat\'s OpenCode server process is faulted; LUNA is not restarted (S4 covers an app restart).',
@@ -1300,9 +1309,9 @@ const SCENARIOS = {
     parity: true, extra: true, permissionMode: 'full', phases: ['run'],
     steps: ['recommended-auto-pick', 'hold-keeps-waiting', 'taste-question-waits'],
     prompts: n => ({
-      auto: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which caching approach this project should use, with exactly two options labelled "In-memory cache (Recommended)" and "Redis cache". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly CACHE-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
-      hold: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which log format this project should use, with exactly two options labelled "Structured JSON logs (Recommended)" and "Plain text logs". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly LOGS-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
-      taste: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which accent colour I like, with exactly these options: red, green, blue. This is purely my taste, so do not mark any option as recommended. After I answer, reply with exactly ACCENT-${n}- followed by the colour I chose. Do not use any other tool.`,
+      auto: `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which caching approach this project should use, with exactly two options labelled "In-memory cache (Recommended)" and "Redis cache". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly CACHE-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
+      hold: `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which log format this project should use, with exactly two options labelled "Structured JSON logs (Recommended)" and "Plain text logs". Keep both labels exactly as written, including "(Recommended)". After I answer, reply with exactly LOGS-${n}- followed by the first word of the option I chose, in lowercase. Do not use any other tool.`,
+      taste: `${BLOCKING_QUESTION} Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me which accent colour I like, with exactly these options: red, green, blue. This is purely my taste, so do not mark any option as recommended. After I answer, reply with exactly ACCENT-${n}- followed by the colour I chose. Do not use any other tool.`,
     }),
     unverified: ['Needs the QA data dir ui-settings.json unattendedAnswerSeconds set to the --unattended-ms value (default 15 s).',
       'Question steps need a real model (T3).'],
@@ -1396,9 +1405,9 @@ const SCENARIOS = {
         const mirror = s.d.chatByRole('root').mirror;
         // The reply must be complete, not still streaming: the session can
         // read idle a moment before the final text lands.
-        await mirror.waitFor(entries => !s.d.busy(chatId) && entries.filter(e => e.role === 'assistant')
-          .some(e => e.status === 'complete' && textOf(e).toLowerCase().includes(marker.toLowerCase())),
-        {timeoutMs, label}).catch(() => null);
+        await waitOn([mirror, s.d.sessions], () => !s.d.busy(chatId) && mirror.entries.filter(e => e.role === 'assistant')
+          .some(e => e.status === 'complete' && textOf(e).toLowerCase().includes(marker.toLowerCase())) ? true : null,
+        timeoutMs, label).catch(() => null);
         await sleep(2000);
         await s.d.waitIdle(chatId, {timeoutMs: 120000}).catch(() => null);
       };
@@ -1572,7 +1581,13 @@ async function runScenario(id, opts, {rehearsal = null} = {}) {
   const scenario = SCENARIOS[id];
   assert.ok(scenario, `unknown scenario ${id}; try: list`);
   const provider = opts.provider;
-  assert.ok(PROVIDERS.includes(provider), `--provider must be one of ${PROVIDERS.join(', ')}`);
+  const codexQuestions = provider === 'codex' && id === 'S9Q' && !rehearsal;
+  assert.ok(PROVIDERS.includes(provider) || codexQuestions,
+    `--provider must be one of ${PROVIDERS.join(', ')} (Codex is supported only for live S9Q)`);
+  if (codexQuestions) {
+    assert.equal(opts.tier, 'T3', 'Codex S9Q requires --tier T3');
+    assert.ok(opts.model?.trim(), 'Codex S9Q requires an explicit --model from ListModels');
+  }
   const phase = opts.phase ?? scenario.phases[0];
   assert.ok(scenario.phases.includes(phase), `${id} phases: ${scenario.phases.join(', ')}`);
   const tier = rehearsal ? 'R0' : opts.tier;

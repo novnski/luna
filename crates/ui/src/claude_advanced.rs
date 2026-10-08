@@ -609,8 +609,8 @@ pub const CLAUDE_ADVANCED_LEDGER: &[LedgerRow] = &[
     },
     LedgerRow {
         lane: "Two-writer protection on resume",
-        status: LaneStatus::LiveQaPending,
-        luna: "LUNA won't resume a conversation another live Claude process holds.",
+        status: LaneStatus::Certified,
+        luna: "Refuses a resume when Claude reports another live writer for that conversation.",
     },
     LedgerRow {
         lane: "Remote agents",

@@ -1,0 +1,67 @@
+{
+  "sessionId": "4624f95e-f105-4db1-8278-3650cdd1922d",
+  "controllerPid": 95346,
+  "pass": true,
+  "claudeExecutable": "/Users/iulian/.local/share/claude/versions/2.1.293",
+  "configuredHome": false,
+  "holderArgs": [
+    "--print",
+    "--session-id",
+    "4624f95e-f105-4db1-8278-3650cdd1922d",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--tools",
+    "",
+    "--permission-mode",
+    "dontAsk",
+    "--setting-sources",
+    "",
+    "--settings",
+    "{\"disableAllHooks\":true}",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "{\"mcpServers\":{}}",
+    "--no-chrome",
+    "--no-session-persistence"
+  ],
+  "sentUserMessages": 0,
+  "version": "2.1.293 (Claude Code)",
+  "holderPid": 95348,
+  "listedHolder": {
+    "pid": 95348,
+    "sessionId": "4624f95e-f105-4db1-8278-3650cdd1922d",
+    "kind": "interactive",
+    "status": "idle"
+  },
+  "probe": {
+    "configuredHome": false,
+    "externalWriterVisible": true,
+    "probePid": 95380,
+    "rejectedBeforeAcceptance": true,
+    "sessionId": "4624f95e-f105-4db1-8278-3650cdd1922d",
+    "probeParentPid": 95379
+  },
+  "cleanup": {
+    "method": "stdin-eof",
+    "exit": 0
+  },
+  "holderOutput": {
+    "stdoutBytes": 17138,
+    "stderrBytes": 0,
+    "stdoutSha256": "7f60660c03399fd7a77a2b2c6985a080e3cdc3069b522aa3011d9c82fb010f17",
+    "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "frames": 1,
+    "initialized": true
+  },
+  "unexpectedTurnLaunch": false,
+  "verifiedDate": "2026-10-08",
+  "claudeExecutableSha256": "4e21122a227857da1178aca3299700c1fd7f2b77c93f12e73c2c76db796a105e",
+  "fullLocalEvidenceSha256": "ec28cae852ce09a2cfef96df68039d391e8e5dc5d11da6a10a1f1bf37bd38370",
+  "reproduce": [
+    "scripts/cargo.sh build --locked -p luna-harness --example claude_writer_guard_probe",
+    "agent-python scripts/qa-claude-writer-guard.py --out /absolute/new/evidence-directory"
+  ]
+}

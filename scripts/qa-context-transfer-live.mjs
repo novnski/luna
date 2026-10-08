@@ -8,17 +8,45 @@ import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
-const base = path.join(root, 'target/qa/harness-evolution/slice-2/native');
-const bundle = path.join(root, 'target/luna-macos-dev/LUNA QA Context.app');
-const port = 59810;
+const defaultBase = path.join(root, 'target/qa/harness-evolution/slice-2/native');
+const identityKeys = ['LUNA_DEV_APP_NAME', 'LUNA_DEV_BUNDLE_ID', 'LUNA_DEV_IPC_PORT', 'LUNA_DEV_DATA_DIR'];
+const suppliedIdentity = identityKeys.filter(key => Object.hasOwn(process.env, key));
+assert.ok(suppliedIdentity.length === 0 || suppliedIdentity.length === 4, 'QA identity overrides require all four LUNA_DEV_* values');
+const overridden = suppliedIdentity.length === 4;
+for (const key of suppliedIdentity) assert.match(process.env[key], /^\S(?:[^\r\n]*\S)?$/, `${key} must be nonempty and single-line`);
+const appName = overridden ? process.env.LUNA_DEV_APP_NAME : 'LUNA QA Context';
+const bundleId = overridden ? process.env.LUNA_DEV_BUNDLE_ID : 'com.novnski.luna.qa.context';
+const portValue = overridden ? process.env.LUNA_DEV_IPC_PORT : '59810';
+assert.match(appName, /^LUNA QA [A-Za-z0-9][A-Za-z0-9 -]{0,48}$/);
+assert.match(bundleId, /^com\.novnski\.luna\.qa\.[a-z][a-z0-9-]{0,47}$/);
+assert.match(portValue, /^[1-9][0-9]{0,4}$/);
+const port = Number(portValue);
+assert.ok(port >= 1024 && port <= 65535 && port !== 59777, 'A separate QA IPC port is required');
+const dataDir = overridden ? process.env.LUNA_DEV_DATA_DIR : path.join(defaultBase, 'data');
+assert.ok(path.isAbsolute(dataDir));
+const bundle = path.join(root, 'target/luna-macos-dev', `${appName}.app`);
+if (overridden) {
+  const target = path.join(root, 'target');
+  assert.equal(fs.realpathSync(target), target, 'QA target must not redirect through symlinks');
+  assert.equal(fs.realpathSync(dataDir), dataDir, 'QA data path must be canonical');
+  assert.ok(dataDir.startsWith(`${target}${path.sep}`), 'QA data must be inside this checkout target');
+  const staging = path.join(target, 'luna-macos-dev');
+  assert.ok(dataDir !== staging && !dataDir.startsWith(`${staging}${path.sep}`), 'QA data must be outside bundle staging and primary data');
+  assert.equal(fs.realpathSync(bundle), bundle, 'QA bundle must not redirect through symlinks');
+}
+const auditBase = process.env.LUNA_AUDIT_NATIVE_BASE;
+if (auditBase !== undefined) assert.ok(path.isAbsolute(auditBase) && !/[\r\n]/.test(auditBase), 'LUNA_AUDIT_NATIVE_BASE must be an absolute single-line path');
+const base = auditBase === undefined ? defaultBase : path.join(auditBase, 'context-transfer');
 const mode = process.argv[2] ?? 'run';
 assert.ok(['run', 'verify-restart', 'finish-readback'].includes(mode));
 const executable = fs.realpathSync(path.join(bundle, 'Contents/MacOS/luna'));
 execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
 const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist')], {encoding: 'utf8'}));
-assert.equal(plist.CFBundleIdentifier, 'com.novnski.luna.qa.context');
+assert.equal(plist.CFBundleIdentifier, bundleId);
+assert.equal(plist.CFBundleDisplayName, appName);
 assert.equal(plist.LSEnvironment.LUNA_IPC_PORT, String(port));
-assert.equal(plist.LSEnvironment.LUNA_DATA_DIR, path.join(base, 'data'));
+assert.equal(plist.LSEnvironment.LUNA_DATA_DIR, dataDir);
+if (overridden) assert.equal(plist.LSEnvironment.LUNA_QA_MCP_ISOLATION, '1', 'QA override requires signed MCP isolation');
 const pids = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'], {encoding: 'utf8'}).match(/^p\d+$/gm);
 assert.equal(new Set(pids).size, 1);
 const pid = Number(pids[0].slice(1));
@@ -63,9 +91,10 @@ async function command(taskId, intent, commandId = crypto.randomUUID()) {
 }
 async function configFor(provider) {
   const catalog = await call('ListModels', {harness: provider});
-  const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : ['claude-sonnet-4-6', 'claude-sonnet-4-5'];
-  const model = preferred.map(id => catalog.find(model => model.id === id)).find(Boolean) ?? catalog.find(model => model.isDefault) ?? catalog[0];
-  assert.ok(model, `${provider} has no live model`);
+  const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : ['claude-sonnet-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5'];
+  const requestedModel = process.env[provider === 'codex' ? 'LUNA_QA_CODEX_MODEL' : 'LUNA_QA_CLAUDE_MODEL'];
+  const model = requestedModel === undefined ? preferred.map(id => catalog.find(model => model.id === id)).find(Boolean) ?? catalog.find(model => model.isDefault) ?? catalog[0] : catalog.find(model => model.id === requestedModel);
+  assert.ok(model, requestedModel === undefined ? `${provider} has no live model` : `${provider} model override is not in the live catalog: ${requestedModel}`);
   save(evidence, `catalog-${provider}`, catalog);
   const modelOptions = {};
   for (const option of model.options ?? []) if (option.id === 'serviceTier' && option.choices.some(choice => choice.id === 'default')) modelOptions.serviceTier = 'default';

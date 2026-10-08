@@ -9,13 +9,43 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 const root = fs.realpathSync(path.resolve(import.meta.dirname, '..'));
-const port = Number(process.env.LUNA_IPC_PORT);
-assert.equal(port, 59783, 'This driver targets only the assigned Workspace QA port');
-const appExecutable = path.join(root, 'target/luna-macos-dev/LUNA QA Workspace.app/Contents/MacOS/luna');
-const appPid = execFileSync('lsof', ['-t', '-nP', '-iTCP:59783', '-sTCP:LISTEN'], { encoding: 'utf8' }).trim();
-assert.match(appPid, /^\d+$/);
-assert.equal(execFileSync('ps', ['-p', appPid, '-o', 'command='], { encoding: 'utf8' }).trim(), appExecutable);
-const dataRoot = fs.realpathSync(path.join(root, 'target/luna-qa-data/workspace'));
+const identityKeys = ['LUNA_DEV_APP_NAME', 'LUNA_DEV_BUNDLE_ID', 'LUNA_DEV_IPC_PORT', 'LUNA_DEV_DATA_DIR'];
+const suppliedIdentity = identityKeys.filter(key => Object.hasOwn(process.env, key));
+assert.ok(suppliedIdentity.length === 0 || suppliedIdentity.length === 4, 'QA identity overrides require all four LUNA_DEV_* values');
+const overridden = suppliedIdentity.length === 4;
+for (const key of suppliedIdentity) assert.match(process.env[key], /^\S(?:[^\r\n]*\S)?$/, `${key} must be nonempty and single-line`);
+const appName = overridden ? process.env.LUNA_DEV_APP_NAME : 'LUNA QA Workspace';
+const bundleId = overridden ? process.env.LUNA_DEV_BUNDLE_ID : 'com.novnski.luna.qa.workspace';
+const portValue = overridden ? process.env.LUNA_DEV_IPC_PORT : process.env.LUNA_IPC_PORT ?? '59783';
+assert.match(appName, /^LUNA QA [A-Za-z0-9][A-Za-z0-9 -]{0,48}$/);
+assert.match(bundleId, /^com\.novnski\.luna\.qa\.[a-z][a-z0-9-]{0,47}$/);
+assert.match(portValue, /^[1-9][0-9]{0,4}$/);
+const port = Number(portValue);
+assert.ok(port >= 1024 && port <= 65535 && port !== 59777, 'A separate QA IPC port is required');
+if (!overridden) assert.equal(port, 59783, 'A different QA port requires all four LUNA_DEV_* identity values');
+const dataDir = overridden ? process.env.LUNA_DEV_DATA_DIR : path.join(root, 'target/luna-qa-data/workspace');
+assert.ok(path.isAbsolute(dataDir));
+const bundle = path.join(root, 'target/luna-macos-dev', `${appName}.app`);
+const target = path.join(root, 'target');
+assert.equal(fs.realpathSync(target), target, 'QA target must not redirect through symlinks');
+const dataRoot = fs.realpathSync(dataDir);
+assert.equal(dataRoot, dataDir, 'QA data path must be canonical');
+assert.ok(dataRoot.startsWith(`${target}${path.sep}`), 'QA data must be inside this checkout target');
+const staging = path.join(target, 'luna-macos-dev');
+assert.ok(dataRoot !== staging && !dataRoot.startsWith(`${staging}${path.sep}`), 'QA data must be outside bundle staging and primary data');
+assert.equal(fs.realpathSync(bundle), bundle, 'QA bundle must not redirect through symlinks');
+execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
+const appExecutable = fs.realpathSync(path.join(bundle, 'Contents/MacOS/luna'));
+const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist')], { encoding: 'utf8' }));
+assert.equal(plist.CFBundleIdentifier, bundleId);
+assert.equal(plist.CFBundleDisplayName, appName);
+assert.equal(plist.LSEnvironment.LUNA_IPC_PORT, String(port));
+assert.equal(plist.LSEnvironment.LUNA_DATA_DIR, dataRoot);
+assert.equal(plist.LSEnvironment.LUNA_QA_MCP_ISOLATION, '1', 'QA requires signed MCP isolation');
+const pids = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'], { encoding: 'utf8' }).match(/^p\d+$/gm) ?? [];
+assert.equal(new Set(pids).size, 1, 'Exactly one isolated QA app must be listening');
+const appPid = pids[0].slice(1);
+assert.equal(execFileSync('ps', ['-p', appPid, '-o', 'comm='], { encoding: 'utf8' }).trim(), appExecutable);
 const report = path.resolve(process.env.LUNA_NATIVE_REPORT_DIR || path.join(root, 'target/qa/workspace-native-' + Date.now()));
 assert.ok(report.startsWith(path.join(root, 'target/qa/')));
 fs.mkdirSync(report, { recursive: true });
@@ -180,7 +210,9 @@ try {
       evidence('cleanup', { projectDeleted: spaceId, chatDeleted: chatCreated ? chatId : null, projectCleanup, taskCleanup });
     }
     for (const file of blobPaths) {
+      assert.equal(fs.realpathSync(dataDir), dataRoot, 'QA data root changed before cleanup');
       assert.ok(file.startsWith(dataRoot + path.sep));
+      if (fs.existsSync(file)) assert.equal(fs.realpathSync(file), file, 'Upload cleanup path changed');
       fs.rmSync(file, { force: true });
     }
     // Only exact returned files are removed; failed staging remains QA-owned
@@ -194,7 +226,9 @@ try {
   fs.writeFileSync(path.join(report, 'result.json'), JSON.stringify({ passed: checks, ok: !failure,
     checkoutRevision: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     builtRevision: process.env.LUNA_NATIVE_BUILD_REVISION || null,
-    port, appPid, appExecutable, fixture, fixtureRemoved: !fs.existsSync(fixture),
+    port, appPid, appExecutable, appName, bundleId, dataRoot,
+    signatureVerified: true, mcpIsolation: plist.LSEnvironment.LUNA_QA_MCP_ISOLATION,
+    fixture, fixtureRemoved: !fs.existsSync(fixture),
     chatId, spaceId, error: failure?.message ?? null,
     checkpointScope: 'Fixture-seeded Git refs; native read/diff and guarded refusal, no provider capture or isolated restore' }, null, 2) + '\n');
 }

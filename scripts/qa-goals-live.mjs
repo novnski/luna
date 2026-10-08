@@ -10,6 +10,10 @@ import { execFileSync } from 'node:child_process';
 const [mode, directory] = process.argv.slice(2);
 assert.ok(['run', 'snapshot'].includes(mode), 'usage: node scripts/qa-goals-live.mjs run|snapshot <absolute-evidence-directory>');
 assert.ok(directory && path.isAbsolute(directory), 'use an absolute evidence directory outside disposable checkouts');
+const tokenBudgetInput = process.env.LUNA_GOAL_QA_TOKEN_BUDGET ?? '60000';
+assert.match(tokenBudgetInput, /^[1-9]\d*$/, 'LUNA_GOAL_QA_TOKEN_BUDGET must be a positive decimal integer');
+const tokenBudget = Number(tokenBudgetInput);
+assert.ok(Number.isSafeInteger(tokenBudget), 'LUNA_GOAL_QA_TOKEN_BUDGET must be a finite safe integer');
 const evidence = path.resolve(directory);
 const app = process.env.LUNA_GOAL_QA_APP ?? path.resolve('target/luna-macos-dev/LUNA Dev.app');
 const port = process.env.LUNA_GOAL_QA_PORT ?? '59777';
@@ -77,6 +81,15 @@ async function waitFor(taskId, label, predicate, timeout = 180000) {
   while (Date.now() < deadline) {
     const read = await observation(taskId); timeline.push(read);
     if (predicate(read)) { save(`${label}-timeline.json`, timeline); return read; }
+    const goal = read.messages.contextControl?.goal?.goal;
+    if (goal?.status === 'budgetLimited') {
+      save(`${label}-timeline.json`, timeline);
+      save(`${label}-budget-limited.json`, { classification: 'qa-token-budget-exhausted', taskId,
+        tokenBudget: goal.tokenBudget, tokensUsed: goal.tokensUsed, timeUsedSeconds: goal.timeUsedSeconds, at: read.at });
+      const error = new Error(`${label}: goal reported budgetLimited (${goal.tokensUsed} used / ${goal.tokenBudget} allowed); rerun with a suitable finite LUNA_GOAL_QA_TOKEN_BUDGET`);
+      error.code = 'LUNA_GOAL_QA_BUDGET_LIMITED';
+      throw error;
+    }
     await sleep(500);
   }
   save(`${label}-timeline.json`, timeline);
@@ -102,7 +115,7 @@ try {
     const spaceId = crypto.randomUUID(), taskId = crypto.randomUUID(), marker = `LUNA_GOAL_${crypto.randomBytes(5).toString('hex')}`;
     const config = { harness: 'codex', model, reasoning, sandbox: 'read-only', permissionMode: 'ask' };
     if (process.env.LUNA_GOAL_QA_ACCOUNT) config.providerAccountId = process.env.LUNA_GOAL_QA_ACCOUNT;
-    save('manifest.json', { taskId, spaceId, workspace, marker, model, reasoning, app, executable, port, pid });
+    save('manifest.json', { taskId, spaceId, workspace, marker, model, reasoning, tokenBudget, app, executable, port, pid });
     await mutate({ op: 'createSpace', spaceId, deviceId: info.deviceId, path: workspace, name: `Goal QA ${marker}`, gitDetected: true });
     await mutate({ op: 'createChat', chatId: taskId, spaceId, cwd: workspace, config });
     await mutate({ op: 'renameChat', chatId: taskId, title: `Goal QA ${marker}` });
@@ -115,15 +128,15 @@ try {
     assert.equal((await observation(taskId)).messages.contextControl.goal.goal, null, 'ordinary work must not infer a goal');
     const checkpointsBefore = await call('ListGitCheckpoints', { chatId: taskId, cwd: workspace }); save('checkpoints-before.json', checkpointsBefore);
     const objective = `Use only text and native goal tools. Read this thread history. If ${marker}_STEP1 is absent, reply exactly ${marker}_STEP1 and leave the goal active for another idle continuation. If STEP1 is present, reply ${marker}_STEP2 and call update_goal with status complete because both requested steps are achieved. Do not create another goal. Do not call external tools or ask questions.`;
-    await command(taskId, { kind: 'goal', operation: { action: 'set', objective, status: 'paused', tokenBudget: { mode: 'limited', tokens: 6000 } } }, 'create-paused');
+    await command(taskId, { kind: 'goal', operation: { action: 'set', objective, status: 'paused', tokenBudget: { mode: 'limited', tokens: tokenBudget } } }, 'create-paused');
     const created = (await observation(taskId)).messages.contextControl.goal.goal;
-    assert.equal(created.status, 'paused'); assert.equal(created.tokenBudget, 6000);
+    assert.equal(created.status, 'paused'); assert.equal(created.tokenBudget, tokenBudget);
     await command(taskId, { kind: 'goal', operation: { action: 'set', objective } }, 'update-preserve-budget');
     let goal = (await observation(taskId)).messages.contextControl.goal.goal;
-    assert.equal(goal.tokenBudget, 6000); assert.equal(goal.createdAt, created.createdAt); assert.equal(goal.status, 'paused');
+    assert.equal(goal.tokenBudget, tokenBudget); assert.equal(goal.createdAt, created.createdAt); assert.equal(goal.status, 'paused');
     await command(taskId, { kind: 'goal', operation: { action: 'set', tokenBudget: { mode: 'unlimited' } } }, 'remove-budget');
     assert.equal((await observation(taskId)).messages.contextControl.goal.goal.tokenBudget, null);
-    await command(taskId, { kind: 'goal', operation: { action: 'set', tokenBudget: { mode: 'limited', tokens: 6000 } } }, 'restore-budget');
+    await command(taskId, { kind: 'goal', operation: { action: 'set', tokenBudget: { mode: 'limited', tokens: tokenBudget } } }, 'restore-budget');
     await command(taskId, { kind: 'goal', operation: { action: 'set', status: 'active' } }, 'resume');
     const completed = await waitFor(taskId, 'idle-continuation', read => read.messages.contextControl?.goal?.goal?.status === 'complete'
       && text(read.messages).includes(`${marker}_STEP2`) && !read.sessions.some(s => s.status === 'working'));
@@ -143,10 +156,10 @@ try {
     assert.equal((await observation(taskId)).messages.contextControl.goal.goal.status, 'paused');
     await command(taskId, { kind: 'goal', operation: { action: 'set', status: 'complete' } }, 'explicit-complete');
     save('final-readback.json', await observation(taskId));
-    save('result.json', { passed: true, taskId, marker, model, reasoning, checks: ['ordinary-no-goal', 'create-pause', 'update-preserves-status-budget', 'remove-budget', 'idle-two-turn-continuation', 'distinct-history-checkpoints', 'provider-usage', 'explicit-complete'] });
+    save('result.json', { passed: true, taskId, marker, model, reasoning, tokenBudget, checks: ['ordinary-no-goal', 'create-pause', 'update-preserves-status-budget', 'remove-budget', 'idle-two-turn-continuation', 'distinct-history-checkpoints', 'provider-usage', 'explicit-complete'] });
     console.log(JSON.stringify({ passed: true, taskId, evidence }));
   }
 } catch (error) {
-  save(`failure-${Date.now()}.json`, { error: String(error), stack: error.stack });
+  save(`failure-${Date.now()}.json`, { error: String(error), code: error.code, stack: error.stack });
   throw error;
 } finally { ws.close(); }
