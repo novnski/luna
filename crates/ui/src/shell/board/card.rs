@@ -622,7 +622,7 @@ impl BoardPage {
                 let id = id.clone();
                 move |this, _, window, cx| {
                     this.select(&id, true, window, cx);
-                    this.open_detail(&id, cx);
+                    this.open_detail(id.clone(), window, cx);
                 }
             }))
             .on_mouse_down(
