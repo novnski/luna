@@ -61,6 +61,77 @@ fn service(root: &Path) -> BackupService {
     )
 }
 
+/// Failure cases recorded in the 2026-10-08 history/platform audit before
+/// implementation: current schema rejected; definition tombstones, mutation
+/// receipts or active occurrence claims lost during archive/restore.
+#[test]
+fn automation_tables_survive_encrypted_archive_and_activation() {
+    let (_parent, root, backups) = fixture();
+    let database = root.join("profiles/local/docs.sqlite3");
+    let definition = br#"{"id":"backup-auto","enabled":false,"deleted":true}"#;
+    let receipt = br#"{"requestId":"backup-mutation","payloadHash":"frozen"}"#;
+    let occurrence = br#"{"id":"backup-run","state":"unknown","bootId":"old-boot"}"#;
+    let conn = Connection::open(&database).unwrap();
+    conn.execute("INSERT INTO automations(id,owner_host_id,revision,enabled,deleted,next_due_ms,origin_task_id,record) VALUES('backup-auto','synthetic-device',2,0,1,NULL,'origin',?1)", [definition.as_slice()]).unwrap();
+    conn.execute("INSERT INTO automation_mutations(request_id,automation_id,payload_hash,committed_at_ms,receipt) VALUES('backup-mutation','backup-auto','frozen',42,?1)", [receipt.as_slice()]).unwrap();
+    conn.execute("INSERT INTO automation_runs(id,automation_id,owner_host_id,scheduled_at_ms,task_id,message_id,blocks_next,state,record) VALUES('backup-run','backup-auto','synthetic-device',42,'origin','occurrence-message',1,'\"unknown\"',?1)", [occurrence.as_slice()]).unwrap();
+    drop(conn);
+    let backup = service(&root)
+        .export(&backups.join("automations.lunabk"))
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].schema_version, 18);
+    let conn = Connection::open(&database).unwrap();
+    conn.execute_batch(
+        "DELETE FROM automations; DELETE FROM automation_mutations; DELETE FROM automation_runs;",
+    )
+    .unwrap();
+    drop(conn);
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    service(&root).activate(staged).unwrap();
+    let restored = Connection::open(&database).unwrap();
+    let (enabled, deleted, record): (bool, bool, Vec<u8>) = restored
+        .query_row(
+            "SELECT enabled,deleted,record FROM automations WHERE id='backup-auto'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert!(!enabled && deleted);
+    assert_eq!(record, definition);
+    let saved_receipt: Vec<u8> = restored
+        .query_row(
+            "SELECT receipt FROM automation_mutations WHERE request_id='backup-mutation'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_receipt, receipt);
+    let (blocks_next, state, saved_run): (bool, String, Vec<u8>) = restored
+        .query_row(
+            "SELECT blocks_next,state,record FROM automation_runs WHERE id='backup-run'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert!(blocks_next);
+    assert_eq!(state, "\"unknown\"");
+    assert_eq!(saved_run, occurrence);
+    if let Ok(dir) = std::env::var("LUNA_HISTORY_PLATFORM_EVIDENCE_DIR") {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            Path::new(&dir).join("automation-backup-roundtrip.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schemaVersion":18, "definitionBytesRestored":true, "deleted":deleted,
+                "enabled":enabled, "mutationReceiptBytesRestored":true,
+                "occurrenceBytesRestored":true, "occurrenceBlocksNext":blocks_next,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 /// Full encrypted archive -> staged verification -> activation with a saved
 /// tab tree. Failure cases precede code in the chat-workbench design brief.
 #[test]
@@ -211,7 +282,7 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
     let backup = service(&root)
         .backup_now(&backups, 1_700_000_000_000)
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 17);
+    assert_eq!(backup.manifest.databases[0].schema_version, 18);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     service(&root).activate(staged).unwrap();
@@ -479,6 +550,9 @@ fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
         "side_chat_entries",
         "side_chat_sends",
         "task_execution_lineage",
+        "automations",
+        "automation_mutations",
+        "automation_runs",
     ] {
         let (_parent, root, _backups) = fixture();
         fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
@@ -533,6 +607,9 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
          DROP TABLE side_chat_sends;
          DROP TABLE side_chats;
          DROP TABLE task_execution_lineage;
+         DROP TABLE automation_runs;
+         DROP TABLE automation_mutations;
+         DROP TABLE automations;
          ALTER TABLE task_command_state DROP COLUMN workspace_repair_revision;
          ALTER TABLE task_command_receipts DROP COLUMN workspace_repair_revision;
          DELETE FROM schema_migrations WHERE version > 9;",
@@ -558,7 +635,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 17);
+    assert_eq!(schema, 18);
 }
 
 #[test]
@@ -811,7 +888,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 17);
+    assert_eq!(backup.manifest.databases[0].schema_version, 18);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1306,7 +1383,7 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 17);
+    assert_eq!(backup.manifest.databases[0].schema_version, 18);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();

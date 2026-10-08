@@ -44,7 +44,9 @@ const CHUNK: usize = 64 * 1024;
 // v15 keeps workspace repair authority; v16 adds local prompt stash records.
 // v17 keeps the original task defaults in local execution lineage. Preserve
 // that immutable snapshot so recovery still detects later configuration edits.
-const CURRENT_SCHEMA: i64 = 17;
+// v18 preserves automation definitions, idempotent mutation receipts and
+// occurrence claims together, including deleted and blocked states.
+const CURRENT_SCHEMA: i64 = 18;
 
 // Serialized legacy labels are part of archive validation. The credentials/
 // directory, including the new device-local key, remains outside the allowlist.
@@ -1196,6 +1198,9 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         (14, "side_chat_sends"),
         (15, "task_execution_lineage"),
         (16, "prompt_stash"),
+        (18, "automations"),
+        (18, "automation_mutations"),
+        (18, "automation_runs"),
     ] {
         if schema_version >= introduced && !has_table(conn, table)? {
             return Err(BackupError::Invalid(format!(
