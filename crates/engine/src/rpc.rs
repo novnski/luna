@@ -8577,6 +8577,24 @@ impl CrossTaskBackend for EngineRpc {
     async fn workspace(&self, authority: &CrossTaskAuthority) -> Result<Value, CrossTaskError> {
         self.read_agent_workspace(authority)
     }
+    // ---- board tools (A4: board/tools.rs, board/context.rs) ----
+    fn board_tools(
+        &self,
+        authority: &CrossTaskAuthority,
+    ) -> Vec<luna_proto::RuntimeToolDefinition> {
+        self.board_tools_for_authority(authority)
+    }
+    fn board_context(&self, task_id: &str) -> Option<luna_proto::BoardRuntimeContext> {
+        self.board_run_context(task_id)
+    }
+    async fn call_board_tool(
+        &self,
+        authority: &CrossTaskAuthority,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, CrossTaskError> {
+        self.board_tool_invoke(authority, name, arguments).await
+    }
     async fn prepare_workspace(
         &self,
         request: crate::cross_task_tools::WorkspaceToolRequest,

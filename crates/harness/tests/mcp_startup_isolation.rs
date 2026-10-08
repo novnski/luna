@@ -100,6 +100,7 @@ fn luna_contract(harness: HarnessId) -> LunaAgentRuntimeContract {
             execution_route: "local".into(),
             granted_scopes: Vec::new(),
             chat: None,
+            board: None,
         },
         environment: std::collections::BTreeMap::new(),
         local_endpoints: Vec::new(),

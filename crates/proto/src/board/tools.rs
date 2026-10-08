@@ -6,7 +6,10 @@
 //! existing is not delivery; each provider path must be verified.
 use serde::{Deserialize, Serialize};
 
-use super::{BoardChatRole, BoardColumn, BoardCompletionMode, ChatPermittedActions, TaskLinkRole};
+use super::{
+    BoardChatRole, BoardColumn, BoardCompletionMode, BoardContextOrigin, ChatPermittedActions,
+    ChatProvenance, OriginalContainer, TaskLinkRole,
+};
 
 pub const BOARD_TOOL_LIST: &str = "board_list";
 pub const BOARD_TOOL_READ: &str = "board_read";
@@ -112,4 +115,25 @@ pub struct BoardRuntimeContext {
     pub parent_locked: bool,
     /// Board tool names actually attached to this run.
     pub tools: Vec<String>,
+    /// The workbench that displays this chat: itself for a main chat, its
+    /// main parent for a side chat. `None` for authoring sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_container_id: Option<String>,
+    /// Creation provenance (who asked for this chat), distinct from the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator: Option<ChatProvenance>,
+    /// Fork or handoff source, distinct from the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ChatProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_origin: Option<BoardContextOrigin>,
+    /// Ticket workers: the frozen original container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_container: Option<OriginalContainer>,
+    /// The main parent is archived, deleted or otherwise unavailable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parent_unavailable: bool,
+    /// The project's owning host (the only board writer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_host_id: Option<String>,
 }

@@ -42,6 +42,12 @@ pub struct RuntimeContext {
     /// actually do. Absent in contracts compiled before roles existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<RuntimeChatIdentity>,
+    /// Canonical board context (role, main parent, ticket, permitted
+    /// creation/context actions, attached board tools). Engine-derived on
+    /// every start and resume; absent before the board and for runs with no
+    /// local project board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<crate::BoardRuntimeContext>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

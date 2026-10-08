@@ -77,6 +77,7 @@ fn contract(workspace: &str) -> LunaAgentRuntimeContract {
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
             chat: None,
+            board: None,
         },
         environment: [("LUNA_THREAD_ID".to_owned(), "oc13-probe-thread".to_owned())]
             .into_iter()
