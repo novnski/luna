@@ -235,6 +235,34 @@ impl ModelCache {
         Ok(catalog.models)
     }
 
+    /// The last-known-good catalog for this account without any provider
+    /// call (synchronous readers such as board save-time validation). `None`
+    /// means nothing is cached yet, never "no models".
+    pub(crate) fn cached(
+        &self,
+        harness: HarnessId,
+        account_id: Option<&str>,
+    ) -> Option<Vec<Model>> {
+        // Same cache key as `list`.
+        let identity = match harness {
+            HarnessId::Codex => {
+                self.accounts
+                    .resolve_execution(harness, account_id)
+                    .ok()?
+                    .auth_instance_id
+            }
+            HarnessId::ClaudeCode => self
+                .accounts
+                .resolve_execution(HarnessId::ClaudeCode, None)
+                .map_or_else(
+                    |_| "device".to_owned(),
+                    |execution| execution.auth_instance_id,
+                ),
+            _ => "device".to_owned(),
+        };
+        self.read(harness, &identity)
+    }
+
     pub(crate) async fn list(
         &self,
         harness: HarnessId,
