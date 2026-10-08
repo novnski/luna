@@ -267,9 +267,15 @@ impl Shell {
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        // A focused side chat has no context fork (Board A10): its `+`
+        // chooser entry opens the side chat's own card instead.
+        let side_focus = self.board_palette_side_focus(cx);
         entries.extend(
             self.workbench_palette_actions()
                 .into_iter()
+                .filter(|action| {
+                    !(side_focus && *action == super::workbench::WorkbenchAction::SideChat)
+                })
                 .map(Entry::Workbench)
                 .filter(|entry| {
                     matches_query(&query, entry.action().map_or("", |(label, _)| label))

@@ -98,6 +98,13 @@ impl Shell {
         Some(selected)
     }
 
+    /// Whether the chat the palette acts on is a side chat (its workbench
+    /// actions offer no context fork).
+    pub(in crate::shell) fn board_palette_side_focus(&self, cx: &App) -> bool {
+        self.board_palette_chat(cx)
+            .is_some_and(|chat| self.board_chat_role(&chat, cx).role == BoardChatRole::Side)
+    }
+
     /// The palette's board entries for `query` (lowercased): actions for
     /// the current chat, then (for a non-empty query) matching tickets.
     pub(in crate::shell) fn board_palette_entries(
