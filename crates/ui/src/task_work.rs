@@ -168,7 +168,7 @@ pub fn state_label(state: TaskWorkState) -> &'static str {
 
 pub fn kind_label(kind: TaskWorkKind) -> &'static str {
     match kind {
-        TaskWorkKind::ChildChat => "Child chat",
+        TaskWorkKind::ChildChat => "Side chat",
         TaskWorkKind::NativeChild => "Subagent",
         TaskWorkKind::Workflow => "Workflow",
         TaskWorkKind::Shell => "Shell",

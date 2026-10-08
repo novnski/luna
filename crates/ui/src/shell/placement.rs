@@ -307,7 +307,7 @@ impl Shell {
                 });
                 let parent_title = self.chat_title(&parent, cx);
                 self.sidebar_notice = Some(SidebarNotice::transient_status(format!(
-                    "Listed in the sidebar. It is still a new thread from {parent_title}."
+                    "Listed in the sidebar. It is still a side chat of {parent_title}."
                 )));
             }
             related_chats::RelatedKind::Alongside | related_chats::RelatedKind::Side => {
@@ -387,7 +387,7 @@ impl Shell {
             return refuse(
                 self,
                 format!(
-                    "New threads stay with their parent, {parent_title}. Drop it on that chat's Related chats, or keep it in the sidebar."
+                    "Side chats stay with their main chat, {parent_title}. Drop it on that chat's Related chats, or keep it in the sidebar."
                 ),
                 cx,
             );

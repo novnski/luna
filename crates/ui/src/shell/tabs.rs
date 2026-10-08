@@ -197,8 +197,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Child of ‹parent›" ahead of a child's title: opens that actual
-    /// parent. A parent that no longer exists is named, not linked.
+    /// "Side chat of ‹main chat›" ahead of a side chat's title: opens that
+    /// actual parent. A parent that no longer exists is named, not linked.
     fn render_parent_breadcrumb(
         &self,
         (parent_id, title, archived, origin): (Option<String>, SharedString, bool, &'static str),
@@ -206,7 +206,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = theme.text_muted;
-        let tooltip_title: SharedString = format!("New thread from {title}").into();
+        let tooltip_title: SharedString = format!("Side chat of {title}").into();
         let crumb = div()
             .id("parent-breadcrumb")
             .max_w(crate::typography::ui_rems(240.0))
@@ -237,7 +237,7 @@ impl Shell {
                     .flex_none()
                     .text_color(muted),
             )
-            .child(div().flex_none().child("New thread from"))
+            .child(div().flex_none().child("Side chat of"))
             .child(
                 div()
                     .min_w_0()
@@ -252,7 +252,7 @@ impl Shell {
         match parent_id {
             Some(parent_id) => crumb
                 .role(gpui::Role::Button)
-                .aria_label(SharedString::from(format!("Open parent chat: {title}")))
+                .aria_label(SharedString::from(format!("Open main chat: {title}")))
                 .tab_index(0)
                 .cursor_pointer()
                 .hover_wash("parent-breadcrumb")
@@ -268,7 +268,7 @@ impl Shell {
                 .into_any_element(),
             None => crumb
                 .aria_label(SharedString::from(
-                    "New thread from a chat that is no longer available",
+                    "Side chat of a chat that is no longer available",
                 ))
                 .into_any_element(),
         }

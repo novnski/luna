@@ -1,4 +1,10 @@
-//! Starting a side thread: a persistent fork of a conversation.
+//! Starting a side chat with context: a persistent fork of a main chat.
+//!
+//! Only a main chat starts one: a side chat never forks or carries its
+//! context into another chat (one level of side chats; Board A10). Its
+//! creations are a fresh sibling under the same main chat or a handoff to a
+//! new main chat (`board::chat_badges::dialogs`), and the engine validates
+//! every creation either way.
 //!
 //! A side thread begins as a fork (or a frozen context snapshot) of its
 //! source and is then an ordinary thread: the engine publishes it with its
@@ -187,6 +193,11 @@ impl SideChatPanel {
             cx.notify();
             return;
         };
+        if super::board::chat_badges::context_forks_blocked(self.state.read(cx), &self.parent) {
+            self.error = Some(super::board::chat_badges::SIDE_FORK_REFUSAL.into());
+            cx.notify();
+            return;
+        }
         // A retry after an unknown outcome repeats the same request, so the
         // engine returns the thread it already created.
         let request_id = match &self.pending_create {
@@ -355,8 +366,16 @@ impl Shell {
         }
     }
 
-    /// The user's New side chat (agents never start side chats).
+    /// The user's New side chat (agents never start side chats): with
+    /// context from a main chat; from a side chat, a fresh sibling under the
+    /// same main chat.
     pub(super) fn start_side_chat(&mut self, snapshot: bool, cx: &mut Context<Self>) {
+        if super::board::chat_badges::context_forks_blocked(self.state.read(cx), &self.active_chat)
+        {
+            let side = self.active_chat.clone();
+            self.board_create_sibling(side, cx);
+            return;
+        }
         self.related_focus = super::related_chats::RelatedKind::Side;
         let panel = self.ensure_side_chat_panel(cx);
         panel.update(cx, |panel, cx| panel.create(snapshot, cx));

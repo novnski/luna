@@ -217,6 +217,10 @@ icon_assets![
     (FILTER, "filter"),
     (INBOX_IN, "inbox-in"),
     (TICKET, "ticket"),
+    // Board identity on chat surfaces: Solar `ticket` (a ticket's working
+    // chat) and `magnifier-bug` (its temporary reviewer side chat).
+    (CHAT_TICKET, "ticket"),
+    (CHAT_REVIEWER, "magnifier-bug"),
     (STOP_CIRCLE, "stop-circle"),
     (NOTEBOOK, "notebook"),
     (WIFI_OFF, "wifi-off"),

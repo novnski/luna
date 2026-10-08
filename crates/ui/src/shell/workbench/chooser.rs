@@ -1,22 +1,25 @@
-//! The group's `+` creation chooser.
+//! The group's `+` creation chooser: a main chat's **Side chat**, Fresh or
+//! With context.
 //!
 //! `+` never creates anything by itself: it opens this anchored card, which
 //! names the actual source (the active chat of the group it was opened
-//! from), offers the two kinds of conversation and, for a New thread, the
-//! providers this device offers. Only the explicit "Create new thread" /
-//! "Create side chat" action creates, through the existing safe creation
-//! paths (one idempotency key per New thread gesture; the side chat
-//! creator's request id). A chooser whose source, Main, engine or layout
-//! generation changed while it was open closes without creating.
+//! from), offers the two starting contexts and, for a fresh side chat, the
+//! providers this device offers. Only the explicit Create action creates,
+//! through the existing safe creation paths (one idempotency key per fresh
+//! side chat gesture; the side chat creator's request id). A chooser whose
+//! source, Main, engine or layout generation changed while it was open
+//! closes without creating. A side chat's `+` opens its own card instead
+//! (New side chat or Hand off; `board::chat_badges::dialogs`): side chats
+//! never fork or carry context.
 //!
-//! - **New thread**: a fresh conversation from the source. Its context is
-//!   not carried over; it may run on any offered provider (with that
-//!   provider's own default account).
-//! - **Side chat**: carries the source's context, captured now. It stays on
-//!   the source's provider and account. A provider without native history
-//!   forks, or a source with no provider history yet, is said so before
-//!   creating; the recent-visible-messages path is a separate, explicitly
-//!   labeled action, offered only when visible messages exist.
+//! - **Fresh**: a side chat that starts without the source's conversation;
+//!   it may run on any offered provider (with that provider's own default
+//!   account).
+//! - **With context**: carries the source's context, captured now. It stays
+//!   on the source's provider and account. A provider without native
+//!   history forks, or a source with no provider history yet, is said so
+//!   before creating; the recent-visible-messages path is a separate,
+//!   explicitly labeled action, offered only when visible messages exist.
 
 use super::*;
 use luna_proto::{HarnessId, HistoryCapabilityView, ProviderForkCapability};
@@ -51,9 +54,9 @@ impl ChooserAction {
     pub(in crate::shell) fn label(&self) -> &'static str {
         match self {
             Self::Disabled(_) => "Create",
-            Self::NewThread(_) => "Create new thread",
-            Self::SideNative => "Create side chat",
-            Self::SideRecent => "Create side chat (recent messages)",
+            Self::NewThread(_) => "Create side chat",
+            Self::SideNative => "Create side chat with context",
+            Self::SideRecent => "Create side chat from recent messages",
             Self::CheckStatus { .. } => "Check status",
         }
     }
@@ -108,6 +111,10 @@ impl Shell {
             .get(&pane_id)
             .map(|bounds| gpui::point(bounds.left(), bounds.bottom() + px(4.0)))
             .unwrap_or_else(|| gpui::point(px(240.0), px(80.0)));
+        // A side chat's `+`: New side chat or Hand off, never this chooser.
+        if self.board_side_origin_card(&source, anchor, cx) {
+            return;
+        }
         let provider = self.chooser_default_provider(&source, cx);
         let capability_task = self.chooser_capability_task(source.clone(), cx);
         self.workbench.chooser = Some(CreationChooser {
@@ -317,13 +324,13 @@ impl Shell {
         match chooser.kind {
             CreationKind::NewThread => {
                 if self.workbench.creating_child.is_some() {
-                    return ChooserAction::Disabled("Creating a new thread…".into());
+                    return ChooserAction::Disabled("Creating side chat…".into());
                 }
-                // An earlier New thread whose outcome is unknown blocks any
-                // new intent until its status is checked.
+                // An earlier fresh side chat whose outcome is unknown blocks
+                // any new intent until its status is checked.
                 if self.workbench_child_unresolved() {
                     return ChooserAction::Disabled(
-                        "An earlier New thread may already exist. Check its status first.".into(),
+                        "An earlier side chat may already exist. Check its status first.".into(),
                     );
                 }
                 match (self.chooser_providers(cx), chooser.provider) {
@@ -483,8 +490,8 @@ impl Shell {
         match event.keystroke.key.as_str() {
             "escape" => self.workbench_close_chooser(cx),
             "enter" => self.workbench_chooser_create(cx),
-            "n" => self.workbench_chooser_kind(CreationKind::NewThread, cx),
-            "s" => self.workbench_chooser_kind(CreationKind::SideChat, cx),
+            "f" | "n" => self.workbench_chooser_kind(CreationKind::NewThread, cx),
+            "c" | "s" => self.workbench_chooser_kind(CreationKind::SideChat, cx),
             "up" | "down" if kind == Some(CreationKind::NewThread) => {
                 self.chooser_step_provider(if event.keystroke.key == "up" { -1 } else { 1 }, cx);
             }
@@ -643,9 +650,9 @@ impl Shell {
                 kind_option(
                     "wb-chooser-kind-thread",
                     CreationKind::NewThread,
-                    "New thread",
-                    "Starts fresh. The parent's context is not carried over.",
-                    "N",
+                    "Fresh",
+                    "A side chat that starts fresh. This chat's conversation is not carried over.",
+                    "F",
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.workbench_chooser_kind(CreationKind::NewThread, cx)
@@ -655,14 +662,18 @@ impl Shell {
                 kind_option(
                     "wb-chooser-kind-side",
                     CreationKind::SideChat,
-                    "Side chat",
-                    "Carries the parent's context, captured now. Later messages are not copied.",
-                    "S",
+                    "With context",
+                    "A side chat that carries this chat's context, captured now. Later messages are not copied.",
+                    "C",
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.workbench_chooser_kind(CreationKind::SideChat, cx)
                 })),
             );
+        self.board_mark(
+            || "chooser-kinds".into(),
+            || vec!["Fresh".into(), "With context".into()],
+        );
         // Providers: any offered one for a New thread; the source's own for a
         // Side chat (its context lives in that provider's session).
         let provider_rows: Vec<AnyElement> = providers
@@ -741,7 +752,7 @@ impl Shell {
                         .and_then(|list| list.iter().find(|(id, _)| *id == provider))
                         .map(|(_, name)| name.clone())
                         .unwrap_or_else(|| format!("{provider:?}"));
-                    format!("Side chats stay on {name}, the source's provider and account, to keep its context.").into()
+                    format!("Side chats with context stay on {name}, the source's provider and account, to keep its context.").into()
                 }
                 None => "The source has no provider yet: send a message there first.".into(),
             }),

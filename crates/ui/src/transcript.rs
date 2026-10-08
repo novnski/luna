@@ -7984,6 +7984,12 @@ impl Transcript {
                 .map(|config| config.harness)
         });
         let history_role = row.role;
+        // One level of side chats (Board A10): a side chat never forks or
+        // carries its context, so its rows offer neither (the chat menu says
+        // why, and the engine refuses it regardless).
+        let side_origin = history_task_id.as_deref().is_some_and(|task_id| {
+            crate::shell::board::chat_badges::context_forks_blocked(self.state.read(cx), task_id)
+        });
         // Only where the host can resolve the boundary (a turn's checkpoint).
         let history_target = history_task_id.clone().filter(|_| {
             self.history_actions
@@ -8015,7 +8021,7 @@ impl Transcript {
                 if !matches!(history_role, MessageRole::User | MessageRole::Assistant) {
                     return None;
                 }
-                let parent = history_task_id.clone();
+                let parent = history_task_id.clone().filter(|_| !side_origin);
                 let side = self
                     .doc_override
                     .clone()
@@ -8079,6 +8085,7 @@ impl Transcript {
                 .is_some_and(luna_engine::history_operations::same_chat_rewind_supported);
             let fork = history_target.clone().and_then(|task_id| {
                 let eligible = checkpoint_history
+                    && !side_origin
                     && matches!(history_role, MessageRole::User | MessageRole::Assistant);
                 eligible.then(|| {
                     let message_id = copy_entry_id.to_string();

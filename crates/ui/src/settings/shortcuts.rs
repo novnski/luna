@@ -775,10 +775,10 @@ fn description(id: ShortcutId) -> &'static str {
             "Select the previous conversation in the sidebar list, wrapping at the start."
         }
         ShortcutId::NewThreadChooser => {
-            "Choose a New thread or a Side chat from the focused group's chat."
+            "Start a side chat from the focused group's chat: fresh or with its context (from a side chat: a fresh side chat or a handoff)."
         }
         ShortcutId::NewThreadSplit => {
-            "Start a fresh New thread from the focused group's chat in a new group to the right."
+            "Start a fresh side chat from the focused group's chat in a new group to the right."
         }
         ShortcutId::PreviousTab => "Select the previous tab in the focused group.",
         ShortcutId::NextTab => "Select the next tab in the focused group.",

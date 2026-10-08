@@ -184,10 +184,10 @@ fn duration_text(card: &Snapshot, now: chrono::DateTime<chrono::Utc>) -> Option<
         .map(|ms| crate::native_agents::duration_label(ms.max(0) as u64))
 }
 
-/// A child-created record is always a fresh child conversation with no
-/// inherited context: LUNA's "New thread" (never a context-carrying Side
-/// chat).
-const NEW_THREAD: &str = "New thread";
+/// A child-created record is always a fresh side chat with no inherited
+/// context (one vocabulary: every chat a main chat starts is a Side chat;
+/// this one starts fresh).
+const NEW_THREAD: &str = "Side chat · fresh";
 
 /// The conversation-type badge the `#` picker uses (the tab strip's Main
 /// badge geometry in the chip tiles' neutral wash): a quiet label, never a

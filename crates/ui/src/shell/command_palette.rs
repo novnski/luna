@@ -57,6 +57,7 @@ enum EntryIdentity {
     SearchAllContent,
     SearchCurrentContent,
     Workbench(super::workbench::WorkbenchAction),
+    Board(super::board::chat_badges::palette::BoardPaletteEntry),
     Chat(String),
     History(String),
     LoadOlder(ResultGroup),
@@ -85,6 +86,9 @@ pub(super) enum Entry {
     SearchCurrentContent,
     /// A workbench tab/split command (dragging is never the only way).
     Workbench(super::workbench::WorkbenchAction),
+    /// A board action on the current chat, a ticket, or a ticket's chat
+    /// (by stable ids).
+    Board(super::board::chat_badges::palette::BoardPaletteEntry),
     Chat {
         id: String,
         group: ResultGroup,
@@ -107,11 +111,12 @@ impl Entry {
                 | Self::Activity
                 | Self::Theme(_)
                 | Self::Workbench(_)
-        )
+        ) || matches!(self, Self::Board(entry) if !entry.is_result())
     }
 
     fn is_search_result(&self) -> bool {
         matches!(self, Self::Chat { .. } | Self::History { .. })
+            || matches!(self, Self::Board(entry) if entry.is_result())
     }
 
     fn identity(&self) -> EntryIdentity {
@@ -125,6 +130,7 @@ impl Entry {
             Self::SearchAllContent => EntryIdentity::SearchAllContent,
             Self::SearchCurrentContent => EntryIdentity::SearchCurrentContent,
             Self::Workbench(action) => EntryIdentity::Workbench(*action),
+            Self::Board(entry) => EntryIdentity::Board(entry.clone()),
             Self::Chat { id, .. } => EntryIdentity::Chat(id.clone()),
             Self::History { event_id, .. } => EntryIdentity::History(event_id.clone()),
             Self::LoadOlder(group) => EntryIdentity::LoadOlder(*group),
@@ -151,6 +157,7 @@ impl Entry {
                 Some(("Search content in current project", icons::FOLDER))
             }
             Self::Workbench(action) => Some((action.label(), action.icon())),
+            Self::Board(entry) => entry.action(),
             Self::Chat { .. } | Self::History { .. } | Self::LoadOlder(_) => None,
         }
     }
@@ -260,13 +267,26 @@ impl Shell {
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        // A focused side chat has no context fork (Board A10): its `+`
+        // chooser entry opens the side chat's own card instead.
+        let side_focus = self.board_palette_side_focus(cx);
         entries.extend(
             self.workbench_palette_actions()
                 .into_iter()
+                .filter(|action| {
+                    !(side_focus && *action == super::workbench::WorkbenchAction::SideChat)
+                })
                 .map(Entry::Workbench)
                 .filter(|entry| {
                     matches_query(&query, entry.action().map_or("", |(label, _)| label))
                 }),
+        );
+        // Board: actions on the current chat, then matching tickets (each
+        // also offering Go to chat), all by stable ids.
+        entries.extend(
+            self.board_palette_entries(&query, cx)
+                .into_iter()
+                .map(Entry::Board),
         );
         if !query.is_empty() {
             entries.push(if self.history_search_global {
@@ -619,6 +639,7 @@ impl Shell {
             Entry::Activity => self.toggle_activity(window, cx),
             Entry::Theme(_) => unreachable!(),
             Entry::Workbench(action) => self.run_workbench_action(action, cx),
+            Entry::Board(entry) => self.activate_board_palette_entry(entry, cx),
             Entry::Chat { id, .. } => self.open_chat(id, cx),
             Entry::History { .. } => {
                 if let Some(event) = history_event {
@@ -925,6 +946,8 @@ impl Shell {
                         row.child(popover::kbd_hint(&theme, &shortcut))
                     })
                     .into_any_element()
+            } else if let Entry::Board(board) = entry {
+                self.render_board_palette_row(board, active == Some(ix), ix, &query, &theme, cx)
             } else if let Entry::Chat { id, .. } = entry {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| &chat.id == id)?;
