@@ -344,6 +344,8 @@ pub struct EngineCore {
     cleanup_boot_id: String,
     cleanup_cancel: tokio_util::sync::CancellationToken,
     cleanup_worker: std::sync::Mutex<Option<(Arc<rpc::EngineRpc>, tokio::task::JoinHandle<()>)>>,
+    /// Shared by every RPC service of this engine (board gates/notifier).
+    board_hub: rpc::board_engine::BoardHub,
 }
 
 impl EngineCore {
@@ -738,6 +740,7 @@ impl EngineCore {
             cleanup_boot_id: uuid::Uuid::new_v4().to_string(),
             cleanup_cancel: tokio_util::sync::CancellationToken::new(),
             cleanup_worker: std::sync::Mutex::new(None),
+            board_hub: rpc::board_engine::BoardHub::default(),
         })
     }
 
@@ -922,7 +925,8 @@ impl EngineCore {
         .with_previews(self.previews.clone())
         .with_github_pr(self.github_pr.clone())
         .with_side_chats(self.side_chats.clone())
-        .with_provider_defaults(self.provider_defaults.clone());
+        .with_provider_defaults(self.provider_defaults.clone())
+        .with_board_hub(self.board_hub.clone());
         if include_backup {
             // Saved shell commands are a local desktop workflow, never relay RPCs.
             rpc = rpc.with_project_commands(self.project_commands.clone());

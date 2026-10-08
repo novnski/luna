@@ -1259,6 +1259,7 @@ enum MutateParams {
 
 mod agent_workspace;
 mod automations;
+mod board;
 mod claude_goals;
 mod claude_history;
 mod context_transfer;
@@ -1309,6 +1310,8 @@ pub struct EngineRpc {
         std::collections::HashMap<String, child_threads::ProvisionedChildWorktree>,
     >,
     activity_cancel: CancellationToken,
+    /// Engine-shared board gates and observation notifier.
+    board: board_engine::BoardHub,
 }
 
 /// A disconnected RPC can abort a native metadata command after its durable
@@ -1397,6 +1400,12 @@ impl EngineRpc {
         id.split_once("--sub--").is_some_and(|(owner, _)| {
             self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
         })
+    }
+
+    /// Share one board hub across every RPC service of an engine.
+    pub(crate) fn with_board_hub(mut self, hub: board_engine::BoardHub) -> Self {
+        self.board = hub;
+        self
     }
 
     pub(crate) fn with_side_chats(mut self, side_chats: crate::side_chats::SideChats) -> Self {
@@ -1519,6 +1528,7 @@ impl EngineRpc {
             automation_reconcile_cursor: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_child_worktrees: Default::default(),
             activity_cancel: CancellationToken::new(),
+            board: board_engine::BoardHub::default(),
         };
         rpc.spawn_activity_bootstrap();
         rpc.model_cache.start_background_refresh();
@@ -9229,6 +9239,9 @@ impl RpcService for EngineRpc {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
+        if board::handles(method) {
+            return self.handle_board(method, params).await;
+        }
         if context_transfer::handles(method) {
             return self.handle_context_transfer(method, params);
         }
@@ -13396,6 +13409,8 @@ mod context_usage_tests {
     }
 }
 
+#[path = "board/mod.rs"]
+pub(crate) mod board_engine;
 #[path = "chat_workbench_rpc.rs"]
 mod chat_workbench;
 #[path = "child_threads.rs"]
