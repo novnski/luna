@@ -162,9 +162,10 @@ struct PendingInput {
     kind: PendingInputKind,
     questions: Vec<UserInputQuestion>,
     resolver: oneshot::Sender<Vec<UserInputAnswer>>,
-    /// The recommended answers LUNA sends if nobody answers in time. `None`
+    /// The recommended answers and original deadline. Keep both when a
+    /// background question moves to a new card at a turn boundary. `None`
     /// once the user holds the question (or when it never qualified).
-    unattended: Option<Vec<UserInputAnswer>>,
+    unattended: Option<(Vec<UserInputAnswer>, i64)>,
 }
 
 #[derive(Debug)]
@@ -757,7 +758,7 @@ fn schedule_unattended_answer(
         let Some(input) = taken else {
             return;
         };
-        let answers = input.unattended.unwrap_or_default();
+        let (answers, _) = input.unattended.expect("checked unattended answer");
         lock(&signals.auto_answered).insert(request_id.clone());
         tracing::info!(request = %request_id, "no answer in time; sending the agent's recommended answer");
         let _ = input.resolver.send(answers);
@@ -1823,6 +1824,15 @@ impl SessionsEngine {
 
     pub fn has_live_run(&self, chat_id: &str) -> bool {
         lock(&self.inner.runs).contains_key(chat_id)
+    }
+
+    /// A root turn can be idle while its provider-owned children or tasks
+    /// are still running. Destructive idle-only operations must check this
+    /// separately from the foreground turn fence.
+    pub(crate) fn has_live_background_work(&self, chat_id: &str) -> bool {
+        lock(&self.inner.runs)
+            .get(chat_id)
+            .is_some_and(|run| !run.work_observations.is_empty())
     }
 
     /// The execution-lane fence for an active turn. A steerable provider keeps
@@ -3581,6 +3591,11 @@ impl SessionsEngine {
                 "The task has an active or pending turn; stop it before {gerund}."
             )));
         }
+        if self.has_live_background_work(chat_id) {
+            return Err(EngineError::Other(format!(
+                "The task has live background work; stop it before {gerund}."
+            )));
+        }
         let closing = {
             let mut runs = lock(&self.inner.runs);
             runs.get_mut(chat_id).map(|run| {
@@ -5007,7 +5022,7 @@ impl SessionsEngine {
                         kind: PendingInputKind::Provider,
                         questions: questions.clone(),
                         resolver: tx,
-                        unattended: unattended.as_ref().map(|(answers, _)| answers.clone()),
+                        unattended: unattended.clone(),
                     },
                 );
                 // The full URL stays only in the live pending resolver. Strip
@@ -7416,13 +7431,29 @@ impl Inner {
         run_id: &str,
         input: PendingInput,
     ) -> Option<AgentEvent> {
-        let (pending, engine_tx) = lock(&self.runs)
+        let (pending, engine_tx, signals) = lock(&self.runs)
             .get(chat_id)
             .filter(|run| run.run_id == run_id)
-            .map(|run| (run.pending_inputs.clone(), run.engine_tx.clone()))?;
+            .map(|run| {
+                (
+                    run.pending_inputs.clone(),
+                    run.engine_tx.clone(),
+                    run.signals.clone(),
+                )
+            })?;
         let request_id = new_id();
         let questions = input.questions.clone();
+        let unattended = input.unattended.clone();
         lock(&pending).insert(request_id.clone(), input);
+        if let Some((_, at_ms)) = &unattended {
+            schedule_unattended_answer(
+                pending.clone(),
+                engine_tx.clone(),
+                signals,
+                request_id.clone(),
+                *at_ms,
+            );
+        }
         schedule_provider_input_cleanup(
             pending.clone(),
             engine_tx.clone(),
@@ -7435,6 +7466,18 @@ impl Inner {
         for question in &mut visible {
             if let Some(meta) = &mut question.mcp {
                 meta.launch_url = None;
+            }
+            if let Some((answers, at_ms)) = &unattended {
+                let labels = answers
+                    .iter()
+                    .find(|answer| answer.question_id == question.id)
+                    .map(|answer| answer.labels.clone())
+                    .unwrap_or_default();
+                question.set_auto_select(Some(luna_proto::AutoSelect {
+                    at_ms: *at_ms,
+                    labels,
+                    fired: false,
+                }));
             }
         }
         Some(AgentEvent::InputRequested {
@@ -9739,6 +9782,28 @@ async fn drive_run(
                     }
                     AgentEvent::Done { .. } => {
                         idle_since = None;
+                    }
+                    // Nonblocking tools already returned to the provider.
+                    // Keep their question cards even when background work
+                    // asks after the root Done, without reopening the turn.
+                    AgentEvent::AsyncQuestions { message_id, .. } => {
+                        let card_id = format!("aq-{message_id}");
+                        let exists = doc_ref.read_entries().is_ok_and(|entries| {
+                            entries.iter().any(|entry| entry.parts.iter().any(|part| {
+                                matches!(part, MessagePart::AsyncQuestion { id, .. } if id == &card_id)
+                            }))
+                        });
+                        if exists {
+                            continue;
+                        }
+                        if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                            journal_failure = Some(error);
+                            break SessionStatus::Errored;
+                        }
+                        if let Err(error) = write_late_ask_card(doc_ref, &device_id, &event) {
+                            tracing::warn!(chat = %chat_id, %error, "late async question write failed");
+                        }
+                        continue;
                     }
                     // A LATE ASK (OCF-51): background native work (a Claude
                     // background task, an OpenCode background subagent, a

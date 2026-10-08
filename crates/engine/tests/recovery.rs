@@ -2435,3 +2435,167 @@ async fn recovery_storage_failure_rolls_back_registry_projection_and_receipt_tog
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     reopened.shutdown().await;
 }
+
+#[tokio::test]
+async fn legacy_side_stop_holds_ordinary_fork_recovery_across_restart() {
+    // Failure-first: direct compatibility Stop must hold a live ordinary
+    // recovery attempt without a durable task-command Stop projection.
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space("side-stop-space", &core.device_id, "/tmp", None, false)
+        .unwrap();
+    client.call("Mutate", serde_json::json!({
+        "op":"createChat","chatId":"side-stop-source","spaceId":"side-stop-space",
+        "config":{"harness":"mock","model":"mock-1","sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}
+    })).await.unwrap();
+    let created = client.call("CreateSideChat", serde_json::json!({
+        "parentId":"side-stop-source","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true
+    })).await.unwrap();
+    let id = created["meta"]["id"].as_str().unwrap().to_owned();
+    let mut original = request("");
+    original.attachments.clear();
+    original.parent_permission_ceiling = None;
+    let initial = fork_command(&client, &id, "side-stop-original-run", serde_json::json!({
+        "kind":"session","command":{"kind":"run","messageId":"side-stop-original","request":original}
+    })).await;
+    let scheduled = wait_for_fork_recovery(&core, &id, RecoveryStatus::Scheduled).await;
+    let retried = fork_command(
+        &client,
+        &id,
+        "side-stop-first-retry",
+        serde_json::json!({"kind":"retryRecovery","chainId":scheduled.chain_id}),
+    )
+    .await;
+    assert_eq!(retried.status, CommandReceiptStatus::Applied, "{retried:?}");
+    let running = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(recovery) = core
+                .sessions
+                .session_status(&id)
+                .and_then(|session| session.recovery)
+                && recovery.status == RecoveryStatus::Running
+                && recovery.acceptance == RecoveryAcceptance::Accepted
+                && core.sessions.active_turn_id(&id).is_some()
+            {
+                break recovery;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ordinary fork recovery attempt is accepted and still running");
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    let stopped = client
+        .call("StopSideChat", serde_json::json!({"id":id}))
+        .await
+        .unwrap();
+    assert_eq!(stopped["stopped"], true);
+    assert!(!core.sessions.has_live_run(&id));
+    let held = wait_for_fork_recovery(&core, &id, RecoveryStatus::Held).await;
+    assert_eq!(held.chain_id, running.chain_id);
+    assert_eq!(held.attempt_count, 1);
+    assert!(!held.automatic);
+    assert!(held.retry_at_ms.is_none());
+    assert_eq!(
+        core.store.task_recovery(&id).unwrap().unwrap().status,
+        "held"
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        core.doc_host
+            .open(&id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| &entry.parts)
+            .filter(|part| matches!(part, MessagePart::Tool { id, .. } if id == "completed-effect"))
+            .count(),
+        1,
+        "the original completed effect remains visible after Stop"
+    );
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = luna_rpc::memory_client(reopened.rpc_service());
+    let after_restart = wait_for_fork_recovery(&reopened, &id, RecoveryStatus::Held).await;
+    assert_eq!(after_restart.chain_id, held.chain_id);
+    assert_eq!(after_restart.attempt_count, held.attempt_count);
+    // An incorrectly reconciled Interrupted chain would auto-continue after
+    // its 1–2 second retry delay. A durable Held state must stay inert.
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "restart must not undo explicit Stop"
+    );
+    assert!(!reopened.sessions.has_live_run(&id));
+    assert_eq!(
+        reopened.store.task_recovery(&id).unwrap().unwrap().status,
+        "held"
+    );
+    let resumed = fork_command(
+        &client,
+        &id,
+        "side-stop-explicit-retry-after-restart",
+        serde_json::json!({"kind":"retryRecovery","chainId":held.chain_id}),
+    )
+    .await;
+    assert_eq!(resumed.status, CommandReceiptStatus::Applied, "{resumed:?}");
+    let completed = wait_for_fork_recovery(&reopened, &id, RecoveryStatus::Completed).await;
+    assert_eq!(completed.chain_id, held.chain_id);
+    assert_eq!(completed.attempt_count, 2);
+    assert_eq!(runs.load(Ordering::SeqCst), 3);
+    let logged = requests.lock().unwrap().clone();
+    assert_eq!(logged.len(), 3);
+    assert_ne!(logged[0].prompt, logged[1].prompt);
+    assert_eq!(logged[1].prompt, logged[2].prompt);
+    assert_eq!(logged[1].resume, logged[2].resume);
+    assert_eq!(
+        reopened
+            .doc_host
+            .open(&id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| &entry.parts)
+            .filter(|part| matches!(part, MessagePart::Tool { id, .. } if id == "completed-effect"))
+            .count(),
+        1,
+        "explicit continuation must not replay the original completed effect"
+    );
+    if let Ok(dir) = std::env::var("FORK_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("legacy-side-stop-recovery.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "taskId":id,"initial":initial,"scheduled":scheduled,"retry":retried,
+                "running":running,"stop":stopped,"held":held,"afterRestart":after_restart,
+                "explicitRetry":resumed,"completed":completed,"providerRunsBeforeRestart":2,
+                "providerRunsAfterRestart":2,"providerRunsAfterExplicitRetry":runs.load(Ordering::SeqCst),
+                "requests":logged
+            })).unwrap(),
+        ).unwrap();
+    }
+    drop(client);
+    reopened.shutdown().await;
+}

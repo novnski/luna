@@ -869,7 +869,7 @@ impl SideChats {
     pub async fn stop(&self, id: &str, token: &str) -> Result<()> {
         let _gate = self.gate(id).await;
         self.require_lease(id, token)?;
-        self.0.sessions.interrupt_for_stop(id).await?;
+        self.0.sessions.interrupt(id).await?;
         self.project(id)?;
         Ok(())
     }

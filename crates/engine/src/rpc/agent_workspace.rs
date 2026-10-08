@@ -82,7 +82,23 @@ impl EngineRpc {
                 .parent_task_id
                 .or(identity.task.lineage.source_task_id)
             {
-                Some(parent) => id = parent,
+                Some(parent) => {
+                    // Provenance does not own an ordinary conversation's
+                    // lifetime. A surviving fork (and its descendants) keeps
+                    // a local workbench when its source is deleted or moved.
+                    // Never cross that missing host/project boundary to find
+                    // a different root.
+                    let parent_chat = self.workspace.chat(&parent).map_err(fail)?;
+                    let parent_identity = self.task_identity.view(&parent);
+                    if parent_chat.as_ref().is_none_or(|chat| {
+                        chat.device_id != self.engine_info.device_id
+                            || chat.space_id != start.space_id
+                    }) || parent_identity.is_none_or(|identity| identity.task.tombstoned)
+                    {
+                        return Ok(id);
+                    }
+                    id = parent;
+                }
                 None => return Ok(id),
             }
         }
@@ -229,9 +245,11 @@ impl EngineRpc {
                 ));
             }
             let snapshot = self.current_task_command_snapshot(id).map_err(fail)?;
-            if request.action == Action::ArchiveThreads && snapshot.active_turn_id.is_some() {
+            if request.action == Action::ArchiveThreads
+                && (snapshot.active_turn_id.is_some() || self.sessions.has_live_background_work(id))
+            {
                 return Err(fail(
-                    "Conversation is working; finish or explicitly stop it before archiving",
+                    "Conversation or its background work is active; finish or explicitly stop it before archiving",
                 ));
             }
             if request.action == Action::ForkThread && request.native_context {

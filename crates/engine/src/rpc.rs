@@ -3580,16 +3580,19 @@ impl EngineRpc {
             command_id: &command.command_id,
             armed: true,
         });
-        let outcome = self
-            .apply_task_command_intent(
-                &command.command_id,
-                &command.task_id,
-                command.intent,
-                expected_turn_id.as_deref(),
-                validated_project_move,
-                send_fence,
-            )
-            .await;
+        // Keep this large command state machine out of every enclosing RPC
+        // future. Inline storage compounds debug poll-stack usage even for a
+        // small command such as goal resume; the command lane and cancellation
+        // guard still surround the same awaited operation.
+        let outcome = Box::pin(self.apply_task_command_intent(
+            &command.command_id,
+            &command.task_id,
+            command.intent,
+            expected_turn_id.as_deref(),
+            validated_project_move,
+            send_fence,
+        ))
+        .await;
         if let Some(guard) = &mut cancellation_guard {
             guard.armed = false;
         }
@@ -4180,19 +4183,105 @@ impl EngineRpc {
     ) -> Result<Vec<String>, crate::EngineError> {
         let mut source_turns = self.hidden_turn_prefix(source, source_binding)?;
         if side_chat {
+            if plan
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| entry.role == MessageRole::Assistant)
+                .is_some_and(|entry| !plan.checkpoints.contains_key(&entry.id))
+            {
+                return Err(crate::EngineError::Other(
+                    "This history ends without an exact provider checkpoint. Create a context snapshot instead of a native fork.".into(),
+                ));
+            }
             for entry in &plan.entries {
-                if entry.role == MessageRole::Assistant {
-                    source_turns.push(plan.checkpoints.get(&entry.id).cloned().ok_or_else(
-                        || {
-                            crate::EngineError::Other(
-                                "This history contains a display segment without an exact provider checkpoint. Create a context snapshot instead of a native fork.".into(),
-                            )
-                        },
-                    )?);
+                if entry.role == MessageRole::Assistant
+                    && let Some(checkpoint) = plan.checkpoints.get(&entry.id)
+                {
+                    source_turns.push(checkpoint.clone());
                 }
             }
         }
         Ok(source_turns)
+    }
+
+    /// Display segments have no independent provider boundary. Compare the
+    /// entire retained prefix before creating a native side fork, so skipping
+    /// their absent checkpoints cannot also hide a missing whole native turn.
+    async fn validate_side_fork_native_prefix(
+        &self,
+        source: &Chat,
+        binding: &luna_proto::ExecutionBinding,
+        plan: &crate::history_operations::HistoryPlan,
+        expected: &[String],
+    ) -> Result<(), crate::EngineError> {
+        use luna_proto::ProviderForkBoundary;
+        let fail = || {
+            crate::EngineError::Other(
+                "Provider and LUNA retained history differ; native side fork was not sent".into(),
+            )
+        };
+        let native = if binding.provider_id == HarnessId::Codex {
+            let anchor = match &plan.provider_boundary {
+                ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
+                | ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+                    Some(checkpoint_id.as_str())
+                }
+                ProviderForkBoundary::Tip => expected.last().map(String::as_str),
+            };
+            // Empty native history has no anchor to read through the Codex
+            // API. Its exhaustive fork checkpoint map must remain empty at
+            // publication; a nonempty map is refused below.
+            let Some(anchor) = anchor else {
+                return Ok(());
+            };
+            let client = self.conversation_rewind_client(&source.id, source)?;
+            let cwd = source.cwd.clone().unwrap_or_else(|| ".".into());
+            // prepare_rewind reads thread history and computes a prefix only;
+            // it never issues thread/revert or any other history mutation.
+            let read = tokio::time::timeout(
+                Duration::from_secs(30),
+                client.prepare_rewind(&binding.provider_task_id, anchor, &cwd),
+            )
+            .await
+            .map_err(|_| {
+                crate::EngineError::Other("native side fork history read timed out".into())
+            })??;
+            read.original
+                .iter()
+                .map(|turn| turn.get("id").and_then(Value::as_str).map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(fail)?
+        } else {
+            let read = self
+                .native_turns(binding.provider_id, self.native_scope(source, binding))
+                .await?;
+            // OpenCode keeps completed compaction and preceding history in
+            // its native store, so its fork contract still supports this
+            // exact prefix. Claude's native fork refuses compacted history.
+            if read.compacted && binding.provider_id == HarnessId::ClaudeCode {
+                return Err(fail());
+            }
+            read.turn_starts
+        };
+        let end = match &plan.provider_boundary {
+            ProviderForkBoundary::Tip => native.len(),
+            ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => native
+                .iter()
+                .position(|turn| turn == checkpoint_id)
+                .ok_or_else(fail)?,
+            ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+                native
+                    .iter()
+                    .position(|turn| turn == checkpoint_id)
+                    .ok_or_else(fail)?
+                    + 1
+            }
+        };
+        if expected != &native[..end] {
+            return Err(fail());
+        }
+        Ok(())
     }
 
     fn preserve_fork_hidden_turns(
@@ -4205,6 +4294,21 @@ impl EngineRpc {
         side_chat: bool,
     ) -> Result<(), crate::EngineError> {
         let source_turns = self.fork_hidden_turns(source, source_binding, plan, side_chat)?;
+        // These adapters return one mapping per native turn. OpenCode maps
+        // every message instead, so its full fork prefix is read back before
+        // reaching this publication path.
+        if side_chat
+            && matches!(
+                source_binding.provider_id,
+                HarnessId::ClaudeCode | HarnessId::Codex
+            )
+            && result.checkpoint_map.len() != source_turns.len()
+        {
+            return Err(crate::EngineError::Other(
+                "Provider fork contains a different inherited turn prefix; fork was not published"
+                    .into(),
+            ));
+        }
         let turns = source_turns
             .iter()
             .map(|turn| {
@@ -5777,8 +5881,14 @@ impl EngineRpc {
 
                 // Fail before mutating a provider when inherited display
                 // segments cannot be mapped to exact native history.
-                self.fork_hidden_turns(&source, &binding, &plan, side_chat)
+                let inherited_turns = self
+                    .fork_hidden_turns(&source, &binding, &plan, side_chat)
                     .map_err(TaskProjectionError::Mutation)?;
+                if side_chat {
+                    self.validate_side_fork_native_prefix(&source, &binding, &plan, &inherited_turns)
+                        .await
+                        .map_err(TaskProjectionError::Mutation)?;
+                }
 
                 let provider_result = self
                     .fork_provider_history(
@@ -5794,6 +5904,28 @@ impl EngineRpc {
                 let remapped_checkpoints = plan
                     .remapped_checkpoints(&provider_result)
                     .map_err(TaskProjectionError::ProviderUnknown)?;
+                if side_chat && binding.provider_id == HarnessId::Opencode {
+                    let mapped = inherited_turns
+                        .iter()
+                        .map(|turn| provider_result.checkpoint_map.get(turn).cloned())
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                                "Provider fork did not map an inherited turn".into(),
+                            ))
+                        })?;
+                    let mut scope = self.native_scope(&source, &binding);
+                    scope.session_id = provider_session_id.clone();
+                    let read = self
+                        .native_turns(binding.provider_id, scope)
+                        .await
+                        .map_err(TaskProjectionError::ProviderUnknown)?;
+                    if read.turn_starts != mapped {
+                        return Err(TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            "Provider fork contains a different inherited turn prefix; fork was not published".into(),
+                        )));
+                    }
+                }
 
                 let after = self
                     .current_task_command_snapshot(task_id)
@@ -6046,16 +6178,10 @@ impl EngineRpc {
                     .map_err(TaskProjectionError::Mutation)?;
                 let mut document_turns = self.hidden_turn_prefix(&chat, &binding)
                     .map_err(TaskProjectionError::Mutation)?;
-                document_turns.extend(entries
-                    .iter()
-                    .filter(|entry| entry.role == MessageRole::Assistant)
-                    .map(|entry| handle.doc().provider_checkpoint(&entry.id))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| {
-                        TaskProjectionError::Mutation(crate::EngineError::Other(
-                            "LUNA history lacks exact provider checkpoints".into(),
-                        ))
-                    })?);
+                document_turns.extend(
+                    crate::history_operations::segment_checkpoints_for_native_comparison(handle.doc(), &entries)
+                        .map_err(TaskProjectionError::Mutation)?,
+                );
                 let native_turns = native
                     .original
                     .iter()
@@ -6886,6 +7012,11 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetArchived { archived } => {
+                if archived && self.sessions.has_live_background_work(task_id) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "The task has live background work; stop it before archiving.".into(),
+                    )));
+                }
                 let native = self.task_identity.has_native_codex_binding(task_id);
                 let _archive_transition = if native {
                     Some(

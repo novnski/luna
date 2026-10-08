@@ -423,6 +423,109 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     assert_eq!(capability.capability, ProviderForkCapability::Checkpoint);
     assert_eq!(capability.unavailable_reason, None);
 
+    // Chronological notices split one provider turn into multiple assistant
+    // rows. Only the final row has a native checkpoint. Exercise all history
+    // paths below with this real persisted projection shape.
+    let handle = core.doc_host.open(&task).unwrap();
+    let mut split_rows = entries(&core, &task);
+    let second = split_rows
+        .iter()
+        .position(|entry| entry.id == "u2")
+        .unwrap();
+    let second_reply = second
+        + 1
+        + split_rows[second + 1..]
+            .iter()
+            .position(|entry| entry.role == MessageRole::Assistant)
+            .unwrap();
+    let checkpoints = split_rows
+        .iter()
+        .filter_map(|entry| {
+            checkpoint(&core, &task, &entry.id).map(|checkpoint| (entry.id.clone(), checkpoint))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut prefix = split_rows[second_reply].clone();
+    prefix.id = "u2-before-notice".into();
+    prefix.parts = vec![MessagePart::Text {
+        id: "before-notice-text".into(),
+        text: "Before the notice".into(),
+    }];
+    let mut notice = prefix.clone();
+    notice.id = "u2-notice".into();
+    notice.role = MessageRole::System;
+    split_rows.splice(second_reply..second_reply, [prefix, notice]);
+    handle
+        .doc()
+        .replace_conversation_entries(&split_rows, &checkpoints)
+        .unwrap();
+
+    // A missing whole turn must still refuse before native mutation. Merely
+    // filtering out every non-checkpointed row would miss this distinction.
+    let first_reply = split_rows
+        .iter()
+        .find(|entry| entry.role == MessageRole::Assistant)
+        .unwrap();
+    let last_reply = split_rows
+        .iter()
+        .rev()
+        .find(|entry| entry.role == MessageRole::Assistant)
+        .unwrap();
+    for (label, missing_reply, selected_user) in [
+        ("earlier", &first_reply.id, "u3"),
+        ("tip", &last_reply.id, "u2"),
+    ] {
+        let mut missing_checkpoint = checkpoints.clone();
+        missing_checkpoint.remove(missing_reply);
+        handle
+            .doc()
+            .replace_conversation_entries(&split_rows, &missing_checkpoint)
+            .unwrap();
+        let native_before_missing = sha(&transcript(&workspace, &source_session));
+        let read = snapshot(&client, &task).await;
+        let missing = execute(
+            &client,
+            envelope(
+                &format!("cc10-rewind-missing-{label}"),
+                &task,
+                Some(&read),
+                serde_json::json!({
+                    "kind": "rewindConversation", "messageId": selected_user, "keepFiles": true,
+                    "review": review(&core, &read, &task, Some(selected_user)),
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(missing.status, CommandReceiptStatus::Failed, "{missing:?}");
+        assert_eq!(
+            sha(&transcript(&workspace, &source_session)),
+            native_before_missing
+        );
+        assert_eq!(entries(&core, &task), split_rows);
+        assert!(handle.doc().context_control().pending_rewind.is_none());
+        let side_fork = client
+            .call(
+                methods::CREATE_SIDE_CHAT,
+                serde_json::json!({
+                    "parentId":task, "requestId":uuid::Uuid::new_v4().to_string(),
+                }),
+            )
+            .await;
+        assert!(
+            side_fork.is_err(),
+            "native side fork must reject a missing {label} checkpoint"
+        );
+        assert_eq!(
+            sha(&transcript(&workspace, &source_session)),
+            native_before_missing
+        );
+        assert_eq!(entries(&core, &task), split_rows);
+    }
+    handle
+        .doc()
+        .replace_conversation_entries(&split_rows, &checkpoints)
+        .unwrap();
+    drop(handle);
+
     // D3/D4: preview without touching files; a stale digest is refused.
     let notes = workspace.join("notes.txt");
     let preview: NativeFileRewindView = client
@@ -705,6 +808,28 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
         "saved history truncates the rewound tail"
     );
 
+    // Native steering can insert a User row inside a provider turn. Global
+    // history comparison must accept that segmentation when rewinding a later
+    // whole turn, without treating the steered row as a new native turn.
+    let handle = core.doc_host.open(&task).unwrap();
+    let mut steered_rows = entries(&core, &task);
+    let turn_two_end = steered_rows
+        .iter()
+        .position(|entry| checkpoint(&core, &task, &entry.id).as_deref() == Some(c2.as_str()))
+        .unwrap();
+    let mut steered_user = steered_rows
+        .iter()
+        .find(|entry| entry.id == "u2")
+        .unwrap()
+        .clone();
+    steered_user.id = "u2-steer".into();
+    steered_rows.insert(turn_two_end, steered_user);
+    handle
+        .doc()
+        .replace_conversation_entries(&steered_rows, &checkpoints)
+        .unwrap();
+    drop(handle);
+
     // Same-chat rewind before turn three on the same Claude session.
     let read = snapshot(&client, &task).await;
     let rewound = execute(
@@ -727,7 +852,9 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
         vec![c1.clone(), c2.clone()]
     );
     let ids = conversation_ids(&core, &task);
-    assert_eq!(ids.len(), 4, "{ids:?}");
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    assert!(ids.contains(&"u2-before-notice".to_string()));
+    assert!(ids.contains(&"u2-steer".to_string()));
     assert!(!ids.contains(&"u3".to_string()));
     assert!(
         core.doc_host
@@ -817,7 +944,6 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
         .append(true)
         .open(&path)
         .unwrap();
-    use std::io::Write as _;
     writeln!(
         file,
         "{}",

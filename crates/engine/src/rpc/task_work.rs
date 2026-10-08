@@ -234,6 +234,14 @@ impl WorkProjection {
                     State::Running
                 } else if let Some(reply) = reply {
                     match reply.status {
+                        Some(MessageStatus::Complete)
+                            if reply
+                                .parts
+                                .iter()
+                                .any(|part| matches!(part, MessagePart::Error { .. })) =>
+                        {
+                            State::Failed
+                        }
                         Some(MessageStatus::Complete) => State::Completed,
                         Some(MessageStatus::Aborted) => State::Stopped,
                         _ => State::Unknown,
@@ -258,7 +266,7 @@ impl WorkProjection {
                         origin: child.work_origin.clone(),
                         owned,
                         blocks_completion: owned && !state.terminal(),
-                        needs_attention: state == State::Unknown,
+                        needs_attention: matches!(state, State::Unknown | State::Failed),
                         can_stop: control.is_some(),
                         detail: if independent {
                             "Initial delegated turn ended; the current turn is independently owned"

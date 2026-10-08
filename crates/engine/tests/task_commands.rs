@@ -59,6 +59,7 @@ struct HistoryHarness {
 #[derive(Clone, Copy)]
 enum HistoryForkBehavior {
     Success,
+    CompactedHistory,
     FailPreflight,
     FailAfterAcknowledgement,
 }
@@ -87,6 +88,31 @@ impl Harness for HistoryHarness {
 
     fn fork_capability(&self) -> ProviderForkCapability {
         ProviderForkCapability::Checkpoint
+    }
+
+    async fn native_history_turns(
+        &self,
+        scope: luna_harness::NativeHistoryScope,
+    ) -> Result<luna_harness::NativeHistoryTurns, HarnessError> {
+        let checkpoint = if scope.session_id == "synthetic-history-source" {
+            "provider-message-1".to_string()
+        } else {
+            let sequence = scope
+                .session_id
+                .strip_prefix("synthetic-history-fork-")
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|sequence| {
+                    *sequence > 0 && *sequence <= self.fork_sequence.load(Ordering::SeqCst)
+                })
+                .ok_or_else(|| {
+                    HarnessError::Protocol("unknown synthetic history session".into())
+                })?;
+            format!("fork-provider-message-{sequence}")
+        };
+        Ok(luna_harness::NativeHistoryTurns {
+            turn_starts: vec![checkpoint],
+            compacted: matches!(self.behavior, HistoryForkBehavior::CompactedHistory),
+        })
     }
 
     async fn fork_session(
@@ -5720,6 +5746,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
 async fn side_chat_native_fork_preserves_binding_and_never_replays_unknown_creation() {
     for behavior in [
         HistoryForkBehavior::Success,
+        HistoryForkBehavior::CompactedHistory,
         HistoryForkBehavior::FailAfterAcknowledgement,
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -5749,7 +5776,10 @@ async fn side_chat_native_fork_preserves_binding_and_never_replays_unknown_creat
             1,
             "creation cannot replay a native fork"
         );
-        if matches!(behavior, HistoryForkBehavior::Success) {
+        if matches!(
+            behavior,
+            HistoryForkBehavior::Success | HistoryForkBehavior::CompactedHistory
+        ) {
             let created = first.unwrap();
             assert_eq!(created["meta"]["contextMode"], "nativeFork");
             assert_eq!(created["meta"]["id"], second.unwrap()["meta"]["id"]);

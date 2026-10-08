@@ -2753,6 +2753,16 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
             .count(),
         1
     );
+    // This case exercises an amendment after the previous answer's turn.
+    // ScriptedHarness does not consume live steering: under concurrent test
+    // load that turn can still be active after the duplicate receipt lands.
+    // Keep the duplicate timing above; wait for actual runtime settlement
+    // before the late amendment. The boundary test below covers live steering.
+    wait_for(
+        || !core.sessions.has_live_run(CHAT),
+        "prior answer turn settled before late amendment",
+    )
+    .await;
     queue_as_owner(
         &core,
         handle.doc(),
@@ -2767,8 +2777,11 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     );
     wait_for(
         || {
-            command_status(&core, "amend-call-2")
-                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+            let receipt = command_status(&core, "amend-call-2");
+            if let Some((SessionCommandStatus::Rejected, reason)) = &receipt {
+                panic!("late amendment was rejected: {reason:?}");
+            }
+            receipt.is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
         },
         "amended answer applied",
     )
@@ -5088,4 +5101,259 @@ async fn codex_retry_and_warning_are_transient_notices_not_error_parts() {
         .collect();
     assert_eq!(errors, ["quota exhausted"], "retries are not errors");
     core.shutdown().await;
+}
+
+fn save_input_audit_evidence(name: &str, value: &serde_json::Value) {
+    let root = std::env::var_os("LUNA_AUDIT_EVIDENCE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("luna-engine-input-audit-{}", std::process::id()))
+        });
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("{name}.json"));
+    std::fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    eprintln!("input audit evidence: {}", path.display());
+}
+
+/// A nonblocking question is still real after the root turn settles. Its
+/// durable card must survive both parking and a repeated provider event.
+#[tokio::test]
+async fn parked_async_question_is_visible_once_without_reopening_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let question = AgentEvent::AsyncQuestions {
+        message_id: "late-nonblocking-call".into(),
+        questions: vec![luna_proto::AsyncUserInputQuestion {
+            title: "Which background result should I keep?".into(),
+            options: Some(vec!["First (Recommended)".into(), "Second".into()]),
+            ..Default::default()
+        }],
+    };
+    let core = assemble(
+        dir.path(),
+        Arc::new(ScriptedHarness {
+            script: vec![
+                AgentEvent::TextDelta {
+                    text: "Root finished".into(),
+                },
+                done(DoneStatus::Completed),
+                question.clone(),
+                question,
+            ],
+            step_delay: Duration::from_millis(25),
+            hang_until_interrupt: false,
+        }),
+    );
+    core.sessions
+        .dispatch(CHAT, HarnessId::Mock, run_request("start"), None)
+        .await
+        .unwrap();
+    wait_for(|| !core.sessions.has_live_run(CHAT), "parked stream closed").await;
+    let entries = entries_now(&core);
+    save_input_audit_evidence(
+        "parked-async-question",
+        &serde_json::json!({
+            "entries": entries,
+            "session": core.sessions.session_status(CHAT),
+        }),
+    );
+    let cards: Vec<_> = entries
+        .iter()
+        .filter(|entry| {
+            entry.parts.iter().any(|part| {
+                matches!(part, MessagePart::AsyncQuestion { id, resolved: false, .. }
+            if id == "aq-late-nonblocking-call")
+            })
+        })
+        .collect();
+    assert_eq!(
+        cards.len(),
+        1,
+        "the accepted late question has one durable card"
+    );
+    assert_eq!(cards[0].status, Some(MessageStatus::Complete));
+    assert_eq!(
+        core.sessions.session_status(CHAT).unwrap().status,
+        SessionStatus::Idle
+    );
+    core.shutdown().await;
+}
+
+/// Carrying a child question to a new card must keep the original automatic
+/// answer deadline and the provider's original one-shot answer channel.
+#[tokio::test(flavor = "multi_thread")]
+async fn carried_question_preserves_unattended_deadline_and_hold() {
+    struct CarriedQuestionHarness {
+        root_done: Arc<tokio::sync::Notify>,
+        observed: Arc<std::sync::Mutex<Option<Vec<luna_proto::UserInputAnswer>>>>,
+    }
+    #[async_trait]
+    impl Harness for CarriedQuestionHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Carried question"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            let root_done = self.root_done.clone();
+            let observed = self.observed.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(AgentEvent::NativeTaskChanged {
+                        task: Box::new(luna_proto::NativeTaskSnapshot {
+                            task_id: "asking-child".into(),
+                            ..Default::default()
+                        }),
+                    }))
+                    .await;
+                let answer = (controls.request_input)(vec![luna_proto::UserInputQuestion {
+                    id: "choice".into(),
+                    header: "Choose".into(),
+                    question: "Which path?".into(),
+                    options: vec!["First (Recommended)".into(), "Second".into()],
+                    multi_select: false,
+                    approval: None,
+                    mcp: None,
+                    input: None,
+                }]);
+                root_done.notified().await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+                let answer = answer.await.unwrap_or_default();
+                *observed.lock().unwrap() = Some(answer);
+                controls.interrupt.cancelled().await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+    for hold in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root_done = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let core = assemble(
+            dir.path(),
+            Arc::new(CarriedQuestionHarness {
+                root_done: root_done.clone(),
+                observed: observed.clone(),
+            }),
+        );
+        let settings = dir.path().join("input-settings.json");
+        std::fs::write(&settings, br#"{"unattendedAnswerSeconds":2}"#).unwrap();
+        core.sessions.set_recovery_settings_path(settings);
+        core.sessions
+            .dispatch(CHAT, HarnessId::Mock, run_request("start"), None)
+            .await
+            .unwrap();
+        let open_card = || {
+            entries_now(&core).into_iter().rev().find_map(|entry| {
+                entry.parts.into_iter().find_map(|part| match part {
+                    MessagePart::Input {
+                        request_id,
+                        questions,
+                        resolved: false,
+                        ..
+                    } => Some((request_id, questions)),
+                    _ => None,
+                })
+            })
+        };
+        wait_for(|| open_card().is_some(), "initial recommended question").await;
+        let (old_id, old_questions) = open_card().unwrap();
+        let original_deadline = old_questions[0]
+            .input
+            .as_ref()
+            .unwrap()
+            .auto_select
+            .as_ref()
+            .unwrap()
+            .at_ms;
+        if hold {
+            assert!(core.sessions.hold_input(CHAT, &old_id));
+        }
+        root_done.notify_one();
+        wait_for(
+            || open_card().is_some_and(|(id, _)| id != old_id),
+            "carried question card",
+        )
+        .await;
+        let (new_id, questions) = open_card().unwrap();
+        let plan = questions[0]
+            .input
+            .as_ref()
+            .and_then(|input| input.auto_select.as_ref());
+        if hold {
+            assert!(plan.is_none(), "Hold survives card replacement");
+            let remaining = original_deadline
+                .saturating_sub(chrono::Utc::now().timestamp_millis())
+                .max(0);
+            tokio::time::sleep(Duration::from_millis(remaining as u64 + 100)).await;
+            assert!(
+                observed.lock().unwrap().is_none(),
+                "held request is never auto-answered"
+            );
+            assert!(
+                core.sessions
+                    .respond_input(
+                        CHAT,
+                        &new_id,
+                        vec![luna_proto::UserInputAnswer {
+                            question_id: "choice".into(),
+                            labels: vec!["Second".into()],
+                        }]
+                    )
+                    .unwrap()
+            );
+        } else {
+            assert_eq!(
+                plan.map(|plan| plan.at_ms),
+                Some(original_deadline),
+                "carrying a question preserves, rather than restarts, its countdown"
+            );
+        }
+        wait_for(
+            || observed.lock().unwrap().is_some(),
+            "native child receives its answer",
+        )
+        .await;
+        wait_for(|| open_card().is_none(), "carried card resolved").await;
+        let answers = observed.lock().unwrap().clone().unwrap();
+        save_input_audit_evidence(
+            if hold {
+                "carried-question-held"
+            } else {
+                "carried-question-auto"
+            },
+            &serde_json::json!({"oldRequestId": old_id, "newRequestId": new_id,
+                "deadline": original_deadline, "answers": answers, "entries": entries_now(&core)}),
+        );
+        assert_eq!(
+            answers[0].labels,
+            [if hold {
+                "Second"
+            } else {
+                "First (Recommended)"
+            }]
+        );
+        core.sessions.interrupt(CHAT).await.unwrap();
+        core.shutdown().await;
+    }
 }

@@ -184,7 +184,7 @@ fn checkpoint_file_digest(path: &std::path::Path) -> Result<Option<String>, RpcE
 impl EngineRpc {
     /// The bound native session. Claude's transcripts live under its config
     /// dir; OpenCode's server owns its own storage (no provider home).
-    fn native_scope(
+    pub(super) fn native_scope(
         &self,
         chat: &Chat,
         binding: &luna_proto::ExecutionBinding,
@@ -202,7 +202,7 @@ impl EngineRpc {
         }
     }
 
-    async fn native_turns(
+    pub(super) async fn native_turns(
         &self,
         provider: HarnessId,
         scope: NativeHistoryScope,
@@ -326,14 +326,11 @@ impl EngineRpc {
             .hidden_turn_prefix(&chat, &binding)
             .map_err(TaskProjectionError::Mutation)?;
         document_turns.extend(
-            entries
-                .iter()
-                .filter(|entry| entry.role == MessageRole::Assistant)
-                .map(|entry| handle.doc().provider_checkpoint(&entry.id))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    mutation(format!("LUNA history lacks exact {label} turn identities"))
-                })?,
+            crate::history_operations::segment_checkpoints_for_native_comparison(
+                handle.doc(),
+                &entries,
+            )
+            .map_err(TaskProjectionError::Mutation)?,
         );
         if document_turns != native.turn_starts {
             return Err(mutation(format!(
@@ -685,33 +682,20 @@ impl EngineRpc {
         message_id: &str,
     ) -> Result<String, crate::EngineError> {
         let handle = self.doc_host.open(task_id)?;
-        let entries = handle.doc().read_entries()?;
-        let index = entries
-            .iter()
-            .position(|entry| entry.id == message_id && entry.role == MessageRole::User)
-            .ok_or_else(|| other("choose one of your messages in this task"))?;
-        if let Some(previous) = entries[..index]
-            .iter()
-            .rev()
-            .find(|entry| matches!(entry.role, MessageRole::User | MessageRole::Assistant))
-            && (previous.role != MessageRole::Assistant
-                || handle.doc().provider_checkpoint(&previous.id).is_none())
-        {
-            return Err(other(
-                "this message was folded into a running Claude turn; choose the turn's first message",
-            ));
+        let plan = plan_history(
+            handle.doc(),
+            HarnessId::ClaudeCode,
+            ConversationForkBoundaryKind::BeforeUserMessage,
+            Some(message_id),
+        )?;
+        match plan.provider_boundary {
+            luna_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => {
+                Ok(checkpoint_id)
+            }
+            _ => Err(other(
+                "this message has no exact Claude before-turn checkpoint",
+            )),
         }
-        let assistant = entries[index + 1..]
-            .iter()
-            .find(|entry| matches!(entry.role, MessageRole::User | MessageRole::Assistant))
-            .filter(|entry| entry.role == MessageRole::Assistant)
-            .ok_or_else(|| other("this message has no completed Claude turn"))?;
-        handle
-            .doc()
-            .provider_checkpoint(&assistant.id)
-            .ok_or_else(|| {
-                other("this turn has no Claude checkpoint (it did not complete in LUNA)")
-            })
     }
 
     pub(super) async fn handle_native_file_rewind(

@@ -38,6 +38,25 @@ impl Harness for Peer {
         c: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         self.0.lock().unwrap().push(r.prompt.clone());
+        if r.prompt == "FAIL_DELEGATED_WORK_FOR_REVIEW" {
+            return Ok(futures::stream::iter(vec![
+                Ok(AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: "fixture".into(),
+                    tools: vec![],
+                    cwd: r.cwd,
+                    session_id: format!("native-{}", uuid::Uuid::new_v4()),
+                    assistant_message_id: uuid::Uuid::new_v4().to_string(),
+                }),
+                Ok(AgentEvent::Done {
+                    status: DoneStatus::Errored,
+                    result: None,
+                    error: Some("Delegated work failed in the provider".into()),
+                    session_id: None,
+                }),
+            ])
+            .boxed());
+        }
         Ok(futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -126,6 +145,81 @@ fn artifact(name: &str, v: &Value) {
         .unwrap();
     }
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_child_work_remains_failed_and_needs_attention() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = engine(tmp.path());
+    let c = luna_rpc::memory_client(e.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    e.workspace
+        .create_space(
+            "work-space",
+            &e.device_id,
+            tmp.path().to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(command(&c, &parent, json!({"kind":"createChat","spaceId":"work-space","cwd":tmp.path(),"config":{"harness":"mock","model":"fixture","sandbox":"workspace-write","permissionMode":"ask"}})).await["status"], "applied");
+    queue(&c, &parent, "parent-with-failed-child").await;
+    active(&e, &parent).await;
+    let child = e
+        .rpc_service()
+        .seed_child_for_qa(
+            parent.clone(),
+            serde_json::from_value(json!({
+                "prompt":"FAIL_DELEGATED_WORK_FOR_REVIEW",
+                "idempotencyKey":"failed-child-work",
+                "reportResults":false
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .task_id;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let entries = e
+                .doc_host
+                .open(&child)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap();
+            if e.sessions.active_turn_id(&child).is_none()
+                && entries.iter().any(|entry| {
+                    entry.status == Some(luna_doc::MessageStatus::Complete)
+                        && entry
+                            .parts
+                            .iter()
+                            .any(|part| matches!(part, luna_doc::MessagePart::Error { .. }))
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("child provider error settles into its transcript");
+    let view = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    let row = view["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "childChat" && item["taskId"] == child)
+        .unwrap();
+    assert_eq!(row["state"], "failed", "{view}");
+    assert_eq!(row["needsAttention"], true);
+    assert_eq!(row["owned"], true);
+    assert_eq!(row["blocksCompletion"], false);
+    assert_eq!(row["canStop"], false);
+    assert!(e.sessions.active_turn_id(&parent).is_some());
+    artifact("failed-child-work", &view);
+    e.sessions.interrupt(&parent).await.unwrap();
+    e.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nested_ownership_stop_receipts_and_independent_child_survival() {
     let tmp = tempfile::tempdir().unwrap();
@@ -365,6 +459,129 @@ fn native_engine(
     )
     .unwrap()
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archive_refuses_background_native_work_until_its_terminal_event() {
+    use luna_engine::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend};
+    use std::sync::atomic::AtomicUsize;
+    let tmp = tempfile::tempdir().unwrap();
+    let events = Arc::new(Mutex::new(None));
+    let e = native_engine(
+        tmp.path(),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        events.clone(),
+    );
+    let service = e.rpc_service();
+    let c = luna_rpc::memory_client(service.clone());
+    let source = uuid::Uuid::new_v4().to_string();
+    let fork = uuid::Uuid::new_v4().to_string();
+    e.workspace
+        .create_space(
+            "background-archive",
+            &e.device_id,
+            tmp.path().to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(command(&c, &source, json!({"kind":"createChat","spaceId":"background-archive","cwd":tmp.path(),"config":{"harness":"claude-code","model":"fixture","sandbox":"workspace-write","permissionMode":"ask"}})).await["status"], "applied");
+    call(
+        &c,
+        "CreateSideChat",
+        json!({"parentId":source,"requestId":fork,"forceSnapshot":true}),
+    )
+    .await;
+    queue(&c, &fork, "launch-background-before-archive").await;
+    let before = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let view = call(&c, "GetTaskWork", json!({"taskId":fork})).await;
+            if e.sessions.active_turn_id(&fork).is_none()
+                && view["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["kind"] == "nativeChild" && row["state"] == "running")
+            {
+                break view;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("root settles while its native child keeps running");
+    assert!(e.sessions.has_live_run(&fork));
+    let authority = CrossTaskAuthority {
+        caller_task_id: source.clone(),
+        local_environment_id: e.device_id.clone(),
+        visible_project_ids: std::collections::HashSet::from(["background-archive".into()]),
+        allow_projectless: false,
+        granted_scopes: std::collections::HashSet::from(["threads.read".into()]),
+        explicit_user_request: false,
+        delivery: luna_proto::RuntimeDelivery::CodexMcpTools,
+    };
+    let request = || {
+        serde_json::from_value(json!({
+            "action":"archiveThreads", "taskIds":[fork], "idempotencyKey":"archive-background-fork"
+        }))
+        .unwrap()
+    };
+    assert!(
+        service
+            .prepare_workspace(request(), &authority)
+            .await
+            .is_err()
+    );
+    let refused = command(&c, &fork, json!({"kind":"setArchived","archived":true})).await;
+    assert_ne!(refused["status"], "applied", "{refused}");
+    assert!(!e.workspace.chat(&fork).unwrap().unwrap().archived);
+    assert!(e.sessions.has_live_run(&fork));
+    events
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .send(AgentEvent::Subagent {
+            parent_tool_use_id: "PRIVATE_NATIVE_WORK_TOOL".into(),
+            event: Box::new(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: None,
+            }),
+        })
+        .unwrap();
+    let after = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let view = call(&c, "GetTaskWork", json!({"taskId":fork})).await;
+            if view["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["kind"] == "nativeChild" && row["state"] == "completed")
+            {
+                break view;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("native child's terminal event clears background ownership");
+    assert!(
+        service
+            .prepare_workspace(request(), &authority)
+            .await
+            .is_ok()
+    );
+    let archived = command(&c, &fork, json!({"kind":"setArchived","archived":true})).await;
+    assert_eq!(archived["status"], "applied", "{archived}");
+    assert!(e.workspace.chat(&fork).unwrap().unwrap().archived);
+    artifact(
+        "background-archive",
+        &json!({"before":before,"refused":refused,"after":after,"archived":archived}),
+    );
+    e.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_stop_acknowledgement_unknown_restart_and_terminal_readback() {
     use std::sync::atomic::{AtomicUsize, Ordering};

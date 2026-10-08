@@ -359,6 +359,105 @@ async fn agent_catalog_exposes_bound_workspace_and_rejects_unrelated_targets() {
 }
 
 #[tokio::test]
+async fn surviving_forks_keep_workspace_tools_after_source_deletion() {
+    use luna_engine::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend, CrossTaskTools};
+    let root = tempfile::tempdir().unwrap();
+    let core = engine(root.path());
+    let service = core.rpc_service();
+    let rpc = luna_rpc::memory_client(service.clone());
+    let (source, unrelated) = seed(&core, &rpc, root.path()).await;
+    let fork = uuid::Uuid::new_v4().to_string();
+    let nested = uuid::Uuid::new_v4().to_string();
+    for (parent, id) in [(&source, &fork), (&fork, &nested)] {
+        rpc.call(
+            "CreateSideChat",
+            json!({"parentId":parent,"requestId":id,"forceSnapshot":true}),
+        )
+        .await
+        .unwrap();
+    }
+    let tools = CrossTaskTools::new(service.clone());
+    let mut authority = CrossTaskAuthority {
+        caller_task_id: nested.clone(),
+        local_environment_id: core.device_id.clone(),
+        visible_project_ids: std::collections::HashSet::from(["project".into()]),
+        allow_projectless: false,
+        granted_scopes: std::collections::HashSet::from(["threads.read".into()]),
+        explicit_user_request: false,
+        delivery: luna_proto::RuntimeDelivery::CodexMcpTools,
+    };
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let before = tools
+        .invoke(&authority, "get_workspace", json!({}), &cancel)
+        .await
+        .unwrap();
+    assert_eq!(before["mainChatId"], source);
+    rpc.call("Mutate", json!({"op":"deleteChat","chatId":source}))
+        .await
+        .unwrap();
+    assert!(core.workspace.chat(&source).unwrap().is_none());
+    let mut after = Vec::new();
+    for caller in [&fork, &nested] {
+        authority.caller_task_id = caller.clone();
+        let state = tools
+            .invoke(&authority, "get_workspace", json!({}), &cancel)
+            .await
+            .unwrap();
+        assert_eq!(state["mainChatId"], fork);
+        assert_eq!(state["callerTaskId"], *caller);
+        assert!(
+            state["relatedTaskIds"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(nested))
+        );
+        assert!(
+            !state["relatedTaskIds"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(unrelated))
+        );
+        let request = serde_json::from_value(json!({
+            "action":"openTab","taskIds":[nested],"idempotencyKey":"surviving-fork-view"
+        }))
+        .unwrap();
+        assert_eq!(
+            service
+                .prepare_workspace(request, &authority)
+                .await
+                .unwrap()
+                .main_chat_id,
+            fork
+        );
+        let unrelated_request = serde_json::from_value(json!({
+            "action":"openTab","taskIds":[unrelated],"idempotencyKey":"unrelated-view"
+        }))
+        .unwrap();
+        assert!(
+            service
+                .prepare_workspace(unrelated_request, &authority)
+                .await
+                .is_err()
+        );
+        after.push(state);
+    }
+    authority.caller_task_id = source.clone();
+    assert!(
+        tools
+            .invoke(&authority, "get_workspace", json!({}), &cancel)
+            .await
+            .is_err()
+    );
+    evidence(
+        "surviving-fork-workspace.json",
+        json!({"before":before,"after":after}),
+    );
+    drop(rpc);
+    drop(service);
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn moving_an_existing_background_tab_into_a_split_preserves_focus_and_is_replayable() {
     let root = tempfile::tempdir().unwrap();
     let core = engine(root.path());

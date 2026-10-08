@@ -1230,7 +1230,8 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         -32600
     );
 
-    // Codex's handshake and catalog: the current LUNA tools, read-only marked.
+    // Codex's handshake and catalog: reads are marked read-only; question
+    // cards, workspace mutations and message delivery are writes.
     let (status, init) = mcp_post(
         &http,
         &a.url,
@@ -1256,6 +1257,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         "wait_threads",
         "send_message_to_thread",
         "create_thread",
+        "ask_user",
     ] {
         assert!(names.contains(name), "{name} missing from {names:?}");
     }
@@ -1267,6 +1269,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
                     | "create_thread"
                     | "automation_update"
                     | "manage_workspace"
+                    | "ask_user"
             )
         );
         assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{tool}");

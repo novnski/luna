@@ -252,6 +252,40 @@ pub fn plan_history(
     })
 }
 
+/// Collect segment checkpoints for comparison with exact native turn history.
+/// Notices can split an assistant reply into several entries, with its
+/// checkpoint written only on the last one; in-turn steering can also insert
+/// user rows between those segments. The caller MUST compare the returned
+/// list with every native turn in order: that comparison detects missing
+/// whole-turn checkpoints that cannot be distinguished from segments here.
+/// A trailing uncheckpointed or nonterminal segment is always refused.
+pub(crate) fn segment_checkpoints_for_native_comparison(
+    doc: &SessionDoc,
+    entries: &[SessionMessageEntry],
+) -> Result<Vec<String>, EngineError> {
+    let missing = || EngineError::Other("LUNA history lacks exact provider checkpoints".into());
+    let mut checkpoints = Vec::new();
+    let mut pending_segment = false;
+    for entry in entries {
+        if entry.role == MessageRole::Assistant {
+            let checkpoint = doc.provider_checkpoint(&entry.id);
+            if entry.status != Some(MessageStatus::Complete)
+                && !(entry.status == Some(MessageStatus::Aborted) && checkpoint.is_some())
+            {
+                return Err(missing());
+            }
+            pending_segment = checkpoint.is_none();
+            if let Some(checkpoint) = checkpoint {
+                checkpoints.push(checkpoint);
+            }
+        }
+    }
+    if pending_segment {
+        return Err(missing());
+    }
+    Ok(checkpoints)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HistoryRecoveryRecord {
