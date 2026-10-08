@@ -211,6 +211,12 @@ icon_assets![
     (PACKAGE_SEARCH, "package-search"),
     (CHAT_ROUND_QUESTION_MARK, "chat-round-question-mark"),
     (CLIPBOARD_LIST, "clipboard-list"),
+    // Board page (Solar Linear): the Board/List switch, filters, From
+    // GitHub issue and the card key.
+    (KANBAN, "kanban"),
+    (FILTER, "filter"),
+    (INBOX_IN, "inbox-in"),
+    (TICKET, "ticket"),
     (STOP_CIRCLE, "stop-circle"),
     (NOTEBOOK, "notebook"),
     (WIFI_OFF, "wifi-off"),
