@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Deterministic `gh api` boundary for the Board GitHub E2E and UI fixture.
+
+Serves recorded, sanitized REST responses from a per-scenario world
+(`fake-gh-state/state.json`, copied from `recorded.json` by the test) found
+by walking up from the working directory (the project checkout). Records
+every invocation in `calls.jsonl` and every write in `writes.jsonl`. Never
+touches the network or real credentials.
+
+Knobs (files in the state dir):
+  account  current `gh` login ("" = expired token -> 401, "-" = logged out)
+  mode     ok | rate (issue list/search rate limited) | timeout (issue reads
+           hang) | lost-write (writes apply, response lost) | black-hole
+           (writes never apply, response lost)
+"""
+import hashlib, json, os, pathlib, sys, time, urllib.parse
+
+
+def find_state():
+    here = pathlib.Path(os.getcwd()).resolve()
+    for directory in [here, *here.parents]:
+        candidate = directory / "fake-gh-state"
+        if candidate.is_dir():
+            return candidate
+    sys.stderr.write("fake gh: no fake-gh-state above the working directory\n")
+    sys.exit(2)
+
+
+STATE_DIR = find_state()
+ARGS = sys.argv[1:]
+
+
+def read(name, default=""):
+    path = STATE_DIR / name
+    return path.read_text().strip() if path.exists() else default
+
+
+def append(name, record):
+    with (STATE_DIR / name).open("a") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def parse_args(args):
+    if not args or args[0] != "api":
+        return None
+    options = {"headers": {}, "method": "GET", "input": None, "hostname": "github.com",
+               "include": False, "endpoint": None}
+    index = 1
+    while index < len(args):
+        arg = args[index]
+        if arg == "--hostname":
+            options["hostname"] = args[index + 1]; index += 2
+        elif arg in ("--method", "-X"):
+            options["method"] = args[index + 1].upper(); index += 2
+        elif arg in ("-H", "--header"):
+            name, _, value = args[index + 1].partition(":")
+            options["headers"][name.strip().lower()] = value.strip(); index += 2
+        elif arg == "--input":
+            options["input"] = args[index + 1]; index += 2
+        elif arg in ("--include", "-i"):
+            options["include"] = True; index += 1
+        elif arg.startswith("-"):
+            sys.stderr.write(f"fake gh: unexpected flag {arg}\n"); sys.exit(2)
+        else:
+            options["endpoint"] = arg; index += 1
+    return options
+
+
+OPTIONS = parse_args(ARGS)
+ACCOUNT = read("account", "octo-a")
+MODE = read("mode", "ok")
+append("calls.jsonl", {"args": ARGS, "method": OPTIONS and OPTIONS["method"],
+                       "endpoint": OPTIONS and OPTIONS["endpoint"], "account": ACCOUNT,
+                       "mode": MODE})
+if OPTIONS is None or not OPTIONS["endpoint"]:
+    sys.stderr.write("Unexpected fixture invocation\n"); sys.exit(2)
+if ACCOUNT == "-":
+    sys.stderr.write("You are not logged into any GitHub hosts. To log in, run: gh auth login\n")
+    sys.exit(4)
+
+WORLD_PATH = STATE_DIR / "state.json"
+WORLD = json.loads(WORLD_PATH.read_text())
+
+
+def save():
+    WORLD_PATH.write_text(json.dumps(WORLD, ensure_ascii=False, indent=1))
+
+
+REASONS = {200: "OK", 201: "Created", 204: "No Content", 304: "Not Modified", 401: "Unauthorized",
+           403: "Forbidden", 404: "Not Found", 422: "Unprocessable Entity"}
+
+
+def respond(status, body=None, headers=None):
+    headers = dict(headers or {})
+    text = "" if body is None else json.dumps(body, ensure_ascii=False)
+    headers.setdefault("Content-Type", "application/json; charset=utf-8")
+    headers.setdefault("X-Ratelimit-Remaining", "4999")
+    if status == 200 and OPTIONS["method"] == "GET":
+        etag = 'W/"' + hashlib.sha1((ACCOUNT + text).encode()).hexdigest() + '"'
+        headers["Etag"] = etag
+        if OPTIONS["headers"].get("if-none-match") == etag:
+            status, text = 304, ""
+    out = sys.stdout
+    out.write(f"HTTP/2.0 {status} {REASONS.get(status, 'Status')}\n")
+    for name in sorted(headers):
+        out.write(f"{name}: {headers[name]}\r\n")
+    out.write("\r\n")
+    out.write(text)
+    out.flush()
+    if status >= 300:
+        message = body.get("message", REASONS.get(status, "")) if isinstance(body, dict) else ""
+        sys.stderr.write(f"gh: {message} (HTTP {status})\n" if message else f"gh: HTTP {status}\n")
+        sys.exit(1)
+    sys.exit(0)
+
+
+def fail(status, message):
+    respond(status, {"message": message, "documentation_url": "https://docs.github.com/rest"})
+
+
+def account():
+    if not ACCOUNT:
+        fail(401, "Bad credentials")
+    record = WORLD["accounts"].get(ACCOUNT)
+    if record is None:
+        fail(401, "Bad credentials")
+    return record
+
+
+def expand(text):
+    if isinstance(text, dict) and "repeat" in text:
+        return text["repeat"][0] * text["repeat"][1]
+    return text
+
+
+def issue_json(full_name, issue):
+    out = {key: expand(value) for key, value in issue.items() if not key.startswith("_")}
+    out["comments"] = len(issue.get("_comments", []))
+    out["repository_url"] = f"https://api.github.com/repos/{full_name}"
+    out["html_url"] = f"https://github.com/{full_name}/{'pull' if 'pull_request' in issue else 'issues'}/{issue['number']}"
+    out["url"] = f"https://api.github.com/repos/{full_name}/issues/{issue['number']}"
+    return out
+
+
+def comment_json(full_name, number, comment):
+    out = {key: expand(value) for key, value in comment.items()}
+    out["issue_url"] = f"https://api.github.com/repos/{full_name}/issues/{number}"
+    out["html_url"] = f"https://github.com/{full_name}/issues/{number}#issuecomment-{comment['id']}"
+    return out
+
+
+def repository(full_name):
+    record = account()
+    repo = WORLD["repositories"].get(full_name.lower())
+    if repo is None or full_name.lower() not in [name.lower() for name in record["access"]]:
+        fail(404, "Not Found")
+    return repo
+
+
+def issues_of(full_name):
+    return WORLD["issues"].setdefault(repo_key(full_name), [])
+
+
+def repo_key(full_name):
+    return full_name.lower()
+
+
+def find_issue(full_name, number):
+    for issue in issues_of(full_name):
+        if issue["number"] == number:
+            return issue
+    fail(404, "Not Found")
+
+
+def now_stamp():
+    # Writes happen "now" so `since=` readback windows behave like GitHub's.
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def bump(issue):
+    issue["updated_at"] = now_stamp()
+
+
+def page_of(items, query):
+    per_page = int(query.get("per_page", ["30"])[0])
+    page = int(query.get("page", ["1"])[0])
+    start = (page - 1) * per_page
+    return items[start:start + per_page], start + per_page < len(items), page
+
+
+def link_header(endpoint_base, page):
+    return {"Link": f'<https://api.github.com/{endpoint_base}&page={page + 1}>; rel="next"'}
+
+
+def write_payload():
+    if not OPTIONS["input"]:
+        return None
+    return json.loads(pathlib.Path(OPTIONS["input"]).read_text())
+
+
+def lose_response_if_requested():
+    if MODE == "lost-write":
+        save()
+        sys.stderr.write("error connecting to api.github.com: connection reset by peer\n")
+        sys.exit(1)
+
+
+path, _, raw_query = OPTIONS["endpoint"].partition("?")
+query = urllib.parse.parse_qs(raw_query)
+parts = path.split("/")
+method = OPTIONS["method"]
+is_write = method != "GET"
+
+if is_write:
+    append("writes.jsonl", {"method": method, "endpoint": OPTIONS["endpoint"],
+                            "payload": write_payload(), "account": ACCOUNT, "mode": MODE})
+    if MODE == "black-hole":
+        # The request never reached GitHub, but the caller cannot know.
+        sys.stderr.write("error connecting to api.github.com: i/o timeout\n")
+        sys.exit(1)
+
+if parts == ["user"]:
+    record = account()
+    respond(200, {"login": ACCOUNT, "id": record["id"], "type": "User"})
+
+if parts[0] == "search" and parts[1:] == ["issues"]:
+    account()
+    if MODE == "rate":
+        fail_headers = {"X-Ratelimit-Remaining": "0", "X-Ratelimit-Reset": str(int(time.time()) + 90)}
+        respond(403, {"message": "API rate limit exceeded for user."}, fail_headers)
+    if MODE == "timeout":
+        time.sleep(30)
+    tokens = query.get("q", [""])[0]
+    repo_name, state, labels, assignee, words = None, None, [], None, []
+    rest = tokens
+    while rest:
+        rest = rest.strip()
+        if not rest:
+            break
+        if rest.startswith('label:"'):
+            end = rest.index('"', 7)
+            labels.append(rest[7:end]); rest = rest[end + 1:]; continue
+        token, _, rest = rest.partition(" ")
+        if token.startswith("repo:"):
+            repo_name = token[5:]
+        elif token in ("is:open", "is:closed"):
+            state = token[3:]
+        elif token == "is:issue":
+            pass
+        elif token.startswith("assignee:"):
+            assignee = token[9:]
+        else:
+            words.append(token.lower())
+    repository(repo_name)
+    matches = []
+    for issue in issues_of(repo_name):
+        text = (issue["title"] + " " + (expand(issue.get("body")) or "")).lower()
+        if state and issue["state"] != state:
+            continue
+        if any(word not in text for word in words):
+            continue
+        if any(label not in [l["name"] for l in issue.get("labels", [])] for label in labels):
+            continue
+        if assignee and assignee not in [a["login"] for a in issue.get("assignees", [])]:
+            continue
+        # Defensive fixture: PR entries are returned too (the engine filters).
+        matches.append(issue)
+    matches.sort(key=lambda issue: issue["updated_at"], reverse=True)
+    chunk, _, _ = page_of(matches, query)
+    respond(200, {"total_count": len(matches), "incomplete_results": WORLD.get("searchIncomplete", False),
+                  "items": [issue_json(repo_name, issue) for issue in chunk]})
+
+if parts[0] == "repos" and len(parts) >= 3:
+    full_name = f"{parts[1]}/{parts[2]}"
+    repo = repository(full_name)
+    canonical = repo["full_name"]
+    tail = parts[3:]
+    if tail == [] and method == "GET":
+        respond(200, repo)
+    if tail == ["issues"] and method == "GET":
+        if MODE == "rate":
+            respond(403, {"message": "API rate limit exceeded for user."},
+                    {"X-Ratelimit-Remaining": "0", "X-Ratelimit-Reset": str(int(time.time()) + 90)})
+        if MODE == "timeout":
+            time.sleep(30)
+        state = query.get("state", ["open"])[0]
+        labels = [l for l in query.get("labels", [""])[0].split(",") if l]
+        assignee = query.get("assignee", [None])[0]
+        items = []
+        for issue in issues_of(full_name):
+            if state != "all" and issue["state"] != state:
+                continue
+            if any(label not in [l["name"] for l in issue.get("labels", [])] for label in labels):
+                continue
+            logins = [a["login"] for a in issue.get("assignees", [])]
+            if assignee == "none" and logins:
+                continue
+            if assignee and assignee not in ("none", "*") and assignee not in logins:
+                continue
+            items.append(issue)
+        items.sort(key=lambda issue: issue["updated_at"], reverse=True)
+        chunk, more, page = page_of(items, query)
+        headers = link_header(f"repositories/{repo['id']}/issues?state={state}&per_page={query.get('per_page', ['30'])[0]}", page) if more else {}
+        respond(200, [issue_json(canonical, issue) for issue in chunk], headers)
+    if len(tail) == 3 and tail[:2] == ["issues", "comments"] and method == "GET":
+        comment_id = int(tail[2])
+        for issue in issues_of(full_name):
+            for comment in issue.get("_comments", []):
+                if comment["id"] == comment_id:
+                    respond(200, comment_json(canonical, issue["number"], comment))
+        fail(404, "Not Found")
+    if len(tail) >= 2 and tail[0] == "issues" and tail[1].isdigit():
+        number = int(tail[1])
+        issue = find_issue(full_name, number)
+        rest = tail[2:]
+        if rest == [] and method == "GET":
+            if MODE == "timeout":
+                time.sleep(30)
+            respond(200, issue_json(canonical, issue))
+        if rest == [] and method == "PATCH":
+            payload = write_payload()
+            for key in ("state", "state_reason", "title", "body"):
+                if key in payload:
+                    issue[key] = payload[key]
+            bump(issue)
+            save()
+            lose_response_if_requested()
+            respond(200, issue_json(canonical, issue))
+        if rest == ["comments"] and method == "GET":
+            since = query.get("since", [None])[0]
+            comments = [c for c in issue.get("_comments", []) if not since or c["updated_at"] >= since]
+            chunk, more, page = page_of(comments, query)
+            headers = link_header(f"repositories/{repo['id']}/issues/{number}/comments?per_page={query.get('per_page', ['30'])[0]}", page) if more else {}
+            respond(200, [comment_json(canonical, number, c) for c in chunk], headers)
+        if rest == ["comments"] and method == "POST":
+            payload = write_payload()
+            WORLD["nextCommentId"] = WORLD.get("nextCommentId", 9000) + 1
+            stamp = now_stamp()
+            comment = {"id": WORLD["nextCommentId"], "user": {"login": ACCOUNT},
+                       "created_at": stamp, "updated_at": stamp, "body": payload["body"]}
+            issue.setdefault("_comments", []).append(comment)
+            bump(issue)
+            save()
+            lose_response_if_requested()
+            respond(201, comment_json(canonical, number, comment))
+        if rest == ["labels"] and method == "POST":
+            payload = write_payload()
+            names = [l["name"] for l in issue.setdefault("labels", [])]
+            for label in payload["labels"]:
+                if label.lower() not in [n.lower() for n in names]:
+                    issue["labels"].append({"name": label, "color": "ededed"})
+            bump(issue)
+            save()
+            lose_response_if_requested()
+            respond(200, issue["labels"])
+        if len(rest) == 2 and rest[0] == "labels" and method == "DELETE":
+            label = urllib.parse.unquote(rest[1])
+            before = len(issue.get("labels", []))
+            issue["labels"] = [l for l in issue.get("labels", []) if l["name"].lower() != label.lower()]
+            if len(issue["labels"]) == before:
+                fail(404, "Label does not exist")
+            bump(issue)
+            save()
+            lose_response_if_requested()
+            respond(200, issue["labels"])
+
+sys.stderr.write(f"fake gh: unexpected endpoint {method} {OPTIONS['endpoint']}\n")
+sys.exit(2)

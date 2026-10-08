@@ -491,6 +491,9 @@ pub struct BoardItemDetail {
     pub review_runs: Vec<super::ReviewRun>,
     #[serde(default)]
     pub dependencies: Vec<super::BoardDependency>,
+    /// Tickets this one blocks (the other end of `dependencies`).
+    #[serde(default)]
+    pub dependents: Vec<super::BoardDependency>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<super::BoardExecutionIntent>,
     #[serde(default)]
