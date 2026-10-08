@@ -597,17 +597,13 @@ impl EngineRpc {
         let mut payload = request.clone();
         payload.request_id.clear();
         payload.caller_task_id = creator_id.clone();
-        self.board_claim_creation(
-            &request_id,
-            &board_digest(&(
-                "createSideChat",
-                &payload,
-                reviewer
-                    .as_ref()
-                    .map(|spec| (&spec.work_item_id, &spec.review_run_id)),
-            ))?,
-            &chat_id,
-        )?;
+        let payload_hash = board_digest(&(
+            "createSideChat",
+            &payload,
+            reviewer
+                .as_ref()
+                .map(|spec| (&spec.work_item_id, &spec.review_run_id)),
+        ))?;
 
         let _gate = match &request.ticket {
             Some(binding) if take_gate => Some(self.board_hub().gate(&binding.work_item_id).await),
@@ -662,6 +658,9 @@ impl EngineRpc {
                     .filter(|_| title.is_none())
             })
             .or(title);
+        // Claimed only once the request is valid: a refused request can be
+        // corrected and retried with the same key.
+        self.board_claim_creation(&request_id, &payload_hash, &chat_id)?;
 
         if self.workspace.chat(&chat_id).map_err(storage)?.is_none() {
             let (source, context_origin) = match &request.context {
@@ -845,6 +844,13 @@ impl EngineRpc {
                 }
                 Some(task_id.clone())
             }
+            // A temporary discussion is not a chat: it hands nothing off.
+            BoardCaller::Authoring { .. } if request.from_task_id.is_some() => {
+                return Err(BoardError::invalid(
+                    "fromTaskId",
+                    "a temporary ticket discussion is not a chat to hand off from",
+                ));
+            }
             _ => request.from_task_id.clone().filter(|from| !from.is_empty()),
         };
         let brief = request
@@ -903,11 +909,7 @@ impl EngineRpc {
         let mut payload = request.clone();
         payload.request_id.clear();
         payload.from_task_id = from_id.clone();
-        self.board_claim_creation(
-            &request_id,
-            &board_digest(&("createMainChat", &payload))?,
-            &chat_id,
-        )?;
+        let payload_hash = board_digest(&("createMainChat", &payload))?;
         let _gate = match &request.ticket {
             Some(binding) if take_gate => Some(self.board_hub().gate(&binding.work_item_id).await),
             _ => None,
@@ -940,6 +942,7 @@ impl EngineRpc {
             BoardSettingOrigin::Project
         };
         let profile = explicit.or(saved);
+        self.board_claim_creation(&request_id, &payload_hash, &chat_id)?;
 
         if self.workspace.chat(&chat_id).map_err(storage)?.is_none() {
             // A handoff inherits its source's settings and never exceeds its

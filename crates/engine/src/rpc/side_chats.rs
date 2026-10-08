@@ -41,7 +41,7 @@ impl EngineRpc {
             .as_ref()
             .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?;
         let fail = |error: anyhow::Error| RpcError::Failed(error.to_string());
-        let id = uuid::Uuid::parse_str(&request_id)
+        let id = uuid::Uuid::parse_str(request_id)
             .map_err(|error| RpcError::Failed(error.to_string()))?
             .to_string();
         if service.contains(&id) {
@@ -71,7 +71,7 @@ impl EngineRpc {
         }
         let chat = self
             .workspace
-            .chat(&parent_id)
+            .chat(parent_id)
             .map_err(|error| RpcError::Failed(error.to_string()))?
             .ok_or_else(|| RpcError::Failed("Parent conversation unavailable".into()))?;
         let config = chat
@@ -82,7 +82,7 @@ impl EngineRpc {
             !force_snapshot && capability_for(config.harness) != ProviderForkCapability::None;
         let readiness = if native {
             Some(
-                self.ensure_history_operation_ready(&parent_id)
+                self.ensure_history_operation_ready(parent_id)
                     .map_err(|error| RpcError::Failed(error.to_string()))?,
             )
         } else {
@@ -90,8 +90,8 @@ impl EngineRpc {
         };
         let created = service
             .prepare(
-                &parent_id,
-                &request_id,
+                parent_id,
+                request_id,
                 native,
                 origin_message_id,
                 anchor_text,
@@ -136,11 +136,11 @@ impl EngineRpc {
                 }
             };
         };
-        let snapshot = self.current_task_command_snapshot(&parent_id)?;
+        let snapshot = self.current_task_command_snapshot(parent_id)?;
         let (boundary, message_text) = if let Some(origin) = origin_message_id {
             let entry = self
                 .doc_host
-                .open(&parent_id)
+                .open(parent_id)
                 .map_err(|error| RpcError::Failed(error.to_string()))?
                 .doc()
                 .read_entries()

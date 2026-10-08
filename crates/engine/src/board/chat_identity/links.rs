@@ -202,9 +202,12 @@ impl EngineRpc {
 
     fn board_conversion_receipt(
         &self,
-        mutation: BoardMutationReceipt,
+        mut mutation: BoardMutationReceipt,
         task_id: &str,
     ) -> BoardResult<BoardConvertReceipt> {
+        // The stored receipt predates its own link; Go to chat is derived
+        // from the committed relationship on every read.
+        mutation.navigation = self.board_default_navigation(&mutation.item);
         let link = self
             .store
             .board_task_links_for_item(&mutation.work_item_id, false)

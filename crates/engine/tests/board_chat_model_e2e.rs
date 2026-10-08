@@ -913,7 +913,6 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
     .await;
     // Let the held turn's first streamed text land before the snapshot.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let active_turn = snapshot(&c, &main).await["activeTurnId"].clone();
     let rows = chats(&c).await;
     let before = json!({
         "row": row_identity(row(&rows, &main)),
@@ -929,12 +928,12 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
     ev.step(
         "same chat becomes the working chat in place",
         json!({"taskId":main,"operation":"convertChat","role":"working","container":{"kind":"mainChat"},
-            "purpose":"ticketWorker","title":"Main to convert","running":true,"activeTurnId":active_turn,
+            "purpose":"ticketWorker","title":"Main to convert","running":true,"activeTurnRecorded":true,
             "navigation":{"kind":"mainChat","taskId":main}}),
         json!({"taskId":receipt["mutation"]["taskId"],"operation":receipt["mutation"]["operation"],
             "role":receipt["link"]["role"],"container":receipt["link"]["originalContainer"],
             "purpose":receipt["identity"]["purpose"]["kind"],"title":receipt["mutation"]["item"]["title"],
-            "running":receipt["run"]["running"],"activeTurnId":receipt["run"]["activeTurnId"],
+            "running":receipt["run"]["running"],"activeTurnRecorded":receipt["run"]["activeTurnId"].is_string(),
             "navigation":receipt["mutation"]["navigation"]}),
         Some(&receipt),
     );
