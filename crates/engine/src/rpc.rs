@@ -2960,6 +2960,20 @@ impl EngineRpc {
                 "Native-agent transcripts are derived documents, not writable threads".into(),
             ));
         }
+        // A temporary Board discussion is never a chat or a task: no command
+        // (create, run, rename, archive, …) is admitted or ledgered for it.
+        if command
+            .task_id
+            .starts_with(board_engine::authoring::AUTHORING_ID_PREFIX)
+            && self
+                .store
+                .board_authoring_owns(&command.task_id)
+                .unwrap_or(false)
+        {
+            return Err(RpcError::Failed(
+                "A temporary Board discussion is not a chat and cannot become one.".into(),
+            ));
+        }
         if let TaskCommandIntent::NativeReview {
             request,
             message_id,

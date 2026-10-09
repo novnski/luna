@@ -2236,6 +2236,15 @@ impl DocHost {
     }
 
     pub fn open(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
+        // A temporary Board discussion keeps its transcript in the board
+        // store only: it never gets a session document, snapshot or sync room.
+        if chat_id.starts_with(crate::rpc::board_engine::authoring::AUTHORING_ID_PREFIX)
+            && self.inner.store.is_board_authoring_session(chat_id)?
+        {
+            return Err(EngineError::Other(
+                "A temporary Board discussion is not a chat and has no chat document.".into(),
+            ));
+        }
         let local_only = self.is_side_document(chat_id);
         let side_owner = chat_id
             .split_once("--sub--")
