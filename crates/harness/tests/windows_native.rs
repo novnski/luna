@@ -5,6 +5,7 @@
 use futures::StreamExt;
 use luna_harness::{CancellationToken, Harness, RunControls};
 use luna_proto::{AgentEvent, HarnessId, RunRequest, SandboxLevel};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -214,6 +215,10 @@ fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
         cwd: cwd.display().to_string(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
+        permission_mode: luna_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: Vec::new(),
         worktree: None,
         resume: resume.map(str::to_owned),

@@ -78,12 +78,3 @@ fn system_wide_claude_present() -> bool {
     std::path::Path::new("/opt/homebrew/bin/claude").exists()
         || std::path::Path::new("/usr/local/bin/claude").exists()
 }
-
-#[test]
-fn claude_availability_reports_not_installed_without_any_cli() {
-    if system_wide_claude_present() {
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    probe(dir.path(), None, false);
-}

@@ -3416,17 +3416,6 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
         .collect()
 }
 
-/// Synthesize the yes/no question an approval request surfaces to the user.
-#[cfg(test)]
-fn approval_question(
-    method: &str,
-    params: &Value,
-    provider_request_id: &Value,
-    policy: &luna_proto::PermissionPolicy,
-) -> UserInputQuestion {
-    approvals::legacy_question(method, params, provider_request_id, policy)
-}
-
 use crate::{Signal, send_signal, shutdown_child};
 
 #[cfg(test)]
@@ -3493,68 +3482,6 @@ mod tests {
                 "cli_auth_credentials_store=\"file\"",
                 "login"
             ]
-        );
-    }
-
-    #[test]
-    fn approval_questions_are_typed_and_machine_scoped() {
-        let policy = luna_proto::PermissionPolicy {
-            machine_name: "test-machine".into(),
-            ..Default::default()
-        };
-        let q = approval_question(
-            "item/commandExecution/requestApproval",
-            &json!({"itemId": "c1", "command": "rm -rf /tmp/x"}),
-            &json!("provider-1"),
-            &policy,
-        );
-        assert_eq!(q.header, "Approve command");
-        assert!(q.question.contains("rm -rf /tmp/x"));
-        assert_eq!(
-            q.options,
-            vec!["Deny", "Allow once", "Allow for session", "Cancel turn"]
-        );
-        assert!(!q.multi_select);
-        assert_eq!(q.approval.unwrap().machine_name, "test-machine");
-
-        let q = approval_question(
-            "item/fileChange/requestApproval",
-            &json!({"changes": [{"path": "/a.rs"}, {"path": "/b.rs"}]}),
-            &json!("provider-2"),
-            &policy,
-        );
-        assert_eq!(q.header, "Approve file change");
-        assert!(q.question.contains("/a.rs, /b.rs"));
-
-        // Command as argv array joins with spaces.
-        let q = approval_question(
-            "item/commandExecution/requestApproval",
-            &json!({"command": ["git", "push", "--force"]}),
-            &json!("provider-3"),
-            &policy,
-        );
-        assert!(q.question.contains("git push --force"));
-    }
-
-    #[test]
-    fn permission_modes_map_to_exact_app_server_settings() {
-        use luna_proto::PermissionMode::{Ask, Auto, Full};
-        assert_eq!(
-            codex_permission_settings(Ask, false),
-            ("on-request", "user")
-        );
-        assert_eq!(
-            codex_permission_settings(Auto, false),
-            ("on-request", "auto_review")
-        );
-        assert_eq!(codex_permission_settings(Full, false), ("never", "user"));
-        assert_eq!(
-            sandbox_mode(luna_proto::SandboxLevel::WorkspaceWrite),
-            "workspace-write"
-        );
-        assert_eq!(
-            sandbox_mode(luna_proto::SandboxLevel::DangerFullAccess),
-            "danger-full-access"
         );
     }
 

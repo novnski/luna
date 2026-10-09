@@ -411,16 +411,6 @@ fn question(
     }
 }
 
-#[cfg(test)]
-pub(super) fn legacy_question(
-    method: &str,
-    params: &Value,
-    id: &Value,
-    policy: &luna_proto::PermissionPolicy,
-) -> UserInputQuestion {
-    question(method, params, id, policy, &command_choices(params), None)
-}
-
 /// Strict for permissions; old command/file peers may omit routing fields.
 /// A supplied foreign/stale ID is always rejected, including Full mode. A
 /// sub-agent request must name its child thread and that child's live turn.
@@ -734,4 +724,42 @@ fn exact_answer<'a>(
     let answer = answers.first()?;
     (answer.question_id == question.id && answer.labels.len() == 1)
         .then(|| answer.labels[0].as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rows `tests/codex.rs` `approvals_round_trip_as_input_requests`
+    /// cannot reach through the fake peer (one string command, one path, no
+    /// machine): argv-array commands and multi-file changes stay readable,
+    /// and the card is scoped to the policy's machine.
+    #[test]
+    fn approval_card_joins_argv_and_paths_and_is_machine_scoped() {
+        let policy = luna_proto::PermissionPolicy {
+            machine_name: "test-machine".into(),
+            ..Default::default()
+        };
+        let card = |method: &str, params: Value| {
+            question(
+                method,
+                &params,
+                &json!("provider-1"),
+                &policy,
+                &command_choices(&params),
+                None,
+            )
+        };
+        let command = card(
+            "item/commandExecution/requestApproval",
+            json!({"command": ["git", "push", "--force"]}),
+        );
+        assert!(command.question.contains("git push --force"));
+        assert_eq!(command.approval.unwrap().machine_name, "test-machine");
+        let files = card(
+            "item/fileChange/requestApproval",
+            json!({"changes": [{"path": "/a.rs"}, {"path": "/b.rs"}]}),
+        );
+        assert!(files.question.contains("/a.rs, /b.rs"));
+    }
 }

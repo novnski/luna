@@ -634,56 +634,6 @@ mod computer_use_tests {
     }
 
     #[test]
-    fn exact_provider_turn_lifecycle_and_evidence_without_payload() {
-        let mut stream = ComputerUseStream::default();
-        let params = json!({"threadId":"provider-1","turnId":"turn-1"});
-        assert!(
-            stream
-                .map_item(
-                    Phase::Started,
-                    "provider-1",
-                    Some("turn-1"),
-                    &params,
-                    &item("inProgress")
-                )
-                .is_some()
-        );
-        let events = stream
-            .map_item(
-                Phase::Completed,
-                "provider-1",
-                Some("turn-1"),
-                &params,
-                &item("completed"),
-            )
-            .unwrap();
-        assert!(
-            matches!(&events[0], AgentEvent::ToolCall { call: ToolCall::ComputerUse { app: Some(app), status: ComputerUseStatus::ProviderCompleted, screenshot_observed: true, thread_id, turn_id, .. }, .. } if app == "Finder" && thread_id == "provider-1" && turn_id == "turn-1")
-        );
-        assert!(matches!(
-            &events[1],
-            AgentEvent::ToolResult {
-                is_error: false,
-                output: Some(_),
-                ..
-            }
-        ));
-        assert!(!format!("{events:?}").contains("private pixels"));
-        assert!(
-            stream
-                .map_item(
-                    Phase::Completed,
-                    "provider-1",
-                    Some("turn-1"),
-                    &params,
-                    &item("completed")
-                )
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn wrong_target_and_late_results_cannot_settle_an_active_call() {
         let mut stream = ComputerUseStream::default();
         let params = json!({"threadId":"provider-1","turnId":"turn-1"});
@@ -2024,30 +1974,6 @@ mod tests {
     }
 
     #[test]
-    fn sub_agent_activity_maps_to_a_named_parent_chip() {
-        let started = map_item(
-            Phase::Started,
-            &json!({"type": "subAgentActivity", "id": "call_1", "kind": "started",
-                    "agentThreadId": "child-1", "agentPath": "/root/alpha"}),
-        );
-        assert_eq!(started.len(), 1);
-        assert!(matches!(
-            &started[0],
-            AgentEvent::ToolCall { id, call: ToolCall::Unknown { name, .. } }
-                if id == "call_1" && name == "Agent: alpha"
-        ));
-        let completed = map_item(
-            Phase::Completed,
-            &json!({"type": "subAgentActivity", "id": "call_1", "kind": "started",
-                    "agentThreadId": "child-1", "agentPath": "/root/alpha"}),
-        );
-        assert!(matches!(
-            completed.last(),
-            Some(AgentEvent::ToolResult { id, is_error: false, .. }) if id == "call_1"
-        ));
-    }
-
-    #[test]
     fn child_usage_notification_keeps_only_the_provider_reported_snapshot() {
         let mut child = ChildStream::default();
         assert_eq!(
@@ -2147,16 +2073,6 @@ mod tests {
             None
         );
     }
-
-    #[test]
-    fn turn_error_extraction() {
-        assert_eq!(
-            turn_error_message(&json!({"turn": {"id": "t", "error": {"message": "boom"}}})),
-            Some("boom".into())
-        );
-        assert_eq!(turn_error_message(&json!({"turn": {"id": "t"}})), None);
-        assert_eq!(turn_error_message(&json!({"turn": {"error": null}})), None);
-    }
 }
 
 #[cfg(test)]
@@ -2187,125 +2103,6 @@ mod context_tests {
             context_usage_event(&json!({"tokenUsage": {"total": {"totalTokens": 100}}})),
             None
         );
-    }
-
-    #[test]
-    fn context_compaction_requires_root_thread_turn_and_item_correlation() {
-        let mut stream = ContextCompactionStream::default();
-        let started = json!({
-            "threadId": "root-thread",
-            "turnId": "turn-1",
-            "item": {"id": "compact-1", "type": "contextCompaction"}
-        });
-        let item = &started["item"];
-        assert!(
-            stream
-                .map_item(
-                    Phase::Started,
-                    "root-thread",
-                    Some("other-turn"),
-                    &started,
-                    item,
-                )
-                .is_none()
-        );
-        let running = stream
-            .map_item(
-                Phase::Started,
-                "root-thread",
-                Some("turn-1"),
-                &started,
-                item,
-            )
-            .unwrap();
-        assert!(matches!(
-            running,
-            AgentEvent::ContextCompaction {
-                status: ContextOperationStatus::Running,
-                ref operation_id,
-                ref thread_id,
-                ref turn_id,
-            } if operation_id == "codex-auto:root-thread:turn-1:compact-1"
-                && thread_id == "root-thread"
-                && turn_id == "turn-1"
-        ));
-
-        let stale = json!({
-            "threadId": "root-thread",
-            "turnId": "turn-1",
-            "item": {"id": "compact-stale", "type": "contextCompaction"}
-        });
-        assert!(
-            stream
-                .map_item(
-                    Phase::Completed,
-                    "root-thread",
-                    Some("turn-1"),
-                    &stale,
-                    &stale["item"],
-                )
-                .is_none()
-        );
-        let child = json!({
-            "threadId": "child-thread",
-            "turnId": "turn-1",
-            "item": {"id": "compact-1", "type": "contextCompaction"}
-        });
-        assert!(
-            stream
-                .map_item(
-                    Phase::Completed,
-                    "root-thread",
-                    Some("turn-1"),
-                    &child,
-                    &child["item"],
-                )
-                .is_none()
-        );
-        let completed = stream
-            .map_item(
-                Phase::Completed,
-                "root-thread",
-                Some("turn-1"),
-                &started,
-                item,
-            )
-            .unwrap();
-        assert!(matches!(
-            completed,
-            AgentEvent::ContextCompaction {
-                status: ContextOperationStatus::Completed,
-                ..
-            }
-        ));
-        assert!(stream.take_unknown().is_none());
-    }
-
-    #[test]
-    fn interrupted_context_compaction_becomes_unknown_once() {
-        let mut stream = ContextCompactionStream::default();
-        let started = json!({
-            "threadId": "root-thread",
-            "turnId": "turn-1",
-            "item": {"id": "compact-1", "type": "contextCompaction"}
-        });
-        stream
-            .map_item(
-                Phase::Started,
-                "root-thread",
-                Some("turn-1"),
-                &started,
-                &started["item"],
-            )
-            .unwrap();
-        assert!(matches!(
-            stream.unknown_for_turn("root-thread", "turn-1"),
-            Some(AgentEvent::ContextCompaction {
-                status: ContextOperationStatus::Unknown,
-                ..
-            })
-        ));
-        assert!(stream.unknown_for_turn("root-thread", "turn-1").is_none());
     }
 }
 

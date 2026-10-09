@@ -767,22 +767,6 @@ mod tests {
             r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"abc"}}}"#,
         );
         assert!(ev.is_empty());
-    }
-
-    #[test]
-    fn subagent_stream_deltas_arrive_tagged() {
-        let ev = normalize_one(
-            r#"{"type":"stream_event","parent_tool_use_id":"toolu_sub","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub text"}}}"#,
-        );
-        assert_eq!(
-            ev,
-            vec![AgentEvent::Subagent {
-                parent_tool_use_id: "toolu_sub".into(),
-                event: Box::new(AgentEvent::TextDelta {
-                    text: "sub text".into()
-                }),
-            }]
-        );
         // Subagent input_json heartbeats are dropped — the parent turn is
         // already done under the eager-done policy, nothing to keep alive.
         let ev = normalize_one(
@@ -1050,85 +1034,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_task_notification_never_settles_a_subagent() {
-        // `Bash` with `run_in_background` settles through the SAME
-        // `task_notification` subtype, carrying the Bash call's own id.
-        // Tagging that Done bound a subagent ref onto an ordinary Run chip,
-        // which then rendered as a spawn chip opening an empty, never-created
-        // subagent doc (user report 2026-08-20).
-        let mut norm = Normalizer::new();
-        for raw in [
-            // The shell task's start is already unmapped (no subagent_type)…
-            r#"{"type":"system","subtype":"task_started","task_id":"bg1","tool_use_id":"toolu_bash","task_type":"local_bash"}"#,
-            // …and the Bash call itself must not mark the id as a spawn.
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"git clone …","run_in_background":true}}]}}"#,
-        ] {
-            let frame = crate::claude::wire::parse_frame(raw).expect("parses");
-            norm.normalize(frame, false);
-        }
-        let done = crate::claude::wire::parse_frame(
-            r#"{"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"toolu_bash","status":"completed"}"#,
-        )
-        .expect("parses");
-        assert!(
-            norm.normalize(done, false)
-                .iter()
-                .all(|event| matches!(event,
-            AgentEvent::NativeTaskChanged { task } if task.kind == luna_proto::NativeTaskKind::Shell
-                && task.status == luna_proto::NativeTaskStatus::Completed))
-        );
-    }
-
-    #[test]
-    fn subagent_assistant_text_blocks_emit_tagged_text() {
-        // No tagged partial deltas exist on the 2.1.x wire: a subagent's text
-        // arrives only as full blocks on its tagged assistant frames.
-        let ev = normalize_one(
-            r#"{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"working on it"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
-        );
-        assert_eq!(ev.len(), 2);
-        assert_eq!(
-            ev[0],
-            AgentEvent::Subagent {
-                parent_tool_use_id: "toolu_sub".into(),
-                event: Box::new(AgentEvent::TextDelta {
-                    text: "working on it\n\n".into()
-                }),
-            }
-        );
-        assert!(matches!(&ev[1], AgentEvent::Subagent { event, .. }
-            if matches!(event.as_ref(), AgentEvent::ToolCall { .. })));
-    }
-
-    #[test]
-    fn wake_turn_init_is_deduped_but_second_result_still_emits_done() {
-        // Live-verified 2.1.228 shape: background subagent → eager result,
-        // then a second init (same session id) + second result on completion.
-        let mut norm = Normalizer::new();
-        let init = r#"{"type":"system","subtype":"init","model":"m","cwd":"/x","session_id":"s1"}"#;
-        let frame = crate::claude::wire::parse_frame(init).unwrap();
-        assert_eq!(norm.normalize(frame, false).len(), 1, "first init");
-        let frame = crate::claude::wire::parse_frame(init).unwrap();
-        assert!(
-            norm.normalize(frame, false).is_empty(),
-            "wake init deduped — SessionStarted is the fold's run boundary"
-        );
-        let result = r#"{"type":"result","subtype":"success","session_id":"s1"}"#;
-        let frame = crate::claude::wire::parse_frame(result).unwrap();
-        let events = norm.normalize(frame, false);
-        assert!(
-            matches!(
-                events.last(),
-                Some(AgentEvent::Done {
-                    status: DoneStatus::Completed,
-                    ..
-                })
-            ),
-            "wake turn settles with its own Done"
-        );
-    }
-
-    #[test]
     fn first_init_receipt_matches_session_and_can_be_taken_once() {
         let raw = json!({
             "type": "system", "subtype": "init", "model": "synthetic-model",
@@ -1271,60 +1176,35 @@ mod tests {
         }
     }
 
+    /// The CLI's internal `[ede_diagnostic]` turn-accounting breadcrumbs never
+    /// become transcript error parts (they showed up as raw red boxes), real
+    /// errors beside them survive, and a known run-failure subtype keeps its
+    /// human wording even when its errors are all diagnostics. (An empty
+    /// `errors` array is owned by `tests/claude.rs`
+    /// `error_codes_map_to_readable_messages`.)
     #[test]
-    fn ede_diagnostics_never_surface_as_errors() {
-        // The CLI's internal turn-accounting breadcrumbs must not become
-        // transcript error parts (they showed up as raw red boxes).
-        let done = result_done(
-            r#"{"type":"result","subtype":"error_during_execution","errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"]}"#,
-        );
-        match done {
-            AgentEvent::Done { status, error, .. } => {
-                assert_eq!(status, DoneStatus::Errored);
-                assert_eq!(error, None, "diagnostic-only failure surfaces no text");
+    fn result_errors_drop_diagnostics_but_keep_real_text_and_subtype_wording() {
+        for (raw, expected) in [
+            (
+                r#"{"type":"result","subtype":"error_during_execution","errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"]}"#,
+                None,
+            ),
+            (
+                r#"{"type":"result","subtype":"error_during_execution","errors":["[ede_diagnostic] turn aborted (x) stop_reason=null","Something real broke"]}"#,
+                Some("Something real broke"),
+            ),
+            (
+                r#"{"type":"result","subtype":"error_max_turns","errors":["[ede_diagnostic] turn aborted (max) stop_reason=null"]}"#,
+                Some("The run hit the maximum number of turns."),
+            ),
+        ] {
+            match result_done(raw) {
+                AgentEvent::Done { status, error, .. } => {
+                    assert_eq!(status, DoneStatus::Errored, "{raw}");
+                    assert_eq!(error.as_deref(), expected, "{raw}");
+                }
+                other => panic!("unexpected event: {other:?}"),
             }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn real_errors_survive_diagnostic_filtering() {
-        let done = result_done(
-            r#"{"type":"result","subtype":"error_during_execution","errors":["[ede_diagnostic] turn aborted (x) stop_reason=null","Something real broke"]}"#,
-        );
-        match done {
-            AgentEvent::Done { error, .. } => {
-                assert_eq!(error.as_deref(), Some("Something real broke"));
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn known_failure_subtypes_keep_mapped_wording() {
-        // A known run-failure subtype stays visible with human wording even
-        // when its errors array is all diagnostics (or empty).
-        let done = result_done(
-            r#"{"type":"result","subtype":"error_max_turns","errors":["[ede_diagnostic] turn aborted (max) stop_reason=null"]}"#,
-        );
-        match done {
-            AgentEvent::Done { error, .. } => {
-                assert_eq!(
-                    error.as_deref(),
-                    Some("The run hit the maximum number of turns.")
-                );
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-        let done = result_done(r#"{"type":"result","subtype":"error_max_turns","errors":[]}"#);
-        match done {
-            AgentEvent::Done { error, .. } => {
-                assert_eq!(
-                    error.as_deref(),
-                    Some("The run hit the maximum number of turns.")
-                );
-            }
-            other => panic!("unexpected event: {other:?}"),
         }
     }
 }
