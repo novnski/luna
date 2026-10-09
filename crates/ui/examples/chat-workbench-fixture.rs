@@ -4571,9 +4571,17 @@ fn main() -> anyhow::Result<()> {
                 );
                 anyhow::ensure!(fork_row.config.as_ref().is_some_and(|config| config.harness == HarnessId::Mock), "the side chat stays on the source's provider: {fork_row:?}");
                 // A stale chooser: its group's active chat changes while it is
-                // open, so its Create does nothing.
+                // open, so its Create does nothing. The recent-context side
+                // chat just opened as Main's group's active tab, and a side
+                // chat's `+` opens its own card (one level of side chats), so
+                // Main is made the group's active chat first: the chooser is
+                // a main chat's.
+                click_tab(window, cx, MAIN).await?;
+                wait_for(window, cx, "Main focused for the stale chooser", |rb| rb["focusedChat"] == MAIN).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&main_group), false, cx))?;
                 settle(cx, 200).await;
+                let opened = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(opened["open"] == true && opened["source"] == MAIN, "the chooser opens on Main before its source changes: {opened}");
                 let other_tab = pane_of(&wb(window, cx)?, MAIN)
                     .map(|pane| tabs_of(&pane))
                     .unwrap_or_default()
