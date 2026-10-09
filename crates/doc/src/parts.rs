@@ -993,7 +993,8 @@ pub struct SidecarPayload {
 ///
 /// Keeps: command / path / pattern / url / query / todo items / server+tool names,
 /// and a subagent spawn's model/type (see [`spawn_badge`] — a couple of short
-/// identifiers the chip names the child by).
+/// identifiers the chip names the child by), and a LUNA create-thread call's
+/// idempotency key (see [`created_thread_key`]).
 /// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, Mcp/Unknown input.
 /// Full inputs remain only in the host's local run journal. Idempotent.
 pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
@@ -1014,7 +1015,7 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
         ToolCall::Mcp { server, tool, .. } => ToolCall::Mcp {
             server: server.clone(),
             tool: tool.clone(),
-            input: spawn_badge(call),
+            input: spawn_badge(call).or_else(|| created_thread_key(call)),
         },
         ToolCall::ComputerUse { .. } => call.clone(),
         ToolCall::Unknown { name, .. } => ToolCall::Unknown {
@@ -1050,6 +1051,27 @@ fn spawn_badge(call: &ToolCall) -> Option<serde_json::Value> {
         })
         .collect();
     (!kept.is_empty()).then(|| serde_json::Value::Object(kept))
+}
+
+/// A LUNA create-thread call keeps its idempotency key: with the calling
+/// chat's id it names the child the call creates, which is how the
+/// transcript pairs that child's "New thread" card with this call. Only a key
+/// the engine accepts (1-128 printable ASCII bytes) is kept; the brief and
+/// every other argument stay in the host's run journal. A fixpoint.
+fn created_thread_key(call: &ToolCall) -> Option<serde_json::Value> {
+    use luna_proto::view::ThreadTool;
+    let ToolCall::Mcp {
+        input: Some(input), ..
+    } = call
+    else {
+        return None;
+    };
+    if ThreadTool::of(call) != Some(ThreadTool::Create) {
+        return None;
+    }
+    let key = input.get("idempotencyKey")?.as_str()?;
+    (!key.is_empty() && key.len() <= 128 && key.bytes().all(|byte| byte.is_ascii_graphic()))
+        .then(|| serde_json::json!({ "idempotencyKey": key }))
 }
 
 #[cfg(test)]

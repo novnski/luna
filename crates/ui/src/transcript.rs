@@ -1322,6 +1322,9 @@ fn is_child_notice(row: &Row) -> bool {
 ///    hidden; or a card claims a chip from an earlier turn.
 /// 6. Dropping an emptied tool group leaves its entry without its turn gap or
 ///    its lane.
+/// 7. A card hides another create-thread call than the one that made its
+///    child: a concurrent call whose card has not landed disappears, and
+///    swaps back when that call later fails.
 ///
 /// Returns the entries whose history actions resolve, or `None` when the host
 /// has not reported checkpoints (an older host): nothing is gated then.
@@ -1330,8 +1333,9 @@ fn present_timeline(
     rows: &mut Vec<Row>,
     checkpointed: Option<&HashSet<String>>,
     run_live: bool,
+    chat_id: Option<&str>,
 ) -> Option<HashSet<SharedString>> {
-    hide_created_thread_chips(rows);
+    hide_created_thread_chips(rows, chat_id);
 
     // A turn ends at its last assistant entry before the next user entry, or
     // at the transcript's end once the run has settled.
@@ -1401,12 +1405,26 @@ fn present_timeline(
 }
 
 /// The "New thread" card that lands after a create-thread call is that call's
-/// record, so the chip above it only repeats it. Each card claims the earliest
-/// unclaimed create chip of its turn that did not fail; a group left empty
-/// drops out, handing its turn gap and lane to its entry's neighbours.
-fn hide_created_thread_chips(rows: &mut Vec<Row>) {
+/// record, so the chip above it only repeats it. Each card claims the create
+/// chip of its turn that did not fail and whose idempotency key names the
+/// card's child (the engine derives the child from this chat and that key).
+/// A chip stored before the doc kept the key has no identity: a card no chip
+/// names claims the earliest of those. A group left empty drops out, handing
+/// its turn gap and lane to its entry's neighbours.
+fn hide_created_thread_chips(rows: &mut Vec<Row>, chat_id: Option<&str>) {
     use luna_proto::view::ThreadTool;
-    let mut unclaimed: std::collections::VecDeque<(usize, &str)> = Default::default();
+    let child_of = |call: &ToolCall| {
+        let ToolCall::Mcp {
+            input: Some(input), ..
+        } = call
+        else {
+            return None;
+        };
+        let key = input.get("idempotencyKey")?.as_str()?;
+        Some(luna_engine::cross_task_tools::child_task_id(chat_id?, key))
+    };
+    // (group row, chip part, the child its call creates when the doc says)
+    let mut unclaimed: Vec<(usize, &str, Option<String>)> = Vec::new();
     let mut claimed: HashMap<usize, HashSet<String>> = HashMap::new();
     for (ix, row) in rows.iter().enumerate() {
         match &row.kind {
@@ -1417,13 +1435,16 @@ fn hide_created_thread_chips(rows: &mut Vec<Row>) {
                     .filter(|tool| {
                         !tool.is_error && ThreadTool::of(&tool.call) == Some(ThreadTool::Create)
                     })
-                    .map(|tool| (ix, tool.part_id.as_str())),
+                    .map(|tool| (ix, tool.part_id.as_str(), child_of(&tool.call))),
             ),
-            _ if row.turn_start
-                && row.role == MessageRole::System
-                && row.entry_id.starts_with("child-created:") =>
-            {
-                if let Some((group, part)) = unclaimed.pop_front() {
+            _ if row.turn_start && row.role == MessageRole::System => {
+                if let Some(child) = row.entry_id.strip_prefix("child-created:")
+                    && let Some(own) = unclaimed
+                        .iter()
+                        .position(|(_, _, made)| made.as_deref() == Some(child))
+                        .or_else(|| unclaimed.iter().position(|(_, _, made)| made.is_none()))
+                {
+                    let (group, part, _) = unclaimed.remove(own);
                     claimed.entry(group).or_default().insert(part.to_owned());
                 }
             }
@@ -5580,6 +5601,7 @@ impl Transcript {
                 &mut new_rows,
                 checkpointed.as_deref(),
                 run_live,
+                self.chat_id.as_deref(),
             );
             // Bounded caches: rows and parsed trees of entries that left this
             // transcript (rewind, compaction, removal) are dropped.
