@@ -3,8 +3,19 @@
 //! `crates/engine/src/board/` own the behavior. RPC callers are the local
 //! owner acting for the human; agent tools bind their own caller and call
 //! the same service functions.
+//!
+//! Stack discipline: `handle_board` is a plain function returning one boxed
+//! future per method. Each arm's service future is created and polled inside
+//! its own heap allocation, so neither this dispatcher nor the main RPC
+//! handler holds every arm's callee future (and its debug-build
+//! temporaries) in one poll frame. Inlined, the board arms alone took
+//! ~834 KiB of a 2 MiB tokio worker stack and `BoardStart` overflowed it.
 use super::board_engine::{BoardCaller, board_reply};
 use super::*;
+
+/// One boxed dispatcher future.
+pub(super) type BoardRpcFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<RpcReply, RpcError>> + Send + 'a>>;
 
 /// Whether `method` belongs to the board family.
 pub(super) fn handles(method: &str) -> bool {
@@ -19,206 +30,140 @@ fn board_params<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, RpcE
     })
 }
 
+/// A unary method served by an async board function, in its own boxed
+/// future. The caller is bound inside the future (the local owner).
+macro_rules! board_async {
+    ($this:ident, $params:ident, $function:ident) => {
+        Box::pin(async move {
+            let caller = BoardCaller::user(&$this.engine_info.device_id);
+            let request = board_params($params)?;
+            board_reply($this.$function(&caller, request).await)
+        })
+    };
+}
+
+/// A unary method served by a synchronous board function.
+macro_rules! board_sync {
+    ($this:ident, $params:ident, $function:ident) => {
+        Box::pin(async move {
+            let caller = BoardCaller::user(&$this.engine_info.device_id);
+            let request = board_params($params)?;
+            board_reply($this.$function(&caller, request))
+        })
+    };
+}
+
+/// A streaming method served by a board function returning a stream.
+macro_rules! board_stream {
+    ($this:ident, $params:ident, $function:ident) => {
+        Box::pin(async move {
+            let caller = BoardCaller::user(&$this.engine_info.device_id);
+            let request = board_params($params)?;
+            $this
+                .$function(&caller, request)
+                .map(RpcReply::Stream)
+                .map_err(|error| RpcError::Failed(error.to_rpc_message()))
+        })
+    };
+}
+
 impl EngineRpc {
-    pub(super) async fn handle_board(
-        &self,
-        method: &str,
+    pub(super) fn handle_board<'a>(
+        &'a self,
+        method: &'a str,
         mut params: Value,
-    ) -> Result<RpcReply, RpcError> {
+    ) -> BoardRpcFuture<'a> {
         // Owner-local in PB-0: a call addressed to another host is refused,
         // one addressed to this host is served without the routing field.
         if let Some(object) = params.as_object_mut()
             && let Some(target) = object.remove("targetDeviceId")
             && target.as_str() != Some(self.engine_info.device_id.as_str())
         {
-            return Err(RpcError::Failed(
-                luna_proto::BoardError::Unavailable {
-                    reason: "Board methods are served only by the project's owning host.".into(),
-                }
-                .to_rpc_message(),
-            ));
+            return Box::pin(async move {
+                Err(RpcError::Failed(
+                    luna_proto::BoardError::Unavailable {
+                        reason: "Board methods are served only by the project's owning host."
+                            .into(),
+                    }
+                    .to_rpc_message(),
+                ))
+            });
         }
-        let caller = BoardCaller::user(&self.engine_info.device_id);
-        let caller = &caller;
+        let this = self;
         match method {
             // ---- store / core (PB-0) ----
-            methods::BOARD_LIST => {
-                board_reply(self.board_list(caller, board_params(params)?).await)
-            }
-            methods::BOARD_READ => {
-                board_reply(self.board_read(caller, board_params(params)?).await)
-            }
-            methods::BOARD_CREATE => {
-                board_reply(self.board_create(caller, board_params(params)?).await)
-            }
-            methods::BOARD_UPDATE => {
-                board_reply(self.board_update(caller, board_params(params)?).await)
-            }
-            methods::BOARD_RANK => {
-                board_reply(self.board_rank(caller, board_params(params)?).await)
-            }
-            methods::BOARD_ARCHIVE => {
-                board_reply(self.board_archive(caller, board_params(params)?).await)
-            }
-            methods::BOARD_EVENTS => board_reply(self.board_events(caller, board_params(params)?)),
-            methods::BOARD_GET_RECEIPT => {
-                board_reply(self.board_get_receipt(caller, board_params(params)?))
-            }
-            methods::BOARD_WATCH => self
-                .board_watch(caller, board_params(params)?)
-                .map(RpcReply::Stream)
-                .map_err(|error| RpcError::Failed(error.to_rpc_message())),
+            methods::BOARD_LIST => board_async!(this, params, board_list),
+            methods::BOARD_READ => board_async!(this, params, board_read),
+            methods::BOARD_CREATE => board_async!(this, params, board_create),
+            methods::BOARD_UPDATE => board_async!(this, params, board_update),
+            methods::BOARD_RANK => board_async!(this, params, board_rank),
+            methods::BOARD_ARCHIVE => board_async!(this, params, board_archive),
+            methods::BOARD_EVENTS => board_sync!(this, params, board_events),
+            methods::BOARD_GET_RECEIPT => board_sync!(this, params, board_get_receipt),
+            methods::BOARD_WATCH => board_stream!(this, params, board_watch),
             // ---- lifecycle (A2) ----
-            methods::BOARD_MOVE => {
-                board_reply(self.board_move(caller, board_params(params)?).await)
+            methods::BOARD_MOVE => board_async!(this, params, board_move),
+            methods::BOARD_START => board_async!(this, params, board_start),
+            methods::BOARD_START_BATCH => board_async!(this, params, board_start_batch),
+            methods::BOARD_CONTROL => board_async!(this, params, board_control),
+            methods::BOARD_SET_STATUS => board_async!(this, params, board_set_status),
+            methods::BOARD_SEND_UPDATE => board_async!(this, params, board_send_update),
+            methods::BOARD_EXECUTION_OPTIONS => {
+                board_async!(this, params, board_execution_options)
             }
-            methods::BOARD_START => {
-                board_reply(self.board_start(caller, board_params(params)?).await)
-            }
-            methods::BOARD_START_BATCH => {
-                board_reply(self.board_start_batch(caller, board_params(params)?).await)
-            }
-            methods::BOARD_CONTROL => {
-                board_reply(self.board_control(caller, board_params(params)?).await)
-            }
-            methods::BOARD_SET_STATUS => {
-                board_reply(self.board_set_status(caller, board_params(params)?).await)
-            }
-            methods::BOARD_SEND_UPDATE => {
-                board_reply(self.board_send_update(caller, board_params(params)?).await)
-            }
-            methods::BOARD_EXECUTION_OPTIONS => board_reply(
-                self.board_execution_options(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_RESOLVE_SETTINGS => board_reply(
-                self.board_resolve_settings(caller, board_params(params)?)
-                    .await,
-            ),
+            methods::BOARD_RESOLVE_SETTINGS => board_async!(this, params, board_resolve_settings),
             // ---- chat model (A3) ----
-            methods::BOARD_CHAT_IDENTITY => {
-                board_reply(self.board_chat_identity(caller, board_params(params)?))
-            }
-            methods::BOARD_CHAT_BADGES => {
-                board_reply(self.board_chat_badges(caller, board_params(params)?))
-            }
-            methods::BOARD_CREATE_SIDE_CHAT => board_reply(
-                self.board_create_side_chat(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_CREATE_MAIN_CHAT => board_reply(
-                self.board_create_main_chat(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_CONVERT_CHAT => {
-                board_reply(self.board_convert_chat(caller, board_params(params)?).await)
-            }
-            methods::BOARD_LINK_CHAT => {
-                board_reply(self.board_link_chat(caller, board_params(params)?).await)
-            }
-            methods::BOARD_NAVIGATION => {
-                board_reply(self.board_navigation(caller, board_params(params)?))
-            }
+            methods::BOARD_CHAT_IDENTITY => board_sync!(this, params, board_chat_identity),
+            methods::BOARD_CHAT_BADGES => board_sync!(this, params, board_chat_badges),
+            methods::BOARD_CREATE_SIDE_CHAT => board_async!(this, params, board_create_side_chat),
+            methods::BOARD_CREATE_MAIN_CHAT => board_async!(this, params, board_create_main_chat),
+            methods::BOARD_CONVERT_CHAT => board_async!(this, params, board_convert_chat),
+            methods::BOARD_LINK_CHAT => board_async!(this, params, board_link_chat),
+            methods::BOARD_NAVIGATION => board_sync!(this, params, board_navigation),
             // ---- review and evidence (A5) ----
-            methods::BOARD_REVIEW_START => {
-                board_reply(self.board_review_start(caller, board_params(params)?).await)
-            }
-            methods::BOARD_REVIEW_STATUS => {
-                board_reply(self.board_review_status(caller, board_params(params)?))
-            }
-            methods::BOARD_REVIEW_CANCEL => board_reply(
-                self.board_review_cancel(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_REVIEW_SUBMIT => board_reply(
-                self.board_review_submit(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_OUTCOMES => {
-                board_reply(self.board_outcomes(caller, board_params(params)?))
-            }
+            methods::BOARD_REVIEW_START => board_async!(this, params, board_review_start),
+            methods::BOARD_REVIEW_STATUS => board_sync!(this, params, board_review_status),
+            methods::BOARD_REVIEW_CANCEL => board_async!(this, params, board_review_cancel),
+            methods::BOARD_REVIEW_SUBMIT => board_async!(this, params, board_review_submit),
+            methods::BOARD_OUTCOMES => board_sync!(this, params, board_outcomes),
             // ---- temporary authoring (A6) ----
-            methods::BOARD_AUTHORING_START => board_reply(
-                self.board_authoring_start(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_SEND => board_reply(
-                self.board_authoring_send(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_READ => {
-                board_reply(self.board_authoring_read(caller, board_params(params)?))
+            methods::BOARD_AUTHORING_START => board_async!(this, params, board_authoring_start),
+            methods::BOARD_AUTHORING_SEND => board_async!(this, params, board_authoring_send),
+            methods::BOARD_AUTHORING_READ => board_sync!(this, params, board_authoring_read),
+            methods::BOARD_AUTHORING_WATCH => board_stream!(this, params, board_authoring_watch),
+            methods::BOARD_AUTHORING_CHECKPOINT => {
+                board_async!(this, params, board_authoring_checkpoint)
             }
-            methods::BOARD_AUTHORING_WATCH => self
-                .board_authoring_watch(caller, board_params(params)?)
-                .map(RpcReply::Stream)
-                .map_err(|error| RpcError::Failed(error.to_rpc_message())),
-            methods::BOARD_AUTHORING_CHECKPOINT => board_reply(
-                self.board_authoring_checkpoint(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_INTERRUPT => board_reply(
-                self.board_authoring_interrupt(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_CLOSE => board_reply(
-                self.board_authoring_close(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_DISCARD => board_reply(
-                self.board_authoring_discard(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_AUTHORING_LIST => {
-                board_reply(self.board_authoring_list(caller, board_params(params)?))
+            methods::BOARD_AUTHORING_INTERRUPT => {
+                board_async!(this, params, board_authoring_interrupt)
             }
+            methods::BOARD_AUTHORING_CLOSE => board_async!(this, params, board_authoring_close),
+            methods::BOARD_AUTHORING_DISCARD => board_async!(this, params, board_authoring_discard),
+            methods::BOARD_AUTHORING_LIST => board_sync!(this, params, board_authoring_list),
             // ---- GitHub issues and dependencies (A7) ----
-            methods::BOARD_ISSUE_SOURCES => board_reply(
-                self.board_issue_sources(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_ISSUE_SEARCH => {
-                board_reply(self.board_issue_search(caller, board_params(params)?).await)
+            methods::BOARD_ISSUE_SOURCES => board_async!(this, params, board_issue_sources),
+            methods::BOARD_ISSUE_SEARCH => board_async!(this, params, board_issue_search),
+            methods::BOARD_ISSUE_DETAIL => board_async!(this, params, board_issue_detail),
+            methods::BOARD_ISSUE_COMMENTS => board_async!(this, params, board_issue_comments),
+            methods::BOARD_ISSUE_IMPORT => board_async!(this, params, board_issue_import),
+            methods::BOARD_ISSUE_LINK => board_async!(this, params, board_issue_link),
+            methods::BOARD_ISSUE_UNLINK => board_async!(this, params, board_issue_unlink),
+            methods::BOARD_SET_DEPENDENCY => board_async!(this, params, board_set_dependency),
+            methods::BOARD_ISSUE_WRITEBACK_PREVIEW => {
+                board_async!(this, params, board_issue_writeback_preview)
             }
-            methods::BOARD_ISSUE_DETAIL => {
-                board_reply(self.board_issue_detail(caller, board_params(params)?).await)
-            }
-            methods::BOARD_ISSUE_COMMENTS => board_reply(
-                self.board_issue_comments(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_ISSUE_IMPORT => {
-                board_reply(self.board_issue_import(caller, board_params(params)?).await)
-            }
-            methods::BOARD_ISSUE_LINK => {
-                board_reply(self.board_issue_link(caller, board_params(params)?).await)
-            }
-            methods::BOARD_ISSUE_UNLINK => {
-                board_reply(self.board_issue_unlink(caller, board_params(params)?).await)
-            }
-            methods::BOARD_SET_DEPENDENCY => board_reply(
-                self.board_set_dependency(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_ISSUE_WRITEBACK_PREVIEW => board_reply(
-                self.board_issue_writeback_preview(caller, board_params(params)?)
-                    .await,
-            ),
-            methods::BOARD_ISSUE_WRITEBACK => board_reply(
-                self.board_issue_writeback(caller, board_params(params)?)
-                    .await,
-            ),
+            methods::BOARD_ISSUE_WRITEBACK => board_async!(this, params, board_issue_writeback),
             // ---- agent tools (A4) ----
-            methods::BOARD_TOOL_CATALOG => {
+            methods::BOARD_TOOL_CATALOG => Box::pin(async move {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
                 struct Catalog {
                     task_id: String,
                 }
                 let request: Catalog = board_params(params)?;
-                board_reply(self.board_tool_catalog(&request.task_id))
-            }
-            _ => Err(RpcError::UnknownMethod(method.into())),
+                board_reply(this.board_tool_catalog(&request.task_id))
+            }),
+            _ => Box::pin(async move { Err(RpcError::UnknownMethod(method.into())) }),
         }
     }
 }

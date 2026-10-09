@@ -9285,9 +9285,36 @@ where
     RpcReply::value(&value)
 }
 
-#[async_trait]
+// Board methods are routed before the main handler body is entered. In debug
+// builds that body's poll frame reserves ~1 MiB of stack for all its arms, and
+// board operations polled beneath it overflowed a 2 MiB tokio worker (see
+// `rpc/board.rs`). Every other method takes the unchanged path below.
 impl RpcService for EngineRpc {
-    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+    fn handle<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        method: &'life1 str,
+        params: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<RpcReply, RpcError>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        if board::handles(method) {
+            return self.handle_board(method, params);
+        }
+        Box::pin(self.handle_engine(method, params))
+    }
+}
+
+impl EngineRpc {
+    async fn handle_engine(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
         if matches!(
             method,
             methods::GET_PROVIDER_DEFAULTS | methods::SET_PROVIDER_DEFAULTS
@@ -9296,9 +9323,6 @@ impl RpcService for EngineRpc {
         }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
-        }
-        if board::handles(method) {
-            return self.handle_board(method, params).await;
         }
         if context_transfer::handles(method) {
             return self.handle_context_transfer(method, params);

@@ -40,6 +40,12 @@
 //!     a structured error.
 //! 13. Upgrading a profile created before the board (schema 18) loses
 //!     existing data or fails to add the board tables.
+//! 14. (Integration fix round, written before the dispatcher change.) A debug
+//!     build overflows a 2 MiB tokio worker stack on the RPC path of the
+//!     heaviest board operations (`BoardStart`, `BoardConvertChat`,
+//!     `BoardMove`, `BoardReviewStart`) because the dispatcher inlines every
+//!     arm's callee future into one poll frame; the process aborts before any
+//!     board logic answers.
 //!
 //! Every scenario writes a JSON manifest (steps, expected/observed, SHA-256
 //! of snapshots) under `target/qa/board/store/`.
@@ -972,4 +978,69 @@ async fn every_board_method_is_routed_and_older_profiles_upgrade_additively() {
         .unwrap();
     evidence.step("schema is 19", json!(19), json!(version), None);
     evidence.write();
+}
+
+/// Case 14: the heaviest board operations answer over real RPC on an
+/// explicit 2 MiB worker stack (an overflow aborts the whole test binary).
+#[test]
+fn heavy_board_rpcs_fit_a_two_mib_worker_stack() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(2 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let f = fixture();
+        let (core, c) = boot(&f);
+        let mut evidence = Evidence::new("two-mib-worker-stack");
+        let path = space(&c, &core, &f, "project-luna", "luna").await;
+        let chat_id = "a2222222-2222-4222-8222-222222222222";
+        chat(&c, "project-luna", chat_id, &path).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while chats(&c).await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("the chat row never appeared");
+        let moved = create(&c, "stack-move", "project-luna", "Moved to Ready").await;
+        let started = create(&c, "stack-start", "project-luna", "Started explicitly").await;
+        let calls = [
+            (
+                "BoardMove",
+                json!({"requestId":"stack-move-1","workItemId":moved["workItemId"],"to":"ready"}),
+            ),
+            (
+                "BoardStart",
+                json!({"requestId":"stack-start-1","workItemId":started["workItemId"]}),
+            ),
+            (
+                "BoardConvertChat",
+                json!({"requestId":"stack-convert-1","taskId":chat_id,"title":"Convert me","description":"Converted in place"}),
+            ),
+            (
+                "BoardReviewStart",
+                json!({"requestId":"stack-review-1","workItemId":started["workItemId"]}),
+            ),
+        ];
+        for (method, params) in calls {
+            let outcome = match call(&c, method, params).await {
+                Ok(_) => "ok".to_owned(),
+                Err(RpcError::Failed(message)) => BoardError::from_rpc_message(&message)
+                    .map(|error| error.code())
+                    .unwrap_or_else(|| panic!("{method}: unstructured failure {message}")),
+                Err(RpcError::BadParams(message)) => panic!("{method}: bad params {message}"),
+                Err(other) => panic!("{method}: the RPC did not answer: {other}"),
+            };
+            evidence.step(
+                &format!("{method} answers on a 2 MiB worker ({outcome})"),
+                json!(true),
+                json!(!outcome.is_empty()),
+                None,
+            );
+        }
+        evidence.write();
+        stop(core, c).await;
+    });
 }
