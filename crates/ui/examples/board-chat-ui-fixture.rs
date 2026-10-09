@@ -481,7 +481,11 @@ async fn engine_badges(
     .await
 }
 
-fn user_messages(core: &EngineCore, chat: &str) -> usize {
+/// User messages in `chat`'s document. Opening a document the engine has
+/// not opened yet starts its worker, which must run on the engine's Tokio
+/// runtime (never the GPUI thread).
+fn user_messages(runtime: &tokio::runtime::Handle, core: &EngineCore, chat: &str) -> usize {
+    let _entered = runtime.enter();
     core.doc_host
         .open(chat)
         .ok()
@@ -901,7 +905,7 @@ async fn scenario(
     // f02-f03. Convert MAIN in place from its sidebar menu.
     let chats_before = cx.update(|cx| state.read(cx).chats.len());
     let engine_chats_before = engine_chat_count(core);
-    let main_prompts_before = user_messages(core, MAIN);
+    let main_prompts_before = user_messages(runtime, core, MAIN);
     right_click_row(window, cx, MAIN).await?;
     let menu = wait_for(window, cx, 40, "MAIN's chat menu", |rb| {
         !marks(rb, &format!("menu:chat:{MAIN}")).is_empty()
@@ -980,12 +984,12 @@ async fn scenario(
             "engine": engine_main,
             "uiChats": [chats_before, cx.update(|cx| state.read(cx).chats.len())],
             "engineChats": [engine_chats_before, engine_chat_count(core)],
-            "userMessages": [main_prompts_before, user_messages(core, MAIN)],
+            "userMessages": [main_prompts_before, user_messages(runtime, core, MAIN)],
         }),
         engine_working
             && cx.update(|cx| state.read(cx).chats.len()) == chats_before
             && engine_chat_count(core) == engine_chats_before
-            && user_messages(core, MAIN) == main_prompts_before,
+            && user_messages(runtime, core, MAIN) == main_prompts_before,
     );
     let header = board_bounds(&converted, &format!("header-ticket:{MAIN}"));
     let status = board_bounds(&converted, &format!("header-status:{MAIN}"));
@@ -1512,7 +1516,7 @@ async fn scenario(
     .await?;
     let chats_before = cx.update(|cx| state.read(cx).chats.len());
     let engine_chats_before = engine_chat_count(core);
-    let side_prompts_before = user_messages(core, &side);
+    let side_prompts_before = user_messages(runtime, core, &side);
     let launches = |detail: &Value| detail["launches"].as_array().map(Vec::len).unwrap_or(0);
     let detail_before = rpc(
         runtime,
@@ -1566,14 +1570,14 @@ async fn scenario(
             "focused": revealed["workbench"]["focusedChat"],
             "main": revealed["workbench"]["main"],
             "launches": [launches(&detail_before), launches(&detail_after)],
-            "prompts": [side_prompts_before, user_messages(core, &side)],
+            "prompts": [side_prompts_before, user_messages(runtime, core, &side)],
             "uiChats": [chats_before, cx.update(|cx| state.read(cx).chats.len())],
             "engineChats": [engine_chats_before, engine_chat_count(core)],
             "lineage": [lineage_before, lineage_now],
             "inSidebar": sidebar_row(&revealed, &side).is_some(),
         }),
         launches(&detail_before) == launches(&detail_after)
-            && user_messages(core, &side) == side_prompts_before
+            && user_messages(runtime, core, &side) == side_prompts_before
             && cx.update(|cx| state.read(cx).chats.len()) == chats_before
             && engine_chat_count(core) == engine_chats_before
             && lineage_before == lineage_now

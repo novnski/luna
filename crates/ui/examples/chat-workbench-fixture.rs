@@ -1881,6 +1881,9 @@ fn main() -> anyhow::Result<()> {
     let handle_a = handle.clone();
     // w20l seeds one held queue row through the real document host.
     let queue_doc_host = core.doc_host.clone();
+    // Opening a document the engine has not opened yet starts its worker on
+    // the engine's Tokio runtime (w20b/w20c seed new chats' history).
+    let doc_runtime = runtime.handle().clone();
     let queue_device = core.device_id.clone();
     // ...and proves Send now's disposition from the durable command ledger.
     let command_store = core.store.clone();
@@ -3765,6 +3768,7 @@ fn main() -> anyhow::Result<()> {
                     let reader = reader.clone();
                     let workspace = &automation_workspace;
                     let docs = &queue_doc_host;
+                    let rt = doc_runtime.clone();
                     let device = queue_device.clone();
                     let cwd = automation_cwd.to_string_lossy().into_owned();
                     async move {
@@ -3782,9 +3786,14 @@ fn main() -> anyhow::Result<()> {
                             .await?;
                         workspace.rename_chat(id, title)?;
                         let at = Utc::now().timestamp_millis();
-                        let doc = docs.open(id)?;
-                        doc.doc().push_message(&text_entry(&format!("{id}-prompt"), MessageRole::User, &format!("{title} (fixture)"), &device, at - 60_000))?;
-                        doc.doc().push_message(&text_entry(&format!("{id}-answer"), MessageRole::Assistant, "Noted.", &device, at))?;
+                        {
+                            // A new chat's document worker starts on the
+                            // engine's runtime, never the GPUI thread.
+                            let _entered = rt.enter();
+                            let doc = docs.open(id)?;
+                            doc.doc().push_message(&text_entry(&format!("{id}-prompt"), MessageRole::User, &format!("{title} (fixture)"), &device, at - 60_000))?;
+                            doc.doc().push_message(&text_entry(&format!("{id}-answer"), MessageRole::Assistant, "Noted.", &device, at))?;
+                        }
                         anyhow::Ok(())
                     }
                 };
