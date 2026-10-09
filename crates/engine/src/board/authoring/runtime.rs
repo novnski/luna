@@ -88,6 +88,9 @@ struct LiveTurn {
     tools: usize,
     /// The streaming assistant entry (persisted when the turn ends).
     parts: Vec<MessagePart>,
+    /// The provider closed a message; its next text or thought opens a new
+    /// part instead of gluing onto the previous message's.
+    message_ended: bool,
     task: Option<tokio::task::AbortHandle>,
 }
 
@@ -199,7 +202,7 @@ impl AuthoringRuntimes {
         if let Some(turn) = lock(&self.turns).get_mut(session_id)
             && turn.turn_id == turn_id
         {
-            luna_doc::fold_event_into_parts(&mut turn.parts, event);
+            luna_doc::fold_event_across_messages(&mut turn.parts, event, &mut turn.message_ended);
         }
         self.notify();
     }
@@ -323,6 +326,7 @@ pub(crate) fn start_turn(
                 closing: false,
                 tools: 0,
                 parts: Vec::new(),
+                message_ended: false,
                 task: None,
             },
         );

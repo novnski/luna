@@ -7873,6 +7873,9 @@ struct SubagentSink {
     /// fold; this keeps late activity and results at the original call site,
     /// like the root chat's `tool_entry_by_id`.
     tool_entry_by_id: HashMap<String, String>,
+    /// The child's provider closed a message; its next text or thought opens
+    /// a new part, as in the root chat.
+    message_ended: bool,
 }
 
 impl SubagentSink {
@@ -7908,7 +7911,7 @@ impl SubagentSink {
                 _ => {}
             }
         }
-        luna_doc::fold_event_into_parts(&mut self.folded, event);
+        luna_doc::fold_event_across_messages(&mut self.folded, event, &mut self.message_ended);
         luna_doc::apply_journal_output_refs(&self.doc_id, &mut self.folded);
         self.dirty = true;
     }
@@ -9282,6 +9285,7 @@ async fn drive_run(
                             folded: Vec::new(),
                             dirty: false,
                             tool_entry_by_id: HashMap::new(),
+                            message_ended: false,
                         },
                     );
                     if !chip_streaming {
