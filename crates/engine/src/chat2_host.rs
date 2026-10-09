@@ -470,20 +470,6 @@ mod frontier_tests {
     /// fresh readers skipped the checkpoint anyway. A vacuous claim is not
     /// containment.
     #[test]
-    fn encoded_empty_frontier_is_not_contained() {
-        let dir = std::env::temp_dir().join(format!("luna-frontier2-{}", std::process::id()));
-        let store = Arc::new(DocsStore::open(&dir).expect("store opens"));
-        let doc = Arc::new(SessionDoc::from_doc(loro::LoroDoc::new()));
-        let sink = EngineChatSink::new(&doc, store, "frontier-test-2");
-        let encoded_empty = loro::VersionVector::default().encode();
-        assert!(
-            !sink.contains_frontier(&encoded_empty),
-            "an encoded-empty frontier must trigger the fetch, not vacuous containment"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn empty_frontier_is_not_contained() {
         let dir = std::env::temp_dir().join(format!("luna-frontier-test-{}", std::process::id()));
         let store = Arc::new(DocsStore::open(&dir).expect("store opens"));
@@ -492,6 +478,11 @@ mod frontier_tests {
         assert!(
             !sink.contains_frontier(&[]),
             "empty frontier on a present checkpoint must trigger the fetch"
+        );
+        let encoded_empty = loro::VersionVector::default().encode();
+        assert!(
+            !sink.contains_frontier(&encoded_empty),
+            "an encoded-empty frontier must trigger the fetch, not vacuous containment"
         );
         // A real, contained frontier still short-circuits the fetch — the
         // doc needs actual ops, or its own frontier is the vacuous-empty one.

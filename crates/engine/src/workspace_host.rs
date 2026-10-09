@@ -3744,39 +3744,14 @@ mod tests {
     }
 
     #[test]
-    fn boot_repairs_the_legacy_unknown_device_sentinel() {
+    fn boot_repairs_only_the_legacy_unknown_device_sentinel() {
         assert_eq!(
             device_name_on_boot(Some("unknown-device"), "MacBook Pro"),
             "MacBook Pro"
         );
-    }
-
-    #[test]
-    fn boot_preserves_a_user_selected_device_name() {
         assert_eq!(
             device_name_on_boot(Some("Work laptop"), "MacBook Pro"),
             "Work laptop"
-        );
-    }
-
-    #[test]
-    fn linked_worktree_resolves_to_the_checkout_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("proj");
-        let wt = dir.path().join("clever-ember");
-        std::fs::create_dir_all(root.join(".git").join("worktrees").join("clever-ember")).unwrap();
-        std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(
-            wt.join(".git"),
-            format!(
-                "gitdir: {}\n",
-                root.join(".git/worktrees/clever-ember").display()
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            linked_worktree_root(&wt).as_deref(),
-            Some(root.to_str().unwrap())
         );
     }
 

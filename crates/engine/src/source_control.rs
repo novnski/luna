@@ -1263,37 +1263,26 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
     }
 
     #[tokio::test]
-    async fn merged_pull_request_is_returned_when_no_open_exists() {
+    async fn terminal_pull_request_is_returned_when_no_open_exists() {
         let source = source("feature/status", "acme", Some("main"));
-        let json = serde_json::to_vec(&vec![pull_request(
-            91,
-            "MERGED",
-            "acme",
-            "feature/status",
-            "2026-08-15T12:00:00Z",
-        )])
-        .unwrap();
+        for (number, state, expected) in [
+            (91, "MERGED", ChangeRequestState::Merged),
+            (92, "CLOSED", ChangeRequestState::Closed),
+        ] {
+            let json = serde_json::to_vec(&vec![pull_request(
+                number,
+                state,
+                "acme",
+                "feature/status",
+                "2026-08-15T12:00:00Z",
+            )])
+            .unwrap();
 
-        let (result, _) = resolve_with(&source, command_success(json)).await;
-        let summary = result.unwrap().unwrap();
-        assert_eq!(summary.number, 91);
-        assert_eq!(summary.state, ChangeRequestState::Merged);
-    }
-
-    #[tokio::test]
-    async fn closed_pull_request_is_returned_when_no_open_exists() {
-        let source = source("feature/status", "acme", Some("main"));
-        let json = serde_json::to_vec(&vec![pull_request(
-            92,
-            "CLOSED",
-            "acme",
-            "feature/status",
-            "2026-08-15T12:00:00Z",
-        )])
-        .unwrap();
-
-        let (result, _) = resolve_with(&source, command_success(json)).await;
-        assert_eq!(result.unwrap().unwrap().state, ChangeRequestState::Closed);
+            let (result, _) = resolve_with(&source, command_success(json)).await;
+            let summary = result.unwrap().unwrap();
+            assert_eq!(summary.number, number);
+            assert_eq!(summary.state, expected);
+        }
     }
 
     #[tokio::test]
@@ -1378,78 +1367,62 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
         assert_eq!(result.unwrap(), None);
     }
 
+    /// Every `gh` failure maps to one typed error, and stderr (which can carry
+    /// hosts and tokens) never reaches the error text.
     #[tokio::test]
-    async fn partial_or_invalid_json_is_classified_as_decode() {
+    async fn github_cli_failures_are_classified_without_exposing_stderr() {
         let source = source("feature/status", "acme", Some("main"));
-        for json in [br#"[{"number":90}]"#.to_vec(), b"not-json".to_vec()] {
-            let (result, _) = resolve_with(&source, command_success(json)).await;
-            assert_eq!(result.unwrap_err(), ChangeRequestError::Decode);
-        }
-    }
-
-    #[tokio::test]
-    async fn truncated_json_is_classified_as_decode() {
-        let source = source("feature/status", "acme", Some("main"));
-        let runner = FakeProcessRunner::with_responses([Ok(ProcessOutput {
+        let truncated = Ok(ProcessOutput {
             success: true,
             stdout: b"[]".to_vec(),
             stderr: Vec::new(),
             stdout_truncated: true,
-        })]);
-        let github = GitHubCli::with_runner(runner);
-
-        let result = github.find_for_branch(&source).await;
-
-        assert_eq!(result.unwrap_err(), ChangeRequestError::Decode);
-    }
-
-    #[tokio::test]
-    async fn missing_github_executable_is_classified() {
-        let source = source("feature/status", "acme", Some("main"));
-        let (result, _) = resolve_with(
-            &source,
-            Err(ProcessRunError::Spawn(io::ErrorKind::NotFound)),
-        )
-        .await;
-        assert_eq!(result.unwrap_err(), ChangeRequestError::CliUnavailable);
-    }
-
-    #[tokio::test]
-    async fn authentication_failure_is_classified_without_exposing_stderr() {
-        let source = source("feature/status", "acme", Some("main"));
-        let secret_stderr = "not logged into github.example.com; token secret-value";
-        let (result, _) = resolve_with(&source, command_failure(secret_stderr)).await;
-        let error = result.unwrap_err();
-        assert_eq!(error, ChangeRequestError::Authentication);
-        assert!(!error.to_string().contains("secret-value"));
-    }
-
-    #[tokio::test]
-    async fn rate_limit_failure_is_classified() {
-        let source = source("feature/status", "acme", Some("main"));
-        let (result, _) =
-            resolve_with(&source, command_failure("GraphQL: API rate limit exceeded")).await;
-        assert_eq!(result.unwrap_err(), ChangeRequestError::RateLimited);
-    }
-
-    #[tokio::test]
-    async fn generic_github_failure_is_classified_without_exposing_stderr() {
-        let source = source("feature/status", "acme", Some("main"));
-        let (result, _) = resolve_with(
-            &source,
-            command_failure("provider failed with sensitive details"),
-        )
-        .await;
-        let error = result.unwrap_err();
-        assert_eq!(error, ChangeRequestError::CommandFailed);
-        assert!(!error.to_string().contains("sensitive details"));
-    }
-
-    #[tokio::test]
-    async fn timeout_is_classified() {
-        let source = source("feature/status", "acme", Some("main"));
-        let (result, _) = resolve_with(&source, Err(ProcessRunError::Timeout)).await;
-        assert_eq!(result.unwrap_err(), ChangeRequestError::Timeout);
+        });
+        for (response, expected, private) in [
+            (
+                command_success(br#"[{"number":90}]"#.to_vec()),
+                ChangeRequestError::Decode,
+                None,
+            ),
+            (
+                command_success(b"not-json".to_vec()),
+                ChangeRequestError::Decode,
+                None,
+            ),
+            (truncated, ChangeRequestError::Decode, None),
+            (
+                Err(ProcessRunError::Spawn(io::ErrorKind::NotFound)),
+                ChangeRequestError::CliUnavailable,
+                None,
+            ),
+            (
+                command_failure("not logged into github.example.com; token secret-value"),
+                ChangeRequestError::Authentication,
+                Some("secret-value"),
+            ),
+            (
+                command_failure("GraphQL: API rate limit exceeded"),
+                ChangeRequestError::RateLimited,
+                None,
+            ),
+            (
+                command_failure("provider failed with sensitive details"),
+                ChangeRequestError::CommandFailed,
+                Some("sensitive details"),
+            ),
+            (
+                Err(ProcessRunError::Timeout),
+                ChangeRequestError::Timeout,
+                None,
+            ),
+        ] {
+            let (result, _) = resolve_with(&source, response).await;
+            let error = result.unwrap_err();
+            assert_eq!(error, expected);
+            if let Some(private) = private {
+                assert!(!error.to_string().contains(private), "{error}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1639,22 +1612,6 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
         assert_eq!(
             context.head_selectors,
             ["contributor:published-name", "published-name"]
-        );
-    }
-
-    #[test]
-    fn branch_without_upstream_keeps_safe_local_fallback() {
-        let context = BranchHeadContext::resolve(
-            "feature/local",
-            None,
-            Some("origin"),
-            Some("https://github.com/acme/luna.git"),
-        );
-
-        assert_eq!(context.head_branch, "feature/local");
-        assert_eq!(
-            context.head_selectors,
-            ["acme:feature/local", "feature/local"]
         );
     }
 

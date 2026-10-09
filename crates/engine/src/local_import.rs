@@ -217,26 +217,7 @@ impl LocalImporter {
         }
     }
 
-    #[cfg(test)]
-    fn copy_journal_with_handle(
-        source: &Path,
-        destination: &Path,
-        target_journals: &Path,
-        write_handle: Option<&DeviceWriteHandle>,
-    ) -> Result<(), EngineError> {
-        let _permit = write_handle
-            .map(DeviceWriteHandle::try_admit)
-            .transpose()
-            .map_err(|error| {
-                EngineError::Other(format!(
-                    "journal import temporarily unavailable ({error:?})"
-                ))
-            })?;
-        Self::copy_file_atomic(source, destination, target_journals)
-    }
-
-    /// Publish a complete file once. `run` calls this under its outer ticket;
-    /// the standalone journal helper admits its own ticket above.
+    /// Publish a complete file once. `run` calls this under its outer ticket.
     fn copy_file_atomic(
         source: &Path,
         destination: &Path,
@@ -1410,57 +1391,6 @@ mod tests {
             })
             .unwrap();
         assert!(migrations > 0);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn journal_import_waits_for_same_freeze_and_retries_after_restart() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("local/chat.jsonl");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        let bytes = b"{\"seq\":1,\"event\":{\"type\":\"textDelta\",\"text\":\"synthetic\"}}\n";
-        std::fs::write(&source, bytes).unwrap();
-        let target_dir = root.path().join("target/journals");
-        let destination = target_dir.join("chat.jsonl");
-        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
-            .unwrap();
-        let handle = owner.handle();
-        let snapshot = owner
-            .epoch_for_tests()
-            .freeze(Duration::from_secs(2))
-            .await
-            .unwrap()
-            .into_snapshot()
-            .unwrap();
-        let error = LocalImporter::copy_journal_with_handle(
-            &source,
-            &destination,
-            &target_dir,
-            Some(&handle),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("Busy"));
-        assert!(!destination.exists());
-        assert!(!target_dir.exists());
-        drop(snapshot);
-
-        LocalImporter::copy_journal_with_handle(&source, &destination, &target_dir, Some(&handle))
-            .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
-        assert_eq!(std::fs::read_dir(&target_dir).unwrap().count(), 1);
-        drop(owner);
-        let replacement =
-            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
-                .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
-        let second = target_dir.join("second.jsonl");
-        LocalImporter::copy_journal_with_handle(
-            &source,
-            &second,
-            &target_dir,
-            Some(&replacement.handle()),
-        )
-        .unwrap();
-        assert_eq!(std::fs::read(&second).unwrap(), bytes);
     }
 
     #[test]

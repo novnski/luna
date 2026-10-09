@@ -199,17 +199,6 @@ impl HarnessRegistry {
         self.prefs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_prefs_before_publish_for_tests(
-        &self,
-        hook: Option<Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>>,
-    ) {
-        *self
-            .prefs_before_publish
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = hook;
-    }
-
     /// Load `harness-prefs.json` from the engine data dir and remember the
     /// path for writes. Corrupt/missing files fall back to the default set.
     pub fn load_prefs(&self, data_dir: &Path) {

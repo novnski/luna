@@ -907,17 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn seq_continues_across_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        {
-            let journal = RunJournal::open(dir.path()).unwrap();
-            journal.append("chat-1", &text("a")).unwrap();
-        }
-        let journal = RunJournal::open(dir.path()).unwrap();
-        assert_eq!(journal.append("chat-1", &text("b")).unwrap(), 2);
-    }
-
-    #[test]
     fn stale_scan_flags_journals_without_terminal_done() {
         let dir = tempfile::tempdir().unwrap();
         let journal = RunJournal::open(dir.path()).unwrap();

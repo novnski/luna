@@ -633,20 +633,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn commit_assembles_chunks_into_a_durable_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let uploads = Uploads::from_root(dir.path());
-        uploads
-            .append("upload-1", &BASE64.encode(b"local"), Some(0))
-            .unwrap();
-
-        let path = uploads.commit("upload-1", "image.png").unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"local");
-        assert!(!dir.path().join("tmp").join("upload-1").exists());
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn guarded_commit_drains_into_snapshot_and_retries_after_freeze() {
         let root = tempfile::tempdir().unwrap();

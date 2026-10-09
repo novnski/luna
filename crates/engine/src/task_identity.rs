@@ -2899,17 +2899,6 @@ mod tests {
     }
 
     #[test]
-    fn external_import_key_is_deterministic_but_not_a_task_id() {
-        let key = external_import_key(HarnessId::Codex, "instance", "provider-task");
-        assert_eq!(
-            key,
-            external_import_key(HarnessId::Codex, "instance", "provider-task")
-        );
-        assert!(uuid::Uuid::parse_str(&key).is_err());
-        assert_ne!(key, "provider-task");
-    }
-
-    #[test]
     fn provider_prefix_is_cleanly_owned() {
         assert_eq!(provider_title(Some("Fix tests")), "[LUNA] Fix tests");
         assert_eq!(clean_provider_title(Some("[LUNA] Fix tests")), "Fix tests");

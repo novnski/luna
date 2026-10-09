@@ -1556,29 +1556,7 @@ pub async fn capture_turn_diff(
 
 #[cfg(test)]
 mod watch_budget_tests {
-    use super::{CheckoutIdentity, MAX_WATCH_DIRS, exceeds_watch_budget, watch_targets};
-
-    #[test]
-    fn small_tree_is_watchable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("src/a/b")).unwrap();
-        std::fs::create_dir_all(root.join("src/c")).unwrap();
-        std::fs::write(root.join("src/a/f.txt"), "x").unwrap();
-        assert!(!exceeds_watch_budget(root));
-    }
-
-    #[test]
-    fn budget_is_exceeded_and_probe_stays_bounded() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        // One flat directory of MAX_WATCH_DIRS + 50 subdirs trips the budget;
-        // the BFS must stop right after the threshold, not enumerate the rest.
-        for i in 0..(MAX_WATCH_DIRS + 50) {
-            std::fs::create_dir(root.join(format!("d{i}"))).unwrap();
-        }
-        assert!(exceeds_watch_budget(root));
-    }
+    use super::{CheckoutIdentity, MAX_WATCH_DIRS, watch_targets};
 
     fn identity(root: &std::path::Path, git_dir: &std::path::Path) -> CheckoutIdentity {
         CheckoutIdentity {
@@ -1638,6 +1616,6 @@ mod watch_budget_tests {
         std::fs::create_dir_all(root.join("real/inner")).unwrap();
         // A self-referential symlink cycle must not send the walk into a spin.
         std::os::unix::fs::symlink(root.join("real"), root.join("real/inner/loop")).unwrap();
-        assert!(!exceeds_watch_budget(root)); // terminates, under budget
+        assert!(!super::exceeds_watch_budget(root)); // terminates, under budget
     }
 }

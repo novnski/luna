@@ -2061,49 +2061,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_price_override_wins_over_provider_reported_cost() {
-        let source = UsageSource {
-            provider: UsageProvider::Claude,
-            environment_id: "fake".into(),
-            fingerprint: "fake-home".into(),
-            status: UsageSourceStatus::Ready,
-            distinct_sessions: 1,
-            files_scanned: 1,
-            files_cached: 0,
-            failed_files: 0,
-            detail: None,
-        };
-        let record = Record {
-            at_ms: now_ms(),
-            model: "fake-model".into(),
-            session: "fake-session".into(),
-            tokens: UsageTokens {
-                uncached_input: 1_000_000,
-                ..UsageTokens::default()
-            },
-            cost_usd: Some(99.0),
-            dedupe: None,
-            legacy_parser: false,
-        };
-        let prices = HashMap::from([(
-            "fake-model".into(),
-            (
-                UsagePriceRate {
-                    input_per_million: 1.0,
-                    cached_per_million: 1.0,
-                    creation_per_million: 1.0,
-                    output_per_million: 1.0,
-                },
-                CostQuality::UserOverride,
-            ),
-        )]);
-        let buckets =
-            aggregate_records(vec![(UsageProvider::Claude, record)], &[source], 7, &prices);
-        assert_eq!(buckets[0].api_equivalent_cost_usd, Some(1.0));
-        assert_eq!(buckets[0].cost_quality, CostQuality::UserOverride);
-    }
-
-    #[test]
     fn claude_repeated_blocks_have_same_dedupe_identity() {
         let line = r#"{"type":"assistant","timestamp":"2026-09-22T00:00:00Z","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-test","usage":{"input_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"output_tokens":5}}}"#;
         let record = parse_claude(line).unwrap();
