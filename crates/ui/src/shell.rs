@@ -92,6 +92,7 @@ mod usage;
 mod workbench;
 
 use crate::AccessibleButton as _;
+use crate::pickers::ShortcutTooltipExt as _;
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
 
 actions!(
@@ -103,6 +104,9 @@ actions!(
         AddSpacePalette,
         ToggleCommandPalette,
         ToggleActivity,
+        ToggleUsage,
+        NavigateBack,
+        NavigateForward,
         OpenModelPicker,
         NewSession,
         OpenSettings,
@@ -422,9 +426,22 @@ pub fn apply_keymap(
             None,
         ),
     ]);
-    // Tabs and splits: each binds its configured chord; an empty one (the
-    // user cleared it, or an upgrade found its default taken) binds nothing.
-    let workbench_bindings: [(ShortcutId, Box<dyn Fn(&str) -> KeyBinding>); 7] = [
+    // Tabs and splits, Back/Forward and Usage: each binds its configured
+    // chord; an empty one (the user cleared it, or an upgrade found its
+    // default taken) binds nothing.
+    let optional_bindings: [(ShortcutId, Box<dyn Fn(&str) -> KeyBinding>); 10] = [
+        (
+            ShortcutId::ToggleUsage,
+            Box::new(|combo: &str| KeyBinding::new(combo, ToggleUsage, None)),
+        ),
+        (
+            ShortcutId::NavigateBack,
+            Box::new(|combo: &str| KeyBinding::new(combo, NavigateBack, None)),
+        ),
+        (
+            ShortcutId::NavigateForward,
+            Box::new(|combo: &str| KeyBinding::new(combo, NavigateForward, None)),
+        ),
         (
             ShortcutId::NewThreadChooser,
             Box::new(|combo: &str| KeyBinding::new(combo, OpenCreationChooser, None)),
@@ -454,7 +471,7 @@ pub fn apply_keymap(
             Box::new(|combo: &str| KeyBinding::new(combo, ReopenClosedTab, None)),
         ),
     ];
-    for (id, bind) in workbench_bindings {
+    for (id, bind) in optional_bindings {
         let combo = keymap.get(id);
         if combo.is_empty() {
             continue;
@@ -463,7 +480,7 @@ pub fn apply_keymap(
         if Keystroke::parse(&combo).is_ok() {
             cx.bind_keys([bind(&combo)]);
         } else {
-            tracing::warn!(%combo, "unparseable workbench shortcut; leaving it unbound");
+            tracing::warn!(%combo, "unparseable shortcut; leaving it unbound");
         }
     }
     if !keymap.open_activity.is_empty() {
@@ -5381,6 +5398,15 @@ impl Shell {
 
     // ---- back/forward (route history) ----
 
+    /// Whether the Back/Forward chords belong to the focused surface: the
+    /// terminal (Alt+arrows move by word) or the browser (its own history).
+    fn history_keys_yield(&self, window: &Window) -> bool {
+        window
+            .context_stack()
+            .iter()
+            .any(|context| context.contains("Terminal") || context.contains("Browser"))
+    }
+
     fn navigate_back(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.nav.back() {
             self.apply_nav(entry, cx);
@@ -8192,6 +8218,14 @@ impl Shell {
             .child(window_control_button(
                 "toggle-sidebar",
                 icons::SIDEBAR_MINIMALISTIC_LEFT,
+                ChromeTip::new(
+                    if self.sidebar_collapsed() {
+                        "Show left sidebar"
+                    } else {
+                        "Hide left sidebar"
+                    },
+                    self.shortcut_badge(ShortcutId::ToggleSidebar),
+                ),
                 &theme,
                 cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
             ))
@@ -8205,6 +8239,7 @@ impl Shell {
                     .child(nav_history_button(
                         "nav-back",
                         icons::ARROW_LEFT,
+                        ChromeTip::new("Back", self.shortcut_badge(ShortcutId::NavigateBack)),
                         can_back,
                         &theme,
                         cx.listener(|this, _, _, cx| this.navigate_back(cx)),
@@ -8212,6 +8247,7 @@ impl Shell {
                     .child(nav_history_button(
                         "nav-forward",
                         icons::ARROW_RIGHT,
+                        ChromeTip::new("Forward", self.shortcut_badge(ShortcutId::NavigateForward)),
                         can_forward,
                         &theme,
                         cx.listener(|this, _, _, cx| this.navigate_forward(cx)),
@@ -10318,13 +10354,11 @@ impl Shell {
                             .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-settings-action")
-                            .tooltip(|_, cx| {
-                                cx.new(|_| SurfaceTabTooltip {
-                                    text: "Open settings".into(),
-                                })
-                                .into()
-                            })
-                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+                            .with_shortcut_tooltip(
+                                "sidebar-settings-action",
+                                "Settings",
+                                Some(crate::settings::badge_combo("mod-,").into()),
+                            )
                             .flex()
                             .items_center()
                             .justify_center()
@@ -10347,13 +10381,7 @@ impl Shell {
                             .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-devices-action")
-                            .tooltip(|_, cx| {
-                                cx.new(|_| SurfaceTabTooltip {
-                                    text: "Open devices".into(),
-                                })
-                                .into()
-                            })
-                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+                            .with_shortcut_tooltip("sidebar-devices-action", "Devices", None)
                             .flex()
                             .items_center()
                             .justify_center()
@@ -10398,15 +10426,25 @@ impl Shell {
             HarnessId::Opencode => icons::OPENCODE_MARK,
             _ => icons::ARROW_DOWN,
         };
+        let summary: SharedString = format!(
+            "{} provider update{} available",
+            pending.len(),
+            if pending.len() == 1 { "" } else { "s" }
+        )
+        .into();
         Some(
             div()
                 .id("sidebar-provider-update")
                 .role(gpui::Role::Button)
-                .aria_label(format!(
-                    "{} provider update{} available. Open Providers.",
-                    pending.len(),
-                    if pending.len() == 1 { "" } else { "s" }
-                ))
+                .aria_label(format!("{summary}. Open Providers."))
+                .tooltip(move |_, cx| {
+                    crate::pickers::ControlTooltip::view(
+                        summary.clone(),
+                        Some("Open Providers in Settings.".into()),
+                        cx,
+                    )
+                })
+                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                 .w(px(48.0))
                 .h(px(24.0))
                 .rounded(px(12.0))
@@ -15266,16 +15304,41 @@ fn grid_backdrop(theme: &Theme) -> AnyElement {
 
 /// A size-6 icon button for the titlebar strip (luna window-controls.tsx:
 /// `grid size-6 place-items-center rounded-md text-muted-foreground`).
+/// What a chrome icon button says on hover and to assistive tech: its name
+/// and, when bound, its keyboard shortcut.
+pub(super) struct ChromeTip {
+    label: SharedString,
+    shortcut: Option<SharedString>,
+}
+
+impl ChromeTip {
+    pub(super) fn new(label: impl Into<SharedString>, shortcut: Option<String>) -> Self {
+        Self {
+            label: label.into(),
+            shortcut: shortcut.map(Into::into),
+        }
+    }
+
+    /// A button `id` with this accessible name and hover tooltip.
+    fn button(self, id: &'static str) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(self.label.clone())
+            .with_shortcut_tooltip(id, self.label, self.shortcut)
+    }
+}
+
 fn window_control_button(
     id: &'static str,
     icon_path: &'static str,
+    tip: ChromeTip,
     theme: &Theme,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let muted = theme.text_muted;
     let fade_key = format!("window-control-{id}");
-    div()
-        .id(id)
+    tip.button(id)
         .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
@@ -15432,12 +15495,16 @@ fn linux_caption_button(
 fn nav_history_button(
     id: &'static str,
     icon_path: &'static str,
+    tip: ChromeTip,
     enabled: bool,
     theme: &Theme,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     if !enabled {
-        return div()
+        // Still named and still says its shortcut: nothing to go back to
+        // yet is no reason to hide how.
+        return tip
+            .button(id)
             .size(px(crate::surface_chrome::CONTROL_M))
             .flex_none()
             .flex()
@@ -15454,7 +15521,7 @@ fn nav_history_button(
             )
             .into_any_element();
     }
-    window_control_button(id, icon_path, theme, on_click).into_any_element()
+    window_control_button(id, icon_path, tip, theme, on_click).into_any_element()
 }
 
 /// A size-7 icon button for the main-panel header (luna __root.tsx:
@@ -15462,13 +15529,13 @@ fn nav_history_button(
 fn header_icon_button(
     id: &'static str,
     icon_path: &'static str,
+    tip: ChromeTip,
     theme: &Theme,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let muted = theme.text_muted;
     let fade_key = format!("header-icon-{id}");
-    div()
-        .id(id)
+    tip.button(id)
         .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
@@ -15825,7 +15892,44 @@ impl Render for Shell {
                 this.toggle_command_palette(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleActivity, window, cx| {
+                // Activity lists in the sidebar: a shortcut that opens it
+                // into a collapsed sidebar would show nothing.
+                if !this.activity.view_active
+                    && !matches!(this.route, Route::Settings(_))
+                    && this.settings.sidebar_collapsed
+                {
+                    this.toggle_sidebar(cx);
+                }
                 this.toggle_activity(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleUsage, _, cx| {
+                // The card lives in the chat sidebar's footer; Settings has
+                // its own navigation there, and a hidden card stays hidden.
+                if matches!(this.route, Route::Settings(_)) || this.settings.usage_sidebar_hidden {
+                    return;
+                }
+                // Collapsing closed the card, so this opens it.
+                if this.settings.sidebar_collapsed {
+                    this.toggle_sidebar(cx);
+                }
+                this.toggle_usage_card(cx);
+            }))
+            // Back/Forward through route history. The terminal and browser
+            // keep the chord (word moves, the page's own history), so the
+            // keystroke goes on to them instead.
+            .on_action(cx.listener(|this, _: &NavigateBack, window, cx| {
+                if this.history_keys_yield(window) {
+                    cx.propagate();
+                } else if !this.overlay_owns_keyboard(cx) {
+                    this.navigate_back(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NavigateForward, window, cx| {
+                if this.history_keys_yield(window) {
+                    cx.propagate();
+                } else if !this.overlay_owns_keyboard(cx) {
+                    this.navigate_forward(cx);
+                }
             }))
             // Any press starts a new pointer gesture: a workbench gesture an
             // earlier Escape cancelled is over.

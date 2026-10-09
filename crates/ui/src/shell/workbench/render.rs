@@ -2664,10 +2664,7 @@ fn strip_button_titled(
     glyph: &'static str,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    let title: SharedString = match chord {
-        Some(chord) => format!("{label}  {chord}").into(),
-        None => label.into(),
-    };
+    let shortcut: Option<SharedString> = chord.map(Into::into);
     div()
         .id(id.clone())
         .role(gpui::Role::Button)
@@ -2684,8 +2681,14 @@ fn strip_button_titled(
         .rounded(px(crate::surface_chrome::RADIUS_M))
         .cursor_pointer()
         .hover_wash(id)
+        .when_some(shortcut.clone(), |el, keys| el.aria_keyshortcuts(keys))
         .tooltip(move |_, cx| {
-            crate::pickers::ControlTooltip::view(title.clone(), detail.map(SharedString::from), cx)
+            crate::pickers::ControlTooltip::with_shortcut(
+                label,
+                shortcut.clone(),
+                detail.map(SharedString::from),
+                cx,
+            )
         })
         .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
         .on_key_down(crate::swallow_activation_key)

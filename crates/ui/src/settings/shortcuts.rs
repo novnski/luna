@@ -602,10 +602,13 @@ fn group(id: ShortcutId) -> &'static str {
     match id {
         ShortcutId::CaptureAppshot => "Appshots",
         ShortcutId::SaveFile | ShortcutId::BrowserReload => "Files and browser",
-        ShortcutId::ToggleSidebar | ShortcutId::ToggleChanges | ShortcutId::ToggleTerminal => {
-            "Panels"
-        }
-        ShortcutId::NewSession
+        ShortcutId::ToggleSidebar
+        | ShortcutId::ToggleChanges
+        | ShortcutId::ToggleTerminal
+        | ShortcutId::ToggleUsage => "Panels",
+        ShortcutId::NavigateBack
+        | ShortcutId::NavigateForward
+        | ShortcutId::NewSession
         | ShortcutId::NewProject
         | ShortcutId::OpenModelPicker
         | ShortcutId::OpenActivity
@@ -765,6 +768,9 @@ fn description(id: ShortcutId) -> &'static str {
         ShortcutId::ToggleSidebar => "Show or hide sessions and settings navigation.",
         ShortcutId::ToggleChanges => "Show or hide the right sidebar for the current session.",
         ShortcutId::ToggleTerminal => "Show or hide the terminal for the current session.",
+        ShortcutId::ToggleUsage => "Show or hide the usage card in the sidebar.",
+        ShortcutId::NavigateBack => "Go back to the previous thread or page.",
+        ShortcutId::NavigateForward => "Go forward to the next thread or page.",
         ShortcutId::NewSession => "Open a blank session canvas to start a new session.",
         ShortcutId::NewProject => "Open the new project dialog.",
         ShortcutId::OpenModelPicker => "Open the model picker for the current session.",

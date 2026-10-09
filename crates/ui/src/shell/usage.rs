@@ -17,6 +17,7 @@ use luna_rpc::methods;
 use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
 use crate::interaction::HoverFill;
+use crate::pickers::ShortcutTooltipExt as _;
 use crate::theme::Theme;
 use crate::typography::TypeStyleExt as _;
 
@@ -2998,6 +2999,12 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
+                            .with_shortcut_tooltip(
+                                "usage-card-collapse",
+                                "Collapse usage",
+                                self.shortcut_badge(crate::settings::ShortcutId::ToggleUsage)
+                                    .map(Into::into),
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
                             .on_key_down(crate::swallow_activation_key)
                             .child(
@@ -3022,11 +3029,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let open = self.usage_card_open;
+        let shortcut = self.shortcut_badge(crate::settings::ShortcutId::ToggleUsage);
         let action = div()
             .id("usage-sidebar-action")
             .role(gpui::Role::Button)
             .aria_label("Toggle usage")
             .aria_expanded(open)
+            .with_shortcut_tooltip("usage-sidebar-action", "Usage", shortcut.map(Into::into))
             .size(crate::typography::ui_rems(super::SIDEBAR_FOOTER_BUTTON))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()

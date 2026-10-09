@@ -592,6 +592,8 @@ pub(crate) fn chip_text_width(text: &str, window: &Window, theme: &Theme) -> f32
 /// or the state it summarizes. Shared by the chips, Attach and Goal.
 pub(crate) struct ControlTooltip {
     title: SharedString,
+    /// The control's keyboard shortcut, as keycaps beside the title.
+    shortcut: Option<SharedString>,
     detail: Option<SharedString>,
 }
 
@@ -601,10 +603,64 @@ impl ControlTooltip {
         detail: Option<SharedString>,
         cx: &mut App,
     ) -> gpui::AnyView {
+        Self::with_shortcut(title, None, detail, cx)
+    }
+
+    /// [`Self::view`] naming the control's shortcut (already formatted, see
+    /// [`crate::settings::badge_combo`]); `None` when it is unbound.
+    pub(crate) fn with_shortcut(
+        title: impl Into<SharedString>,
+        shortcut: Option<SharedString>,
+        detail: Option<SharedString>,
+        cx: &mut App,
+    ) -> gpui::AnyView {
         let title = title.into();
-        cx.new(|_| Self { title, detail }).into()
+        cx.new(|_| Self {
+            title,
+            shortcut,
+            detail,
+        })
+        .into()
     }
 }
+
+/// `.tooltip(shortcut_tooltip("Toggle left sidebar", Some("⌘B".into())))`:
+/// a control's name with its shortcut keycaps (none when unbound).
+pub(crate) fn shortcut_tooltip(
+    title: impl Into<SharedString>,
+    shortcut: Option<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let title = title.into();
+    move |_, cx| ControlTooltip::with_shortcut(title.clone(), shortcut.clone(), None, cx)
+}
+
+/// `.with_shortcut_tooltip(key, "Settings", Some("⌘,".into()))`: a chrome
+/// control's [`shortcut_tooltip`], its shortcut for assistive tech, and —
+/// while layout probes are on — a `control:{key}` probe that a fixture aims
+/// real pointer input at.
+pub(crate) trait ShortcutTooltipExt:
+    StatefulInteractiveElement + ParentElement + Sized
+{
+    fn with_shortcut_tooltip(
+        self,
+        key: &str,
+        title: impl Into<SharedString>,
+        shortcut: Option<SharedString>,
+    ) -> Self {
+        let probe = crate::perf_counters::probes_enabled()
+            .then(|| crate::perf_counters::probe(format!("control:{key}")));
+        let control = self.children(probe);
+        let control = match shortcut.clone() {
+            Some(keys) => control.aria_keyshortcuts(keys),
+            None => control,
+        };
+        control
+            .tooltip(shortcut_tooltip(title, shortcut))
+            .tooltip_show_delay(CONTROL_TOOLTIP_DELAY)
+    }
+}
+
+impl<T: StatefulInteractiveElement + ParentElement + Sized> ShortcutTooltipExt for T {}
 
 /// Details longer than this wrap inside a fixed-width card; shorter ones
 /// stay on one line. GPUI lays tooltips out at their min-content width, so a
@@ -635,10 +691,28 @@ impl Render for ControlTooltip {
             .text_size(crate::typography::ui_rems(12.0))
             .child(
                 div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(self.title.clone()),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(crate::typography::ui_rems(10.0))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child(self.title.clone()),
+                    )
+                    .when_some(self.shortcut.clone(), |row, shortcut| {
+                        row.child(crate::popover::kbd_hint(theme, &shortcut))
+                    }),
             )
+            // What painted, for fixtures: `tooltip:{title}|{shortcut}`.
+            .when(crate::perf_counters::probes_enabled(), |card| {
+                card.relative().child(crate::perf_counters::probe(format!(
+                    "tooltip:{}|{}",
+                    self.title,
+                    self.shortcut.as_deref().unwrap_or("")
+                )))
+            })
             // One line per `\n` (execution details: Running / Requested /
             // how it applies / the engine's reason).
             .when_some(self.detail.clone(), |card, detail| {
@@ -5128,7 +5202,21 @@ impl Pickers {
             // The open menu already says everything the tooltip would.
             .when(!open, |el| {
                 el.tooltip_above(move |_, cx| {
-                    ControlTooltip::view(tooltip_title.clone(), tooltip_detail.clone(), cx)
+                    let shortcut = (kind == PickerKind::HarnessModel)
+                        .then(|| {
+                            crate::settings::shortcut_keys(
+                                cx,
+                                crate::settings::ShortcutId::OpenModelPicker,
+                            )
+                        })
+                        .flatten()
+                        .map(SharedString::from);
+                    ControlTooltip::with_shortcut(
+                        tooltip_title.clone(),
+                        shortcut,
+                        tooltip_detail.clone(),
+                        cx,
+                    )
                 })
             })
             .when(chip.icon_loading, |el| {

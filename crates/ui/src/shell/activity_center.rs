@@ -666,6 +666,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let active = self.activity.view_active;
+        let shortcut = self.shortcut_badge(crate::settings::ShortcutId::OpenActivity);
         let task_keys = self.activity_task_keys(cx);
         let has_attention = self
             .state
@@ -722,18 +723,15 @@ impl Shell {
                 },
                 theme.glass_hover(),
             )
-            .tooltip(move |_, cx| {
-                cx.new(|_| SurfaceTabTooltip {
-                    text: (if active {
-                        "Turn off activity view"
-                    } else {
-                        "View activity"
-                    })
-                    .into(),
-                })
-                .into()
-            })
-            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+            .with_shortcut_tooltip(
+                "sidebar-activity-action",
+                if active {
+                    "Turn off activity view"
+                } else {
+                    "View activity"
+                },
+                shortcut.map(Into::into),
+            )
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
             .on_key_down(crate::swallow_activation_key)
             .child(

@@ -426,6 +426,16 @@ fn remove_managed_new_thread_background(
     }
 }
 
+/// The keycaps a configured shortcut reads as ([`badge_combo`]), or `None`
+/// while it is unbound — for tooltips outside the shell, which owns its own
+/// copy of the keymap.
+pub fn shortcut_keys(cx: &App, id: ShortcutId) -> Option<String> {
+    let combo = cx
+        .try_global::<SettingsStore>()
+        .map(|store| store.current.keymap.get(id))?;
+    (!combo.is_empty()).then(|| badge_combo(combo))
+}
+
 /// Monotonic id of the global code-fence layout choice. Every transcript
 /// compares this during render so inactive subagent tabs can observe all mode
 /// transitions when they next become visible.
@@ -706,7 +716,7 @@ impl TaskNotificationPolicy {
 }
 
 /// Fixed application/menu chords are unavailable to the optional Activity
-/// binding. Activity has no default chord and must not shadow these actions.
+/// binding, which must not shadow these actions.
 pub fn activity_combo_is_reserved(combo: &str) -> bool {
     matches!(
         combo,
@@ -1043,6 +1053,11 @@ pub enum ShortcutId {
     ToggleSidebar,
     ToggleChanges,
     ToggleTerminal,
+    /// The sidebar footer's usage card.
+    ToggleUsage,
+    /// The titlebar's Back and Forward through route history.
+    NavigateBack,
+    NavigateForward,
     NewSession,
     NewProject,
     OpenModelPicker,
@@ -1064,13 +1079,16 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 20 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 23 + JUMP_SLOTS] = [
         ShortcutId::CaptureAppshot,
         ShortcutId::SaveFile,
         ShortcutId::BrowserReload,
         ShortcutId::ToggleSidebar,
         ShortcutId::ToggleChanges,
         ShortcutId::ToggleTerminal,
+        ShortcutId::ToggleUsage,
+        ShortcutId::NavigateBack,
+        ShortcutId::NavigateForward,
         ShortcutId::NewSession,
         ShortcutId::NewProject,
         ShortcutId::OpenModelPicker,
@@ -1109,6 +1127,9 @@ impl ShortcutId {
             ShortcutId::ToggleSidebar => "Toggle left sidebar",
             ShortcutId::ToggleChanges => "Toggle right sidebar",
             ShortcutId::ToggleTerminal => "Toggle terminal",
+            ShortcutId::ToggleUsage => "Toggle usage",
+            ShortcutId::NavigateBack => "Back",
+            ShortcutId::NavigateForward => "Forward",
             ShortcutId::NewSession => "New session",
             ShortcutId::NewProject => "New project",
             ShortcutId::OpenModelPicker => "Open model picker",
@@ -1144,12 +1165,20 @@ impl ShortcutId {
             ShortcutId::ToggleSidebar => "mod-b",
             ShortcutId::ToggleChanges => "mod-r",
             ShortcutId::ToggleTerminal => "mod-j",
+            ShortcutId::ToggleUsage => "mod-shift-u",
+            // Each platform's own history convention. Off macOS Ctrl+[ is
+            // the terminal's Escape, so Back/Forward take Alt+arrows there
+            // (the composer's word moves are Ctrl+arrows off macOS).
+            ShortcutId::NavigateBack if mac => "mod-[",
+            ShortcutId::NavigateBack => "alt-left",
+            ShortcutId::NavigateForward if mac => "mod-]",
+            ShortcutId::NavigateForward => "alt-right",
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-shift-n",
             ShortcutId::OpenModelPicker => "mod-/",
-            // Explicitly unbound: no new reserved chord is taken from a
-            // user's existing keymap before collision checking.
-            ShortcutId::OpenActivity => "",
+            // Slack's Activity chord. An upgraded keymap takes it only where
+            // it is still free (see `UiSettings::load`).
+            ShortcutId::OpenActivity => "mod-shift-m",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
             // ctrl IS the primary and stores as "mod"; on macOS it is its own
@@ -1181,7 +1210,10 @@ impl ShortcutId {
 
     /// Shortcuts introduced after keymaps were first saved: an upgraded
     /// keymap takes their defaults only where the chord is still free.
-    pub const ADDED_LATER: [(ShortcutId, &'static str); 7] = [
+    pub const ADDED_LATER: [(ShortcutId, &'static str); 10] = [
+        (ShortcutId::ToggleUsage, "toggleUsage"),
+        (ShortcutId::NavigateBack, "navigateBack"),
+        (ShortcutId::NavigateForward, "navigateForward"),
         (ShortcutId::NewThreadChooser, "newThreadChooser"),
         (ShortcutId::NewThreadSplit, "newThreadSplit"),
         (ShortcutId::PreviousTab, "previousTab"),
@@ -1212,6 +1244,9 @@ pub struct KeymapConfig {
     pub toggle_sidebar: String,
     pub toggle_changes: String,
     pub toggle_terminal: String,
+    pub toggle_usage: String,
+    pub navigate_back: String,
+    pub navigate_forward: String,
     pub new_session: String,
     pub new_project: String,
     pub open_model_picker: String,
@@ -1242,10 +1277,13 @@ impl Default for KeymapConfig {
             toggle_sidebar: ShortcutId::ToggleSidebar.default_combo().into(),
             toggle_changes: ShortcutId::ToggleChanges.default_combo().into(),
             toggle_terminal: ShortcutId::ToggleTerminal.default_combo().into(),
+            toggle_usage: ShortcutId::ToggleUsage.default_combo().into(),
+            navigate_back: ShortcutId::NavigateBack.default_combo().into(),
+            navigate_forward: ShortcutId::NavigateForward.default_combo().into(),
             new_session: ShortcutId::NewSession.default_combo().into(),
             new_project: ShortcutId::NewProject.default_combo().into(),
             open_model_picker: ShortcutId::OpenModelPicker.default_combo().into(),
-            open_activity: String::new(),
+            open_activity: ShortcutId::OpenActivity.default_combo().into(),
             next_session: ShortcutId::NextSession.default_combo().into(),
             prev_session: ShortcutId::PrevSession.default_combo().into(),
             archive_session: ShortcutId::ArchiveSession.default_combo().into(),
@@ -1270,6 +1308,9 @@ impl KeymapConfig {
             ShortcutId::ToggleSidebar => &self.toggle_sidebar,
             ShortcutId::ToggleChanges => &self.toggle_changes,
             ShortcutId::ToggleTerminal => &self.toggle_terminal,
+            ShortcutId::ToggleUsage => &self.toggle_usage,
+            ShortcutId::NavigateBack => &self.navigate_back,
+            ShortcutId::NavigateForward => &self.navigate_forward,
             ShortcutId::NewSession => &self.new_session,
             ShortcutId::NewProject => &self.new_project,
             ShortcutId::OpenModelPicker => &self.open_model_picker,
@@ -1300,6 +1341,9 @@ impl KeymapConfig {
             ShortcutId::ToggleSidebar => self.toggle_sidebar = combo,
             ShortcutId::ToggleChanges => self.toggle_changes = combo,
             ShortcutId::ToggleTerminal => self.toggle_terminal = combo,
+            ShortcutId::ToggleUsage => self.toggle_usage = combo,
+            ShortcutId::NavigateBack => self.navigate_back = combo,
+            ShortcutId::NavigateForward => self.navigate_forward = combo,
             ShortcutId::NewSession => self.new_session = combo,
             ShortcutId::NewProject => self.new_project = combo,
             ShortcutId::OpenModelPicker => self.open_model_picker = combo,
@@ -1612,8 +1656,14 @@ const CONTEXTUAL_COMBOS: [(&str, &str, &[ShortcutId]); 5] = [
     ),
     ("mod-l", "the browser's address bar", &[]),
     ("mod-t", "the browser's New tab", &[]),
-    ("mod-[", "the browser's Back", &[]),
-    ("mod-]", "the browser's Forward", &[]),
+    // The app's Back/Forward mean the same thing: inside the browser its
+    // own history moves, everywhere else the app's route history does.
+    ("mod-[", "the browser's Back", &[ShortcutId::NavigateBack]),
+    (
+        "mod-]",
+        "the browser's Forward",
+        &[ShortcutId::NavigateForward],
+    ),
 ];
 
 /// What owns `combo` so that `id` may not take it: a fixed application
@@ -1919,10 +1969,22 @@ impl UiSettings {
                         .get_mut("keymap")
                         .and_then(serde_json::Value::as_object_mut)
                     {
-                        let missing: Vec<(ShortcutId, &str)> = ShortcutId::ADDED_LATER
+                        let mut missing: Vec<(ShortcutId, &str)> = ShortcutId::ADDED_LATER
                             .into_iter()
                             .filter(|(_, field)| !keymap.contains_key(*field))
                             .collect();
+                        // Activity shipped unbound, so a keymap saved before
+                        // it had a default (one without `navigateBack`, which
+                        // arrived with it) says "" by default, not by choice.
+                        if !keymap.contains_key("navigateBack")
+                            && keymap
+                                .get("openActivity")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("")
+                                .is_empty()
+                        {
+                            missing.push((ShortcutId::OpenActivity, "openActivity"));
+                        }
                         if !missing.is_empty() {
                             for (_, field) in &missing {
                                 keymap.insert((*field).into(), serde_json::json!(""));
@@ -2636,9 +2698,10 @@ mod tests {
     }
 
     #[test]
-    fn activity_shortcut_is_unbound_and_fixed_chords_remain_reserved() {
+    fn activity_shortcut_defaults_to_a_free_chord_and_fixed_chords_remain_reserved() {
         let mut keymap = KeymapConfig::default();
-        assert!(keymap.open_activity.is_empty());
+        assert_eq!(keymap.open_activity, "mod-shift-m");
+        assert!(!activity_combo_is_reserved(&keymap.open_activity));
         for combo in [
             "mod-k",
             "mod-,",
