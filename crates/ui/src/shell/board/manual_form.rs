@@ -706,11 +706,14 @@ impl ManualTicketForm {
                     .border_color(theme.separator(true))
                     .text_size(ui_rems(13.0))
                     .when_some(min_height, |frame, height| frame.min_h(ui_rems(height)))
-                    // A click anywhere in the frame focuses its input.
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(move |_, _, window, cx| window.focus(&focus, cx)),
-                    )
+                    // The input paints only its own lines at the top of this
+                    // taller box: a press anywhere in the box (bubbling, after
+                    // the input's own press handling) focuses it, and the
+                    // focusable drawer and Shell must not take focus back.
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                        window.focus(&focus, cx);
+                        window.prevent_default();
+                    })
                     .children(self.probe.bounds_el(id)),
             )
             .into_any_element()

@@ -664,6 +664,15 @@ fn center(bounds: [f32; 4]) -> (f32, f32) {
     (bounds[0] + bounds[2] / 2.0, bounds[1] + bounds[3] / 2.0)
 }
 
+/// Controls that live in the detail drawer's pinned header.
+const HEADER_CONTROLS: &[&str] = &[
+    "detail-close",
+    "detail-rename",
+    "detail-title-input",
+    "detail-title-save",
+    "detail-title-cancel",
+];
+
 fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
     inner[0] >= outer[0] - 0.5
         && inner[1] >= outer[1] - 0.5
@@ -681,7 +690,12 @@ async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result
         let rb = surfaces(window, cx)?;
         let target = rect(&rb, name).ok_or_else(|| anyhow!("{name} was not painted"))?;
         let drawer = rect(&rb, "board-drawer").ok_or_else(|| anyhow!("no drawer painted"))?;
-        if rect(&rb, "detail-header").is_some_and(|header| inside(target, header)) {
+        // Only the pinned header's own controls are always visible. A body
+        // control scrolled up under the header also paints inside the
+        // header's rectangle, but is clipped: it must be scrolled back.
+        if HEADER_CONTROLS.contains(&name)
+            && rect(&rb, "detail-header").is_some_and(|header| inside(target, header))
+        {
             return Ok(target);
         }
         let (top, bottom) = match rect(&rb, "detail-scroll") {
@@ -711,6 +725,13 @@ async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result
         settle(cx, 60).await;
     }
     bail!("could not scroll {name} into the drawer")
+}
+
+/// Press inside a text box's bottom padding, below any line of text: the
+/// box (not the input element) receives the press.
+async fn press_box_bottom(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result<()> {
+    let bounds = reveal(window, cx, name).await?;
+    click_at(window, cx, (bounds[0] + 40.0, bounds[1] + bounds[3] - 4.0)).await
 }
 
 async fn click(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result<()> {
@@ -1754,18 +1775,44 @@ async fn scenario(
     type_text(window, cx, "uploads that fail are retried three times").await?;
     keys(window, cx, &["enter"]).await?;
     type_text(window, cx, "done when the retry test passes").await?;
+    // A press in the empty lower part of the multi-line box (below its
+    // text, in the box's padding) focuses the description; typing lands.
+    click(window, cx, "manual-title").await?;
+    press_box_bottom(window, cx, "manual-description").await?;
+    let rb = surfaces(window, cx)?;
+    let focused_low = state_of(&rb)["focused"].clone();
+    type_text(window, cx, " fast").await?;
+    // The acceptance criteria section is part of the same box.
+    click(window, cx, "manual-title").await?;
+    click(window, cx, "manual-add-criteria").await?;
+    click(window, cx, "manual-title").await?;
+    press_box_bottom(window, cx, "manual-description").await?;
+    let rb = surfaces(window, cx)?;
+    let focused_criteria = state_of(&rb)["focused"].clone();
+    type_text(window, cx, "the retry test passes").await?;
     let rb = surfaces(window, cx)?;
     let description = state_of(&rb)["description"]
         .as_str()
         .unwrap_or("")
         .to_owned();
+    let expected_description = "uploads that fail are retried three times\ndone when the retry \
+                                test passes fast\n\n## Acceptance criteria\n- the retry test passes";
+    run.check(
+        "description-box-lower-press-focuses",
+        json!({ "focused": ["description", "description"], "description": expected_description }),
+        json!({
+            "focused": [focused_low, focused_criteria],
+            "description": description,
+        }),
+        focused_low == "description"
+            && focused_criteria == "description"
+            && description == expected_description,
+    )?;
     run.check(
         "typed-brief",
-        json!({ "title": "retry failed uploads", "description": "two lines" }),
+        json!({ "title": "retry failed uploads", "description": expected_description }),
         json!({ "title": state_of(&rb)["title"], "description": description }),
-        state_of(&rb)["title"] == "retry failed uploads"
-            && description
-                == "uploads that fail are retried three times\ndone when the retry test passes",
+        state_of(&rb)["title"] == "retry failed uploads" && description == expected_description,
     )?;
     // A double click saves once.
     let save = reveal(window, cx, "manual-save").await?;
@@ -1888,17 +1935,40 @@ async fn scenario(
     let mut visits = Vec::new();
     for key in ["claude-code", "codex", "opencode", "claude-code", "codex"] {
         for which in ["impl", "review"] {
-            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
-            let rb = surfaces(window, cx)?;
+            let profile = if which == "impl" {
+                "implementation"
+            } else {
+                "review"
+            };
+            let wanted = model_with_options(key);
+            let model_chip = format!("detail-{which}-model:{wanted}");
             let show_all = format!("detail-{which}-model-show-all");
-            if rect(&rb, &show_all).is_some() {
-                click(window, cx, &show_all).await?;
-            }
-            click(
+            // The harness chip is scrolled into the visible body first
+            // (`click` reveals it); then wait until the draft names the
+            // harness and the model row lists that harness's catalog.
+            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
+            wait_for(
                 window,
                 cx,
-                &format!("detail-{which}-model:{}", model_with_options(key)),
+                &format!("{key} in the {profile} profile"),
+                |rb| {
+                    state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["harness"]
+                        == key
+                        && (rect(rb, &model_chip).is_some() || rect(rb, &show_all).is_some())
+                },
             )
+            .await?;
+            if rect(&surfaces(window, cx)?, &model_chip).is_none() {
+                click(window, cx, &show_all).await?;
+                wait_for(window, cx, &format!("all {key} models"), |rb| {
+                    rect(rb, &model_chip).is_some()
+                })
+                .await?;
+            }
+            click(window, cx, &model_chip).await?;
+            wait_for(window, cx, &format!("{wanted} selected"), |rb| {
+                state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["model"] == wanted
+            })
             .await?;
             // Two full frames with the tree built.
             draw(window, cx)?;
@@ -1969,6 +2039,26 @@ async fn scenario(
         state_of(rb)["edits"]["brief"].is_object()
     })
     .await?;
+    // Move the keyboard away (a press on the drawer header's status line),
+    // then press the empty lower part of the brief box: it focuses the
+    // brief and the typed text lands at its end.
+    let rb = surfaces(window, cx)?;
+    let drawer = rect(&rb, "board-drawer").ok_or_else(|| anyhow!("no drawer painted"))?;
+    let close = rect(&rb, "detail-close").ok_or_else(|| anyhow!("no Close painted"))?;
+    click_at(window, cx, (drawer[0] + 30.0, close[1] + close[3] / 2.0)).await?;
+    let blurred = surfaces(window, cx)?;
+    press_box_bottom(window, cx, "detail-brief-input").await?;
+    let rb = surfaces(window, cx)?;
+    run.check(
+        "brief-box-lower-press-focuses",
+        json!({ "before": false, "after": true }),
+        json!({
+            "before": state_of(&blurred)["edits"]["brief"]["focused"],
+            "after": state_of(&rb)["edits"]["brief"]["focused"],
+        }),
+        state_of(&blurred)["edits"]["brief"]["focused"] == false
+            && state_of(&rb)["edits"]["brief"]["focused"] == true,
+    )?;
     keys(window, cx, &["cmd-down"]).await?;
     type_text(window, cx, " plus logging").await?;
     let current = read_ticket(env, &manual_id).await?.view.item;

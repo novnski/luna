@@ -1800,10 +1800,17 @@ impl BoardDetail {
                         }
                     }));
                 if let Some(input) = input {
+                    let focus = input.read(cx).focus_handle(cx);
                     editor = editor.child(
                         crate::popover::dialog_field(input.into_any_element())
                             .id("detail-title-input")
                             .relative()
+                            .cursor_text()
+                            // The padding around the line focuses it too.
+                            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                                window.focus(&focus, cx);
+                                window.prevent_default();
+                            })
                             .children(self.probe.bounds_el("detail-title-input")),
                     );
                 }
@@ -2289,10 +2296,12 @@ impl BoardDetail {
                             .cursor_text()
                             .min_h(ui_rems(160.0))
                             .text_size(ui_rems(13.0))
-                            .on_mouse_down(
-                                gpui::MouseButton::Left,
-                                cx.listener(move |_, _, window, cx| window.focus(&focus, cx)),
-                            )
+                            // A press anywhere in the box focuses the brief; the
+                            // drawer root and Shell must not take focus back.
+                            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                                window.focus(&focus, cx);
+                                window.prevent_default();
+                            })
                             .children(self.probe.bounds_el("detail-brief-input")),
                     );
                 }
