@@ -66,6 +66,10 @@ const STOP_UNKNOWN_AFTER_MS: i64 = 60_000;
 /// proven accepted.
 const DELIVERY_GRACE_MS: i64 = 5_000;
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
+/// Runtime status pings to Board watchers are coalesced over this window
+/// and bounded to this many changed chats per ping.
+const RUNTIME_PING_COALESCE: Duration = Duration::from_millis(150);
+const RUNTIME_PING_CHATS_MAX: usize = 256;
 const RECONCILE_BATCH: usize = 1_000;
 const STATUS_SUMMARY_MAX_CHARS: usize = 2_000;
 const STATUS_EVIDENCE_MAX: usize = 16;
@@ -2073,6 +2077,7 @@ impl EngineRpc {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        self.start_board_runtime_watch(cancel.clone());
         let weak = std::sync::Arc::downgrade(self);
         runtime.spawn(async move {
             if let Some(rpc) = weak.upgrade() {
@@ -2096,6 +2101,78 @@ impl EngineRpc {
                 }
             }
         });
+    }
+
+    /// Wake Board watchers when a linked chat's runtime status changes (a
+    /// worker or reviewer starts waiting for an approval or an answer,
+    /// fails, or goes idle), so an open Board re-reads those tickets'
+    /// phase and Needs attention without waiting for a journal event.
+    /// Status heartbeats are ignored; bursts are coalesced.
+    fn start_board_runtime_watch(self: &std::sync::Arc<Self>, cancel: CancellationToken) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let weak = std::sync::Arc::downgrade(self);
+        let mut sessions = self.sessions.watch_sessions();
+        runtime.spawn(async move {
+            let mut last: HashMap<String, (luna_proto::SessionStatus, Option<String>)> =
+                HashMap::new();
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    changed = sessions.changed() => if changed.is_err() { break },
+                }
+                // Coalesce a burst of transitions into one ping.
+                tokio::time::sleep(RUNTIME_PING_COALESCE).await;
+                let current: HashMap<String, (luna_proto::SessionStatus, Option<String>)> =
+                    sessions
+                        .borrow_and_update()
+                        .iter()
+                        .map(|session| {
+                            (
+                                session.chat_id.clone(),
+                                (session.status, session.last_completed_turn.clone()),
+                            )
+                        })
+                        .collect();
+                let mut changed: Vec<String> = current
+                    .iter()
+                    .filter(|(chat, state)| last.get(*chat) != Some(*state))
+                    .map(|(chat, _)| chat.clone())
+                    .collect();
+                changed.extend(
+                    last.keys()
+                        .filter(|chat| !current.contains_key(*chat))
+                        .cloned(),
+                );
+                last = current;
+                if changed.is_empty() {
+                    continue;
+                }
+                let Some(rpc) = weak.upgrade() else { break };
+                let ids = rpc.board_items_for_chats(&changed);
+                rpc.board_hub().notify_observed(ids);
+            }
+        });
+    }
+
+    /// Tickets whose working or reviewer chat is one of `task_ids`
+    /// (bounded).
+    fn board_items_for_chats(&self, task_ids: &[String]) -> Vec<String> {
+        let mut ids = Vec::new();
+        for task in task_ids.iter().take(RUNTIME_PING_CHATS_MAX) {
+            let Ok(links) = self.store.board_task_links_for_task(task, true) else {
+                continue;
+            };
+            for link in links {
+                if matches!(link.role, TaskLinkRole::Working | TaskLinkRole::Reviewer)
+                    && !ids.contains(&link.work_item_id)
+                {
+                    ids.push(link.work_item_id);
+                }
+            }
+        }
+        ids
     }
 
     /// Deliver a generation's outcome (success, failure, cancellation or
