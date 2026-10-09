@@ -557,14 +557,15 @@ async fn board_github_e2e() {
         .unwrap();
     assert_eq!(first_gh, fixture);
 
-    sources_and_identity().await;
-    search_pagination_and_fidelity().await;
-    freshness_backoff_and_account_scope().await;
-    timeout_is_structured().await;
-    import_dedupe_and_concurrency().await;
-    snapshot_start_and_source_changes().await;
-    link_unlink_and_dependencies().await;
-    writeback_readback_and_local_done().await;
+    // Each scenario's future is boxed so the suite never stacks them.
+    Box::pin(sources_and_identity()).await;
+    Box::pin(search_pagination_and_fidelity()).await;
+    Box::pin(freshness_backoff_and_account_scope()).await;
+    Box::pin(timeout_is_structured()).await;
+    Box::pin(import_dedupe_and_concurrency()).await;
+    Box::pin(snapshot_start_and_source_changes()).await;
+    Box::pin(link_unlink_and_dependencies()).await;
+    Box::pin(writeback_readback_and_local_done()).await;
 }
 
 /// Cases 1, 17.
