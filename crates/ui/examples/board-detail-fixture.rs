@@ -47,9 +47,10 @@
 //! 12. Review and evidence are not rendered from the engine's records: repair
 //!     rounds not shown as "N of 2", a finding without its severity word or
 //!     blocking label (colour-only meaning), no reviewer model or phase, no
-//!     Review details link for the archived reviewer, the wrong cleanup
-//!     state; outcomes (diff stats, pull request, checks, artifacts) without
-//!     their state or actual actor.
+//!     Review details link for the archived reviewer, a cleanup state other
+//!     than the engine's own cleanup readback (the reviewer is a real chat
+//!     archived through the engine); outcomes (diff stats, pull request,
+//!     checks, artifacts) without their state or actual actor.
 //! 13. Review details does not open the archived reviewer chat (route and
 //!     selection), or opening it unarchives it.
 //! 14. Escape does not close the drawer; in a narrow window the drawer is
@@ -84,8 +85,9 @@ use luna_proto::{
     HarnessId, IssueLinkRole, IssueProvider, IssueReference, IssueRepository, LaunchSnapshot,
     Model, OriginalContainer, OutcomeKind, OutcomeReference, PermissionMode, ReasoningLevel,
     ResolvedExecution, ReviewBasis, ReviewCleanup, ReviewCleanupState, ReviewFinding,
-    ReviewProfileResolution, ReviewResult, ReviewRun, ReviewRunState, ReviewSeverity,
-    ReviewVerdict, ReviewerPlacement, TaskLinkRole, WorkItem, WorkItemEventKind, WorkItemTaskLink,
+    ReviewProfileResolution, ReviewResult, ReviewRun, ReviewRunOutcome, ReviewRunState,
+    ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole, WorkItem, WorkItemEventKind,
+    WorkItemTaskLink,
 };
 use luna_rpc::methods;
 use luna_ui::*;
@@ -103,6 +105,9 @@ const NARROW: f32 = 760.0;
 /// Spaces the scripted provider's events so a started run stays active
 /// long enough to edit the brief and send an update while it runs.
 const MOCK_DELAY_MS: &str = "1200";
+/// The drawer's cleanup lines for the engine's Archived and Closed states.
+const CLEANUP_ARCHIVED: &str = "Cleanup: Archived; the review history is kept.";
+const CLEANUP_CLOSED: &str = "Cleanup: Archived and closed; the review history is kept.";
 const REVIEW_FALLBACK: &str =
     "No reviewer is configured: the implementation model reviews in a separate reviewer chat.";
 
@@ -827,7 +832,8 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
     let run = |round: u8,
                verdict: ReviewVerdict,
                findings: Vec<ReviewFinding>,
-               cleanup: ReviewCleanupState| ReviewRun {
+               cleanup: ReviewCleanupState,
+               outcome: ReviewRunOutcome| ReviewRun {
         id: format!("rr-fixture-{round}"),
         work_item_id: item.id.clone(),
         version: 0,
@@ -857,8 +863,8 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
         cleanup: ReviewCleanup {
             state: cleanup,
             cleanup_id: format!("cl-fixture-{round}"),
-            attempts: u32::from(cleanup == ReviewCleanupState::Archived),
-            archived_at_ms: (cleanup == ReviewCleanupState::Archived).then_some(now - minute),
+            attempts: 0,
+            archived_at_ms: None,
             detail: None,
         },
         created_at_ms: now - (25 - round as i64 * 10) * minute,
@@ -869,7 +875,7 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
         requested_by: None,
         result_request_id: None,
         late_result: false,
-        outcome: None,
+        outcome: Some(outcome),
         implementer_summary: None,
         evidence: Vec::new(),
         reported_check_ids: Vec::new(),
@@ -976,6 +982,10 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
                     repeats_finding_id: None,
                 }],
                 ReviewCleanupState::NotStarted,
+                ReviewRunOutcome::RepairRequested {
+                    launch_snapshot_id: "ls-fixture-3".into(),
+                    repair_round: 1,
+                },
             )),
         },
         luna_sync::BoardRowWrite::ReviewRun {
@@ -994,7 +1004,13 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
                     evidence: vec![],
                     repeats_finding_id: None,
                 }],
-                ReviewCleanupState::Archived,
+                // This pass completed the ticket: cleanup is due, and the
+                // engine's own cleanup reads the reviewer's archived state
+                // and closed views back before reporting Archived/Closed.
+                ReviewCleanupState::Pending,
+                ReviewRunOutcome::Completed {
+                    execution_generation: 3,
+                },
             )),
         },
         luna_sync::BoardRowWrite::Intent {
@@ -1794,22 +1810,50 @@ async fn scenario(
         }),
     )
     .await?;
-    for (id, title, archived) in [
-        (EV_MAIN, "Retry failed uploads", false),
-        (EV_REVIEW, "Review · retry failed uploads", true),
+    for (id, title) in [
+        (EV_MAIN, "Retry failed uploads"),
+        (EV_REVIEW, "Review · retry failed uploads"),
     ] {
-        env.workspace.create_chat(
-            id,
-            Some(PROJECT),
-            Some(&env.device),
-            None,
-            Some(env.project_path.clone()),
-        )?;
-        env.workspace.rename_chat(id, title)?;
-        if archived {
-            env.workspace.set_chat_archived(id, true)?;
-        }
+        let _: Value = rpc(
+            env,
+            "Mutate",
+            json!({
+                "op": "createChat",
+                "chatId": id,
+                "spaceId": PROJECT,
+                "cwd": env.project_path,
+            }),
+        )
+        .await?;
+        let _: Value = rpc(
+            env,
+            "Mutate",
+            json!({ "op": "renameChat", "chatId": id, "title": title }),
+        )
+        .await?;
     }
+    // The reviewer is archived the way the review cleanup archives it: the
+    // ordinary setArchived task command, then an independent readback.
+    let archive: luna_proto::CommandReceipt = rpc(
+        env,
+        methods::EXECUTE_TASK_COMMAND,
+        json!({
+            "commandId": "fixture-archive-reviewer",
+            "taskId": EV_REVIEW,
+            "intent": { "kind": "setArchived", "archived": true },
+        }),
+    )
+    .await?;
+    let reviewer_archived = env
+        .workspace
+        .chat(EV_REVIEW)?
+        .is_some_and(|chat| chat.archived);
+    run.check(
+        "reviewer-archived-through-the-engine",
+        json!({ "status": "applied", "archived": true }),
+        json!({ "status": archive.status, "archived": reviewer_archived }),
+        archive.status == luna_proto::CommandReceiptStatus::Applied && reviewer_archived,
+    )?;
     let chats = env.workspace.read_chats()?;
     cx.update(|cx| {
         env.state.update(cx, |state, cx| {
@@ -1819,6 +1863,24 @@ async fn scenario(
     });
     let item = read_ticket(env, &created.work_item_id).await?.view.item;
     seed_evidence(env, &item, &manual_id, &choice)?;
+    // The engine's cleanup (A5) runs on its own: wait until its readback
+    // reports the reviewer archived (Archived) or archived with its views
+    // closed (Closed). Nothing here writes that state.
+    let cleaned = wait_engine("the reviewer cleanup", cx, || async {
+        let detail = read_ticket(env, &created.work_item_id).await?;
+        Ok(detail
+            .review_runs
+            .iter()
+            .find(|run| run.id == "rr-fixture-1")
+            .map(|run| run.cleanup.state)
+            .filter(|state| {
+                matches!(
+                    state,
+                    ReviewCleanupState::Archived | ReviewCleanupState::Closed
+                )
+            }))
+    })
+    .await?;
     open_detail(window, cx, &created.work_item_id)?;
     let rb = wait_for(window, cx, "the evidence ticket", |rb| {
         rb["surface"] == "detail"
@@ -1826,6 +1888,7 @@ async fn scenario(
             && detail_of(rb)["reviewRuns"] == 2
             && detail_of(rb)["outcomes"] == 5
             && !text(rb, "detail-review-repairs").is_empty()
+            && text(rb, "detail-review-cleanup").starts_with("Cleanup: Archived")
     })
     .await?;
     run.keep("evidence-ticket", &rb);
@@ -1836,6 +1899,23 @@ async fn scenario(
         .map(|index| text(&rb, &format!("detail-outcome-{index}-meta")).to_owned())
         .collect();
     let has = |needle: &str| outcome_texts.iter().any(|text| text.starts_with(needle));
+    // Read the engine after the UI: the UI may lag Archived → Closed, never
+    // run ahead of the engine.
+    let engine_cleanup = read_ticket(env, &created.work_item_id)
+        .await?
+        .review_runs
+        .iter()
+        .find(|run| run.id == "rr-fixture-1")
+        .map(|run| run.cleanup.state);
+    let shown_cleanup = text(&rb, "detail-review-cleanup").to_owned();
+    let cleanup_ok = match shown_cleanup.as_str() {
+        CLEANUP_ARCHIVED => matches!(
+            engine_cleanup,
+            Some(ReviewCleanupState::Archived | ReviewCleanupState::Closed)
+        ),
+        CLEANUP_CLOSED => engine_cleanup == Some(ReviewCleanupState::Closed),
+        _ => false,
+    };
     run.check(
         "review-from-engine-records",
         json!({
@@ -1844,7 +1924,8 @@ async fn scenario(
             "reviewer": choice.a.label,
             "finding": "Note · Not blocking · src/upload.rs:57",
             "earlier": "… Changes requested · 1 finding (1 blocking)",
-            "cleanup": "Cleanup: Archived…",
+            "cleanup": [CLEANUP_ARCHIVED, CLEANUP_CLOSED],
+            "engineCleanupSettled": cleaned,
             "reviewDetails": true,
         }),
         json!({
@@ -1853,7 +1934,8 @@ async fn scenario(
             "reviewer": text(&rb, "detail-review-reviewer"),
             "finding": text(&rb, "detail-finding-0"),
             "earlier": text(&rb, "detail-review-earlier-0"),
-            "cleanup": text(&rb, "detail-review-cleanup"),
+            "cleanup": shown_cleanup,
+            "engineCleanupNow": engine_cleanup,
             "reviewDetails": rect(&rb, "detail-review-details:rr-fixture-1").is_some(),
         }),
         text(&rb, "detail-review-repairs") == "Repairs used: 1 of 2 · Review passes: 2"
@@ -1863,7 +1945,7 @@ async fn scenario(
             && text(&rb, "detail-finding-0") == "Note · Not blocking · src/upload.rs:57"
             && text(&rb, "detail-review-earlier-0").contains("Changes requested")
             && text(&rb, "detail-review-earlier-0").contains("(1 blocking)")
-            && text(&rb, "detail-review-cleanup").starts_with("Cleanup: Archived")
+            && cleanup_ok
             && rect(&rb, "detail-review-details:rr-fixture-1").is_some(),
     )?;
     run.check(
@@ -2230,6 +2312,13 @@ fn main() -> anyhow::Result<()> {
                     if let Err(error) = written {
                         eprintln!("board-detail fixture could not write evidence: {error:#}");
                         failed_ui.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let _ = std::fs::write(
+                            output.join("failure.txt"),
+                            format!("could not write evidence: {error:#}\n"),
+                        );
+                        // The GPUI run loop can end the process on quit
+                        // with status 0; a failed run must not.
+                        std::process::exit(1);
                     }
                 }
                 Err(error) => {
@@ -2241,6 +2330,9 @@ fn main() -> anyhow::Result<()> {
                     }
                     let _ = run.write("fail", Some(format!("{error:#}")));
                     failed_ui.store(true, std::sync::atomic::Ordering::SeqCst);
+                    // The GPUI run loop can end the process on quit with
+                    // status 0; a failed run must not.
+                    std::process::exit(1);
                 }
             }
             let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, window, _| window.remove_window());
