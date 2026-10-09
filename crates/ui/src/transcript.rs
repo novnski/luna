@@ -1663,8 +1663,12 @@ fn assistant_copy_text(entry: &SessionMessageEntry) -> Option<SharedString> {
         .filter_map(|part| match part {
             // Inspect the trimmed view only to reject empty parts. Copy the
             // original bytes so indentation-based code blocks and Markdown
-            // hard-break whitespace survive the clipboard round trip.
-            MessagePart::Text { text, .. } if !text.trim().is_empty() => Some(text.as_str()),
+            // hard-break whitespace survive the clipboard round trip; only
+            // line breaks at a part's edges go (a provider's own message
+            // separator), since the join supplies the paragraph break.
+            MessagePart::Text { text, .. } if !text.trim().is_empty() => {
+                Some(text.trim_matches(['\r', '\n']))
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
