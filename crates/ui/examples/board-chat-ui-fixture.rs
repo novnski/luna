@@ -570,6 +570,13 @@ fn main() -> anyhow::Result<()> {
         true,
     )?;
     let now = Utc::now();
+    // Chats are created through the public RPC (`Mutate createChat`), as the
+    // app does, so the engine projects each chat's task identity: side chat
+    // creation (a child of the main chat) validates its parent against it.
+    let seeder = {
+        let _entered = runtime.enter();
+        luna_rpc::memory_client(core.rpc_service())
+    };
     let ui_chats = runtime.block_on(async {
         let mut ui_chats = Vec::new();
         for (id, title, prompt, answer, minutes) in [
@@ -595,13 +602,18 @@ fn main() -> anyhow::Result<()> {
                 45,
             ),
         ] {
-            core.workspace.create_chat(
-                id,
-                Some(PROJECT),
-                Some(&device),
-                Some(config()),
-                Some(project.to_string_lossy().into_owned()),
-            )?;
+            seeder
+                .call(
+                    "Mutate",
+                    json!({
+                        "op": "createChat",
+                        "chatId": id,
+                        "spaceId": PROJECT,
+                        "cwd": project.to_string_lossy(),
+                        "config": serde_json::to_value(config())?,
+                    }),
+                )
+                .await?;
             core.workspace.rename_chat(id, title)?;
             let at = now - TimeDelta::minutes(minutes);
             let at_ms = at.timestamp_millis();
