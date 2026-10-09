@@ -463,6 +463,11 @@ pub mod methods {
     ];
     /// Inventory of shipped RPC names. Remote policy treats unlisted names as unknown.
     pub const ALL: &[&str] = &[
+        LIST_AUTOMATIONS,
+        LIST_AUTOMATION_RUNS,
+        PREVIEW_AUTOMATION,
+        MUTATE_AUTOMATION,
+        GET_AUTOMATION_MUTATION_RECEIPT,
         BOARD_LIST,
         BOARD_READ,
         BOARD_CREATE,
