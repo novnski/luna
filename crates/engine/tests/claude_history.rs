@@ -707,6 +707,93 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
     assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
 
+    // A fork of the main chat (allowed) carries the hidden-ancestry checks:
+    // a second native side fork hides its inherited turns in LUNA, a rewind
+    // removes only fork-owned turns and an earlier-message edit keeps that
+    // exact provider prefix. The first side chat stays untouched for the
+    // external-turn checks below.
+    let created = client
+        .call(
+            methods::CREATE_SIDE_CHAT,
+            serde_json::json!({
+                "parentId":task, "requestId":uuid::Uuid::new_v4().to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+    let derived = created["meta"]["id"].as_str().unwrap().to_owned();
+    assert!(entries(&core, &derived).is_empty());
+    let derived_session = session(&core, &derived);
+    let derived_inherited = native_turns(&workspace, &derived_session).await;
+    assert_eq!(
+        derived_inherited.len(),
+        inherited.len(),
+        "the frozen main prefix"
+    );
+    send(
+        &client,
+        &core,
+        &derived,
+        &workspace,
+        "derived-u0",
+        "derived owned turn",
+    )
+    .await;
+    assert_eq!(native_turns(&workspace, &derived_session).await.len(), 4);
+    let read = snapshot(&client, &derived).await;
+    let derived_rewind = execute(
+        &client,
+        envelope(
+            "side-derived-rewind",
+            &derived,
+            Some(&read),
+            serde_json::json!({
+                "kind":"rewindConversation", "messageId":"derived-u0", "keepFiles":true,
+                "review":review(&core, &read, &derived, Some("derived-u0")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        derived_rewind.status,
+        CommandReceiptStatus::Applied,
+        "{derived_rewind:?}"
+    );
+    assert_eq!(
+        native_turns(&workspace, &derived_session).await,
+        derived_inherited
+    );
+    send(
+        &client,
+        &core,
+        &derived,
+        &workspace,
+        "derived-u1",
+        "derived first",
+    )
+    .await;
+    let read = snapshot(&client, &derived).await;
+    let edited = execute(
+        &client,
+        envelope(
+            "side-derived-edit",
+            &derived,
+            Some(&read),
+            serde_json::json!({
+                "kind":"editEarlierMessage", "messageId":"derived-u1", "text":"derived edited",
+                "review":review(&core, &read, &derived, Some("derived-u1")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(edited.status, CommandReceiptStatus::Applied, "{edited:?}");
+    settle(&client, &core, &workspace, &derived, 1).await;
+    let edited_session = session(&core, &derived);
+    assert_ne!(edited_session, derived_session);
+    assert_eq!(native_turns(&workspace, &edited_session).await.len(), 4);
+    assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
+    assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
+
     // An unrecorded external turn is never mistaken for the captured prefix.
     let side_path = transcript(&workspace, &side_session);
     let leaf = std::fs::read_to_string(&side_path)
