@@ -27,6 +27,9 @@
 //! 9. Two provider messages with only the provider's message end between
 //!    them glue into one text or thought part (`Checking.The answer is 42.`)
 //!    when no notice has buried the reply.
+//! 10. The same messages from a native child (a tagged subagent stream) glue
+//!     in the child's own transcript: its fold ignores the message ends the
+//!     parent honors.
 //!
 //! `TIMELINE_ORDER_EVIDENCE_DIR` keeps each test's final parent transcript as
 //! JSON.
@@ -108,6 +111,24 @@ fn message_end() -> AgentEvent {
     }
 }
 
+/// Three provider messages, none carrying its own separator: a thought
+/// alone, a thought then text, then text alone.
+fn back_to_back_messages() -> Vec<AgentEvent> {
+    vec![
+        AgentEvent::ReasoningDelta {
+            text: "Reading the fixture.".into(),
+        },
+        message_end(),
+        AgentEvent::ReasoningDelta {
+            text: "Comparing the totals.".into(),
+        },
+        text("Checking."),
+        message_end(),
+        text("The answer is 42."),
+        message_end(),
+    ]
+}
+
 #[async_trait]
 impl Harness for Timeline {
     fn id(&self) -> HarnessId {
@@ -140,6 +161,7 @@ impl Harness for Timeline {
         let split = request.prompt.contains("TIMELINE_SPLIT");
         let early_card = request.prompt.contains("TIMELINE_EARLY_CARD");
         let back_to_back = request.prompt.contains("TIMELINE_MESSAGES");
+        let child_back_to_back = request.prompt.contains("TIMELINE_SUBAGENT_MESSAGES");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -210,19 +232,32 @@ impl Harness for Timeline {
                 }
                 released
             } else if back_to_back {
-                // Three provider messages, none carrying its own separator:
-                // a thought alone, a thought then text, then text alone.
-                send(AgentEvent::ReasoningDelta {
-                    text: "Reading the fixture.".into(),
+                back_to_back_messages().into_iter().for_each(send);
+                true
+            } else if child_back_to_back {
+                // The same messages from a native child, tagged with the
+                // spawn call that owns its transcript.
+                send(AgentEvent::ToolCall {
+                    id: "spawn-messages".into(),
+                    call: ToolCall::Unknown {
+                        name: "Agent".into(),
+                        input: None,
+                    },
                 });
-                send(message_end());
-                send(AgentEvent::ReasoningDelta {
-                    text: "Comparing the totals.".into(),
-                });
-                send(text("Checking."));
-                send(message_end());
-                send(text("The answer is 42."));
-                send(message_end());
+                let tag = |event| AgentEvent::Subagent {
+                    parent_tool_use_id: "spawn-messages".into(),
+                    event: Box::new(event),
+                };
+                back_to_back_messages()
+                    .into_iter()
+                    .for_each(|event| send(tag(event)));
+                send(tag(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                }));
+                send(result("spawn-messages", "child finished"));
                 true
             } else {
                 send(AgentEvent::ReasoningDelta {
@@ -782,6 +817,41 @@ async fn back_to_back_provider_messages_stay_separate_parts() {
         replies,
         ["assistant [thought, thought, text(Checking.), text(The answer is 42.)] Some(Complete)"],
         "Case 9: each provider message opens its own thought or text part\n{}",
+        lines.join("\n")
+    );
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn back_to_back_child_messages_stay_separate_parts() {
+    let (_root, _harness, core, rpc, parent) = start_parent("TIMELINE_SUBAGENT_MESSAGES").await;
+    // The parent's Done follows the child's, so its settled reply means the
+    // child transcript is final.
+    until("parent turn completes", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Complete)
+                && tool_ids(entry) == [("spawn-messages".to_string(), true)]
+        })
+    })
+    .await;
+
+    let child = format!("{parent}--sub--spawn-messages");
+    let entries = messages(&core, &child);
+    let lines = outline(&entries);
+    evidence(
+        "child-message-boundary",
+        json!({ "outline": lines, "entries": entries }),
+    );
+    let replies: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("assistant"))
+        .collect();
+    assert_eq!(
+        replies,
+        ["assistant [thought, thought, text(Checking.), text(The answer is 42.)] Some(Complete)"],
+        "Case 10: each of a native child's provider messages opens its own part\n{}",
         lines.join("\n")
     );
     drop(rpc);
