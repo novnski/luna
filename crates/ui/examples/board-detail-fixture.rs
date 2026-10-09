@@ -80,6 +80,9 @@
 //! 18. The ticket's first start does not deliver the brief's image: the
 //!     launch snapshot lacks it, or the working chat's first message has no
 //!     `Attached images` block naming it.
+//! 20. After Save to Backlog the keyboard is lost: the field that held it
+//!     is gone and nothing in the receipt takes it, so Enter cannot open the
+//!     ticket (and Escape cannot reach the drawer).
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -600,6 +603,29 @@ fn wheel(window: Window, cx: &mut AsyncApp, at: (f32, f32), dy: f32) -> anyhow::
             touch_phase: gpui::TouchPhase::Moved,
         }),
     )
+}
+
+/// A physical key press: the platform's key down then key up, which is
+/// what activates a focused control (GPUI clicks on the key up).
+async fn key_press(window: Window, cx: &mut AsyncApp, key: &str) -> anyhow::Result<()> {
+    let keystroke = Keystroke::parse(key)?;
+    input(
+        window,
+        cx,
+        PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        }),
+    )?;
+    input(
+        window,
+        cx,
+        PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+    )?;
+    settle(cx, 150).await;
+    draw(window, cx)?;
+    Ok(())
 }
 
 async fn keys(window: Window, cx: &mut AsyncApp, combos: &[&str]) -> anyhow::Result<()> {
@@ -2349,9 +2375,22 @@ async fn scenario(
     run.capture(window, cx, "d04-receipt")?;
     let manual_id = receipt.work_item_id.clone();
     let manual_key = receipt.key.clone();
+    // The receipt takes the keyboard the saved fields held.
+    let rb = wait_for(window, cx, "the receipt's keyboard focus", |rb| {
+        state_of(rb)["focused"] == "receipt"
+    })
+    .await
+    .unwrap_or_else(|_| rb.clone());
+    run.check(
+        "receipt-takes-the-keyboard",
+        json!("receipt"),
+        state_of(&rb)["focused"].clone(),
+        state_of(&rb)["focused"] == "receipt",
+    )?;
 
-    // 3. The drawer shows the saved settings and nothing unrecorded.
-    click(window, cx, "manual-open-ticket").await?;
+    // 3. The drawer shows the saved settings and nothing unrecorded. Enter
+    // on the focused Open ticket opens it (a keyboard press, no click).
+    key_press(window, cx, "enter").await?;
     let rb = wait_for(window, cx, "the ticket's drawer", |rb| {
         rb["surface"] == "detail"
             && state_of(rb)["loaded"] == "ready"

@@ -84,7 +84,9 @@
 //!     or disagrees with the engine.
 //! 19. Bound creation: with a project selected in the sidebar, New issue
 //!     offers a project choice (a dropdown or chips) instead of naming that
-//!     project, or Write manually saves the ticket in any other project.
+//!     project, or Write manually saves the ticket in any other project; or
+//!     Escape after the save does not close the drawer (the keyboard was
+//!     lost with the saved fields).
 //! 20. All projects creation: New issue does not ask for the project in the
 //!     sidebar's searchable project picker; the picker lists another
 //!     machine's project or misses one of this host's; Write manually
@@ -2581,10 +2583,19 @@ async fn scope_creation_pass(
         "item 19: the ticket must be saved in Luna: {}",
         bound["view"]["item"]["projectId"]
     );
-    close_form(window, cx).await?;
+    // The receipt holds the keyboard: Escape closes the drawer.
+    wait_surfaces(window, cx, "the receipt's keyboard focus", |rb| {
+        rb["state"]["focused"] == "receipt"
+    })
+    .await?;
+    press(window, cx, "escape").await?;
+    wait(window, cx, "Escape closing the saved form", |rb| {
+        rb["overlay"].is_null()
+    })
+    .await?;
     manifest.step(
         "create-bound-to-sidebar-project",
-        "with Luna selected in the sidebar, New issue names Luna (no chips, no picker) and Write manually saves the ticket in Luna",
+        "with Luna selected in the sidebar, New issue names Luna (no chips, no picker) and Write manually saves the ticket in Luna; the receipt holds the keyboard and Escape closes the drawer",
         json!({"chooser": chooser["state"], "ticket": bound_id, "png": png_bound}),
     );
 

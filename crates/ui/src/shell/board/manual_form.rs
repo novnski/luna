@@ -502,6 +502,12 @@ pub struct ManualTicketForm {
     /// below it.
     settings_rows: Option<(Entity<SettingsRow>, Entity<SettingsRow>)>,
     phase: SavePhase,
+    /// The receipt's Open ticket. A save removes the field that held the
+    /// keyboard, so the receipt takes it (Enter opens the ticket, Tab
+    /// reaches its other actions, Escape closes the drawer).
+    receipt_focus: FocusHandle,
+    /// Give the keyboard to the receipt on the next frame.
+    focus_receipt: bool,
     /// Reused verbatim after a lost answer, so a retry can never create a
     /// second ticket.
     pending_request: Option<String>,
@@ -598,6 +604,8 @@ impl ManualTicketForm {
             settings,
             settings_rows,
             phase: SavePhase::Editing,
+            receipt_focus: cx.focus_handle().tab_stop(true),
+            focus_receipt: false,
             pending_request: None,
             errors: FieldErrors::default(),
             scroll: ScrollHandle::new(),
@@ -795,6 +803,7 @@ impl ManualTicketForm {
                 self.model
                     .update(cx, |model, cx| model.apply_receipt(&receipt, cx));
                 self.phase = SavePhase::Saved(Box::new(receipt));
+                self.focus_receipt = true;
             }
             Err(BoardCallError::Lost) => {
                 // Keep the request id: saving again reconciles, never
@@ -1069,6 +1078,7 @@ impl ManualTicketForm {
                                 theme,
                             )
                             .aria_label("Open ticket")
+                            .track_focus(&self.receipt_focus)
                             .child("Open ticket")
                             .children(self.probe.bounds_el("manual-open-ticket"))
                             .on_click(cx.listener(
@@ -1115,6 +1125,8 @@ impl ManualTicketForm {
             Some("title")
         } else if gpui::Focusable::focus_handle(self.description.read(cx), cx).is_focused(window) {
             Some("description")
+        } else if self.receipt_focus.is_focused(window) {
+            Some("receipt")
         } else {
             None
         };
@@ -1150,8 +1162,12 @@ impl ManualTicketForm {
 }
 
 impl Render for ManualTicketForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        if std::mem::take(&mut self.focus_receipt) && matches!(self.phase, SavePhase::Saved(_)) {
+            let focus = self.receipt_focus.clone();
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
         let project_name = self
             .project_id
             .as_ref()
