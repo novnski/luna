@@ -1324,6 +1324,9 @@ fn is_child_notice(row: &Row) -> bool {
 ///    hidden; or a card claims a chip from an earlier turn.
 /// 6. Dropping an emptied tool group leaves its entry without its turn gap or
 ///    its lane.
+/// 7. A card hides another create-thread call than the one that made its
+///    child: a concurrent call whose card has not landed disappears, and
+///    swaps back when that call later fails.
 ///
 /// Returns the entries whose history actions resolve, or `None` when the host
 /// has not reported checkpoints (an older host): nothing is gated then.
@@ -1332,8 +1335,9 @@ fn present_timeline(
     rows: &mut Vec<Row>,
     checkpointed: Option<&HashSet<String>>,
     run_live: bool,
+    chat_id: Option<&str>,
 ) -> Option<HashSet<SharedString>> {
-    hide_created_thread_chips(rows);
+    hide_created_thread_chips(rows, chat_id);
 
     // A turn ends at its last assistant entry before the next user entry, or
     // at the transcript's end once the run has settled.
@@ -1403,12 +1407,26 @@ fn present_timeline(
 }
 
 /// The "New thread" card that lands after a create-thread call is that call's
-/// record, so the chip above it only repeats it. Each card claims the earliest
-/// unclaimed create chip of its turn that did not fail; a group left empty
-/// drops out, handing its turn gap and lane to its entry's neighbours.
-fn hide_created_thread_chips(rows: &mut Vec<Row>) {
+/// record, so the chip above it only repeats it. Each card claims the create
+/// chip of its turn that did not fail and whose idempotency key names the
+/// card's child (the engine derives the child from this chat and that key).
+/// A chip stored before the doc kept the key has no identity: a card no chip
+/// names claims the earliest of those. A group left empty drops out, handing
+/// its turn gap and lane to its entry's neighbours.
+fn hide_created_thread_chips(rows: &mut Vec<Row>, chat_id: Option<&str>) {
     use luna_proto::view::ThreadTool;
-    let mut unclaimed: std::collections::VecDeque<(usize, &str)> = Default::default();
+    let child_of = |call: &ToolCall| {
+        let ToolCall::Mcp {
+            input: Some(input), ..
+        } = call
+        else {
+            return None;
+        };
+        let key = input.get("idempotencyKey")?.as_str()?;
+        Some(luna_engine::cross_task_tools::child_task_id(chat_id?, key))
+    };
+    // (group row, chip part, the child its call creates when the doc says)
+    let mut unclaimed: Vec<(usize, &str, Option<String>)> = Vec::new();
     let mut claimed: HashMap<usize, HashSet<String>> = HashMap::new();
     for (ix, row) in rows.iter().enumerate() {
         match &row.kind {
@@ -1419,13 +1437,16 @@ fn hide_created_thread_chips(rows: &mut Vec<Row>) {
                     .filter(|tool| {
                         !tool.is_error && ThreadTool::of(&tool.call) == Some(ThreadTool::Create)
                     })
-                    .map(|tool| (ix, tool.part_id.as_str())),
+                    .map(|tool| (ix, tool.part_id.as_str(), child_of(&tool.call))),
             ),
-            _ if row.turn_start
-                && row.role == MessageRole::System
-                && row.entry_id.starts_with("child-created:") =>
-            {
-                if let Some((group, part)) = unclaimed.pop_front() {
+            _ if row.turn_start && row.role == MessageRole::System => {
+                if let Some(child) = row.entry_id.strip_prefix("child-created:")
+                    && let Some(own) = unclaimed
+                        .iter()
+                        .position(|(_, _, made)| made.as_deref() == Some(child))
+                        .or_else(|| unclaimed.iter().position(|(_, _, made)| made.is_none()))
+                {
+                    let (group, part, _) = unclaimed.remove(own);
                     claimed.entry(group).or_default().insert(part.to_owned());
                 }
             }
@@ -1663,8 +1684,12 @@ fn assistant_copy_text(entry: &SessionMessageEntry) -> Option<SharedString> {
         .filter_map(|part| match part {
             // Inspect the trimmed view only to reject empty parts. Copy the
             // original bytes so indentation-based code blocks and Markdown
-            // hard-break whitespace survive the clipboard round trip.
-            MessagePart::Text { text, .. } if !text.trim().is_empty() => Some(text.as_str()),
+            // hard-break whitespace survive the clipboard round trip; only
+            // line breaks at a part's edges go (a provider's own message
+            // separator), since the join supplies the paragraph break.
+            MessagePart::Text { text, .. } if !text.trim().is_empty() => {
+                Some(text.trim_matches(['\r', '\n']))
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -5677,6 +5702,7 @@ impl Transcript {
                 &mut new_rows,
                 checkpointed.as_deref(),
                 run_live,
+                self.chat_id.as_deref(),
             );
             // Bounded caches: rows and parsed trees of entries that left this
             // transcript (rewind, compaction, removal) are dropped.
@@ -13301,6 +13327,106 @@ mod tests {
         assert!(inspection.contains("Status: Idle"));
         assert!(inspection.contains("7 input, 0 output"));
         assert!(!inspection.contains("Open transcript"));
+    }
+
+    /// A "New thread" card hides the create-thread call that made its child.
+    /// Failure cases (written before the fix):
+    /// 1. Calls A and B run concurrently and B's card lands first: A's chip,
+    ///    still running, disappears while B's stays beside its own card.
+    /// 2. A then fails and the two swap, changing the group's contents and
+    ///    height a second time.
+    /// 3. A card for a child no call of the turn created (a user-created
+    ///    helper) hides a call anyway.
+    /// Calls come through the engine's doc privacy policy, as the doc stores
+    /// them; documents without call identity are the timeline fixture's.
+    #[gpui::test]
+    fn a_child_card_hides_the_create_call_that_made_its_child(cx: &mut gpui::TestAppContext) {
+        use luna_proto::AgentEvent;
+        // The child the engine creates for chat "parent" and key "beta"
+        // (cross_task_tools::child_task_id, the durable "luna-child-v1" id).
+        const BETA_CHILD: &str = "cb2faea6-116a-4185-bea6-d07eae37116f";
+        let create = |key: &str| AgentEvent::ToolCall {
+            id: format!("create-{key}"),
+            call: luna_doc::sanitize_tool_call(&ToolCall::Mcp {
+                server: "luna".into(),
+                tool: "create_thread".into(),
+                input: Some(serde_json::json!({
+                    "prompt": format!("Pick a random number ({key})."),
+                    "title": format!("Helper {key}"),
+                    "idempotencyKey": key,
+                })),
+            }),
+        };
+        let result = |key: &str, is_error| AgentEvent::ToolResult {
+            id: format!("create-{key}"),
+            is_error,
+            output: None,
+            diff: None,
+        };
+        let entry = |id: &str, role, parts| SessionMessageEntry {
+            role,
+            ..assistant(id, MessageStatus::Complete, parts)
+        };
+        let card = |child: &str| {
+            entry(
+                &format!("child-created:{child}"),
+                MessageRole::System,
+                vec![text_part("text", "Created child")],
+            )
+        };
+        let mut reply = Vec::new();
+        for event in [create("alpha"), create("beta"), result("beta", false)] {
+            luna_doc::fold_event_into_parts(&mut reply, &event);
+        }
+        let mut entries = vec![
+            entry(
+                "u1",
+                MessageRole::User,
+                vec![text_part("t", "Create two helpers.")],
+            ),
+            assistant("a1", MessageStatus::Streaming, reply.clone()),
+            card(BETA_CHILD),
+            card("a-user-created-helper"),
+        ];
+        let visible_creates = |transcript: &Entity<Transcript>, cx: &mut gpui::App| {
+            transcript.update(cx, |this, cx| {
+                this.sync(cx);
+                this.rows
+                    .iter()
+                    .filter_map(|row| match &row.kind {
+                        RowKind::ToolGroup { tools, .. } => Some(tools.iter()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .map(|tool| tool.part_id.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        with_tool_group_navigation(cx, |state, transcript, cx| {
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("parent".into());
+                state.transcript = entries.clone();
+                state.transcript_revision += 1;
+            });
+            assert_eq!(
+                visible_creates(&transcript, cx),
+                ["create-alpha"],
+                "1/3: the beta card hid another call than its own"
+            );
+
+            luna_doc::fold_event_into_parts(&mut reply, &result("alpha", true));
+            entries[1].parts = reply;
+            state.update(cx, |state, _| {
+                state.transcript = entries;
+                state.transcript_revision += 1;
+            });
+            assert_eq!(
+                visible_creates(&transcript, cx),
+                ["create-alpha"],
+                "2: alpha failing swapped which call its group shows"
+            );
+        });
     }
 
     #[test]

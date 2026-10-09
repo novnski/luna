@@ -53,7 +53,7 @@ jobs:
       - name: Durable session publication and recovery
         run: |
           cargo test --locked -p luna-sync --features mock-server
-          cargo test --locked -p luna-engine --lib --test session_publication --test restart_resume --test codex_subagents --test local_profiles
+          cargo test --locked -p luna-engine --lib --test session_publication --test restart_resume --test codex_subagents --test local_profiles --test timeline_order_e2e
       - name: Engine integration keepers
         run: |
           cargo test --locked -p luna-engine --test message_queue --test m5_repos_diffs_terminals \
