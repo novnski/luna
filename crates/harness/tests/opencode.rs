@@ -319,11 +319,13 @@ impl FakeOpencode {
                 "200 OK",
                 Some(json!({ "data": { "id": "ses_resume", "permissions": rules("ses_resume") } })),
             ),
-            ("PATCH", "/api/session/ses_resume") => {
-                self.session_rules
-                    .lock()
-                    .unwrap()
-                    .insert("ses_resume".into(), body["permissions"].clone());
+            // A resumed session's rules, and the ceiling LUNA caps a child
+            // session at when it appears.
+            ("PATCH", "/api/session/ses_resume" | "/api/session/ses_child") => {
+                self.session_rules.lock().unwrap().insert(
+                    path.trim_start_matches("/api/session/").into(),
+                    body["permissions"].clone(),
+                );
                 ("204 No Content", None)
             }
             ("GET", "/api/session/ses_unavailable") => (
@@ -1101,6 +1103,19 @@ async fn child_items_render_when_their_step_start_was_lost_in_a_bus_drop() {
         ),
         "{events:?}"
     );
+    // A run that stopped its child (or failed otherwise) is not this
+    // scenario, whatever the transcript shows.
+    let errors: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|event| match event {
+            AgentEvent::Error { .. } => true,
+            AgentEvent::Subagent { event, .. } => {
+                matches!(event.as_ref(), AgentEvent::Error { .. })
+            }
+            _ => false,
+        })
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
 
     // The child transcript: its streamed items, coalesced per kind.
     let mut child: Vec<(&str, String)> = Vec::new();
