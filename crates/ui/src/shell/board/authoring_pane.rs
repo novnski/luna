@@ -1265,7 +1265,17 @@ impl AuthoringPane {
             .border_color(theme.separator(true))
             .bg(theme.fill(FillTier::Quaternary))
             .text_size(crate::typography::ui_rems(13.0))
-            .min_h(crate::typography::ui_rems(64.0));
+            .min_h(crate::typography::ui_rems(64.0))
+            .cursor(gpui::CursorStyle::IBeam)
+            // The input is one line at the top of this taller box and blurs
+            // itself on any press outside its own bounds: a press anywhere
+            // in the box (bubbling, after that blur) puts focus back in it.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|pane, _, window, cx| {
+                    window.focus(&pane.input.focus_handle(cx), cx);
+                }),
+            );
         div()
             .id("authoring-composer")
             .w_full()
