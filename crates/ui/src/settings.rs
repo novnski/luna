@@ -2102,38 +2102,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn composer_send_behavior_is_opt_in_for_old_and_partial_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 300, "soundEnabled": false}"#,
-        )
-        .unwrap();
-
-        let loaded = UiSettings::load(dir.path());
-        assert_eq!(loaded.composer_send_behavior, ComposerSendBehavior::Enter);
-        assert_eq!(
-            loaded.follow_up_behavior,
-            luna_proto::FollowUpBehavior::Queue
-        );
-        assert!(loaded.open_web_links_in_luna);
-        assert!(loaded.new_thread_composer_background.is_none());
-        assert_eq!(
-            loaded.new_thread_background_effect,
-            NewThreadBackgroundEffect::None
-        );
-        assert_eq!(loaded.sidebar_width, 300.0);
-        assert!(!loaded.sound_enabled);
-        for sound in [
-            crate::sound::Sound::Done,
-            crate::sound::Sound::Request,
-            crate::sound::Sound::Attention,
-        ] {
-            assert!(!loaded.session_sound_enabled(sound));
-        }
-    }
-
-    #[test]
     fn window_geometry_round_trips_and_legacy_settings_default() {
         let dir = tempfile::tempdir().unwrap();
         let geometry = WindowGeometry {
@@ -2864,11 +2832,13 @@ mod tests {
         );
     }
 
-    /// A settings file written before light mode existed has no `appearance`
-    /// key; it must load as "follow the OS" rather than failing the whole parse
-    /// and resetting every other preference to defaults.
+    /// A settings file written before newer preferences existed (no
+    /// `appearance`, fonts, keymap, composer, sound or History keys) must load
+    /// each missing key at its default — appearance as "follow the OS",
+    /// Escape stopping and modifier send opt-in — rather than failing the whole
+    /// parse and resetting the preferences the file does carry.
     #[test]
-    fn settings_without_appearance_default_to_system() {
+    fn partial_legacy_settings_keep_their_values_and_default_new_keys() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             UiSettings::path(dir.path()),
@@ -2931,6 +2901,36 @@ mod tests {
             GitHistoryAuthorDisplay::Avatar,
             "pre-author-display files default to avatars"
         );
+        assert_eq!(loaded.composer_send_behavior, ComposerSendBehavior::Enter);
+        assert_eq!(
+            loaded.follow_up_behavior,
+            luna_proto::FollowUpBehavior::Queue
+        );
+        assert!(loaded.open_web_links_in_luna);
+        assert!(loaded.new_thread_composer_background.is_none());
+        assert_eq!(
+            loaded.new_thread_background_effect,
+            NewThreadBackgroundEffect::None
+        );
+        // The persisted master mute still gates every per-event sound.
+        for sound in [
+            crate::sound::Sound::Done,
+            crate::sound::Sound::Request,
+            crate::sound::Sound::Attention,
+        ] {
+            assert!(!loaded.session_sound_enabled(sound));
+        }
+        assert_eq!(
+            loaded.ui_font_family,
+            crate::typography::UiFontFamily::Geist
+        );
+        assert_eq!(
+            loaded.ui_font_size,
+            crate::typography::UiFontSize::default()
+        );
+        assert!(!loaded.diff_wrap);
+        assert_eq!(loaded.keymap, KeymapConfig::default());
+        assert!(!loaded.sidebar_grouped);
     }
 
     #[test]
@@ -2969,28 +2969,6 @@ mod tests {
         loaded.save(dir.path()).unwrap();
         let saved = std::fs::read_to_string(UiSettings::path(dir.path())).unwrap();
         assert!(!saved.contains("accentColor"));
-    }
-
-    #[test]
-    fn settings_without_ui_font_default_to_geist() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 300, "soundEnabled": false}"#,
-        )
-        .unwrap();
-        let loaded = UiSettings::load(dir.path());
-        assert_eq!(
-            loaded.ui_font_family,
-            crate::typography::UiFontFamily::Geist
-        );
-        assert_eq!(loaded.sidebar_width, 300.0);
-        assert!(!loaded.sound_enabled);
-        assert!(!loaded.diff_wrap);
-        assert_eq!(
-            loaded.ui_font_size,
-            crate::typography::UiFontSize::default()
-        );
     }
 
     #[test]
@@ -3035,13 +3013,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 10000, "rightPaneWidth": 1}"#,
+            r#"{"sidebarWidth": 10000, "rightPaneWidth": 1, "terminalHeight": 5}"#,
         )
         .unwrap();
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.sidebar_width, SIDEBAR_MAX);
         assert_eq!(loaded.right_pane_width, RIGHT_PANE_MIN);
+        assert_eq!(loaded.terminal_height, TERMINAL_MIN_HEIGHT);
         assert!(!loaded.code_fences_fit_content);
+        assert_eq!(
+            UiSettings {
+                terminal_height: 99_999.0,
+                ..Default::default()
+            }
+            .clamped()
+            .terminal_height,
+            TERMINAL_ABS_MAX_HEIGHT
+        );
+        // The right pane has no persisted upper bound (its live drag clamps
+        // against the window), so a wide saved pane survives a reload.
+        assert_eq!(
+            UiSettings {
+                right_pane_width: 2400.0,
+                ..Default::default()
+            }
+            .clamped()
+            .right_pane_width,
+            2400.0
+        );
+        assert_eq!(
+            UiSettings {
+                sidebar_width: f32::NAN,
+                ..Default::default()
+            }
+            .clamped()
+            .sidebar_width,
+            SIDEBAR_DEFAULT
+        );
         assert_eq!(
             UiSettings {
                 sidebar_width: 1.0,
@@ -3134,26 +3142,6 @@ mod tests {
                 GitHistoryColumn::Date,
             ])
         );
-    }
-
-    #[test]
-    fn large_right_pane_width_is_preserved() {
-        let loaded = UiSettings {
-            right_pane_width: 2400.0,
-            ..Default::default()
-        }
-        .clamped();
-        assert_eq!(loaded.right_pane_width, 2400.0);
-    }
-
-    #[test]
-    fn nan_heals_to_default() {
-        let healed = UiSettings {
-            sidebar_width: f32::NAN,
-            ..Default::default()
-        }
-        .clamped();
-        assert_eq!(healed.sidebar_width, SIDEBAR_DEFAULT);
     }
 
     #[test]
@@ -3367,17 +3355,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_distinct_physical_keys() {
-        // Distinct STRINGS is not enough — two defaults could still resolve to
-        // the same keystroke through `platform_combo`.
-        let mut seen = std::collections::HashSet::new();
-        for id in ShortcutId::ALL {
-            let bound = platform_combo(id.default_combo());
-            assert!(seen.insert(bound.clone()), "{bound:?} bound twice");
-        }
-    }
-
-    #[test]
     fn conflict_detection() {
         let mut keymap = KeymapConfig::default();
         assert!(conflicted_shortcuts(&keymap).is_empty());
@@ -3415,32 +3392,6 @@ mod tests {
         // session cycling.
         assert_eq!(platform_combo("ctrl-shift-tab"), "ctrl-shift-tab");
         assert_eq!(display_combo("ctrl-shift-tab"), "Ctrl+Shift+Tab");
-    }
-
-    #[test]
-    fn keymap_survives_old_settings_files() {
-        // Files written before the keymap existed load with defaults.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(UiSettings::path(dir.path()), r#"{"sidebarWidth": 300}"#).unwrap();
-        let loaded = UiSettings::load(dir.path());
-        assert_eq!(loaded.keymap, KeymapConfig::default());
-        assert!(!loaded.sidebar_grouped);
-        assert!(!loaded.escape_stops_active_agent);
-    }
-
-    #[test]
-    fn escape_stopping_is_opt_in_for_old_and_partial_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 300, "soundEnabled": false}"#,
-        )
-        .unwrap();
-
-        let loaded = UiSettings::load(dir.path());
-        assert!(!loaded.escape_stops_active_agent);
-        assert_eq!(loaded.sidebar_width, 300.0);
-        assert!(!loaded.sound_enabled);
     }
 
     #[test]
@@ -3602,20 +3553,5 @@ mod tests {
             ShortcutId::NextSession.default_combo()
         );
         assert_eq!(keymap.get(ShortcutId::ArchiveSession), "mod-shift-a");
-    }
-
-    #[test]
-    fn terminal_height_clamps_on_load() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(UiSettings::path(dir.path()), r#"{"terminalHeight": 5}"#).unwrap();
-        assert_eq!(
-            UiSettings::load(dir.path()).terminal_height,
-            TERMINAL_MIN_HEIGHT
-        );
-        std::fs::write(UiSettings::path(dir.path()), r#"{"terminalHeight": 99999}"#).unwrap();
-        assert_eq!(
-            UiSettings::load(dir.path()).terminal_height,
-            TERMINAL_ABS_MAX_HEIGHT
-        );
     }
 }

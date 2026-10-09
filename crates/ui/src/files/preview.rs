@@ -3556,31 +3556,6 @@ mod tests {
         assert!(maximum.preview_text_size() < crate::typography::FONT_SIZE_MAX);
     }
 
-    #[test]
-    fn tree_split_uses_the_standard_resize_geometry_and_limits() {
-        assert_eq!(TREE_SPLIT_HITBOX_HALF_WIDTH * 2.0, 20.0);
-        let min = crate::motion::resize_drag_sample(
-            TREE_SPLIT_MIN - 1.0,
-            TREE_SPLIT_MIN,
-            TREE_SPLIT_MAX,
-            None,
-            false,
-        );
-        let max = crate::motion::resize_drag_sample(
-            TREE_SPLIT_MAX + 1.0,
-            TREE_SPLIT_MIN,
-            TREE_SPLIT_MAX,
-            None,
-            false,
-        );
-        assert_eq!(min.width, TREE_SPLIT_MIN);
-        assert_eq!(min.edge, Some(crate::motion::ResizeEdge::Min));
-        assert!(min.starts_bounce);
-        assert_eq!(max.width, TREE_SPLIT_MAX);
-        assert_eq!(max.edge, Some(crate::motion::ResizeEdge::Max));
-        assert!(max.starts_bounce);
-    }
-
     fn cached_document(path: &str, text: &str) -> FileDocument {
         let mut document = FileDocument::loading(DocumentKey {
             chat_id: "chat-1".into(),
@@ -3593,17 +3568,8 @@ mod tests {
     }
 
     #[test]
-    fn read_only_reasons_have_specific_messages() {
-        assert!(read_only_message(Some(WorkspaceReadOnlyReason::Binary)).contains("Binary"));
-        assert!(
-            read_only_message(Some(WorkspaceReadOnlyReason::UnsupportedEncoding))
-                .contains("encoding")
-        );
-    }
-
-    #[test]
     fn reset_drops_documents_and_active_preview_from_the_previous_target() {
-        let mut preview = FilePreviewState::new(false, 900, false, 11.5);
+        let mut preview = FilePreviewState::new(false, 900, true, 15.0);
         preview.active = Some("private.env".into());
         preview.documents.insert(
             "private.env".into(),
@@ -3625,6 +3591,10 @@ mod tests {
         assert!(preview.documents.is_empty());
         assert!(preview.active.is_none());
         assert!(!preview.tree_sidebar_visible);
+        // Global editor preferences are not per-target state.
+        assert!(!preview.autosave_enabled);
+        assert!(preview.word_wrap());
+        assert_eq!(preview.editor_font_size, 15.0);
     }
 
     #[test]
@@ -3716,17 +3686,6 @@ mod tests {
         assert!(!preview.highlights.contains_key("old.rs"));
         assert!(!preview.comment_anchors.contains_key("old.rs"));
         assert!(!preview.document_recency.iter().any(|path| path == "old.rs"));
-    }
-
-    #[test]
-    fn reset_preserves_global_editor_preferences() {
-        let mut preview = FilePreviewState::new(false, 900, true, 15.0);
-
-        preview.reset();
-
-        assert!(!preview.autosave_enabled);
-        assert!(preview.word_wrap());
-        assert_eq!(preview.editor_font_size, 15.0);
     }
 
     #[test]

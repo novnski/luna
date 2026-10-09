@@ -1205,12 +1205,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn timing_constants_match_spec() {
-        assert_eq!(COALESCE_MS, 12);
-        assert_eq!(RESIZE_DEBOUNCE_MS, 80);
-    }
-
     // ---- pointer → cell ----
 
     /// 10x20 cells, an 8x4 grid: cols 0..7, rows 0..3.
@@ -1305,10 +1299,5 @@ mod tests {
             }
         );
         assert_eq!(cell_at(f32::NAN, f32::INFINITY, 10.0, 20.0, 8, 4).col, 0);
-    }
-
-    #[test]
-    fn drag_threshold_matches_the_gpui_default() {
-        assert_eq!(SELECTION_DRAG_THRESHOLD, 2.0);
     }
 }

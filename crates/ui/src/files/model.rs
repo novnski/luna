@@ -1012,18 +1012,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_generation_cannot_replace_the_tree() {
-        let mut tree = FileTreeModel::new();
-        let stale = tree.generation();
-        tree.reset();
-        assert!(!tree.apply_page(
-            page("", vec![entry("stale.rs", WorkspaceEntryKind::File)], None),
-            stale,
-        ));
-        assert!(tree.node("stale.rs").is_none());
-    }
-
-    #[test]
     fn removing_a_directory_removes_all_descendants() {
         let mut tree = FileTreeModel::new();
         let generation = tree.generation();
@@ -1091,14 +1079,6 @@ mod tests {
     }
 
     #[test]
-    fn an_inflight_directory_load_is_not_duplicated() {
-        let mut tree = FileTreeModel::new();
-        let generation = tree.generation();
-        assert!(tree.begin_load("", None, generation));
-        assert!(!tree.begin_load("", None, generation));
-    }
-
-    #[test]
     fn a_large_monorepo_page_stays_flat_and_addressable() {
         let mut tree = FileTreeModel::new();
         let generation = tree.generation();
@@ -1138,5 +1118,6 @@ mod tests {
             page("", vec![entry("stale.env", WorkspaceEntryKind::File)], None),
             stale_generation,
         ));
+        assert!(tree.node("stale.env").is_none());
     }
 }

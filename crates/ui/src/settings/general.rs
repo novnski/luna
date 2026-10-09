@@ -441,8 +441,10 @@ impl Render for GeneralPage {
 mod tests {
     use super::*;
 
+    /// The shell persists General preferences from these events, so each real
+    /// change must emit exactly one and a repeated value must emit nothing.
     #[gpui::test]
-    fn general_page_renders_existing_preferences_and_changes_them(cx: &mut gpui::TestAppContext) {
+    fn general_page_renders_and_emits_one_event_per_change(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             gpui_base::init(cx);
             cx.set_global(Theme::default());
@@ -452,14 +454,33 @@ mod tests {
             window.draw(cx).clear();
         })
         .unwrap();
+        let page = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&page, move |_, event: &GeneralEvent, _| {
+                events.borrow_mut().push(format!("{event:?}"));
+            })
+        });
         window
             .update(cx, |page, _, cx| {
                 page.set_follow_up_behavior(FollowUpBehavior::Steer, cx);
+                page.set_follow_up_behavior(FollowUpBehavior::Steer, cx);
                 page.set_automatic_retries(false, cx);
-                assert_eq!(page.follow_up_behavior, FollowUpBehavior::Steer);
-                assert!(!page.automatic_retries_enabled);
+                page.set_automatic_retries(false, cx);
             })
             .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            *events.borrow(),
+            [
+                format!(
+                    "{:?}",
+                    GeneralEvent::FollowUpBehaviorChanged(FollowUpBehavior::Steer)
+                ),
+                format!("{:?}", GeneralEvent::AutomaticRetriesChanged(false)),
+            ]
+        );
         cx.update_window(window.into(), |_, window, cx| {
             window.draw(cx).clear();
         })

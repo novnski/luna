@@ -6261,48 +6261,8 @@ rename to new_name.rs
             .set_offset(gpui::Point::new(px(-48.0), px(0.0)));
         assert_eq!(second.slot("new").handle.offset().x, px(-48.0));
         assert_eq!(first.slot("unified").handle.offset().x, px(-96.0));
-    }
-
-    #[test]
-    fn horizontal_scroll_reset_returns_to_origin() {
-        let handle = gpui::ScrollHandle::new();
-        handle.set_offset(gpui::Point::new(px(-120.0), px(-18.0)));
-
-        reset_horizontal_scroll(&handle);
-
-        assert_eq!(handle.offset(), gpui::Point::default());
-    }
-
-    #[test]
-    fn horizontal_scroll_slots_share_offset_but_keep_unique_ids() {
-        let context = DiffCodeScrollContext {
-            handle: gpui::ScrollHandle::new(),
-            prefix: "row-7".into(),
-        };
-        let old = context.slot("old");
-        let new = context.slot("new");
-
-        old.handle.set_offset(gpui::Point::new(px(-96.0), px(0.0)));
-
-        assert_eq!(new.handle.offset(), old.handle.offset());
-        assert_ne!(old.id, new.id);
-    }
-
-    #[test]
-    fn body_height_is_analytic() {
-        let files = parse_patch(PATCH);
-        let main = &files[0];
-        let lines: usize = main.hunks.iter().map(|h| h.lines.len()).sum();
-        assert_eq!(
-            body_height(main),
-            2.0 * HUNK_HEADER_HEIGHT + lines as f32 * DIFF_LINE_HEIGHT + BODY_BOTTOM_PAD
-        );
-        // Notices add height (added file: 1 notice + meta line inside hunk).
-        let added = &files[1];
-        assert_eq!(
-            body_height(added),
-            NOTICE_HEIGHT + HUNK_HEADER_HEIGHT + 3.0 * DIFF_LINE_HEIGHT + BODY_BOTTOM_PAD
-        );
+        // Slots of one row share the offset but keep distinct element ids.
+        assert_ne!(second.slot("old").id, second.slot("new").id);
     }
 
     fn diff(checkout: &str, device: &str, cwd: &str, patch: &str) -> CheckoutDiff {
@@ -6389,17 +6349,14 @@ rename to new_name.rs
     }
 
     #[test]
-    fn header_label_pluralizes() {
-        assert_eq!(uncommitted_label(0), "0 Uncommitted changes");
-        assert_eq!(uncommitted_label(1), "1 Uncommitted change");
-        assert_eq!(uncommitted_label(4), "4 Uncommitted changes");
-    }
-
-    #[test]
     fn scope_labels_and_clean_messages() {
         assert_eq!(
             scope_label(DiffScope::WorkingTree, 2, None),
             "2 Uncommitted changes"
+        );
+        assert_eq!(
+            scope_label(DiffScope::WorkingTree, 1, None),
+            "1 Uncommitted change"
         );
         assert_eq!(
             scope_label(DiffScope::Branch, 1, Some("main")),
@@ -6474,15 +6431,11 @@ rename to new_name.rs
 
     #[test]
     fn diff_scope_menu_keeps_history_as_a_separate_surface() {
-        assert_eq!(
-            DiffScope::ALL,
-            [
-                DiffScope::WorkingTree,
-                DiffScope::Branch,
-                DiffScope::LatestTurn,
-            ]
-        );
-        assert!(!DiffScope::ALL.contains(&DiffScope::History));
+        // History is chosen from the surface picker so it keeps its own tab and
+        // toolbar state; a Commit pane is only ever born from a History row.
+        for scope in [DiffScope::History, DiffScope::Commit] {
+            assert!(!DiffScope::ALL.contains(&scope), "{scope:?}");
+        }
     }
 
     #[test]

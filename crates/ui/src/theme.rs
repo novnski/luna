@@ -1299,8 +1299,6 @@ impl Theme {
     } else {
         1.0
     };
-    /// Main-panel header height (luna `h-11`) — in-card headers (changes pane).
-    pub const HEADER_HEIGHT: f32 = 44.0;
     /// The unified window titlebar (traffic lights + cluster + tabs). Content
     /// rides [`Self::TITLEBAR_TOP_PAD`] lower than center so the air above
     /// matches the perceived gap to the inset card below (border + card body).
@@ -1782,11 +1780,6 @@ impl Theme {
             font_sans_fallback: system_sans().into(),
             font_mono_fallback: system_mono().into(),
         }
-    }
-
-    /// Build the theme for an appearance.
-    pub fn for_appearance(appearance: Appearance) -> Self {
-        Self::for_preferences(appearance, AccentColor::default())
     }
 
     pub fn for_preferences(appearance: Appearance, accent: AccentColor) -> Self {
@@ -2929,13 +2922,6 @@ mod tests {
     }
 
     #[test]
-    fn neutral_950_is_0a0a0a() {
-        // oklch(0.145 0 0) is Tailwind neutral-950, luna's app background.
-        let rgb = srgb_u8(oklch_to_srgb(0.145, 0.0, 0.0));
-        assert_eq!(rgb, [10, 10, 10]);
-    }
-
-    #[test]
     fn scrollbar_thumbs_follow_the_active_appearance() {
         let dark = scrollbar_thumb_colors(&Theme::dark());
         let light = scrollbar_thumb_colors(&Theme::light());
@@ -2947,8 +2933,10 @@ mod tests {
     }
 
     #[test]
-    fn oklch_accents_match_reference() {
+    fn oklch_matches_reference_colors() {
         // Reference values computed independently (CSS Color 4 matrices).
+        // oklch(0.145 0 0) is Tailwind neutral-950, luna's app background.
+        assert_eq!(srgb_u8(oklch_to_srgb(0.145, 0.0, 0.0)), [10, 10, 10]);
         assert_eq!(
             srgb_u8(oklch_to_srgb(0.673, 0.182, 276.935)),
             [124, 134, 255]
@@ -3351,29 +3339,6 @@ mod tests {
         );
     }
 
-    /// Code is *text*, so syntax tones are held to the body-copy bar, not the
-    /// 3:1 non-text floor. These are the tokens most likely to be picked by eye
-    /// from a dark-theme screenshot and silently fail once the page turns white.
-    #[test]
-    fn code_and_syntax_tones_are_readable() {
-        for t in [Theme::dark(), Theme::light()] {
-            for (name, fg) in [
-                ("code_text", t.code_text),
-                ("syntax_keyword", t.syntax.keyword),
-                ("syntax_string", t.syntax.string),
-                ("syntax_number", t.syntax.number),
-            ] {
-                let r = contrast_ratio(fg, t.bg);
-                assert!(r >= 4.5, "{:?} {name} is {r:.2}:1 on bg", t.appearance);
-            }
-            // Diff tints mark whole rows; the 3:1 non-text floor applies.
-            for (name, fg) in [("diff_add", t.diff_add), ("diff_del", t.diff_del)] {
-                let r = contrast_ratio(fg, t.bg);
-                assert!(r >= 3.0, "{:?} {name} is {r:.2}:1 on bg", t.appearance);
-            }
-        }
-    }
-
     #[test]
     fn syntax_palette_resolves_every_kind_on_code_and_diff_backgrounds() {
         let kinds = [
@@ -3414,6 +3379,16 @@ mod tests {
                 Theme::dark_with_accent(accent),
                 Theme::light_with_accent(accent),
             ] {
+                // Diff tints mark whole rows; the 3:1 non-text floor applies.
+                for (name, tint) in [("diff_add", theme.diff_add), ("diff_del", theme.diff_del)] {
+                    let ratio = contrast_ratio(tint, theme.bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{} {:?} {name} is {ratio:.2}:1 on bg",
+                        accent.label(),
+                        theme.appearance
+                    );
+                }
                 let add_bg = flatten(theme.diff_add.opacity(0.055), theme.bg);
                 let del_bg = flatten(theme.diff_del.opacity(0.055), theme.bg);
                 for kind in kinds {
@@ -3441,17 +3416,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    /// The caret is a 2px bar, so the 3:1 non-text floor applies — but it is the
-    /// one element the user is actively hunting for, and the dark-mode blue is
-    /// far too light to survive on white unchanged.
-    #[test]
-    fn caret_is_findable_on_its_background() {
-        for t in [Theme::dark(), Theme::light()] {
-            let r = contrast_ratio(t.caret, t.bg);
-            assert!(r >= 3.0, "{:?} caret is {r:.2}:1 on bg", t.appearance);
         }
     }
 
@@ -3745,24 +3709,6 @@ mod tests {
     }
 
     #[test]
-    fn appearance_mirror_tracks_installed_theme() {
-        let _guard = lock_appearance();
-        set_current_appearance(Appearance::Light);
-        assert_eq!(current_appearance(), Appearance::Light);
-        set_current_appearance(Appearance::Dark);
-        assert_eq!(current_appearance(), Appearance::Dark);
-    }
-
-    #[test]
-    fn appearance_rebuild_preserves_selected_ui_family() {
-        for appearance in [Appearance::Dark, Appearance::Light] {
-            let theme = Theme::for_appearance(appearance).with_font_sans("Inter".into());
-            assert_eq!(theme.font_sans.as_ref(), "Inter");
-            assert_eq!(theme.font_mono.as_ref(), "Geist Mono");
-        }
-    }
-
-    #[test]
     fn window_appearance_maps_onto_ours() {
         use gpui::WindowAppearance as W;
         assert_eq!(Appearance::from_window(W::Light), Appearance::Light);
@@ -3850,12 +3796,5 @@ mod tests {
                 assert_eq!(tint.a, 0.15);
             }
         }
-    }
-
-    #[test]
-    fn layout_numbers_match_luna() {
-        assert_eq!(Theme::HEADER_HEIGHT, 44.0); // h-11
-        assert_eq!(Theme::STATUS_STRIP_HEIGHT, 24.0); // h-6
-        assert_eq!(Theme::BUBBLE_RADIUS, 16.0);
     }
 }

@@ -1238,13 +1238,13 @@ mod tests {
     }
 
     #[test]
-    fn capture_dimensions_use_retina_scale_for_ordinary_windows() {
-        assert_eq!(capture_dimensions(1_440.0, 900.0), (2_880, 1_800));
-    }
-
-    #[test]
-    fn capture_dimensions_cap_large_fullscreen_windows() {
-        assert_eq!(capture_dimensions(5_120.0, 2_880.0), (4_096, 2_304));
+    fn capture_dimensions_use_retina_scale_and_cap_large_windows() {
+        for (points, pixels) in [
+            ((1_440.0, 900.0), (2_880, 1_800)),
+            ((5_120.0, 2_880.0), (4_096, 2_304)),
+        ] {
+            assert_eq!(capture_dimensions(points.0, points.1), pixels);
+        }
     }
 
     #[test]

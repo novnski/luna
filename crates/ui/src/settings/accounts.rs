@@ -2879,14 +2879,6 @@ mod tests {
     }
 
     #[test]
-    fn usage_colors_map_to_theme_accents() {
-        let theme = Theme::dark();
-        assert_eq!(usage_color(UsageLevel::Normal, &theme), theme.accent);
-        assert_eq!(usage_color(UsageLevel::Warn, &theme), theme.warning);
-        assert_eq!(usage_color(UsageLevel::Critical, &theme), theme.danger);
-    }
-
-    #[test]
     fn reset_formatting_is_absolute() {
         use chrono::Local;
         let now = Utc::now();

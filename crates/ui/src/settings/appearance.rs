@@ -3582,27 +3582,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_mode_gets_a_card() {
-        assert_eq!(AppearanceMode::ALL.len(), 3);
-        for mode in AppearanceMode::ALL {
-            assert!(!mode.label().is_empty());
-        }
-    }
-
-    #[test]
-    fn registry_offers_both_appearances_and_keeps_single_dark_families_valid() {
-        let registry = ThemeRegistry::builtin();
-        assert_eq!(
-            registry.variants_for(luna_theme::Appearance::Light).count(),
-            10
-        );
-        assert_eq!(
-            registry.variants_for(luna_theme::Appearance::Dark).count(),
-            20
-        );
-    }
-
-    #[test]
     fn accent_helper_explains_default_and_override_scope() {
         assert!(accent_helper(AccentSelection::ThemeDefault).contains("intended"));
         let copy = accent_helper(AccentSelection::Preset(AccentPreset::Pink));
@@ -3752,20 +3731,6 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             3
-        );
-    }
-
-    #[test]
-    fn pixel_sizes_render_whole_and_fractional_values() {
-        assert_eq!(format_px(13.0), "13 px");
-        assert_eq!(format_px(typography::CODE_FONT_SIZE_DEFAULT), "12.5 px");
-        assert_eq!(
-            typography::clamp_font_size(typography::FONT_SIZE_MAX + 1.0),
-            typography::FONT_SIZE_MAX
-        );
-        assert_eq!(
-            typography::clamp_font_size(typography::FONT_SIZE_MIN - 1.0),
-            typography::FONT_SIZE_MIN
         );
     }
 

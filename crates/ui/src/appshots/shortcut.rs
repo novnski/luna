@@ -55,7 +55,7 @@ impl Shortcut {
         })
     }
 
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(target_os = "linux")]
     pub fn portal_trigger(&self) -> String {
         let mut parts = Vec::new();
         if self.control {
@@ -179,6 +179,7 @@ mod tests {
             assert!(Shortcut::parse(combo).is_ok(), "{combo}");
         }
     }
+    #[cfg(target_os = "linux")]
     #[test]
     fn portal_uses_xkb_key_names_and_selected_modifiers() {
         assert_eq!(

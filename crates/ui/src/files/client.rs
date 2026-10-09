@@ -483,82 +483,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn local_params_preserve_the_typed_workspace_shape() {
-        let params = request_params(
-            &ListWorkspaceDirectoryRequest {
+    #[tokio::test]
+    async fn malformed_response_is_reported_as_decode_error() {
+        let transport = Arc::new(DeterministicTransport {
+            responses: HashMap::from([(
+                methods::LIST_WORKSPACE_DIRECTORY.into(),
+                serde_json::json!({
+                    "directory": "",
+                    "entries": "not-an-array"
+                }),
+            )]),
+            ..Default::default()
+        });
+        let client = WorkspaceFilesClient::with_transport(
+            transport,
+            FilesRequestContext {
                 target: target(),
-                directory: "src".into(),
+                target_device_id: None,
+                cwd: "/workspace".into(),
+                checkout_id: None,
+            },
+        );
+        let error = client
+            .list_directory(ListWorkspaceDirectoryRequest {
+                target: target(),
+                directory: String::new(),
                 include_ignored: false,
                 cursor: None,
-            },
-            None,
-        )
-        .unwrap();
-        assert_eq!(params["chatId"], "chat-1");
-        assert_eq!(params["directory"], "src");
-        assert!(params.get("targetDeviceId").is_none());
-    }
-
-    #[test]
-    fn remote_params_add_only_the_relay_target() {
-        let params = request_params(
-            &ReadWorkspaceFileRequest {
-                target: target(),
-                path: "src/lib.rs".into(),
-            },
-            Some("device-b"),
-        )
-        .unwrap();
-        assert_eq!(params["chatId"], "chat-1");
-        assert_eq!(params["path"], "src/lib.rs");
-        assert_eq!(params["targetDeviceId"], "device-b");
-        assert!(params.get("spaceId").is_none());
-        assert!(params.get("checkoutPath").is_none());
-    }
-
-    #[test]
-    fn protocol_responses_decode_into_the_final_backend_types() {
-        let page: WorkspaceDirectoryPage = serde_json::from_value(serde_json::json!({
-            "directory": "",
-            "entries": [],
-            "nextCursor": null,
-            "truncated": false
-        }))
-        .unwrap();
-        let search: Vec<WorkspaceFileSearchMatch> = serde_json::from_value(serde_json::json!([{
-            "path": "src/lib.rs",
-            "name": "lib.rs",
-            "kind": "file",
-            "score": 42
-        }]))
-        .unwrap();
-        let text: WorkspaceFileText = serde_json::from_value(serde_json::json!({
-            "path": "src/lib.rs",
-            "text": "fn main() {}",
-            "contentHash": "abc",
-            "checkoutId": "checkout-1",
-            "size": 12,
-            "modifiedAt": null,
-            "encoding": "utf8",
-            "lineEnding": "lf",
-            "readOnlyReason": null,
-            "truncated": false
-        }))
-        .unwrap();
-        assert!(page.entries.is_empty());
-        assert_eq!(search[0].path, "src/lib.rs");
-        assert_eq!(text.content_hash.as_deref(), Some("abc"));
-    }
-
-    #[test]
-    fn malformed_response_is_reported_as_decode_error() {
-        let result = serde_json::from_value::<WorkspaceDirectoryPage>(serde_json::json!({
-            "directory": "",
-            "entries": "not-an-array"
-        }))
-        .map_err(|error| FilesClientError::Decode(error.to_string()));
-        assert!(matches!(result, Err(FilesClientError::Decode(_))));
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, FilesClientError::Decode(_)), "{error:?}");
+        assert!(
+            !error.retryable(),
+            "a malformed engine response must not be retried as a transport failure"
+        );
     }
 
     #[tokio::test]

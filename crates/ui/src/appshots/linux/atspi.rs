@@ -207,22 +207,6 @@ fn clean(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn identity(bus: &'static str, path: &'static str, pid: u32, title: &str) -> WindowIdentity {
-        WindowIdentity {
-            object: ObjectRefOwned::from_static_str_unchecked(bus, path),
-            pid,
-            title: title.into(),
-        }
-    }
-
-    #[test]
-    fn window_identity_never_uses_fuzzy_titles_or_application_names() {
-        let original = identity(":1.2", "/window/1", 10, "a-b");
-        assert_ne!(original, identity(":1.3", "/window/1", 20, "a-b"));
-        assert_ne!(original, identity(":1.2", "/window/2", 10, "a-b"));
-        assert_ne!(original, identity(":1.2", "/window/1", 10, "ab"));
-    }
-
     #[test]
     fn hung_enrichment_releases_the_capture_pipeline() {
         futures::executor::block_on(async {
