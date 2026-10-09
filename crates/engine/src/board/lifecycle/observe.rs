@@ -350,10 +350,12 @@ impl EngineRpc {
                 // The chat is running (for example the user typed in it);
                 // the board never hides observed work.
                 BoardPhase::Working
+            } else if stopped {
+                // Verified quiescence; an unconfirmed delivery stays visible
+                // as its own Needs-attention reason.
+                BoardPhase::Stopped
             } else if unknown_delivery {
                 BoardPhase::Unknown
-            } else if stopped {
-                BoardPhase::Stopped
             } else if !has_worker
                 || (generation == 0 && intent.first_prompt == FirstPromptDelivery::NotSent)
             {
