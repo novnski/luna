@@ -105,6 +105,27 @@ in the campaign.
 Done when each repaired defect has a failing control and a passing candidate
 on the same harness.
 
+## LUNA lessons (2026-10-09 campaign)
+
+From the [first full campaign](../../../docs/audits/2026-10-09-test-audit/README.md):
+
+- Run the baseline before lanes start ledgering and hand each lane its
+  failing tests. Eighteen tests failed on `main` because no workflow ran
+  them, and one lane retired inline tests in favour of two of those failing
+  suites.
+- Lanes that cite each other's tests as keepers can both delete. After
+  merging, check that every keeper named in a D or C row still exists.
+- A whole-workspace `cargo test` exceeds the build guard's 25 GiB growth
+  reservation. Split it per package (`luna-engine`, the rest with
+  `--features luna-sync/mock-server`, then `luna-ui --test-threads=1`) and set
+  `CARGO_PROFILE_DEV_DEBUG=0` for disposable validation targets. Collect the
+  mbx store back to its budget (`MBX_GC_MAX_SIZE=20GiB mbx gc`) when it grows.
+- Suites outside CI rot: when a deletion leaves a contract to an integration
+  suite, route that suite into `.github/workflows/ui-tests.yml` in the same
+  change.
+- Manual visual fixtures that `docs/screenshots` documents as reproduction
+  steps are QA tooling, not assertion-free tests.
+
 ## 8. Reconcile and hand off
 
 Campaigns outlive many `main` commits. Merge `main` rather than rebasing a
