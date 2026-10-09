@@ -57,6 +57,12 @@
 //!     wider than the page or a control paints outside it; the header with
 //!     the key, title and Close scrolls away with the body, or the pinned
 //!     Close does not close the drawer.
+//! 15. Two controls share an element id, which the accessibility tree
+//!     rejects (a debug build panics): a model listed twice, a model option
+//!     with a `default` choice beside the Default chip, repeated reasoning
+//!     levels, model ids spelled like the editor's own controls, or a
+//!     harness switch (Claude Code, Codex, OpenCode and back) in either
+//!     profile. The run builds the tree every frame and fails on any panic.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -85,11 +91,11 @@ use luna_proto::{
     BoardInstructionKind, BoardItemDetail, BoardListPage, BoardMutationReceipt, BoardPhase,
     BoardSettingOrigin, BoardSettingSource, DependencySource, DoneStatus, FirstPromptDelivery,
     HarnessId, IssueLinkRole, IssueProvider, IssueReference, IssueRepository, LaunchSnapshot,
-    Model, OriginalContainer, OutcomeKind, OutcomeReference, PermissionMode, ReasoningLevel,
-    ResolvedExecution, ReviewBasis, ReviewCleanup, ReviewCleanupState, ReviewFinding,
-    ReviewProfileResolution, ReviewResult, ReviewRun, ReviewRunOutcome, ReviewRunState,
-    ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole, WorkItem, WorkItemEventKind,
-    WorkItemTaskLink,
+    Model, ModelOption, ModelOptionChoice, OriginalContainer, OutcomeKind, OutcomeReference,
+    PermissionMode, ReasoningLevel, ResolvedExecution, ReviewBasis, ReviewCleanup,
+    ReviewCleanupState, ReviewFinding, ReviewProfileResolution, ReviewResult, ReviewRun,
+    ReviewRunOutcome, ReviewRunState, ReviewSeverity, ReviewVerdict, ReviewerPlacement,
+    TaskLinkRole, WorkItem, WorkItemEventKind, WorkItemTaskLink,
 };
 use luna_rpc::methods;
 use luna_ui::*;
@@ -119,42 +125,198 @@ type Window = WindowHandle<shell::Shell>;
 // A deterministic provider peer
 // ---------------------------------------------------------------------------
 
-/// A scripted peer registered as Codex with two catalog models of different
-/// reasoning support. Runs report a native session and stream slowly.
-struct FixtureCodex;
+/// A scripted provider peer registered under a real harness id (Claude
+/// Code, Codex, OpenCode) with its own catalog. Runs report a native
+/// session and stream slowly.
+///
+/// The catalogs are deliberately hostile to element ids derived from catalog
+/// values: a model listed twice, a model option whose choice is `default`
+/// beside the editor's Default chip, repeated reasoning levels, model ids
+/// spelled like the editor's own control names (`inherit`, `default`,
+/// `show-all`, `more`), and more models than the editor lists before "Show
+/// all". Codex's first two models drive the manual-form scenario.
+struct ScriptedPeer {
+    harness: HarnessId,
+    name: &'static str,
+    models: Vec<Model>,
+    levels: &'static [ReasoningLevel],
+}
 
-fn fixture_models() -> Vec<Model> {
-    vec![
-        Model {
-            id: "fixture-sol".into(),
-            label: "Fixture Sol".into(),
-            description: None,
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
+fn model(id: &str, label: &str, levels: &[ReasoningLevel], options: Vec<ModelOption>) -> Model {
+    Model {
+        id: id.into(),
+        label: label.into(),
+        description: None,
+        reasoning_levels: levels.to_vec(),
+        options,
+        first_seen_at_ms: None,
+    }
+}
+
+fn option(id: &str, label: &str, default: &str, choices: &[(&str, &str)]) -> ModelOption {
+    ModelOption {
+        id: id.into(),
+        label: label.into(),
+        choices: choices
+            .iter()
+            .map(|(id, label)| ModelOptionChoice {
+                id: (*id).into(),
+                label: (*label).into(),
+            })
+            .collect(),
+        default_choice: default.into(),
+    }
+}
+
+const LEVELS: &[ReasoningLevel] = &[
+    ReasoningLevel::Low,
+    ReasoningLevel::Medium,
+    ReasoningLevel::High,
+    ReasoningLevel::XHigh,
+];
+
+fn codex_peer() -> ScriptedPeer {
+    use ReasoningLevel::{High, Low, Medium};
+    let tier = || {
+        option(
+            "serviceTier",
+            "Service tier",
+            "default",
+            &[("default", "Standard"), ("fast", "Fast"), ("flex", "Flex")],
+        )
+    };
+    let mut models = vec![
+        model("fixture-sol", "Fixture Sol", &[Low, Medium, High], vec![]),
+        model("fixture-luna", "Fixture Luna", &[Medium], vec![]),
+        model(
+            "fixture-astra",
+            "Fixture Astra",
+            &[Low, Medium, High, High],
+            vec![tier()],
+        ),
+        model("fixture-sol", "Fixture Sol (listed again)", &[Low], vec![]),
+    ];
+    for (id, label) in [
+        ("gpt-6.1-sol", "GPT-6.1 Sol"),
+        ("gpt-6-astra", "GPT-6 Astra"),
+        ("gpt-6-sol", "GPT-6 Sol"),
+        ("gpt-6-luna", "GPT-6 Luna"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("gpt-5.6-terra", "GPT-5.6 Terra"),
+        ("gpt-5.6-luna", "GPT-5.6 Luna"),
+        ("inherit", "Inherit"),
+        ("default", "Default"),
+        ("show-all", "Show all"),
+        ("more", "More"),
+    ] {
+        models.push(model(id, label, &[Medium, High], vec![tier()]));
+    }
+    ScriptedPeer {
+        harness: HarnessId::Codex,
+        name: "Codex (fixture peer)",
+        models,
+        levels: &[Low, Medium, High],
+    }
+}
+
+fn claude_peer() -> ScriptedPeer {
+    use ReasoningLevel::{High, Low, Medium, XHigh};
+    let thinking = || {
+        option(
+            "thinking",
+            "Thinking",
+            "off",
+            &[("off", "Off"), ("on", "On")],
+        )
+    };
+    let context = || {
+        option(
+            "context",
+            "Context window",
+            "200k",
+            &[("200k", "200K"), ("1m", "1M"), ("default", "Default")],
+        )
+    };
+    ScriptedPeer {
+        harness: HarnessId::ClaudeCode,
+        name: "Claude Code (fixture peer)",
+        models: vec![
+            model(
+                "fixture-opus",
+                "Fixture Opus",
+                &[Low, Medium, High, XHigh],
+                vec![thinking(), context()],
+            ),
+            model(
+                "fixture-sonnet",
+                "Fixture Sonnet",
+                &[Low, Medium, High],
+                vec![thinking()],
+            ),
+            model("default", "Default", &[Medium], vec![]),
+            model(
+                "fixture-opus",
+                "Fixture Opus (listed again)",
+                &[Low],
+                vec![],
+            ),
+        ],
+        levels: LEVELS,
+    }
+}
+
+fn opencode_peer() -> ScriptedPeer {
+    use ReasoningLevel::{High, Medium};
+    let variant = || {
+        option(
+            "variant",
+            "Variant",
+            "default",
+            &[
+                ("default", "Default"),
+                ("max", "max"),
+                ("minimal", "minimal"),
             ],
-            options: vec![],
-            first_seen_at_ms: None,
-        },
-        Model {
-            id: "fixture-luna".into(),
-            label: "Fixture Luna".into(),
-            description: None,
-            reasoning_levels: vec![ReasoningLevel::Medium],
-            options: vec![],
-            first_seen_at_ms: None,
-        },
-    ]
+        )
+    };
+    ScriptedPeer {
+        harness: HarnessId::Opencode,
+        name: "OpenCode (fixture peer)",
+        models: vec![
+            model(
+                "fixture-open/sonnet",
+                "Fixture Open Sonnet",
+                &[Medium, High, High],
+                vec![variant(), variant()],
+            ),
+            model("fixture-open/gpt", "Fixture Open GPT", &[], vec![]),
+            model(
+                "fixture-open/sonnet",
+                "Fixture Open Sonnet (listed again)",
+                &[],
+                vec![],
+            ),
+        ],
+        levels: &[Medium, High],
+    }
+}
+
+/// The model each harness switch selects so its option rows render.
+fn model_with_options(harness: &str) -> &'static str {
+    match harness {
+        "codex" => "fixture-astra",
+        "claude-code" => "fixture-opus",
+        _ => "fixture-open/sonnet",
+    }
 }
 
 #[async_trait::async_trait]
-impl luna_harness::Harness for FixtureCodex {
+impl luna_harness::Harness for ScriptedPeer {
     fn id(&self) -> HarnessId {
-        HarnessId::Codex
+        self.harness
     }
     fn display_name(&self) -> &str {
-        "Codex (fixture peer)"
+        self.name
     }
     fn supports_steering(&self) -> bool {
         true
@@ -163,14 +325,10 @@ impl luna_harness::Harness for FixtureCodex {
         luna_proto::SteeringMode::StepBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
-        &[
-            ReasoningLevel::Low,
-            ReasoningLevel::Medium,
-            ReasoningLevel::High,
-        ]
+        self.levels
     }
     async fn models(&self) -> Result<Vec<Model>, luna_harness::HarnessError> {
-        Ok(fixture_models())
+        Ok(self.models.clone())
     }
     async fn run(
         &self,
@@ -182,11 +340,11 @@ impl luna_harness::Harness for FixtureCodex {
     > {
         let session = format!("fixture-session-{}", uuid::Uuid::new_v4().simple());
         let mut script = vec![AgentEvent::SessionStarted {
-            harness: HarnessId::Codex,
+            harness: self.harness,
             model: request
                 .model
                 .clone()
-                .unwrap_or_else(|| "fixture-luna".into()),
+                .unwrap_or_else(|| self.models[0].id.clone()),
             tools: Vec::new(),
             cwd: request.cwd.clone(),
             session_id: session.clone(),
@@ -423,6 +581,45 @@ async fn type_text(window: Window, cx: &mut AsyncApp, text: &str) -> anyhow::Res
         .collect();
     let combos: Vec<&str> = combos.iter().map(String::as_str).collect();
     keys(window, cx, &combos).await
+}
+
+/// Make AppKit ask for the window's accessibility children, which turns on
+/// GPUI's AccessKit tree for every later frame.
+#[cfg(target_os = "macos")]
+fn activate_accessibility(window: &gpui::Window) -> anyhow::Result<()> {
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow!("window handle unavailable: {error}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        bail!("fixture window is not an AppKit window");
+    };
+    let view = appkit.ns_view.as_ptr().cast::<AnyObject>();
+    // SAFETY: the view belongs to this live window on the main thread; each
+    // returned pointer is checked before it is messaged.
+    let ns_window: *mut AnyObject = unsafe { objc2::msg_send![view, window] };
+    ensure!(!ns_window.is_null(), "fixture view has no NSWindow");
+    let content: *mut AnyObject = unsafe { objc2::msg_send![ns_window, contentView] };
+    ensure!(!content.is_null(), "fixture NSWindow has no content view");
+    let _children: *mut AnyObject = unsafe { objc2::msg_send![content, accessibilityChildren] };
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_accessibility(_: &gpui::Window) -> anyhow::Result<()> {
+    bail!("the duplicate-id check needs the macOS accessibility tree")
+}
+
+/// Turn the accessibility tree on and confirm GPUI builds it.
+fn arm_a11y(window: Window, cx: &mut AsyncApp) -> anyhow::Result<bool> {
+    gpui::AnyWindowHandle::from(window)
+        .update(cx, |_, window, _| activate_accessibility(window))??;
+    let tree = gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window.draw(cx).clear();
+        window.debug_a11y_tree_json()
+    })?;
+    Ok(tree.is_some())
 }
 
 fn surfaces(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
@@ -1242,6 +1439,16 @@ async fn scenario(
         json!(route(window, cx)?),
         route(window, cx)? == "page:board",
     )?;
+    // The accessibility tree is built every frame from here on, so a debug
+    // build panics on any duplicate element-derived node id (the panic hook
+    // records it and exits nonzero).
+    let armed = arm_a11y(window, cx)?;
+    run.check(
+        "a11y-duplicate-id-check-armed",
+        json!({ "accessKitTree": true, "debugAssertions": true }),
+        json!({ "accessKitTree": armed, "debugAssertions": cfg!(debug_assertions) }),
+        armed && cfg!(debug_assertions),
+    )?;
     let chats_before = chat_count(env)?;
     let options: BoardExecutionOptions = rpc(
         env,
@@ -1420,8 +1627,11 @@ async fn scenario(
         .unwrap_or_default();
     let mut shown = chips_with(&rb, "manual-impl-model:");
     shown.sort();
+    // One chip per catalog model id (a model listed twice is one choice).
+    let mut seen_models = std::collections::HashSet::new();
     let mut expected: Vec<String> = catalog
         .iter()
+        .filter(|model| seen_models.insert(model.id.clone()))
         .take(12)
         .map(|model| format!("manual-impl-model:{}", model.id))
         .collect();
@@ -1664,6 +1874,72 @@ async fn scenario(
         detail_of(&rb)["sendUpdateOffered"] == false && rect(&rb, "detail-send-update").is_none(),
     )?;
     run.capture(window, cx, "d05-detail")?;
+
+    // 3b. Changing settings re-renders every catalog row: switching harness
+    //     Claude → Codex → OpenCode and back in both profiles, with each
+    //     harness's option-bearing model selected, never paints two controls
+    //     with one element id (the a11y tree rejects duplicates).
+    click(window, cx, "detail-settings-edit").await?;
+    wait_for(window, cx, "the settings editor", |rb| {
+        state_of(rb)["edits"]["settings"]["settings"]["options"].is_object()
+    })
+    .await?;
+    click(window, cx, "detail-review-mode-custom").await?;
+    let mut visits = Vec::new();
+    for key in ["claude-code", "codex", "opencode", "claude-code", "codex"] {
+        for which in ["impl", "review"] {
+            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
+            let rb = surfaces(window, cx)?;
+            let show_all = format!("detail-{which}-model-show-all");
+            if rect(&rb, &show_all).is_some() {
+                click(window, cx, &show_all).await?;
+            }
+            click(
+                window,
+                cx,
+                &format!("detail-{which}-model:{}", model_with_options(key)),
+            )
+            .await?;
+            // Two full frames with the tree built.
+            draw(window, cx)?;
+            draw(window, cx)?;
+        }
+        let rb = surfaces(window, cx)?;
+        visits.push(json!({
+            "harness": key,
+            "implModels": chips_with(&rb, "detail-impl-model:").len(),
+            "implOptions": chips_with(&rb, "detail-impl-option"),
+            "reviewOptions": chips_with(&rb, "detail-review-option").len(),
+            "reasoning": chips_with(&rb, "detail-impl-reasoning:"),
+        }));
+    }
+    let rb = surfaces(window, cx)?;
+    run.keep("harness-switch", &rb);
+    let options_shown = chips_with(&rb, "detail-impl-option");
+    let still_armed = arm_a11y(window, cx)?;
+    run.check(
+        "harness-switch-without-duplicate-ids",
+        json!({
+            "visits": 5,
+            "a11yTree": true,
+            "codexTier": ["detail-impl-option-default:serviceTier", "detail-impl-option:serviceTier=default"],
+        }),
+        json!({ "visits": visits, "a11yTree": still_armed, "codexOptions": options_shown }),
+        visits.len() == 5
+            && still_armed
+            && options_shown
+                .iter()
+                .any(|id| id == "detail-impl-option-default:serviceTier")
+            && options_shown
+                .iter()
+                .any(|id| id == "detail-impl-option:serviceTier=default"),
+    )?;
+    run.capture(window, cx, "d05b-harness-switch")?;
+    click(window, cx, "detail-settings-cancel").await?;
+    wait_for(window, cx, "the settings editor to close", |rb| {
+        state_of(rb)["edits"]["settings"].is_null()
+    })
+    .await?;
 
     // 4. Rename through the engine; Enter submits.
     let before = read_ticket(env, &manual_id).await?.view.item.revision;
@@ -2094,6 +2370,7 @@ async fn scenario(
     let boot = env.boot.clone();
     let narrow = cx.update(|cx| open_shell(cx, state, boot, NARROW))?;
     settle(cx, 600).await;
+    arm_a11y(narrow, cx)?;
     narrow.update(cx, |shell, _, cx| shell.fixture_board_detail_open_board(cx))?;
     for _ in 0..50 {
         if route(narrow, cx)? == "page:board"
@@ -2221,6 +2498,15 @@ fn main() -> anyhow::Result<()> {
     ] {
         let _ = std::fs::remove_file(output.join(stale));
     }
+    // A panic anywhere (a debug a11y duplicate-id assertion in a frame) is a
+    // failed run: record it and exit nonzero instead of unwinding into GPUI.
+    let panic_dir = output.clone();
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = std::fs::write(panic_dir.join("failure.txt"), format!("panic: {info}\n"));
+        default_hook(info);
+        std::process::exit(1);
+    }));
     let root = tempfile::tempdir()?;
     let ui_data = root.path().join("ui");
     let engine_data = root.path().join("engine");
@@ -2248,7 +2534,9 @@ fn main() -> anyhow::Result<()> {
             },
         ],
     }));
-    registry.register(Arc::new(FixtureCodex));
+    registry.register(Arc::new(claude_peer()));
+    registry.register(Arc::new(codex_peer()));
+    registry.register(Arc::new(opencode_peer()));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
             EngineProfile::development(

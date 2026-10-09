@@ -359,6 +359,8 @@ pub struct BoardSurfaces {
     probe: BoardProbe,
     surface: Option<BoardSurface>,
     focus: FocusHandle,
+    /// Give the keyboard back to the open surface on the next frame.
+    refocus: bool,
     _surface: Vec<Subscription>,
 }
 
@@ -372,7 +374,28 @@ impl BoardSurfaces {
             probe: BoardProbe::default(),
             surface: None,
             focus: cx.focus_handle(),
+            refocus: false,
             _surface: Vec::new(),
+        }
+    }
+
+    /// An overlay above the drawer (A7's writeback dialog or issue picker)
+    /// closed and took the focused element with it: return the keyboard to
+    /// the open surface so Escape and Tab reach it again.
+    pub fn restore_focus(&mut self, cx: &mut Context<Self>) {
+        if self.surface.is_some() {
+            self.refocus = true;
+            cx.notify();
+        }
+    }
+
+    /// The element that owns the keyboard for the open surface.
+    fn surface_focus(&self, cx: &App) -> FocusHandle {
+        match &self.surface {
+            Some(BoardSurface::Detail(detail)) => detail.read(cx).focus.clone(),
+            Some(BoardSurface::Chooser(chooser)) => chooser.read(cx).focus_handle(),
+            Some(BoardSurface::Manual(form)) => form.read(cx).title_focus(cx),
+            None => self.focus.clone(),
         }
     }
 
@@ -567,8 +590,12 @@ impl BoardSurfaces {
 }
 
 impl Render for BoardSurfaces {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.probe.clear();
+        if std::mem::take(&mut self.refocus) && self.surface.is_some() {
+            let focus = self.surface_focus(cx);
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
         let Some(surface) = &self.surface else {
             return div().id("board-overlay-closed").into_any_element();
         };
@@ -3067,6 +3094,15 @@ impl Render for BoardDetail {
 // ---------------------------------------------------------------------------
 
 impl Shell {
+    /// After an overlay above the Board drawer closes (A7's writeback dialog
+    /// or issue picker), give the keyboard back to the open drawer.
+    pub(in crate::shell) fn board_restore_drawer_focus(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = &self.board_page {
+            let surfaces = page.read(cx).surfaces().clone();
+            surfaces.update(cx, |surfaces, cx| surfaces.restore_focus(cx));
+        }
+    }
+
     /// Route a Board surface request to the existing app surfaces: Go to
     /// chat (A10's `board_open_navigation`), the existing attention UI, A6's
     /// conversation, and A7's GitHub picker and writeback dialog.
