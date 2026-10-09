@@ -1,0 +1,297 @@
+Window: "T3 Code (Alpha)", App: T3 Code (Alpha).
+0 standard window T3 Code (Alpha), Secondary Actions: Raise
+	1 container T3 Code (Alpha)
+		2 container
+			3 HTML content T3 Code (Alpha), URL: t3code://app/#/settings/general
+				4 container
+					5 container Settings
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search settings, Placeholder: Search
+							9 text /
+							10 content list
+								11 button General
+								12 button Appearance
+								13 button Keybindings
+								14 button SnapShots
+								15 button Providers
+								16 button Integrations
+								17 button Source Control
+								18 button Storage
+								19 button Connections
+								20 button Archive
+						21 content list
+							22 button Sign in to T3 Connect
+						23 content list
+							24 button Back
+							25 button Update 0.0.45 ready to download
+						26 button Resize Sidebar
+					27 container
+						28 container Settings breadcrumb
+							29 content list
+								30 text Settings
+								31 text General
+						32 button Restore device defaults
+						33 text Applying settings for
+						34 pop up button Project scope: All projects
+						35 text across
+						36 pop up button Environment scope: All environments
+						37 container
+							38 heading New threads, Value: 2
+								39 text New threads
+							40 container
+								41 heading Model, Value: 3
+									42 text Model
+								43 pop up button Built-in default. Show where this value comes from
+								44 text Default model for new threads. Projects can override it.
+								45 text Automatic
+								46 pop up button GPT-6-Astra
+									47 text GPT-6-Astra
+								48 pop up button Medium
+							49 container
+								50 heading Permissions, Value: 3
+									51 text Permissions
+								52 pop up button Built-in default. Show where this value comes from
+								53 text Default permissions for new threads. Projects can override them.
+								54 combo box (settable) Description: Default permissions, Value: Full access
+									55 text Full access
+							56 container
+								57 heading Workspace, Value: 3
+									58 text Workspace
+								59 pop up button Built-in default. Show where this value comes from
+								60 text Where new threads start. Projects and their t3.json can override it.
+								61 combo box (settable) Description: Default workspace, Value: Current checkout
+									62 text Current checkout
+							63 container
+								64 heading Submodules, Value: 3
+									65 text Submodules
+								66 pop up button Built-in default. Show where this value comes from
+								67 text How new worktrees populate git submodules. Projects and their t3.json can override it.
+								68 combo box (settable) Description: Worktree submodules, Value: Recursive
+									69 text Recursive
+						70 container
+							71 heading Organization, Value: 2
+								72 text Organization
+							73 container
+								74 heading Project grouping, Value: 3
+									75 text Project grouping
+								76 text Combine matching repositories across environments.
+								77 switch Description: Project grouping, Value: on
+							78 container
+								79 heading Auto-settle merged threads, Value: 3
+									80 text Auto-settle merged threads
+								81 pop up button Built-in default. Show where this value comes from
+								82 text Settle a thread when its pull request merges. Closed pull requests still settle automatically.
+								83 switch Description: Auto-settle merged threads, Value: on
+							84 container
+								85 heading Auto-settle inactive threads, Value: 3
+									86 text Auto-settle inactive threads
+								87 pop up button Built-in default. Show where this value comes from
+								88 text Sidebar threads with no activity for this long settle automatically.
+								89 switch Description: Auto-settle inactive threads, Value: on
+							90 heading Days of inactivity before auto-settle, Value: 3
+								91 text Days of inactivity before auto-settle
+							92 pop up button Built-in default. Show where this value comes from
+							93 text Any new activity un-settles a thread automatically.
+							94 stepper (settable, float) Description: Days of inactivity before auto-settle, Value: 3
+						95 container
+							96 heading Behavior, Value: 2
+								97 text Behavior
+							98 container
+								99 heading Thread notifications, Value: 3
+									100 text Thread notifications
+								101 text System alerts when a thread finishes, fails, or needs input or approval. Applies to this device while T3 Code is open.
+								102 combo box (settable) Description: Thread notifications, Value: Off
+									103 text Off
+							104 container
+								105 heading In-app notifications, Value: 3
+									106 text In-app notifications
+								107 text Show a toast when another thread finishes, fails, or needs input or approval while this app has focus.
+								108 switch Description: In-app notifications, Value: off
+							109 container
+								110 heading Time format, Value: 3
+									111 text Time format
+								112 button Reset time format to default
+								113 text System default follows your browser or OS clock preference.
+								114 combo box (settable) Description: Timestamp format, Value: 24-hour
+									115 text 24-hour
+							116 container
+								117 heading Response streaming, Value: 3
+									118 text Response streaming
+								119 pop up button Built-in default. Show where this value comes from
+								120 text Each paragraph or code block appears as soon as it is complete.
+								121 combo box (settable) Description: Response streaming, Value: Show finished paragraphs
+									122 text Show finished paragraphs
+							123 container
+								124 heading Hide whitespace changes, Value: 3
+									125 text Hide whitespace changes
+								126 text Set whether the diff panel ignores whitespace-only edits by default.
+								127 switch Description: Hide whitespace changes by default, Value: on
+							128 container
+								129 heading Default diff file state, Value: 3
+									130 text Default diff file state
+								131 button Reset default diff file state to default
+								132 text Start with files expanded or collapsed when opening diffs or a pull request's Code tab.
+								133 combo box (settable) Description: Default diff file state, Value: Expanded
+									134 text Expanded
+							135 container
+								136 heading Diff layout, Value: 3
+									137 text Diff layout
+								138 text Show diffs stacked or side by side. The toggle in the diff toolbar changes this too.
+								139 combo box (settable) Description: Diff layout, Value: Stacked
+									140 text Stacked
+							141 container
+								142 heading Proactive panels, Value: 3
+									143 text Proactive panels
+								144 text Open linked pull requests first. Otherwise, open the working tree diff for changes to at least 3 files or 50 lines.
+								145 switch Description: Proactive panels, Value: off
+							146 container
+								147 heading Show skills in slash menu, Value: 3
+									148 text Show skills in slash menu
+								149 text Also include skills in the / command menu. Skills always appear when you type $.
+								150 switch Description: Show skills in slash menu, Value: on
+							151 container
+								152 heading Rich text composer, Value: 3
+									153 text Rich text composer
+								154 text Show formatted Markdown as you type.
+								155 switch Description: Rich text composer, Value: on
+							156 container
+								157 heading Collapse composer on scroll, Value: 3
+									158 text Collapse composer on scroll
+								159 text Rest the composer of an existing thread into a single line when you scroll the conversation. Focus the composer or start typing to expand it again.
+								160 switch Description: Collapse composer on scroll, Value: on
+							161 container
+								162 heading Send shortcut, Value: 3
+									163 text Send shortcut
+								164 text Choose when Enter sends a prompt or inserts a new line
+								165 combo box (settable) Description: Send shortcut, Value: Enter
+									166 text Enter
+							167 container
+								168 heading Follow-up behavior, Value: 3
+									169 text Follow-up behavior
+								170 text Queue follow-ups while the agent runs or steer the current run. Press ⌘ + Enter to do the opposite for one message.
+								171 combo box (settable) Description: Follow-up behavior, Value: Queue
+									172 text Queue
+							173 container
+								174 heading Provider update checks, Value: 3
+									175 text Provider update checks
+								176 pop up button Built-in default. Show where this value comes from
+								177 text Check installed provider CLIs for newer available versions.
+								178 switch Description: Check provider versions, Value: on
+							179 container
+								180 heading Continue threads after restarts, Value: 3
+									181 text Continue threads after restarts
+								182 pop up button Built-in default. Show where this value comes from
+								183 text Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments. Update older servers first.
+								184 switch Description: Continue threads after restarts, Value: off
+							185 container
+								186 heading Background activity Background policy details, Value: 3
+									187 text Background activity
+									188 button Background policy details
+								189 pop up button Built-in default. Show where this value comes from
+								190 text Pauses probes for idle clients, locked hosts, or low power mode.
+								191 combo box (settable) Description: Background activity profile, Value: Balanced
+									192 text Balanced
+						193 container
+							194 heading Projects & threads, Value: 2
+								195 text Projects & threads
+							196 container
+								197 heading Start from origin, Value: 3
+									198 text Start from origin
+								199 pop up button Built-in default. Show where this value comes from
+								200 text Creates the worktree from the latest matching branch on origin instead of your local branch.
+								201 switch Description: Start new worktrees from origin by default, Value: on
+							202 container
+								203 heading Add project starts in, Value: 3
+									204 text Add project starts in
+								205 pop up button Built-in default. Show where this value comes from
+								206 text Leave empty to use "~/" when the Add Project browser opens.
+								207 text field (settable) Description: Add project base directory, Placeholder: ~/
+						208 container
+							209 heading Confirmations, Value: 2
+								210 text Confirmations
+							211 container
+								212 heading Unpin confirmation, Value: 3
+									213 text Unpin confirmation
+								214 button Reset unpin confirmation to default
+								215 text Ask before unpinning a thread from the pinned section.
+								216 switch Description: Confirm thread unpinning, Value: on
+							217 container
+								218 heading Archive confirmation, Value: 3
+									219 text Archive confirmation
+								220 button Reset archive confirmation to default
+								221 text Require a second click on the inline archive action before a thread is archived.
+								222 switch Description: Confirm thread archiving, Value: on
+							223 container
+								224 heading Delete confirmation, Value: 3
+									225 text Delete confirmation
+								226 text Ask before deleting a thread and its chat history.
+								227 switch Description: Confirm thread deletion, Value: on
+							228 container
+								229 heading Quit shortcut, Value: 3
+									230 text Quit shortcut
+								231 text Hold mode also quits on two quick presses.
+								232 combo box (settable) Description: Quit shortcut behavior, Value: Hold
+									233 text Hold
+						234 container
+							235 heading Text generation, Value: 2
+								236 text Text generation
+							237 container
+								238 heading Text generation model, Value: 3
+									239 text Text generation model
+								240 pop up button Built-in default. Show where this value comes from
+								241 text Used for thread titles and other generated text on connected devices with this provider. Source control can override it.
+								242 pop up button GPT-6-Luna
+									243 text GPT-6-Luna
+								244 pop up button Low
+						245 container
+							246 heading About, Value: 2
+								247 text About
+							248 heading Version 0.0.44, Value: 3
+								249 text Version
+								250 text 0.0.44
+							251 text Update available.
+							252 button Download
+							253 heading Update track, Value: 3
+								254 text Update track
+							255 text Use stable releases or nightly builds. Switch back anytime.
+							256 combo box (settable) Description: Update track, Value: Stable
+								257 text Stable
+						258 container
+							259 heading Diagnostics, Value: 2
+								260 text Diagnostics
+							261 container
+								262 heading Diagnostics, Value: 3
+									263 text Diagnostics
+								264 text Inspect processes, resource use, and logs on this environment.
+								265 link Description: View diagnostics, Value: t3code://app/#/settings/diagnostics?machine=aec26b09-8c9c-4898-9d9d-e3be39a9f1c3
+							266 container
+								267 heading Open source licenses, Value: 3
+									268 text Open source licenses
+								269 text Notices for dependencies, assets, and optional tools used by T3 Code.
+								270 link Description: View licenses, Value: t3code://app/#/settings/open-source-licenses
+						271 button Legacy features
+							272 heading Legacy features, Value: 2
+								273 text Legacy features
+					274 toggle button Description: Toggle main sidebar, Value: 1
+					275 container Notifications
+					276 container Notifications
+						277 container Update Available: Codex v0.160.0
+							278 button Dismiss notification
+							279 heading Update Available: Codex v0.160.0, Value: 2
+								280 text Update Available: Codex v0.160.0
+							281 text Install the update now or review provider settings.
+							282 button Settings
+							283 button Update
+	284 close button
+	285 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	286 minimize button
+287 menu bar
+	288 T3 Code (Alpha)
+	289 File
+	290 Edit
+	291 View
+	292 Window
+	293 Help
+
+The focused UI element is 11 button General

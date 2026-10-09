@@ -1,0 +1,167 @@
+Window: "Settings", App: bb.
+0 standard window Settings, Secondary Actions: Raise
+	1 container Settings
+		2 container
+			3 HTML content Settings, URL: 127.0.0.1:38886/settings/files
+				4 container
+					5 container
+						6 button Go back
+						7 button (disabled) Go forward
+					8 link Description: Back to app, Value: 127.0.0.1:38886/
+					9 text Settings
+					10 link Description: General, Value: 127.0.0.1:38886/settings
+					11 link Description: Providers, Value: 127.0.0.1:38886/settings/providers
+					12 link Description: AI services, Value: 127.0.0.1:38886/settings/ai-services
+					13 link Description: Appearance, Value: 127.0.0.1:38886/settings/appearance
+					14 link Description: Keyboard, Value: 127.0.0.1:38886/settings/keyboard
+					15 link Description: Browser, Value: 127.0.0.1:38886/settings/browser
+					16 link Description: Files, Value: 127.0.0.1:38886/settings/files
+					17 link Description: Projects, Value: 127.0.0.1:38886/settings/projects
+					18 link Description: Machines, Value: 127.0.0.1:38886/settings/machines
+					19 link Description: Mobile, Value: 127.0.0.1:38886/settings/mobile
+					20 link Description: Environment variables, Value: 127.0.0.1:38886/settings/environment-variables
+					21 link Description: Updates, Value: 127.0.0.1:38886/settings/updates
+					22 link Description: Installed plugins, Value: 127.0.0.1:38886/settings/plugins
+					23 link Description: Plugin marketplaces, Value: 127.0.0.1:38886/settings/marketplaces
+					24 link Description: Experiments, Value: 127.0.0.1:38886/settings/experiments
+					25 link Description: Community, Value: 127.0.0.1:38886/settings/community
+					26 text Plugins
+					27 link Description: ACP providers, Value: 127.0.0.1:38886/settings/plugins/provider-acp
+					28 link Description: bb account, Value: 127.0.0.1:38886/settings/plugins/bb-account
+					29 link Description: bb connect, Value: 127.0.0.1:38886/settings/plugins/connect
+					30 link Description: BB guide, Value: 127.0.0.1:38886/settings/plugins/bb-guide
+					31 link Description: Claude Code provider, Value: 127.0.0.1:38886/settings/plugins/provider-claude-code
+					32 link Description: Codex provider, Value: 127.0.0.1:38886/settings/plugins/provider-codex
+					33 link Description: Concurrency limit, Value: 127.0.0.1:38886/settings/plugins/concurrency-limit
+					34 link Description: Custom instructions, Value: 127.0.0.1:38886/settings/plugins/custom-instructions
+					35 link Description: Keep Awake, Value: 127.0.0.1:38886/settings/plugins/keep-awake
+					36 link Description: Provider retry, Value: 127.0.0.1:38886/settings/plugins/provider-retry
+					37 link Description: Provider usage, Value: 127.0.0.1:38886/settings/plugins/bb--provider-usage
+					38 link Description: Push notifications, Value: 127.0.0.1:38886/settings/plugins/push-notifications
+					39 text Archived
+					40 link Description: Archived threads, Value: 127.0.0.1:38886/settings/archived
+					41 container
+						42 text Settings
+						43 container
+							44 heading File Preferences, Value: 2
+								45 text File Preferences
+							46 text Directory default
+							47 pop up button Directory default
+							48 text File default
+							49 pop up button File default
+							50 container (showing 0-100 of 176 items)
+								51 heading File openers, Value: 2
+									52 text File openers
+								53 text Automatically use matching plugins, or choose a viewer for each file type. Right-click a file link for a one-off choice. .adoc files
+								54 pop up button Default opener for .adoc files
+								55 text .bash files
+								56 pop up button Default opener for .bash files
+								57 text .bat files
+								58 pop up button Default opener for .bat files
+								59 text .c files
+								60 pop up button Default opener for .c files
+								61 text .cc files
+								62 pop up button Default opener for .cc files
+								63 text .cfg files
+								64 pop up button Default opener for .cfg files
+								65 text .cjs files
+								66 pop up button Default opener for .cjs files
+								67 text .clj files
+								68 pop up button Default opener for .clj files
+								69 text .cmd files
+								70 pop up button Default opener for .cmd files
+								71 text .conf files
+								72 pop up button Default opener for .conf files
+								73 text .cpp files
+								74 pop up button Default opener for .cpp files
+								75 text .cs files
+								76 pop up button Default opener for .cs files
+								77 text .css files
+								78 pop up button Default opener for .css files
+								79 text .csv files
+								80 pop up button Default opener for .csv files
+								81 text .cts files
+								82 pop up button Default opener for .cts files
+								83 text .cxx files
+								84 pop up button Default opener for .cxx files
+								85 text .dart files
+								86 pop up button Default opener for .dart files
+								87 text .diff files
+								88 pop up button Default opener for .diff files
+								89 text .dockerfile files
+								90 pop up button Default opener for .dockerfile files
+								91 text .env files
+								92 pop up button Default opener for .env files
+								93 text .erl files
+								94 pop up button Default opener for .erl files
+								95 text .ex files
+								96 pop up button Default opener for .ex files
+								97 text .exs files
+								98 pop up button Default opener for .exs files
+								99 text .fish files
+								100 pop up button Default opener for .fish files
+								101 text .fs files
+								102 pop up button Default opener for .fs files
+								103 text .go files
+								104 pop up button Default opener for .go files
+								105 text .gql files
+								106 pop up button Default opener for .gql files
+								107 text .graphql files
+								108 pop up button Default opener for .graphql files
+								109 text .groovy files
+								110 pop up button Default opener for .groovy files
+								111 text .h files
+								112 pop up button Default opener for .h files
+								113 text .hcl files
+								114 pop up button Default opener for .hcl files
+								115 text .hh files
+								116 pop up button Default opener for .hh files
+								117 text .hpp files
+								118 pop up button Default opener for .hpp files
+								119 text .hs files
+								120 pop up button Default opener for .hs files
+								121 text .htm files
+								122 pop up button Default opener for .htm files
+								123 text .html files
+								124 pop up button Default opener for .html files
+								125 text .ini files
+								126 pop up button Default opener for .ini files
+								127 text .java files
+								128 pop up button Default opener for .java files
+								129 text .jl files
+								130 pop up button Default opener for .jl files
+								131 text .js files
+								132 pop up button Default opener for .js files
+								133 text .json files
+								134 pop up button Default opener for .json files
+								135 text .jsonc files
+								136 pop up button Default opener for .jsonc files
+								137 text .jsx files
+								138 pop up button Default opener for .jsx files
+								139 text .kt files
+								140 pop up button Default opener for .kt files
+								141 text .kts files
+								142 pop up button Default opener for .kts files
+								143 text .less files
+								144 pop up button Default opener for .less files
+								145 text .log files
+								146 pop up button Default opener for .log files
+								147 text .lua files
+								148 pop up button Default opener for .lua files
+								149 text .m files
+								150 pop up button Default opener for .m files
+					151 button Toggle sidebar (⌘ B)
+						152 image
+						153 text Toggle Sidebar
+					154 container Notifications alt+T
+	155 close button
+	156 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	157 minimize button
+158 menu bar
+	159 bb
+	160 File
+	161 Edit
+	162 View
+	163 Window
+
+The focused UI element is 16 link Description: Files, Value: 127.0.0.1:38886/settings/files

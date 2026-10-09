@@ -1,0 +1,73 @@
+Window: "Conductor", App: Conductor.
+0 standard window Conductor, Secondary Actions: Raise
+	1 scroll area
+		2 HTML content Description: Tauri + React + Typescript, URL: tauri://localhost/settings/user/advanced
+			3 container
+				4 button Back
+				5 pop up button Account menu
+				6 text field (settable) Search settings
+				7 container Search settings shortcut
+					8 text ⌘ F
+				9 text Personal
+				10 link General, Value: tauri://localhost/settings/user/general
+				11 link Account, Value: tauri://localhost/settings/user/account
+				12 link Appearance, Value: tauri://localhost/settings/user/appearance
+				13 link Default models, Value: tauri://localhost/settings/user/models
+				14 link Git, Value: tauri://localhost/settings/user/git
+				15 text Agents & environment
+				16 link Agents, Value: tauri://localhost/settings/user/providers
+				17 link Environment, Value: tauri://localhost/settings/user/environment
+				18 text Repositories
+				19 button (collapsed) luna luna, Secondary Actions: Expand
+				20 text More
+				21 link Experimental, Value: tauri://localhost/settings/user/experimental
+				22 link Advanced, Value: tauri://localhost/settings/user/advanced
+				23 button Finder icon Open settings.toml
+				24 pop up button
+				25 heading Advanced, Value: 2
+					26 text Advanced
+				27 text Conductor root directory Where Conductor stores repositories and workspaces. This should be an empty directory that you don't modify directly. Changing this removes all existing repos and workspaces from Conductor, but leaves their files on disk.
+				28 text field /Users/iulian/conductor
+				29 button Browse
+				30 text Claude Code executable path Override the bundled Claude Code executable with a custom one. Leave empty to use the bundled version (recommended).
+				31 text field (settable) /Users/iulian/.local/bin/claude
+				32 button Browse for executable
+				33 button Use system Claude Code
+				34 text Codex executable path Override the bundled Codex executable with a custom one. Leave empty to use the bundled version (recommended).
+				35 text field (settable) /opt/homebrew/bin/codex
+				36 button Browse for executable
+				37 button Use system Codex
+				38 text OpenCode executable path Override the bundled OpenCode executable with a custom one. Leave empty to use the bundled version (recommended).
+				39 text field (settable) /Users/iulian/.opencode/bin/opencode
+				40 button Browse for executable
+				41 button Use system OpenCode
+				42 text SSH private key path Use your own SSH key for cloud workspace access. Leave empty to auto-generate a key.
+				43 text field (settable) ~/.ssh/id_ed25519
+				44 button Browse for SSH key
+				45 text Remote execution MCP Let remote agents request approved one-shot commands on this Mac. Each command still requires your approval.
+				46 switch (settable, boolean) on
+				47 text Always allow local commands Run local commands from remote agents without asking. Turned on when you choose Yes always on a local command approval.
+				48 switch (settable, boolean) off
+				49 text Enable file sync in new cloud workspaces Start syncing when you open a local terminal or run a local task. Sync files can still be turned on per workspace. Syncs tracked files and untracked files that aren't gitignored. Ignoring .context doesn't stop its files from syncing, but other .gitignore rules still apply.
+				50 switch (settable, boolean) on
+				51 text Set upstream on plain git push Configure new Conductor workspaces so plain git push sets a branch upstream. Turning this off avoids writing Git worktree config, but PR info may be less reliable until branches have an upstream.
+				52 switch (settable, boolean) on
+				53 text Scrollback limit Approximate terminal output to keep.
+				54 number field (settable) 10
+					55 stepper 0
+						56 unknown
+						57 unknown
+				58 text MB
+			59 container Notifications alt+T
+	60 close button
+	61 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	62 minimize button
+63 menu bar
+	64 Conductor
+	65 File
+	66 Edit
+	67 View
+	68 Window
+	69 Help
+
+The focused UI element is 70 container

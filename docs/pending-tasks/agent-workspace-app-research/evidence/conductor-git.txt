@@ -1,0 +1,72 @@
+Window: "Conductor", App: Conductor.
+0 standard window Conductor, Secondary Actions: Raise
+	1 scroll area
+		2 HTML content Description: Tauri + React + Typescript, URL: tauri://localhost/settings/user/git
+			3 container
+				4 button Back
+				5 pop up button Account menu
+				6 text field (settable) Search settings
+				7 container Search settings shortcut
+					8 text ⌘ F
+				9 text Personal
+				10 link General, Value: tauri://localhost/settings/user/general
+				11 link Account, Value: tauri://localhost/settings/user/account
+				12 link Appearance, Value: tauri://localhost/settings/user/appearance
+				13 link Default models, Value: tauri://localhost/settings/user/models
+				14 link Git, Value: tauri://localhost/settings/user/git
+				15 text Agents & environment
+				16 link Agents, Value: tauri://localhost/settings/user/providers
+				17 link Environment, Value: tauri://localhost/settings/user/environment
+				18 text Repositories
+				19 button (collapsed) luna luna, Secondary Actions: Expand
+				20 text More
+				21 link Experimental, Value: tauri://localhost/settings/user/experimental
+				22 link Advanced, Value: tauri://localhost/settings/user/advanced
+				23 button Finder icon Open settings.toml
+				24 pop up button
+				25 heading Git, Value: 2
+					26 text Git
+				27 text Open pull requests in
+				28 combo box (collapsed, settable) Value: GitHub, Secondary Actions: Expand
+					29 text GitHub
+				30 text Branch name prefix
+				31 pop up button Setting actions
+				32 text Prefix for new workspace branch names.
+				33 (settable, unknown)
+					34 radio button GitHub username (novnski), Value: 1
+					35 text GitHub username (novnski)
+					36 radio button Custom, Value: 0
+					37 text Custom
+					38 radio button None, Value: 0
+					39 text None
+				40 text Automatically rename new branches
+				41 switch (settable, boolean) on
+				42 text Rename workspace when branch is named
+				43 switch (settable, boolean) on
+				44 text Delete branch on archive Delete the local branch when archiving a workspace. To delete the remote branch, 
+				45 link configure it on GitHub, Value: docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-the-automatic-deletion-of-branches
+				46 text .
+				47 switch (settable, boolean) off
+				48 text Archive on merge Automatically archive a workspace after merging its PR in Conductor
+				49 switch (settable, boolean) off
+				50 text Automerge Show an automerge button in the git panel when checks are pending. Requires automerge to be enabled in your GitHub repository settings. Automerge is not supported for stacked pull requests.
+				51 switch (settable, boolean) off
+				52 text Treat optional checks as blocking Hide the merge button when any check has failed, including checks GitHub considers optional.
+				53 switch (settable, boolean) off
+				54 text Set upstream on plain git push Configure new Conductor workspaces so plain git push sets a branch upstream. Turning this off avoids writing Git worktree config, but PR info may be less reliable until branches have an upstream.
+				55 switch (settable, boolean) on
+				56 text Use GitHub stacked PRs Instruct agents that they can use gh stack for PR stacking.
+				57 switch (settable, boolean) on
+			58 container Notifications alt+T
+	59 close button
+	60 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	61 minimize button
+62 menu bar
+	63 Conductor
+	64 File
+	65 Edit
+	66 View
+	67 Window
+	68 Help
+
+The focused UI element is 69 container

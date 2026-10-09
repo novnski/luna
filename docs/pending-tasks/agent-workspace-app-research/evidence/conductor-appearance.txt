@@ -1,0 +1,79 @@
+Window: "Conductor", App: Conductor.
+0 standard window Conductor, Secondary Actions: Raise
+	1 scroll area
+		2 HTML content Description: Tauri + React + Typescript, URL: tauri://localhost/settings/user/appearance
+			3 container
+				4 button Back
+				5 pop up button Account menu
+				6 text field (settable) Search settings
+				7 container Search settings shortcut
+					8 text ⌘ F
+				9 text Personal
+				10 link General, Value: tauri://localhost/settings/user/general
+				11 link Account, Value: tauri://localhost/settings/user/account
+				12 link Appearance, Value: tauri://localhost/settings/user/appearance
+				13 link Default models, Value: tauri://localhost/settings/user/models
+				14 link Git, Value: tauri://localhost/settings/user/git
+				15 text Agents & environment
+				16 link Agents, Value: tauri://localhost/settings/user/providers
+				17 link Environment, Value: tauri://localhost/settings/user/environment
+				18 text Repositories
+				19 button (collapsed) luna luna, Secondary Actions: Expand
+				20 text More
+				21 link Experimental, Value: tauri://localhost/settings/user/experimental
+				22 link Advanced, Value: tauri://localhost/settings/user/advanced
+				23 button Finder icon Open settings.toml
+				24 pop up button
+				25 heading Appearance, Value: 2
+					26 text Appearance
+				27 text Theme Toggle with  ⌘ ⌥ T
+				28 combo box (collapsed, settable) Value: Dark, Secondary Actions: Expand
+					29 text Dark
+				30 text Low-contrast dark mode
+				31 switch (settable, boolean) off
+				32 text App zoom Adjust with ⌘- (zoom out) or ⌘+ (zoom in)
+				33 combo box (collapsed, settable) Value: 100%, Secondary Actions: Expand
+					34 text 100%
+				35 text Colored sidebar diffs Always show line change colors in the sidebar, even for unselected workspaces.
+				36 switch (settable, boolean) off
+				37 text Accessible colors Theme optimized for color vision differences.
+				38 combo box (collapsed, settable) Value: Default, Secondary Actions: Expand
+					39 text Default
+				40 text Code theme Syntax highlighting colors for code blocks and editors.
+				41 combo box (collapsed, settable) Value: Default, Secondary Actions: Expand
+					42 text Default
+				43 text // Fetch user data
+async function getUser(id: number): Promise<User> {
+    const response = await fetch(`/api/users/${id}`);
+    const data = response.json();
+    return { name: data.name, active: true };
+}
+				44 text Mono Font Font used for code and diffs
+				45 combo box (collapsed, settable) Value: Geist Mono, Secondary Actions: Expand
+					46 text Geist Mono
+				47 text // Preview const greeting = 'Hello, World!'; function sum(a, b) { return a + b; } Code ligatures Use font ligatures in file editors and diffs.
+				48 switch (settable, boolean) on
+				49 text Markdown Style Rendering style for markdown files
+				50 combo box (collapsed, settable) Value: Default, Secondary Actions: Expand
+					51 text Default
+				52 heading Add New Button, Value: 1
+					53 text Add New Button
+				54 text Believe it or not, this plan will add a new button to the interface. Terminal Font
+				55 text field (settable) Leave empty for default
+				56 text Enter font name exactly as installed, e.g. Arial, Papyrus, FiraCode Nerd Font Terminal Font Size 12px
+				57 slider (settable, float) 12
+					58 value indicator 12
+				59 text ~/project main ±3 ?2 ❯ npm test ✓ └── ▶ All tests passed!
+			60 container Notifications alt+T
+	61 close button
+	62 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	63 minimize button
+64 menu bar
+	65 Conductor
+	66 File
+	67 Edit
+	68 View
+	69 Window
+	70 Help
+
+The focused UI element is 71 container

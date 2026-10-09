@@ -1,0 +1,97 @@
+Window: "T3 Code (Alpha)", App: T3 Code (Alpha).
+0 standard window T3 Code (Alpha), Secondary Actions: Raise
+	1 container T3 Code (Alpha)
+		2 container
+			3 HTML content T3 Code (Alpha), URL: t3code://app/#/settings/source-control
+				4 container
+					5 container Settings
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search settings, Placeholder: Search
+							9 text /
+							10 content list
+								11 button General
+								12 button Appearance
+								13 button Keybindings
+								14 button SnapShots
+								15 button Providers
+								16 button Integrations
+								17 button Source Control
+								18 button Storage
+								19 button Connections
+								20 button Archive
+						21 content list
+							22 button Sign in to T3 Connect
+						23 content list
+							24 button Back
+							25 button Update 0.0.45 ready to download
+						26 button Resize Sidebar
+					27 container
+						28 container Settings breadcrumb
+							29 content list
+								30 text Settings
+								31 text Source Control
+						32 text Applying settings for
+						33 pop up button Project scope: All projects
+						34 text across
+						35 pop up button Environment scope: All environments
+						36 heading Repositories, Value: 2
+							37 text Repositories
+						38 container
+							39 heading Automatically pull, Value: 3
+								40 text Automatically pull
+							41 pop up button Built-in default. Show where this value comes from
+							42 text Keeps the default branch current when the checkout has no local changes or commits. Projects can override it.
+							43 switch Description: Default automatic pull, Value: off
+							44 heading Default merge method, Value: 3
+								45 text Default merge method
+							46 pop up button Built-in default. Show where this value comes from
+							47 text Pull requests start with this method. Last selected reuses whatever you chose most recently on this device.
+							48 combo box (settable) Description: Default pull request merge method, Value: Last selected
+								49 text Last selected
+						50 heading Version Control, Value: 2
+							51 text Version Control
+						52 button (disabled) Rescan server environment
+						53 heading Source Control Providers, Value: 2
+							54 text Source Control Providers
+						55 heading Text generation, Value: 2
+							56 text Text generation
+						57 container
+							58 heading Source control writing style, Value: 3
+								59 text Source control writing style
+							60 pop up button Built-in default. Show where this value comes from
+							61 text In each project, matches recent change descriptions and change request titles.
+							62 combo box (settable) Description: Source control writing style, Value: Repository conventions
+								63 text Repository conventions
+							64 heading Follow change request templates, Value: 3
+								65 text Follow change request templates
+							66 pop up button Built-in default. Show where this value comes from
+							67 text Use the repository's template for change request descriptions when available.
+							68 switch Description: Follow change request templates, Value: on
+							69 heading Source control writer model, Value: 3
+								70 text Source control writer model
+							71 pop up button Built-in default. Show where this value comes from
+							72 text Model for source control text and branch or bookmark names. Off uses the environment's text generation model.
+							73 switch Description: Use a separate source control writer model, Value: off
+					74 toggle button Description: Toggle main sidebar, Value: 1
+					75 container Notifications
+					76 container Notifications
+						77 container Update Available: Codex v0.160.0
+							78 button Dismiss notification
+							79 heading Update Available: Codex v0.160.0, Value: 2
+								80 text Update Available: Codex v0.160.0
+							81 text Install the update now or review provider settings.
+							82 button Settings
+							83 button Update
+	84 close button
+	85 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	86 minimize button
+87 menu bar
+	88 T3 Code (Alpha)
+	89 File
+	90 Edit
+	91 View
+	92 Window
+	93 Help
+
+The focused UI element is 17 button Source Control

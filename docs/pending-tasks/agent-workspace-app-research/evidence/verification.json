@@ -1,0 +1,458 @@
+{
+  "research_date": "2026-10-04 Europe/Bucharest",
+  "verified_at_utc": "2026-10-03T22:06:53.832639+00:00",
+  "luna_revision": "455caac00993e1a9b9f48785604c349130bbbbb2",
+  "source_link_count": 28,
+  "local_link_count": 38,
+  "errors": [],
+  "pinned_sources": [
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "README.md",
+      "line": 15
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "apps/app/src/components/settings/plugin-settings-entries.ts",
+      "line": 26
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "apps/app/src/views/thread-detail/SplitThreadArea.tsx",
+      "line": 273
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "apps/app/src/components/settings/SplitDimmingSetting.tsx",
+      "line": 8
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/side-chat/PLUGIN_OVERVIEW.md",
+      "line": 1
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "apps/app/src/views/thread-detail/useSendSideChatMessageToMain.ts",
+      "line": 19
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/workflows/PLUGIN_OVERVIEW.md",
+      "line": 1
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/workflows/src/runtime.ts",
+      "line": 575
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/workflows/src/cache.ts",
+      "line": 170
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/workflows/src/settings.ts",
+      "line": 74
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/concurrency-limit/PLUGIN_OVERVIEW.md",
+      "line": 1
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "plugins/provider-retry/PLUGIN_OVERVIEW.md",
+      "line": 1
+    },
+    {
+      "repository": "get-bb/bb",
+      "revision": "76a1ebcaf5fa038d8638daaad7aad3dafe2ae709",
+      "path": "apps/app/src/components/settings/settings-sections.ts",
+      "line": 5
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/settingsSearch.ts",
+      "line": 29
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/SettingInheritance.tsx",
+      "line": 87
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/useScopedSettings.ts",
+      "line": 38
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "packages/shared/src/projectSettings.ts",
+      "line": 18
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/ChatView.logic.ts",
+      "line": 117
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/ChatView.tsx",
+      "line": 5256
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "line": 2680
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/server/src/orchestration-v2/ThreadSettlementService.ts",
+      "line": 133
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/server/src/checkpointing/CheckpointStore.ts",
+      "line": 1
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/chat/QueuedRunsControl.tsx",
+      "line": 48
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/chat/ProposedPlanCard.tsx",
+      "line": 37
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/chat/useComposerFocusState.ts",
+      "line": 3
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/ThemeWireframe.tsx",
+      "line": 4
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/StorageSettings.tsx",
+      "line": 133
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "revision": "a21702d0e58ad20263dc965d84472bb6d7eb38c8",
+      "path": "apps/web/src/components/settings/SourceControlWritingSettings.tsx",
+      "line": 134
+    }
+  ],
+  "evidence": [
+    {
+      "path": "evidence/bb-appearance.png",
+      "bytes": 351361,
+      "sha256": "a363db3e1b89320d6dc502de1e22ad431587749e576e05c58822f2d49c52550b"
+    },
+    {
+      "path": "evidence/bb-appearance.txt",
+      "bytes": 5091,
+      "sha256": "3fa67cdb485e684d12e0ea8f3393b9427d3001dc00a65bc15e6b8a24ec530e4c"
+    },
+    {
+      "path": "evidence/bb-files.png",
+      "bytes": 386709,
+      "sha256": "1750df9704b964eeaf2bfeefa0ab69e47e91d37efd4abd8d358b809b81cf8eef"
+    },
+    {
+      "path": "evidence/bb-files.txt",
+      "bytes": 7968,
+      "sha256": "bdb3cb5e55d9cebdca257cefac735861b203e0a7229c6d99e112e1cc6fee592e"
+    },
+    {
+      "path": "evidence/bb-home.png",
+      "bytes": 181419,
+      "sha256": "ab9686fb3c65b0468a8619858da2e5b578d92511fce69529990046b789823f4b"
+    },
+    {
+      "path": "evidence/bb-settings.png",
+      "bytes": 403065,
+      "sha256": "b2ac8eae81f24882b7d49c65074d145a203e52e6117cf0ade21a8a1931b5ceba"
+    },
+    {
+      "path": "evidence/bb-settings.txt",
+      "bytes": 6294,
+      "sha256": "3147f70600c6703d1d015f63ce43cdd9d6b5a782cdc0badfe856f673a8ad3da7"
+    },
+    {
+      "path": "evidence/conductor-advanced.png",
+      "bytes": 536458,
+      "sha256": "f9fd7df66eb82f211683fcf325d61ecfc5a38769d5981beebd951d82354aaa82"
+    },
+    {
+      "path": "evidence/conductor-advanced.txt",
+      "bytes": 4143,
+      "sha256": "11bdc3599e90785177921ccd05e5d60481ad4bad8f73e9fc5788c1d65d252f4f"
+    },
+    {
+      "path": "evidence/conductor-appearance.png",
+      "bytes": 371974,
+      "sha256": "3ec8267b0b0689d800531574eba15d93fbac5a896758cc5771c47fc053c0445d"
+    },
+    {
+      "path": "evidence/conductor-appearance.txt",
+      "bytes": 3694,
+      "sha256": "32ab975115aa277ba745fd6b64b4243fb497010fbc9d2a0e94b2f178fc077a22"
+    },
+    {
+      "path": "evidence/conductor-environment.png",
+      "bytes": 247289,
+      "sha256": "38b3a6524a495c6d133bd5f1ee4e9071ca34668c29b2fd12a6d6966c6db575f2"
+    },
+    {
+      "path": "evidence/conductor-environment.txt",
+      "bytes": 2018,
+      "sha256": "702ab2756bfc0113b6392548cbe827a4c3a7a31f1fffea7da52682a823e12b3b"
+    },
+    {
+      "path": "evidence/conductor-git.png",
+      "bytes": 407056,
+      "sha256": "80f30f3f225d452d677e57115b3fb3cb69d72e61734c6755c108c92eb0bf18c7"
+    },
+    {
+      "path": "evidence/conductor-git.txt",
+      "bytes": 3582,
+      "sha256": "1dbd51d25f4670b36c1d27e511ffb5f23bcb04a80ce78e5f3eedb66c9efdd1a2"
+    },
+    {
+      "path": "evidence/conductor-models.png",
+      "bytes": 331959,
+      "sha256": "caa9aea20daa68b4a846abcfa1c1f0acb96049a5894813a209941c5298aaf341"
+    },
+    {
+      "path": "evidence/conductor-models.txt",
+      "bytes": 4119,
+      "sha256": "20359e80b28b69a2538b5caf46261b8c8ffc6df994809b26cbd41d013fa4674d"
+    },
+    {
+      "path": "evidence/conductor-settings.png",
+      "bytes": 404421,
+      "sha256": "82c92aa4ad0ad58bf0ec1567482b85a3e3a5526ed9ff66ef76c6f4fea0705b6c"
+    },
+    {
+      "path": "evidence/luna-appearance.png",
+      "bytes": 378290,
+      "sha256": "8250871bd9ace0bd82ed46ebc7ccd669ced95a7037d928d6c2fab6c46f9446ca"
+    },
+    {
+      "path": "evidence/luna-appearance.txt",
+      "bytes": 2229,
+      "sha256": "9862fa863690458c9f46d0d83417cb2500f57e2a58f75ee621b8782524f808cd"
+    },
+    {
+      "path": "evidence/luna-projects.png",
+      "bytes": 443634,
+      "sha256": "0182a501d50e8caa7b4aa8fa96acb3522247e5934359a43f83e9d2e8a2d267d3"
+    },
+    {
+      "path": "evidence/luna-projects.txt",
+      "bytes": 2512,
+      "sha256": "185ef88260e82f13727b109690e09b664d7368b71c45dc2b51beb4720806bd58"
+    },
+    {
+      "path": "evidence/luna-settings.png",
+      "bytes": 330683,
+      "sha256": "556e9a01ed5ec37db2c0c2e2195084f59f442f73521b73ddee7ed18426a50f86"
+    },
+    {
+      "path": "evidence/luna-settings.txt",
+      "bytes": 1540,
+      "sha256": "4d76fa16586eb6b1b8b7bb2484de1b349b730fb7a443cfc3d06d38e8ddf0abae"
+    },
+    {
+      "path": "evidence/proposal-settings-narrow.png",
+      "bytes": 42859,
+      "sha256": "8ac6f9a2d376035ada6722871c3af05ffaa0dc3168b04198eaa45e920d6baa9b"
+    },
+    {
+      "path": "evidence/proposal-settings-search-first.png",
+      "bytes": 53804,
+      "sha256": "ed5a20b411eeed923eb6b3b80f7de988a73002f48e384573033bc13fa011bfd5"
+    },
+    {
+      "path": "evidence/proposal-workspace-focus.png",
+      "bytes": 57386,
+      "sha256": "2a90f915cdb44f3bd350ff606636a15e0ad46602c2baa895f6022a603b065024"
+    },
+    {
+      "path": "evidence/proposal-workspace-narrow.png",
+      "bytes": 51606,
+      "sha256": "a46629291b2fd4c0505395b378dd90f011a5e8a4ba8f9e2cbd844da470ec803a"
+    },
+    {
+      "path": "evidence/proposal-workspace-workbench.png",
+      "bytes": 64245,
+      "sha256": "219d3a2164611896b3d6b3207a7c4a19fa91ab28eb1867fcf6abb1f98b8f20ee"
+    },
+    {
+      "path": "evidence/super-notifications.png",
+      "bytes": 354308,
+      "sha256": "49748ca2ee7df479e24df383af21786871e562919fa0eb11845f621c70af8611"
+    },
+    {
+      "path": "evidence/super-routing.png",
+      "bytes": 499370,
+      "sha256": "4fe51f54506f3cb2c3a9b1e8f0137f7f0bbf41c0d7a528ec81be7439f6c2f1c4"
+    },
+    {
+      "path": "evidence/super-settings-tab.png",
+      "bytes": 461617,
+      "sha256": "b8443bf249272f6028473b08709d8696eac2db23b6dcd4681bb8ed5dabe94f15"
+    },
+    {
+      "path": "evidence/super-settings.png",
+      "bytes": 425764,
+      "sha256": "483f2b2517fc62b80cb36f3d2f084a8d37a69e38c9c91c2db9048becea0d6e7f"
+    },
+    {
+      "path": "evidence/t3-appearance.png",
+      "bytes": 452267,
+      "sha256": "04921e4fde5cdc82753c9bf25da8532cba2866f9e1a9eda29cdb4e166bdccb57"
+    },
+    {
+      "path": "evidence/t3-general.png",
+      "bytes": 488520,
+      "sha256": "cba7fc5858e7148442bd71a044899dbfd2385a07060726796b283e27702a085a"
+    },
+    {
+      "path": "evidence/t3-general.txt",
+      "bytes": 14291,
+      "sha256": "9cd674e05dbc2b547aa6376ba0753d424e429eefa364270224fdd55bf0ef1dfc"
+    },
+    {
+      "path": "evidence/t3-home.png",
+      "bytes": 290019,
+      "sha256": "26332e173cd2533ef246f41279d4400e6458fb8da638bb9b16f5ff0770245670"
+    },
+    {
+      "path": "evidence/t3-inheritance.png",
+      "bytes": 489812,
+      "sha256": "29707afe9bfe133dd2f73a0b0bc30463687f666197786bbf6a09d1b27ddd394b"
+    },
+    {
+      "path": "evidence/t3-inheritance.txt",
+      "bytes": 14593,
+      "sha256": "76cf6fa118237696336ca8bbf667c84d8aac085e366417f333d241da838f98b6"
+    },
+    {
+      "path": "evidence/t3-settings-search-destination.png",
+      "bytes": 488853,
+      "sha256": "ee25fff8525895d195b3b0cc5dddbec2ce3ad5a9937d81d43b976ddfd4a25c1b"
+    },
+    {
+      "path": "evidence/t3-settings-search-destination.txt",
+      "bytes": 8260,
+      "sha256": "c776ecab7b78ae53dd3dec5668da821282d5619acfb963d435961462259c2af2"
+    },
+    {
+      "path": "evidence/t3-settings-search.png",
+      "bytes": 382649,
+      "sha256": "e37b9f018606aa7b0a0e2f648265011a607112ac0bc23e78315ebdc3f590ee6d"
+    },
+    {
+      "path": "evidence/t3-settings-search.txt",
+      "bytes": 3684,
+      "sha256": "9f7cbb64c317c9babf177264082f32c42c3041c939268c45354cf1b02cbab3be"
+    },
+    {
+      "path": "evidence/t3-source-control.png",
+      "bytes": 426697,
+      "sha256": "2d9c1beb59b785ccae7fecc21c18f882ba056f66112135c6434670f358f529f0"
+    },
+    {
+      "path": "evidence/t3-source-control.txt",
+      "bytes": 4285,
+      "sha256": "1a7c6e86e5f227fee0c1ac255d16b5f74c396972ac3827a8a142b4110266df4c"
+    },
+    {
+      "path": "evidence/t3-storage.png",
+      "bytes": 402148,
+      "sha256": "353281efbe772292df425015790d3e5e0130e01ec0f0e44f36d0a2a31e50c744"
+    },
+    {
+      "path": "evidence/t3-storage.txt",
+      "bytes": 3812,
+      "sha256": "2e6d861364aa3bbbea24ecd890b9a487b7b61173cad18103d72ec41e6b45a562"
+    }
+  ],
+  "visuals": [
+    {
+      "path": "/Users/iulian/.codex/visualizations/2026/10/03/01a103ab-45c4-78a0-ab5a-cf2ee8cd23f6/luna-settings-directions.html",
+      "bytes": 16543,
+      "sha256": "153e4e92cca0a04943fcb55c5cc120f9f0fc08b8f6f724c714ebe19413ea0cec"
+    },
+    {
+      "path": "/Users/iulian/.codex/visualizations/2026/10/03/01a103ab-45c4-78a0-ab5a-cf2ee8cd23f6/luna-workspace-directions.html",
+      "bytes": 17918,
+      "sha256": "0772e7ee4acffc9b5f860a72935638c5e3c8e98dca28eddbbb263387e2908daa"
+    }
+  ],
+  "interaction_checks": {
+    "t3_glass_search_and_row_focus": "observed",
+    "t3_inheritance_popover": "observed",
+    "proposal_focus_changes_toggle": "observed",
+    "proposal_variant_navigation": "observed",
+    "proposal_settings_review_filter": "observed",
+    "proposal_horizontal_reflow_320px": {
+      "workspace_frame_width": 288,
+      "settings_frame_width": 288,
+      "horizontal_overflow": false
+    },
+    "proposal_javascript_syntax": "two fragments passed",
+    "proposal_appearance": "light observed; no independent dark-state claim"
+  },
+  "not_tested": [
+    "provider execution",
+    "settings mutation persistence",
+    "Git and forge mutation",
+    "cloud workflows",
+    "runtime E2E acceptance scenarios"
+  ],
+  "settings_matrix_rows": 48,
+  "cleanup": {
+    "temporary_source_checkouts": "removed after pinned source and clean-status validation",
+    "preview_browser_tabs": "closed",
+    "viewport_and_media_overrides": "cleared",
+    "luna_main_chat": "readback confirmed",
+    "target_debug": "14 GiB reported by du",
+    "target_release": "absent",
+    "disk_available": "400 GiB reported by df"
+  }
+}

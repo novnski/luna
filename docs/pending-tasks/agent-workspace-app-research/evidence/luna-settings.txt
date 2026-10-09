@@ -1,0 +1,39 @@
+Window: "", App: LUNA Dev.
+0 standard window Secondary Actions: Raise
+	1 container
+		2 button General settings
+		3 button Projects settings
+		4 button Providers settings
+		5 button Appearance settings
+		6 button Notifications settings
+		7 button Shortcuts settings
+		8 button Files settings
+		9 button Appshots settings
+		10 button Usage settings
+		11 button Updates settings
+		12 button Devices settings
+		13 button Backups settings
+		14 button Archived sessions settings
+		15 button Enable sync
+		16 button Back to chat
+		17 toggle button (settable, boolean) Send shortcut: Enter, Value: on
+		18 toggle button (settable, boolean) Send shortcut: ⌘ Enter, Value: off
+		19 toggle button (settable, boolean) Follow-up behavior: Queue, Value: off
+		20 toggle button (settable, boolean) Follow-up behavior: Steer, Value: on
+		21 switch (settable, boolean) Show context window usage, Value: on
+		22 switch (settable, boolean) Open web links in LUNA, Value: on
+		23 switch (settable, boolean) Automatic retries, Value: on
+		24 switch (settable, boolean) Prevent sleep while running, Value: off
+		25 switch (settable, boolean) Confirm archive, Value: on
+		26 switch (settable, boolean) Confirm settle, Value: on
+		27 switch (settable, boolean) Confirm delete, Value: on
+	28 close button
+	29 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	30 minimize button
+31 menu bar
+	32 LUNA Dev
+	33 Edit
+	34 View
+	35 Window
+
+The focused UI element is 0 standard window Secondary Actions: Raise

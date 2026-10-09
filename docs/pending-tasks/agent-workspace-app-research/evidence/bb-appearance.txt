@@ -1,0 +1,101 @@
+Window: "Settings", App: bb.
+0 standard window Settings, Secondary Actions: Raise
+	1 container Settings
+		2 container
+			3 HTML content Settings, URL: 127.0.0.1:38886/settings/appearance
+				4 container
+					5 container
+						6 button Go back
+						7 button (disabled) Go forward
+					8 link Description: Back to app, Value: 127.0.0.1:38886/
+					9 text Settings
+					10 link Description: General, Value: 127.0.0.1:38886/settings
+					11 link Description: Providers, Value: 127.0.0.1:38886/settings/providers
+					12 link Description: AI services, Value: 127.0.0.1:38886/settings/ai-services
+					13 link Description: Appearance, Value: 127.0.0.1:38886/settings/appearance
+					14 link Description: Keyboard, Value: 127.0.0.1:38886/settings/keyboard
+					15 link Description: Browser, Value: 127.0.0.1:38886/settings/browser
+					16 link Description: Files, Value: 127.0.0.1:38886/settings/files
+					17 link Description: Projects, Value: 127.0.0.1:38886/settings/projects
+					18 link Description: Machines, Value: 127.0.0.1:38886/settings/machines
+					19 link Description: Mobile, Value: 127.0.0.1:38886/settings/mobile
+					20 link Description: Environment variables, Value: 127.0.0.1:38886/settings/environment-variables
+					21 link Description: Updates, Value: 127.0.0.1:38886/settings/updates
+					22 link Description: Installed plugins, Value: 127.0.0.1:38886/settings/plugins
+					23 link Description: Plugin marketplaces, Value: 127.0.0.1:38886/settings/marketplaces
+					24 link Description: Experiments, Value: 127.0.0.1:38886/settings/experiments
+					25 link Description: Community, Value: 127.0.0.1:38886/settings/community
+					26 text Plugins
+					27 link Description: ACP providers, Value: 127.0.0.1:38886/settings/plugins/provider-acp
+					28 link Description: bb account, Value: 127.0.0.1:38886/settings/plugins/bb-account
+					29 link Description: bb connect, Value: 127.0.0.1:38886/settings/plugins/connect
+					30 link Description: BB guide, Value: 127.0.0.1:38886/settings/plugins/bb-guide
+					31 link Description: Claude Code provider, Value: 127.0.0.1:38886/settings/plugins/provider-claude-code
+					32 link Description: Codex provider, Value: 127.0.0.1:38886/settings/plugins/provider-codex
+					33 link Description: Concurrency limit, Value: 127.0.0.1:38886/settings/plugins/concurrency-limit
+					34 link Description: Custom instructions, Value: 127.0.0.1:38886/settings/plugins/custom-instructions
+					35 link Description: Keep Awake, Value: 127.0.0.1:38886/settings/plugins/keep-awake
+					36 link Description: Provider retry, Value: 127.0.0.1:38886/settings/plugins/provider-retry
+					37 link Description: Provider usage, Value: 127.0.0.1:38886/settings/plugins/bb--provider-usage
+					38 link Description: Push notifications, Value: 127.0.0.1:38886/settings/plugins/push-notifications
+					39 text Archived
+					40 link Description: Archived threads, Value: 127.0.0.1:38886/settings/archived
+					41 container
+						42 text Settings
+						43 container
+							44 heading Appearance, Value: 2
+								45 text Appearance
+							46 text Theme
+							47 pop up button Theme
+								48 text System
+								49 image
+							50 text Palette
+							51 text Palettes change bb's colors, including syntax colors in diffs and file previews. Choose a built-in palette or create one from a prompt.
+							52 pop up button Palette
+							53 text Favicon color
+							54 text Tint browser tabs to tell instances apart.
+							55 pop up button Favicon color
+							56 text Fade inactive splits
+							57 text Fade out splits that do not have focus.
+							58 switch Description: Fade inactive splits, Value: on
+							59 heading Interface, Value: 2
+								60 text Interface
+							61 text Sidebar
+							62 text Choose the plugin that renders your sidebar thread list.
+							63 pop up button Sidebar thread list
+							64 text Navigation
+							65 text Choose who arranges the host-owned sidebar destinations on this device.
+							66 pop up button Sidebar navigation
+							67 text Sidebar footer
+							68 text Drag to reorder.
+							69 sortable Reorder Settings
+								70 image
+							71 text Settings
+							72 switch Description: Show Settings in footer, Value: on
+							73 sortable Reorder Mobile apps
+								74 image
+							75 text Mobile apps
+							76 switch Description: Show Mobile apps in footer, Value: on
+							77 sortable Reorder Provider usage
+								78 image
+							79 text Provider usage
+							80 switch Description: Show Provider usage in footer, Value: on
+							81 sortable Reorder Report a bug
+								82 image
+							83 text Report a bug
+							84 switch Description: Show Report a bug in footer, Value: off
+					85 button Toggle sidebar (⌘ B)
+						86 image
+						87 text Toggle Sidebar
+					88 container Notifications alt+T
+	89 close button
+	90 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	91 minimize button
+92 menu bar
+	93 bb
+	94 File
+	95 Edit
+	96 View
+	97 Window
+
+The focused UI element is 13 link Description: Appearance, Value: 127.0.0.1:38886/settings/appearance
