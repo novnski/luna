@@ -95,8 +95,11 @@ production mutation, all caught and restored byte for byte:
   inherits the daemon's cwd, where a stray `CLAUDE.md` or `.claude/` could apply.
 - `provider_lifecycle_audit::lost_ordinary_steer_reply_never_replays` failed
   once under full-suite load and passed five isolated reruns.
-- `windows.yml` fails in seconds without running tests (L04), so Windows-only
-  suites such as `harness/tests/windows_native.rs` are unverified.
+- GitHub Actions starts no job on this repository: every workflow since at
+  least 2026-10-09 fails in seconds with "recent account payments have failed
+  or your spending limit needs to be increased". Until billing is fixed, CI
+  verifies nothing, including the suites this audit routed into it and the
+  Windows-only `harness/tests/windows_native.rs` repair.
 - Production paths kept alive only by their tests, retained for a product
   decision: engine `integration_actions`, `persist_unwired_interrupt_with_id`,
   the prospective/private interrupt and synthetic-archive paths in
