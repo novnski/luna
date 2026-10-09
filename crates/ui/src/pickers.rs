@@ -1061,6 +1061,11 @@ pub struct Pickers {
     /// keyboard nav drives the data-side-opened popover (headless rigs have
     /// no synthetic pointer, but synthetic keys do arrive).
     boot_focus_pending: bool,
+    /// A [`ChatBinding::Detached`] instance: also offer the access lock.
+    show_access: bool,
+    /// A [`ChatBinding::Detached`] instance: also offer the checkout (and a
+    /// new worktree's base ref) beside the model.
+    show_checkout: bool,
     load_task: Option<Task<()>>,
     accounts_task: Option<Task<()>>,
     /// Own slot: the refs load runs concurrently with the eager
@@ -1239,11 +1244,15 @@ impl Pickers {
             if selection_changed || target_changed {
                 this.checkout_choice_explicit = false;
             }
-            this.project_defaults = this
-                .binding
-                .space_row(state.read(cx))
-                .map(|space| space.execution_defaults.clone())
-                .unwrap_or_default();
+            // A detached instance resolves against what its owner inherits
+            // ([`Self::set_detached_inherited`]), not the project row.
+            if !this.binding.is_detached() {
+                this.project_defaults = this
+                    .binding
+                    .space_row(state.read(cx))
+                    .map(|space| space.execution_defaults.clone())
+                    .unwrap_or_default();
+            }
             if this.draft_owner.is_none() && !this.checkout_choice_explicit {
                 this.config.checkout = match this.new_task_defaults().checkout {
                     luna_proto::ProjectCheckout::Local => CheckoutKind::Local,
@@ -1269,7 +1278,7 @@ impl Pickers {
                 let harness = cx
                     .global::<crate::settings::provider_defaults::NewChatProviderChanged>()
                     .0;
-                if this.defaults.harness != Some(harness) {
+                if !this.binding.is_detached() && this.defaults.harness != Some(harness) {
                     this.defaults.harness = Some(harness);
                     cx.notify();
                 }
@@ -1299,8 +1308,12 @@ impl Pickers {
             .as_deref()
             .map(ComposerDefaults::load)
             .unwrap_or_default();
-        // Restore explicit opt-outs as well as project picks before the first frame.
-        state.update(cx, |s, _| s.restore_composer_target(&defaults));
+        // Restore explicit opt-outs as well as project picks before the first
+        // frame. A detached instance targets its own project, never the
+        // composer's.
+        if !binding.is_detached() {
+            state.update(cx, |s, _| s.restore_composer_target(&defaults));
+        }
         let draft_owner = binding.chat_id(state.read(cx)).map(str::to_string);
         let space_owner = binding.space_id(state.read(cx));
         let device_owner = binding.device_id(state.read(cx));
@@ -1356,6 +1369,8 @@ impl Pickers {
             search_reset_muted: false,
             focus: cx.focus_handle(),
             boot_focus_pending: boot_open.is_some(),
+            show_access: true,
+            show_checkout: false,
             load_task: None,
             accounts_task: None,
             refs_task: None,
@@ -1394,7 +1409,12 @@ impl Pickers {
     }
 
     /// Persist the sticky defaults (best-effort; picks are rare and tiny).
+    /// A detached instance's picks belong to its owner (a ticket), never to
+    /// the composer's last-used choices.
     fn save_defaults(&self) {
+        if self.binding.is_detached() {
+            return;
+        }
         if let Some(dir) = self.data_dir.as_deref()
             && let Err(err) = self.defaults.save(dir)
         {
@@ -1509,6 +1529,150 @@ impl Pickers {
 
     pub fn draft(&self) -> &DraftConfig {
         &self.config
+    }
+
+    /// Pickers that edit settings owned by something other than a chat (a
+    /// Board ticket's profile), fixed to `space_id` and its host. The chips
+    /// and popovers are the chat composer's own; nothing here reads or
+    /// writes the composer's target or sticky defaults. `access` and
+    /// `checkout` choose which chips render beside the model.
+    pub fn new_detached(
+        state: Entity<AppState>,
+        space_id: String,
+        access: bool,
+        checkout: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut pickers = Self::new_bound(
+            state,
+            crate::chat_binding::ChatBinding::Detached { space_id },
+            cx,
+        );
+        pickers.show_access = access;
+        pickers.show_checkout = checkout;
+        pickers.project_defaults = Default::default();
+        pickers.defaults = ComposerDefaults {
+            // Read-only conveniences: starred models and known labels.
+            favorites: std::mem::take(&mut pickers.defaults.favorites),
+            model_labels: std::mem::take(&mut pickers.defaults.model_labels),
+            ..ComposerDefaults::default()
+        };
+        pickers.config = DraftConfig::default();
+        pickers
+    }
+
+    /// What an unset field shows: the owner's inherited values (for a
+    /// ticket, the engine's resolution of project and provider defaults).
+    /// `checkout` is the inherited checkout. Detached instances only.
+    pub fn set_detached_inherited(
+        &mut self,
+        harness: Option<HarnessId>,
+        model: Option<(String, String)>,
+        reasoning: Option<ReasoningLevel>,
+        permission: Option<PermissionMode>,
+        checkout: Option<luna_proto::ProjectCheckout>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.binding.is_detached() {
+            return;
+        }
+        self.defaults.harness = harness;
+        self.defaults.model_by_harness.clear();
+        self.defaults.permission_by_harness.clear();
+        if let Some(harness) = harness {
+            if let Some((id, label)) = model {
+                self.defaults.remember_model(harness, id, label);
+            }
+            if let Some(mode) = permission {
+                self.defaults.permission_by_harness.insert(harness, mode);
+            }
+        }
+        self.defaults.reasoning = reasoning;
+        self.project_defaults.checkout = checkout;
+        if !self.checkout_choice_explicit {
+            self.config.checkout = match checkout {
+                Some(luna_proto::ProjectCheckout::NewWorktree) => CheckoutKind::NewWorktree,
+                _ => CheckoutKind::Local,
+            };
+        }
+        cx.notify();
+    }
+
+    /// Replace a detached instance's picks (its owner reset or reloaded
+    /// them). `checkout_explicit`: the checkout is a pick, not inherited.
+    pub fn set_detached_draft(
+        &mut self,
+        draft: DraftConfig,
+        checkout_explicit: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.binding.is_detached() {
+            return;
+        }
+        self.config = draft;
+        self.checkout_choice_explicit = checkout_explicit;
+        if !checkout_explicit {
+            self.config.checkout = match self.project_defaults.checkout {
+                Some(luna_proto::ProjectCheckout::NewWorktree) => CheckoutKind::NewWorktree,
+                _ => CheckoutKind::Local,
+            };
+        }
+        cx.notify();
+    }
+
+    /// The checkout is a pick (not inherited).
+    pub fn checkout_explicit(&self) -> bool {
+        self.checkout_choice_explicit
+    }
+
+    /// QA: a detached instance's painted chips, its open menu and the
+    /// keyboard cursor over the model list and the settings tray.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_detached_readback(&self, cx: &App) -> serde_json::Value {
+        let rect = |bounds: &gpui::Bounds<gpui::Pixels>| {
+            serde_json::json!([
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ])
+        };
+        let chips: serde_json::Map<String, serde_json::Value> = self
+            .target_bounds
+            .borrow()
+            .iter()
+            .map(|(name, bounds)| ((*name).to_owned(), rect(bounds)))
+            .collect();
+        let theme = Theme::of(cx);
+        let chip = self.model_chip_content(ModelChipFit::Full, theme, cx);
+        serde_json::json!({
+            "chips": chips,
+            "modelChip": chip.label.to_string(),
+            "modelChipSuffix": chip.suffix.map(|(suffix, _)| suffix.to_string()),
+            "access": self.access_chip_content(theme, cx).title.to_string(),
+            "showAccess": self.show_access,
+            "checkoutLabel": self.checkout_label(),
+            "open": self.open_kind().map(|kind| format!("{kind:?}")),
+            "active": self.active,
+            "search": self.search.read(cx).text().to_owned(),
+            "modelRows": self.model_rows(cx).iter().map(|row| serde_json::json!({
+                "id": row.model.id,
+                "label": row.model.label,
+                "harness": row.harness,
+            })).collect::<Vec<_>>(),
+            "settingGroups": self.setting_groups(cx).into_iter().map(|group| serde_json::json!({
+                "id": format!("{:?}", group.id),
+                "label": group.label,
+                "choices": group.choices.iter().map(|choice| serde_json::json!({
+                    "label": choice.label,
+                    "value": choice.value,
+                    "reasoning": choice.reasoning,
+                    "selected": choice.selected,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "settingMenu": self.setting_menu.as_ref().map(|menu| format!("{menu:?}")),
+            "settingActive": self.setting_active,
+        })
     }
 
     /// Harness is locked once the chat exists (feature-inventory §1.7).
@@ -1665,6 +1829,13 @@ impl Pickers {
             && let Some(provider) = &self.project_defaults.provider
         {
             return Some(provider.harness);
+        }
+        // A detached instance inherits what its owner's engine resolved (the
+        // harness a launch would use), offered here or not.
+        if self.binding.is_detached()
+            && let Some(harness) = self.defaults.harness
+        {
+            return Some(harness);
         }
         // New-chat canvas: the remembered last-used harness (sticky defaults),
         // when the loaded catalog still offers it (the device may have
@@ -1931,7 +2102,9 @@ impl Pickers {
         cx: &'a App,
     ) -> Option<&'a luna_proto::ProviderExecutionDefault> {
         let state = self.state.read(cx);
+        // New chats only: a detached instance inherits its owner's values.
         if self.binding.chat_id(state).is_some()
+            || self.binding.is_detached()
             || self.binding.device_id(state).as_deref() != state.local_device_id.as_deref()
         {
             return None;
@@ -1971,6 +2144,13 @@ impl Pickers {
             return chat.config.as_ref().and_then(|c| c.model.as_deref());
         }
         let harness = self.effective_harness(cx)?;
+        if self.binding.is_detached() {
+            // The owner's inherited model, for the harness it inherits.
+            return self
+                .defaults
+                .model_for(harness)
+                .map(|model| model.id.as_str());
+        }
         if let Some(provider) = &self.project_defaults.provider
             && provider.harness == harness
             && provider.model.is_some()
@@ -1996,6 +2176,15 @@ impl Pickers {
         let explicit = self.config.reasoning.or_else(|| {
             match self.binding.chat_row(self.state.read(cx)) {
                 Some(chat) => chat.config.as_ref().and_then(|c| c.reasoning),
+                // Detached: the inherited level, while the inherited model is
+                // the one shown (another model starts from its own default).
+                None if self.binding.is_detached() => {
+                    let harness = self.effective_harness(cx)?;
+                    let inherited = self.defaults.model_for(harness)?;
+                    (self.effective_model_id(cx) == Some(inherited.id.as_str()))
+                        .then_some(self.defaults.reasoning)
+                        .flatten()
+                }
                 // New chat: the remembered last-used level.
                 None => self
                     .compatible_fresh_provider_defaults(cx)
@@ -2808,6 +2997,17 @@ impl Pickers {
         // (wing's rule — the footer renders read-only labels there, so this
         // is a belt-and-braces guard).
         if self.binding.chat_row(self.state.read(cx)).is_some() {
+            return;
+        }
+        if self.binding.is_detached() {
+            // A ticket never moves the project's checkout: a ref is only a
+            // new worktree's base.
+            if self.config.checkout == CheckoutKind::NewWorktree {
+                self.config.branch = Some(row.name.clone());
+                self.checkout_choice_explicit = true;
+                self.animate_close(cx);
+                cx.notify();
+            }
             return;
         }
         if row.worktree_path.is_some() {
@@ -6531,7 +6731,26 @@ impl Pickers {
                                 theme.text_muted
                             })),
                     )
-                    .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
+                    .when(is_viewed, |el| el.child(tab_indicator(theme.accent)))
+                    // A detached instance reports its rail tabs (QA).
+                    .when_some(
+                        self.binding
+                            .is_detached()
+                            .then(|| self.target_bounds.clone()),
+                        |el, bounds| {
+                            let name = rail_key(harness);
+                            el.child(
+                                gpui::canvas(
+                                    move |painted, _, _| {
+                                        bounds.borrow_mut().insert(name, painted);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                        },
+                    ),
             );
         }
 
@@ -8682,6 +8901,60 @@ fn offered_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
 
 /// Attach the open popover above a chip at the leading edge of the composer
 /// controls row (audit CP-01).
+/// The QA name of a harness's rail tab in the model picker.
+fn rail_key(harness: HarnessId) -> &'static str {
+    match harness {
+        HarnessId::ClaudeCode => "rail-claude-code",
+        HarnessId::Codex => "rail-codex",
+        HarnessId::Opencode => "rail-opencode",
+        HarnessId::Mock => "rail-mock",
+        _ => "rail-other",
+    }
+}
+
+/// The composer's ghost pill (the model chip's look) as a plain pop-up
+/// button for menus owned elsewhere — a Board ticket's settings mode — so a
+/// row of chat pickers and its neighbours read as one control family.
+pub(crate) fn ghost_pill(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    set: bool,
+    open: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let id: SharedString = id.into();
+    let ink = if set || open {
+        theme.text.opacity(0.9)
+    } else {
+        theme.text_muted
+    };
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .h(crate::typography::ui_rems(CONTROL_HEIGHT))
+        .min_w_0()
+        .max_w(crate::typography::ui_rems(280.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(crate::typography::ui_rems(4.0))
+        .px(crate::typography::ui_rems(CHIP_PAD_X))
+        .rounded_full()
+        .text_size(crate::typography::ui_rems(CHIP_TEXT_SIZE))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(ink)
+        .when(open, |el| el.bg(theme.element_hover))
+        .hover(|style| style.bg(theme.element_hover).text_color(theme.text))
+        .cursor_pointer()
+        .child(div().min_w_0().truncate().child(label.into()))
+        .child(
+            crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                .size(crate::typography::ui_rems(12.0))
+                .flex_none()
+                .text_color(theme.readable_muted(0.7)),
+        )
+}
+
 fn attach_overlay_leading(
     chip: gpui::Stateful<gpui::Div>,
     overlay: &mut Option<(PickerKind, AnyElement)>,
@@ -8760,7 +9033,40 @@ impl Render for Pickers {
         // branch) render in the frame's bottom row (see
         // `render_target_footer`), not here.
         let closing = self.open.closing_since();
+        // A detached instance (a ticket's settings) offers its checkout here,
+        // beside the model; a new chat's lives in the frame's bottom row.
+        let detached_checkout = self.show_checkout
+            && self.binding.is_detached()
+            && self.binding.space_git(self.state.read(cx));
+        // A detached instance reports its chips' painted bounds (QA).
+        let measure = self.binding.is_detached().then(|| {
+            self.target_bounds.borrow_mut().clear();
+            self.target_bounds.clone()
+        });
+        let measured = |name: &'static str| {
+            measure.clone().map(|bounds| {
+                gpui::canvas(
+                    move |painted, _, _| {
+                        bounds.borrow_mut().insert(name, painted);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+            })
+        };
+        if detached_checkout {
+            self.ensure_refs(false, cx);
+        }
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
+            Some(kind @ (PickerKind::Branch | PickerKind::Checkout)) if detached_checkout => {
+                let (content, width) = if kind == PickerKind::Branch {
+                    (self.render_branch_popover(cx), popover::MENU_W_L)
+                } else {
+                    (self.render_checkout_popover(cx), popover::MENU_W_S)
+                };
+                Some((kind, self.popover_frame(width, content, cx)))
+            }
             // Bottom-row pickers: their popovers mount down there.
             Some(PickerKind::Branch)
             | Some(PickerKind::Checkout)
@@ -8842,6 +9148,9 @@ impl Render for Pickers {
         // Opt-in layout probes (slice 6): named after the owning composer.
         let probe_scope = crate::perf_counters::probes_enabled().then(|| match &self.binding {
             crate::chat_binding::ChatBinding::Chat(chat) => format!("composer:pane:{chat}"),
+            crate::chat_binding::ChatBinding::Detached { space_id } => {
+                format!("composer:detached:{space_id}")
+            }
             crate::chat_binding::ChatBinding::Selected => format!(
                 "composer:main:{}",
                 self.state.read(cx).selected_chat.as_deref().unwrap_or("-")
@@ -8853,6 +9162,7 @@ impl Render for Pickers {
                 .child(crate::perf_counters::probe(format!("{scope}:model"))),
             None => model_chip,
         };
+        let model_chip = model_chip.relative().children(measured("model"));
         let access = self.access_chip_content(&theme, cx);
         let permission_chip = self.trigger_chip(
             PickerKind::Permission,
@@ -8902,6 +9212,77 @@ impl Render for Pickers {
                 .child(crate::perf_counters::probe(format!("{scope}:access"))),
             None => permission_chip,
         };
+        let permission_chip = permission_chip.relative().children(measured("access"));
+        let mut checkout_chips: Vec<AnyElement> = Vec::new();
+        if detached_checkout {
+            let new_worktree = self.config.checkout == CheckoutKind::NewWorktree;
+            let checkout_label = SharedString::from(self.checkout_label());
+            let checkout = self.target_chip(
+                TargetChip {
+                    kind: PickerKind::Checkout,
+                    id: "picker-checkout",
+                    noun: "Checkout",
+                    glyph: if new_worktree {
+                        crate::icons::FOLDER_WITH_FILES
+                    } else {
+                        crate::icons::FOLDER
+                    },
+                    detail: checkout_label.clone(),
+                    label: checkout_label,
+                    icon_only: false,
+                    max_width: 160.0,
+                    shrink: 0.0,
+                    tone: None,
+                },
+                true,
+                &theme,
+                cx,
+            );
+            let checkout = checkout.relative().children(measured("checkout"));
+            checkout_chips.push(
+                attach_overlay_leading(
+                    checkout,
+                    &mut overlay,
+                    PickerKind::Checkout,
+                    "checkout-popover",
+                    closing,
+                )
+                .into_any_element(),
+            );
+            // A new worktree's base ref; the current checkout has none to pick.
+            if new_worktree {
+                let ref_label = self.ref_label();
+                let branch = self.target_chip(
+                    TargetChip {
+                        kind: PickerKind::Branch,
+                        id: "picker-branch",
+                        noun: "Base branch",
+                        glyph: crate::icons::GIT_BRANCH,
+                        detail: ref_label.clone(),
+                        label: ref_label,
+                        icon_only: false,
+                        max_width: 220.0,
+                        shrink: 1.0,
+                        tone: None,
+                    },
+                    true,
+                    &theme,
+                    cx,
+                );
+                let branch = branch.relative().children(measured("branch"));
+                checkout_chips.push(
+                    attach_overlay_leading(
+                        branch,
+                        &mut overlay,
+                        PickerKind::Branch,
+                        "branch-popover",
+                        closing,
+                    )
+                    .into_any_element(),
+                );
+            }
+        }
+        let show_access = self.show_access || !self.binding.is_detached();
         div()
             .flex()
             .flex_row()
@@ -8914,7 +9295,8 @@ impl Render for Pickers {
             .min_w_0()
             .gap(crate::typography::ui_rems(crate::composer::CHIP_GAP))
             .child(model_chip)
-            .child(permission_chip)
+            .when(show_access, |row| row.child(permission_chip))
+            .children(checkout_chips)
     }
 }
 

@@ -2914,7 +2914,7 @@ impl BoardDetail {
                 "conflictRevision": edit.conflict.as_ref().map(|current| current.item.revision),
                 "text": edit.input.as_ref().map(|input| input.read(cx).text().to_owned()),
                 "focused": edit.input.as_ref().map(|input| input.read(cx).focus_handle(cx).is_focused(window)),
-                "settings": edit.editor.as_ref().map(|editor| editor.read(cx).fixture_state()),
+                "settings": edit.editor.as_ref().map(|editor| editor.read(cx).fixture_state(cx)),
             }),
         };
         let (loaded, detail) = match &self.loaded {

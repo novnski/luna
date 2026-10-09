@@ -15,14 +15,19 @@
 //!    AI are not two distinct choices, Discuss with AI renders a title or
 //!    description input (beside, below or hidden in the pane), or it does not
 //!    mount the temporary authoring pane.
-//! 2. The manual form invents choices: a harness, model, reasoning level or
-//!    access mode that is not in the host's `BoardExecutionOptions`, a
-//!    reasoning level the selected model does not support, or an account or
-//!    host control with only one valid choice.
+//! 2. The manual form's settings are not the chat composer's own pickers:
+//!    the agent row lacks the model pill, the access lock or the checkout, the
+//!    reviewer row shows an access lock, a picker lists a model that is not
+//!    in the host's `BoardExecutionOptions`, the reasoning tray offers a level
+//!    the selected model does not support, or a pick by search + Enter, the
+//!    tray (Right, Enter) or the access menu does not reach the saved draft.
+//!    A pick must not touch the chat composer's sticky defaults
+//!    (`composer-defaults.json`).
 //! 3. A model change keeps an incompatible reasoning level in the draft or on
 //!    screen, or resets it without telling the user.
-//! 4. Inherited values are unexplained: an inherited field shows a bare
-//!    "default" instead of the effective value and its origin, or the review
+//! 4. Inherited values are unexplained: in Project defaults the model pill
+//!    shows something other than the engine's effective model, the agent
+//!    row does not say it inherits the project's settings, or the review
 //!    profile with no reviewer configured does not say that the
 //!    implementation model reviews in a separate reviewer chat.
 //! 5. Validation is implicit: an empty title is sent to the engine (the ticket
@@ -58,11 +63,11 @@
 //!     the key, title and Close scrolls away with the body, or the pinned
 //!     Close does not close the drawer.
 //! 15. Two controls share an element id, which the accessibility tree
-//!     rejects (a debug build panics): a model listed twice, a model option
-//!     with a `default` choice beside the Default chip, repeated reasoning
-//!     levels, model ids spelled like the editor's own controls, or a
-//!     harness switch (Claude Code, Codex, OpenCode and back) in either
-//!     profile. The run builds the tree every frame and fails on any panic.
+//!     rejects (a debug build panics): a model listed twice, repeated
+//!     reasoning levels, the two profiles' pickers side by side in the
+//!     drawer, or a harness switch (Claude Code, Codex, OpenCode and back)
+//!     through each profile's model picker. The run builds the tree every
+//!     frame and fails on any panic.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -658,6 +663,26 @@ fn chips_with(readback: &Value, prefix: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The label a probed pop-up button (a settings mode menu) showed.
+fn chip_label(readback: &Value, id: &str) -> String {
+    let chip = &readback["probe"]["chips"][id];
+    chip["label"]
+        .as_str()
+        .or_else(|| chip[0].as_str())
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// The chat composer's sticky defaults file, as saved on disk (a ticket's
+/// picks must never change it).
+fn composer_defaults_snapshot(env: &Env) -> Value {
+    let path = env.boot.data_dir.join("composer-defaults.json");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        Err(_) => Value::String("absent".into()),
+    }
 }
 
 fn center(bounds: [f32; 4]) -> (f32, f32) {
@@ -1430,6 +1455,192 @@ fn state_of(rb: &Value) -> &Value {
     &rb["state"]
 }
 
+/// The manual form's settings editor.
+fn manual_settings(rb: &Value) -> &Value {
+    &state_of(rb)["settings"]
+}
+
+/// The detail drawer's settings editor (edit mode).
+fn detail_settings(rb: &Value) -> &Value {
+    &state_of(rb)["edits"]["settings"]["settings"]
+}
+
+/// One profile's chat pickers (`implementation`, `review`): draft and UI.
+fn pickers_of<'a>(settings: &'a Value, profile: &str) -> &'a Value {
+    &settings["pickers"][profile]
+}
+
+fn chip_center(pickers: &Value, chip: &str) -> Option<(f32, f32)> {
+    let rect = pickers["ui"]["chips"][chip].as_array()?;
+    let at = |i: usize| rect.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    (at(2) > 0.0).then(|| (at(0) + at(2) / 2.0, at(1) + at(3) / 2.0))
+}
+
+type SettingsOf = fn(&Value) -> &Value;
+
+/// Open a profile's picker chip (`model`, `access`, `checkout`) with a real
+/// click and wait for its menu.
+async fn open_picker(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: SettingsOf,
+    profile: &str,
+    chip: &str,
+    kind: &str,
+) -> anyhow::Result<Value> {
+    let rb = surfaces(window, cx)?;
+    let at = chip_center(pickers_of(settings(&rb), profile), chip)
+        .ok_or_else(|| anyhow!("the {profile} {chip} picker was not painted"))?;
+    click_at(window, cx, at).await?;
+    wait_for(window, cx, &format!("the {profile} {kind} menu"), |rb| {
+        pickers_of(settings(rb), profile)["ui"]["open"] == kind
+    })
+    .await
+}
+
+/// Move a picker's keyboard cursor (`active` or `settingActive`) to
+/// `target` with Down/Up, reading it back after each key.
+async fn cursor_to(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: SettingsOf,
+    profile: &str,
+    field: &str,
+    target: u64,
+) -> anyhow::Result<()> {
+    for _ in 0..60 {
+        let rb = surfaces(window, cx)?;
+        let at = pickers_of(settings(&rb), profile)["ui"][field]
+            .as_u64()
+            .unwrap_or(0);
+        if at == target {
+            return Ok(());
+        }
+        keys(window, cx, &[if at < target { "down" } else { "up" }]).await?;
+    }
+    bail!("the {profile} picker's {field} never reached {target}")
+}
+
+/// Pick a model the way a person does: open the model pill, type its name,
+/// put the cursor on its row (its harness), Enter. The menu stays open.
+async fn pick_model(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: SettingsOf,
+    profile: &str,
+    harness: &str,
+    model: &Model,
+) -> anyhow::Result<()> {
+    let open = surfaces(window, cx)?;
+    if pickers_of(settings(&open), profile)["ui"]["open"] != "HarnessModel" {
+        open_picker(window, cx, settings, profile, "model", "HarnessModel").await?;
+    }
+    // The search covers the viewed harness: its rail tab first.
+    let rb = surfaces(window, cx)?;
+    let tab = chip_center(
+        pickers_of(settings(&rb), profile),
+        &format!("rail-{harness}"),
+    )
+    .ok_or_else(|| anyhow!("the {profile} picker shows no {harness} rail tab"))?;
+    click_at(window, cx, tab).await?;
+    wait_for(window, cx, &format!("the {harness} rail"), |rb| {
+        pickers_of(settings(rb), profile)["draft"]["harness"] == harness
+    })
+    .await?;
+    keys(window, cx, &["cmd-a", "backspace"]).await?;
+    type_text(window, cx, &model.label.to_lowercase()).await?;
+    let rb = wait_for(window, cx, &format!("{} in the search", model.id), |rb| {
+        pickers_of(settings(rb), profile)["ui"]["modelRows"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["id"] == model.id.as_str() && row["harness"] == harness)
+            })
+    })
+    .await?;
+    let index = pickers_of(settings(&rb), profile)["ui"]["modelRows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .position(|row| row["id"] == model.id.as_str() && row["harness"] == harness)
+        })
+        .unwrap_or(0) as u64;
+    cursor_to(window, cx, settings, profile, "active", index).await?;
+    keys(window, cx, &["enter"]).await?;
+    wait_for(window, cx, &format!("{} picked", model.id), |rb| {
+        pickers_of(settings(rb), profile)["draft"]["model"] == model.id.as_str()
+    })
+    .await?;
+    Ok(())
+}
+
+/// The reasoning tray's levels for the picked model (wire names).
+fn tray_levels(pickers: &Value) -> Vec<String> {
+    pickers["ui"]["settingGroups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|group| group["choices"].as_array().cloned().unwrap_or_default())
+        .filter_map(|choice| choice["reasoning"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Pick a reasoning level in the open model menu's tray: cursor past the
+/// model rows to the reasoning row, Right, cursor to the level, Enter.
+async fn pick_reasoning(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: SettingsOf,
+    profile: &str,
+    level: &str,
+) -> anyhow::Result<()> {
+    let rb = surfaces(window, cx)?;
+    let ui = &pickers_of(settings(&rb), profile)["ui"];
+    let rows = ui["modelRows"].as_array().map_or(0, Vec::len) as u64;
+    let groups = ui["settingGroups"].as_array().cloned().unwrap_or_default();
+    let (group, choice) = groups
+        .iter()
+        .enumerate()
+        .find_map(|(g, group)| {
+            group["choices"]
+                .as_array()?
+                .iter()
+                .position(|choice| choice["reasoning"] == level)
+                .map(|c| (g as u64, c as u64))
+        })
+        .ok_or_else(|| anyhow!("the {profile} tray offers no {level}: {groups:?}"))?;
+    cursor_to(window, cx, settings, profile, "active", rows + group).await?;
+    keys(window, cx, &["right"]).await?;
+    wait_for(window, cx, "the reasoning tray", |rb| {
+        pickers_of(settings(rb), profile)["ui"]["settingMenu"].is_string()
+    })
+    .await?;
+    cursor_to(window, cx, settings, profile, "settingActive", choice).await?;
+    keys(window, cx, &["enter"]).await?;
+    wait_for(window, cx, &format!("{level} reasoning"), |rb| {
+        pickers_of(settings(rb), profile)["draft"]["reasoning"] == level
+    })
+    .await?;
+    Ok(())
+}
+
+/// Close whatever picker menu is open (Escape, as often as it takes).
+async fn close_pickers(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: SettingsOf,
+    profile: &str,
+) -> anyhow::Result<()> {
+    for _ in 0..4 {
+        let rb = surfaces(window, cx)?;
+        if pickers_of(settings(&rb), profile)["ui"]["open"].is_null() {
+            return Ok(());
+        }
+        keys(window, cx, &["escape"]).await?;
+    }
+    bail!("the {profile} picker menu did not close")
+}
+
 fn detail_of(rb: &Value) -> &Value {
     &rb["state"]["detail"]
 }
@@ -1610,126 +1821,181 @@ async fn scenario(
             && tickets == 0
             && chat_count(env)? == chats_before,
     )?;
-    wait_for(window, cx, "the host's choices", |rb| {
-        state_of(rb)["settings"]["options"].is_object()
+    let rb = wait_for(window, cx, "the host's choices", |rb| {
+        manual_settings(rb)["options"].is_object()
+            && chip_center(pickers_of(manual_settings(rb), "implementation"), "model").is_some()
     })
     .await?;
-    click(window, cx, "manual-impl-mode-custom").await?;
-    let rb = wait_for(window, cx, "custom settings", |rb| {
-        !chips_with(rb, "manual-impl-harness:").is_empty()
-    })
-    .await?;
-    let mut shown = chips_with(&rb, "manual-impl-harness:");
-    shown.sort();
-    let mut expected: Vec<String> = options
-        .harnesses
-        .iter()
-        .filter(|entry| entry.available)
-        .map(|entry| format!("manual-impl-harness:{}", wire(entry.harness)))
-        .collect();
-    expected.sort();
+    let composer_defaults = composer_defaults_snapshot(env);
+    // The agent row is the chat's pickers (model, access, checkout); the
+    // reviewer's has the model only. Both start on the project's settings.
+    let settings = manual_settings(&rb);
+    let implementation = pickers_of(settings, "implementation");
+    let review = pickers_of(settings, "review");
+    let effective_model = options
+        .effective_implementation
+        .as_ref()
+        .and_then(|resolved| {
+            let model = resolved.model.as_deref()?;
+            options
+                .harnesses
+                .iter()
+                .find(|entry| entry.harness == resolved.harness)
+                .and_then(|entry| entry.models.iter().find(|m| m.id == model))
+                .map(|m| m.label.clone())
+        })
+        .unwrap_or_default();
     run.check(
-        "harness-choices-from-catalog",
-        json!(expected),
-        json!(shown),
-        shown == expected,
+        "settings-are-the-chat-pickers",
+        json!({
+            "agent": ["model", "access", "checkout"],
+            "reviewer": ["model"],
+            "modes": ["Project defaults", "Project default"],
+            "modelPill": effective_model,
+        }),
+        json!({
+            "agent": implementation["ui"]["chips"],
+            "reviewer": review["ui"]["chips"],
+            "modes": [
+                chip_label(&rb, "manual-impl-mode"),
+                chip_label(&rb, "manual-review-mode"),
+            ],
+            "modelPill": implementation["ui"]["modelChip"],
+            "agentCaption": text(&rb, "manual-impl-caption"),
+        }),
+        ["model", "access", "checkout"]
+            .iter()
+            .all(|chip| chip_center(implementation, chip).is_some())
+            && chip_center(review, "model").is_some()
+            && chip_center(review, "access").is_none()
+            && chip_label(&rb, "manual-impl-mode") == "Project defaults"
+            && chip_label(&rb, "manual-review-mode") == "Project default"
+            && settings["draft"]["implementation"] == json!({})
+            && implementation["ui"]["modelChip"] == effective_model.as_str()
+            && text(&rb, "manual-impl-caption").starts_with("Inherits the project's settings"),
     )?;
-    click(
+    // The model menu lists only the host's catalog.
+    let rb = open_picker(
         window,
         cx,
-        &format!("manual-impl-harness:{}", wire(choice.harness)),
+        manual_settings,
+        "implementation",
+        "model",
+        "HarnessModel",
+    )
+    .await?;
+    let rows = pickers_of(manual_settings(&rb), "implementation")["ui"]["modelRows"].clone();
+    let invented: Vec<Value> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            !options.harnesses.iter().any(|entry| {
+                wire(entry.harness) == row["harness"].as_str().unwrap_or_default()
+                    && entry
+                        .models
+                        .iter()
+                        .any(|model| model.id == row["id"].as_str().unwrap_or_default())
+            })
+        })
+        .cloned()
+        .collect();
+    run.check(
+        "model-choices-from-catalog",
+        json!({ "invented": [] }),
+        json!({ "rows": rows, "invented": invented }),
+        invented.is_empty() && rows.as_array().is_some_and(|rows| !rows.is_empty()),
+    )?;
+    // Model a by search + Enter; its reasoning tray offers a's levels only.
+    pick_model(
+        window,
+        cx,
+        manual_settings,
+        "implementation",
+        &wire(choice.harness),
+        &choice.a,
     )
     .await?;
     let rb = surfaces(window, cx)?;
-    let catalog = options
-        .harnesses
-        .iter()
-        .find(|entry| entry.harness == choice.harness)
-        .map(|entry| entry.models.clone())
-        .unwrap_or_default();
-    let mut shown = chips_with(&rb, "manual-impl-model:");
+    let mut shown = tray_levels(pickers_of(manual_settings(&rb), "implementation"));
     shown.sort();
-    // One chip per catalog model id (a model listed twice is one choice).
-    let mut seen_models = std::collections::HashSet::new();
-    let mut expected: Vec<String> = catalog
-        .iter()
-        .filter(|model| seen_models.insert(model.id.clone()))
-        .take(12)
-        .map(|model| format!("manual-impl-model:{}", model.id))
-        .collect();
+    shown.dedup();
+    let mut expected: Vec<String> = choice.a.reasoning_levels.iter().map(|l| wire(*l)).collect();
     expected.sort();
-    run.check(
-        "model-choices-from-catalog",
-        json!(expected),
-        json!(shown),
-        shown == expected,
-    )?;
-    let accounts = chips_with(&rb, "manual-impl-account");
-    run.check(
-        "account-control-only-with-a-choice",
-        json!({ "accounts": choice.accounts, "controls": choice.accounts > 1 }),
-        json!({ "controls": !accounts.is_empty() }),
-        accounts.is_empty() == (choice.accounts < 2),
-    )?;
-    click(window, cx, &format!("manual-impl-model:{}", choice.a.id)).await?;
-    let rb = surfaces(window, cx)?;
-    let mut shown = chips_with(&rb, "manual-impl-reasoning:");
-    shown.sort();
-    let mut expected: Vec<String> = choice
-        .a
-        .reasoning_levels
-        .iter()
-        .map(|level| format!("manual-impl-reasoning:{}", wire(*level)))
-        .collect();
-    expected.sort();
+    expected.dedup();
     run.check(
         "reasoning-only-supported",
         json!(expected),
         json!(shown),
         shown == expected,
     )?;
-    click(
+    pick_reasoning(
         window,
         cx,
-        &format!("manual-impl-reasoning:{}", wire(choice.level)),
+        manual_settings,
+        "implementation",
+        &wire(choice.level),
     )
     .await?;
-    click(
-        window,
-        cx,
-        &format!("manual-impl-access:{}", permission_key(choice.permission)),
-    )
-    .await?;
+    close_pickers(window, cx, manual_settings, "implementation").await?;
+    // Access through the chat's access menu (Approve for me, Full access).
+    let permission_row = match choice.permission {
+        PermissionMode::Full => Some(1),
+        PermissionMode::Auto => Some(0),
+        _ => None,
+    };
+    if let Some(row) = permission_row {
+        open_picker(
+            window,
+            cx,
+            manual_settings,
+            "implementation",
+            "access",
+            "Permission",
+        )
+        .await?;
+        cursor_to(window, cx, manual_settings, "implementation", "active", row).await?;
+        keys(window, cx, &["enter"]).await?;
+    }
     let rb = surfaces(window, cx)?;
-    let draft = state_of(&rb)["settings"]["draft"]["implementation"].clone();
+    let draft = manual_settings(&rb)["draft"]["implementation"].clone();
     run.check(
         "selected-real-settings",
         json!({
             "harness": wire(choice.harness),
             "model": choice.a.id,
             "reasoning": wire(choice.level),
-            "permissionMode": permission_key(choice.permission),
+            "permissionMode": permission_row.map(|_| permission_key(choice.permission)),
+            "mode": "Custom",
         }),
-        draft.clone(),
+        json!({ "draft": draft, "mode": chip_label(&rb, "manual-impl-mode") }),
         draft["harness"] == wire(choice.harness)
             && draft["model"] == choice.a.id
             && draft["reasoning"] == wire(choice.level)
-            && draft["permissionMode"] == permission_key(choice.permission),
+            && (permission_row.is_none()
+                || draft["permissionMode"] == permission_key(choice.permission))
+            && chip_label(&rb, "manual-impl-mode") == "Custom",
     )?;
     run.capture(window, cx, "d03-manual-settings")?;
-    click(window, cx, &format!("manual-impl-model:{}", choice.b.id)).await?;
+    // Model b does not support the level: the draft drops it and says so.
+    pick_model(
+        window,
+        cx,
+        manual_settings,
+        "implementation",
+        &wire(choice.harness),
+        &choice.b,
+    )
+    .await?;
     let rb = surfaces(window, cx)?;
-    let draft = state_of(&rb)["settings"]["draft"]["implementation"].clone();
-    let notices = state_of(&rb)["settings"]["notices"].clone();
-    let mut shown = chips_with(&rb, "manual-impl-reasoning:");
+    let draft = manual_settings(&rb)["draft"]["implementation"].clone();
+    let notices = manual_settings(&rb)["notices"].clone();
+    let mut shown = tray_levels(pickers_of(manual_settings(&rb), "implementation"));
     shown.sort();
-    let mut expected: Vec<String> = choice
-        .b
-        .reasoning_levels
-        .iter()
-        .map(|level| format!("manual-impl-reasoning:{}", wire(*level)))
-        .collect();
+    shown.dedup();
+    let mut expected: Vec<String> = choice.b.reasoning_levels.iter().map(|l| wire(*l)).collect();
     expected.sort();
+    expected.dedup();
     let told = notices.as_array().is_some_and(|notices| {
         notices.iter().any(|notice| {
             notice
@@ -1739,28 +2005,39 @@ async fn scenario(
     });
     run.check(
         "model-change-resets-incompatible-reasoning",
-        json!({ "reasoning": null, "notice": "names the reset level", "chips": expected }),
-        json!({ "reasoning": draft["reasoning"], "notices": notices, "chips": shown }),
+        json!({ "reasoning": null, "notice": "names the reset level", "tray": expected }),
+        json!({ "reasoning": draft["reasoning"], "notices": notices, "tray": shown }),
         draft["model"] == choice.b.id && draft["reasoning"].is_null() && told && shown == expected,
     )?;
     let saved_level = choice.b.reasoning_levels.first().copied();
     if let Some(level) = saved_level {
-        click(
-            window,
-            cx,
-            &format!("manual-impl-reasoning:{}", wire(level)),
-        )
-        .await?;
+        pick_reasoning(window, cx, manual_settings, "implementation", &wire(level)).await?;
     }
+    close_pickers(window, cx, manual_settings, "implementation").await?;
     let rb = surfaces(window, cx)?;
+    // The reviewer (none configured) follows the implementation's picks.
+    let reviewer = &pickers_of(manual_settings(&rb), "review")["ui"];
+    let expected_suffix = saved_level.map(reasoning_label);
     run.check(
         "reviewer-fallback-when-none-configured",
-        json!(REVIEW_FALLBACK),
         json!({
-            "shown": text(&rb, "manual-review-summary"),
-            "catalogFallsBack": review_falls_back(&options),
+            "caption": REVIEW_FALLBACK,
+            "pill": [choice.b.label, expected_suffix],
         }),
-        text(&rb, "manual-review-summary") == REVIEW_FALLBACK,
+        json!({
+            "shown": text(&rb, "manual-review-caption"),
+            "catalogFallsBack": review_falls_back(&options),
+            "pill": [reviewer["modelChip"], reviewer["modelChipSuffix"]],
+        }),
+        text(&rb, "manual-review-caption") == REVIEW_FALLBACK
+            && reviewer["modelChip"] == choice.b.label.as_str()
+            && expected_suffix.is_none_or(|suffix| reviewer["modelChipSuffix"] == suffix),
+    )?;
+    run.check(
+        "ticket-picks-leave-chat-defaults",
+        json!(composer_defaults),
+        json!(composer_defaults_snapshot(env)),
+        composer_defaults_snapshot(env) == composer_defaults,
     )?;
     // Title and brief by keyboard; Enter in the title moves to the brief.
     click(window, cx, "manual-title").await?;
@@ -1929,48 +2206,49 @@ async fn scenario(
     //     with one element id (the a11y tree rejects duplicates).
     click(window, cx, "detail-settings-edit").await?;
     wait_for(window, cx, "the settings editor", |rb| {
-        state_of(rb)["edits"]["settings"]["settings"]["options"].is_object()
+        detail_settings(rb)["options"].is_object()
+            && chip_center(pickers_of(detail_settings(rb), "review"), "model").is_some()
     })
     .await?;
-    click(window, cx, "detail-review-mode-custom").await?;
+    // The reviewer becomes the ticket's own through its mode menu.
+    click(window, cx, "detail-review-mode").await?;
+    click(window, cx, "detail-review-mode-1").await?;
+    wait_for(window, cx, "a custom reviewer", |rb| {
+        chip_label(rb, "detail-review-mode") == "Custom reviewer"
+    })
+    .await?;
+    let catalog_model = |harness: HarnessId, id: &str| {
+        options
+            .harnesses
+            .iter()
+            .find(|entry| entry.harness == harness)
+            .and_then(|entry| entry.models.iter().find(|model| model.id == id))
+            .cloned()
+    };
     let mut visits = Vec::new();
-    for key in ["claude-code", "codex", "opencode", "claude-code", "codex"] {
-        for which in ["impl", "review"] {
-            let profile = if which == "impl" {
-                "implementation"
-            } else {
-                "review"
-            };
-            let wanted = model_with_options(key);
-            let model_chip = format!("detail-{which}-model:{wanted}");
-            let show_all = format!("detail-{which}-model-show-all");
-            // The harness chip is scrolled into the visible body first
-            // (`click` reveals it); then wait until the draft names the
-            // harness and the model row lists that harness's catalog.
-            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
+    for (key, harness) in [
+        ("claude-code", HarnessId::ClaudeCode),
+        ("codex", HarnessId::Codex),
+        ("opencode", HarnessId::Opencode),
+        ("claude-code", HarnessId::ClaudeCode),
+        ("codex", HarnessId::Codex),
+    ] {
+        let wanted = model_with_options(key);
+        let model = catalog_model(harness, wanted)
+            .ok_or_else(|| anyhow!("{wanted} is not in the {key} catalog"))?;
+        for profile in ["implementation", "review"] {
+            pick_model(window, cx, detail_settings, profile, key, &model).await?;
             wait_for(
                 window,
                 cx,
                 &format!("{key} in the {profile} profile"),
                 |rb| {
-                    state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["harness"]
-                        == key
-                        && (rect(rb, &model_chip).is_some() || rect(rb, &show_all).is_some())
+                    detail_settings(rb)["draft"][profile]["harness"] == key
+                        && detail_settings(rb)["draft"][profile]["model"] == wanted
                 },
             )
             .await?;
-            if rect(&surfaces(window, cx)?, &model_chip).is_none() {
-                click(window, cx, &show_all).await?;
-                wait_for(window, cx, &format!("all {key} models"), |rb| {
-                    rect(rb, &model_chip).is_some()
-                })
-                .await?;
-            }
-            click(window, cx, &model_chip).await?;
-            wait_for(window, cx, &format!("{wanted} selected"), |rb| {
-                state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["model"] == wanted
-            })
-            .await?;
+            close_pickers(window, cx, detail_settings, profile).await?;
             // Two full frames with the tree built.
             draw(window, cx)?;
             draw(window, cx)?;
@@ -1978,32 +2256,18 @@ async fn scenario(
         let rb = surfaces(window, cx)?;
         visits.push(json!({
             "harness": key,
-            "implModels": chips_with(&rb, "detail-impl-model:").len(),
-            "implOptions": chips_with(&rb, "detail-impl-option"),
-            "reviewOptions": chips_with(&rb, "detail-review-option").len(),
-            "reasoning": chips_with(&rb, "detail-impl-reasoning:"),
+            "implementation": pickers_of(detail_settings(&rb), "implementation")["ui"]["modelChip"],
+            "review": pickers_of(detail_settings(&rb), "review")["ui"]["modelChip"],
         }));
     }
     let rb = surfaces(window, cx)?;
     run.keep("harness-switch", &rb);
-    let options_shown = chips_with(&rb, "detail-impl-option");
     let still_armed = arm_a11y(window, cx)?;
     run.check(
         "harness-switch-without-duplicate-ids",
-        json!({
-            "visits": 5,
-            "a11yTree": true,
-            "codexTier": ["detail-impl-option-default:serviceTier", "detail-impl-option:serviceTier=default"],
-        }),
-        json!({ "visits": visits, "a11yTree": still_armed, "codexOptions": options_shown }),
-        visits.len() == 5
-            && still_armed
-            && options_shown
-                .iter()
-                .any(|id| id == "detail-impl-option-default:serviceTier")
-            && options_shown
-                .iter()
-                .any(|id| id == "detail-impl-option:serviceTier=default"),
+        json!({ "visits": 5, "a11yTree": true }),
+        json!({ "visits": visits, "a11yTree": still_armed }),
+        visits.len() == 5 && still_armed,
     )?;
     run.capture(window, cx, "d05b-harness-switch")?;
     click(window, cx, "detail-settings-cancel").await?;

@@ -2,6 +2,14 @@
 //! supported reasoning/options, access, checkout and the reviewer profile,
 //! fed by the host's real catalog (`BoardApi::execution_options`).
 //!
+//! The controls are the chat composer's own pickers (a detached
+//! [`Pickers`] per profile: the model pill with its harness rail, model list
+//! and reasoning/options tray, the access lock, the checkout and a new
+//! worktree's base branch), so choosing a ticket's agent looks and works like
+//! choosing a chat's. Each profile row adds one mode menu (project defaults,
+//! choose, decide later). An unset field shows what it inherits, resolved by
+//! the engine; picking anything makes that one field the ticket's own.
+//!
 //! Rules (ticket-authoring §3, proposal "Execution settings"):
 //! * Every choice comes from the catalog; nothing here invents an id.
 //! * Inherited values show their effective value and origin, never a bare
@@ -16,18 +24,20 @@
 //!   never the enforcement.
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, Window, div, prelude::*,
+    SharedString, Styled, Task, Window, div, prelude::*, px,
 };
 use luna_proto::{
     BoardCheckoutChoice, BoardExecutionOptions, BoardExecutionOptionsRequest,
     BoardExecutionProfile, BoardHarnessOptions, BoardReviewProfile, BoardSettingOrigin, HarnessId,
-    Model, PermissionMode, ProjectCheckout, ReasoningLevel, ResolvedExecution,
+    Model, PermissionMode, ReasoningLevel, ResolvedExecution,
 };
 
 use super::api::BoardCallError;
 use super::detail::BoardProbe;
 use super::model::BoardModel;
 use crate::button::{self, ButtonKind, ControlSize};
+use crate::pickers::{CheckoutKind, DraftConfig, Pickers};
+use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -36,9 +46,6 @@ use crate::typography::ui_rems;
 /// Shown wherever the review profile inherits and no reviewer is configured.
 pub(crate) const REVIEW_FALLBACK_TEXT: &str =
     "No reviewer is configured: the implementation model reviews in a separate reviewer chat.";
-
-/// Catalog models listed at once per harness; "Show all" lists the rest.
-const MODEL_CHIPS: usize = 12;
 
 /// The current choices in a settings editor.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -106,7 +113,7 @@ impl ReviewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Which {
+pub enum Which {
     Implementation,
     Review,
 }
@@ -147,29 +154,6 @@ pub(crate) fn harness_label(harness: HarnessId) -> &'static str {
         HarnessId::Hermes => "Hermes",
         HarnessId::Pi => "Pi",
         HarnessId::Antigravity => "Antigravity",
-    }
-}
-
-/// The wire spelling (`claude-code`), used in element ids.
-pub(crate) fn harness_key(harness: HarnessId) -> String {
-    serde_json::to_value(harness)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{harness:?}"))
-}
-
-pub(crate) fn reasoning_key(level: ReasoningLevel) -> String {
-    serde_json::to_value(level)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{level:?}"))
-}
-
-pub(crate) fn permission_key(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::Ask => "ask",
-        PermissionMode::Auto => "auto",
-        PermissionMode::Full => "full",
     }
 }
 
@@ -250,13 +234,6 @@ fn checkout_label(checkout: &BoardCheckoutChoice) -> &'static str {
     match checkout {
         BoardCheckoutChoice::Current => "Current checkout",
         BoardCheckoutChoice::NewWorktree { .. } => "New worktree",
-    }
-}
-
-fn project_checkout_label(options: &BoardExecutionOptions) -> &'static str {
-    match options.project_defaults.checkout {
-        Some(ProjectCheckout::NewWorktree) => "New worktree",
-        Some(ProjectCheckout::Local) | None => "Current checkout",
     }
 }
 
@@ -374,28 +351,8 @@ pub(crate) fn describe_review(
 // The editor
 // ---------------------------------------------------------------------------
 
-/// One choice control's element id and QA probe name (see `slot`).
-struct Slot {
-    element: String,
-    probe: String,
-}
-
-/// The items in order with later duplicates (by `key`) dropped: a catalog
-/// may list one model, level or choice twice; one control each.
-fn unique_by<T, K: Eq + std::hash::Hash>(
-    items: impl IntoIterator<Item = T>,
-    key: impl Fn(&T) -> K,
-) -> Vec<T> {
-    let mut seen = std::collections::HashSet::new();
-    items
-        .into_iter()
-        .filter(|item| seen.insert(key(item)))
-        .collect()
-}
-
 /// Mutable view of the fields both profiles share.
 struct Fields<'a> {
-    harness: &'a mut Option<HarnessId>,
     account: &'a mut Option<String>,
     model: &'a mut Option<String>,
     reasoning: &'a mut Option<ReasoningLevel>,
@@ -429,10 +386,14 @@ pub struct ExecutionSettingsEditor {
     options: OptionsState,
     /// What a harness/model change reset, newest last.
     notices: Vec<String>,
-    /// Harnesses whose full model list is shown.
-    expanded_models: Vec<(Which, HarnessId)>,
-    more_task: Option<Task<()>>,
     load_task: Option<Task<()>>,
+    /// The chat composer's pickers, detached: the implementation profile's
+    /// (model, access, checkout) and the reviewer's (model only).
+    impl_pickers: Entity<Pickers>,
+    review_pickers: Entity<Pickers>,
+    /// The open mode menu.
+    mode_menu: popover::Popup<Which>,
+    _pickers: [gpui::Subscription; 2],
 }
 
 impl EventEmitter<SettingsEditorEvent> for ExecutionSettingsEditor {}
@@ -447,6 +408,19 @@ impl ExecutionSettingsEditor {
         probe: BoardProbe,
         cx: &mut Context<Self>,
     ) -> Self {
+        let impl_pickers =
+            cx.new(|cx| Pickers::new_detached(state.clone(), project_id.clone(), true, true, cx));
+        let review_pickers =
+            cx.new(|cx| Pickers::new_detached(state.clone(), project_id.clone(), false, false, cx));
+        let watch = |which: Which| {
+            move |editor: &mut Self, _: Entity<Pickers>, cx: &mut Context<Self>| {
+                editor.on_pickers_changed(which, cx)
+            }
+        };
+        let subscriptions = [
+            cx.observe(&impl_pickers, watch(Which::Implementation)),
+            cx.observe(&review_pickers, watch(Which::Review)),
+        ];
         let mut editor = Self {
             model,
             state,
@@ -459,10 +433,14 @@ impl ExecutionSettingsEditor {
             review: initial.review,
             options: OptionsState::Loading,
             notices: Vec::new(),
-            expanded_models: Vec::new(),
-            more_task: None,
             load_task: None,
+            impl_pickers,
+            review_pickers,
+            mode_menu: popover::Popup::default(),
+            _pickers: subscriptions,
         };
+        editor.sync_pickers(Which::Implementation, cx);
+        editor.sync_pickers(Which::Review, cx);
         editor.reload(cx);
         editor
     }
@@ -497,6 +475,9 @@ impl ExecutionSettingsEditor {
         self.implementation = draft.implementation;
         self.review = draft.review;
         self.notices.clear();
+        self.sync_pickers(Which::Implementation, cx);
+        self.sync_pickers(Which::Review, cx);
+        self.sync_inherited(cx);
         cx.notify();
     }
 
@@ -531,63 +512,13 @@ impl ExecutionSettingsEditor {
                     Ok(options) => OptionsState::Ready(Box::new(options)),
                     Err(error) => OptionsState::Error(options_error(&error)),
                 };
+                editor.sync_inherited(cx);
                 cx.emit(SettingsEditorEvent::Changed);
                 cx.notify();
             })
             .ok();
         }));
         cx.notify();
-    }
-
-    /// Fetch the next catalog page for one harness and append it.
-    fn load_more_models(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
-        let Some(offset) = self
-            .options()
-            .and_then(|options| harness_options(options, harness))
-            .and_then(|entry| entry.next_offset)
-        else {
-            return;
-        };
-        let Some(api) = self.model.read(cx).api(cx) else {
-            return;
-        };
-        let request = BoardExecutionOptionsRequest {
-            project_id: self.project_id.clone(),
-            harness: Some(harness),
-            query: None,
-            offset,
-            limit: None,
-        };
-        self.more_task = Some(cx.spawn(async move |this, cx| {
-            let result = api.execution_options(request).await;
-            this.update(cx, |editor, cx| {
-                editor.more_task = None;
-                match result {
-                    Ok(page) => {
-                        if let OptionsState::Ready(options) = &mut editor.options
-                            && let Some(entry) = options
-                                .harnesses
-                                .iter_mut()
-                                .find(|entry| entry.harness == harness)
-                            && let Some(more) =
-                                page.harnesses.into_iter().find(|e| e.harness == harness)
-                        {
-                            for model in more.models {
-                                if !entry.models.iter().any(|known| known.id == model.id) {
-                                    entry.models.push(model);
-                                }
-                            }
-                            entry.next_offset = more.next_offset;
-                        }
-                    }
-                    Err(error) => editor
-                        .notices
-                        .push(format!("More models could not load: {}", error.message())),
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
     }
 
     // ---- effective values ----
@@ -614,14 +545,12 @@ impl ExecutionSettingsEditor {
     fn fields(&mut self, which: Which) -> Fields<'_> {
         match which {
             Which::Implementation => Fields {
-                harness: &mut self.implementation.harness,
                 account: &mut self.implementation.provider_account_id,
                 model: &mut self.implementation.model,
                 reasoning: &mut self.implementation.reasoning,
                 options: &mut self.implementation.model_options,
             },
             Which::Review => Fields {
-                harness: &mut self.review.harness,
                 account: &mut self.review.provider_account_id,
                 model: &mut self.review.model,
                 reasoning: &mut self.review.reasoning,
@@ -750,102 +679,11 @@ impl ExecutionSettingsEditor {
         Some((level, origin))
     }
 
-    fn inherited_permission(&self) -> Option<(PermissionMode, &'static str)> {
-        let harness = self.effective_harness(Which::Implementation)?;
-        if let Some(resolved) = self.baseline(Which::Implementation)
-            && resolved.harness == harness
-        {
-            let origin = source(resolved, "permissionMode").map_or("project", origin_label);
-            return Some((resolved.permission_mode, origin));
-        }
-        self.options()?
-            .project_defaults
-            .permission_mode
-            .map(|mode| (mode, "project"))
-    }
-
     // ---- choices ----
 
     fn changed(&mut self, cx: &mut Context<Self>) {
         cx.emit(SettingsEditorEvent::Changed);
         cx.notify();
-    }
-
-    fn set_implementation_mode(&mut self, mode: ImplementationMode, cx: &mut Context<Self>) {
-        self.implementation_mode = mode;
-        self.changed(cx);
-    }
-
-    fn set_review_mode(&mut self, mode: ReviewMode, cx: &mut Context<Self>) {
-        self.review_mode = mode;
-        self.changed(cx);
-    }
-
-    fn select_harness(&mut self, which: Which, harness: Option<HarnessId>, cx: &mut Context<Self>) {
-        if self.values(which).harness == harness {
-            return;
-        }
-        *self.fields(which).harness = harness;
-        self.reconcile(which, true);
-        self.changed(cx);
-    }
-
-    fn select_model(&mut self, which: Which, model: Option<String>, cx: &mut Context<Self>) {
-        // Pin the harness the model belongs to, so a later project-default
-        // change can never pair this model with another provider.
-        if model.is_some() && self.values(which).harness.is_none() {
-            let harness = self.effective_harness(which);
-            *self.fields(which).harness = harness;
-        }
-        *self.fields(which).model = model;
-        self.reconcile(which, false);
-        self.changed(cx);
-    }
-
-    fn select_reasoning(
-        &mut self,
-        which: Which,
-        level: Option<ReasoningLevel>,
-        cx: &mut Context<Self>,
-    ) {
-        *self.fields(which).reasoning = level;
-        self.changed(cx);
-    }
-
-    fn select_account(&mut self, which: Which, account: Option<String>, cx: &mut Context<Self>) {
-        *self.fields(which).account = account;
-        self.changed(cx);
-    }
-
-    fn select_model_option(
-        &mut self,
-        which: Which,
-        option: String,
-        choice: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let fields = self.fields(which);
-        match choice {
-            Some(choice) => {
-                fields
-                    .options
-                    .insert(option, serde_json::Value::String(choice));
-            }
-            None => {
-                fields.options.remove(&option);
-            }
-        }
-        self.changed(cx);
-    }
-
-    fn select_permission(&mut self, mode: Option<PermissionMode>, cx: &mut Context<Self>) {
-        self.implementation.permission_mode = mode;
-        self.changed(cx);
-    }
-
-    fn select_checkout(&mut self, checkout: Option<BoardCheckoutChoice>, cx: &mut Context<Self>) {
-        self.implementation.checkout = checkout;
-        self.changed(cx);
     }
 
     /// Drop fields the new harness/model does not support, saying so.
@@ -873,7 +711,10 @@ impl ExecutionSettingsEditor {
                 "{label} has no account {account}; the account now inherits."
             ));
         }
+        // Only a complete catalog can say a model is not offered (the pickers
+        // list the host's full catalog; this one may be a first page).
         if harness_changed
+            && entry.next_offset.is_none()
             && let Some(model) = &values.model
             && !entry.models.iter().any(|known| &known.id == model)
         {
@@ -887,8 +728,11 @@ impl ExecutionSettingsEditor {
             .map(|model| model.label.clone())
             .or_else(|| self.effective_model(which))
             .unwrap_or_else(|| "this model".into());
+        // What the model supports is only known for a catalogued model.
+        let known_model = self.effective_model_info(which).is_some();
         let levels = self.supported_levels(which);
-        if let Some(level) = self.values(which).reasoning
+        if known_model
+            && let Some(level) = self.values(which).reasoning
             && !levels.contains(&level)
         {
             *self.fields(which).reasoning = None;
@@ -911,7 +755,7 @@ impl ExecutionSettingsEditor {
                         .iter()
                         .any(|c| Some(c.id.as_str()) == choice.as_str())
             });
-            if !supported {
+            if known_model && !supported {
                 self.fields(which).options.remove(&option);
                 notices.push(format!(
                     "{option} is not an option of {model_label}; it was removed."
@@ -934,576 +778,479 @@ impl ExecutionSettingsEditor {
         self.notices.drain(..excess);
     }
 
+    // ---- the chat's pickers ----
+
+    fn pickers(&self, which: Which) -> &Entity<Pickers> {
+        match which {
+            Which::Implementation => &self.impl_pickers,
+            Which::Review => &self.review_pickers,
+        }
+    }
+
+    /// What a profile's pickers show as picks (unset fields inherit; only
+    /// Custom has picks), and whether its checkout is a pick.
+    fn picker_draft(&self, which: Which) -> (DraftConfig, bool) {
+        match which {
+            Which::Implementation => {
+                if self.implementation_mode != ImplementationMode::Custom {
+                    return (DraftConfig::default(), false);
+                }
+                let profile = &self.implementation;
+                let (checkout, branch) = match &profile.checkout {
+                    Some(BoardCheckoutChoice::NewWorktree { base, .. }) => {
+                        (CheckoutKind::NewWorktree, base.clone())
+                    }
+                    _ => (CheckoutKind::Local, None),
+                };
+                (
+                    DraftConfig {
+                        harness: profile.harness,
+                        provider_account_id: profile.provider_account_id.clone(),
+                        model: profile.model.clone(),
+                        reasoning: profile.reasoning,
+                        branch,
+                        checkout,
+                        permission_mode: profile.permission_mode,
+                        model_options: profile.model_options.clone(),
+                    },
+                    profile.checkout.is_some(),
+                )
+            }
+            Which::Review => {
+                if self.review_mode != ReviewMode::Custom {
+                    return (DraftConfig::default(), false);
+                }
+                let profile = &self.review;
+                (
+                    DraftConfig {
+                        harness: profile.harness,
+                        provider_account_id: profile.provider_account_id.clone(),
+                        model: profile.model.clone(),
+                        reasoning: profile.reasoning,
+                        model_options: profile.model_options.clone(),
+                        ..DraftConfig::default()
+                    },
+                    false,
+                )
+            }
+        }
+    }
+
+    /// Show the profile's picks in its pickers.
+    fn sync_pickers(&mut self, which: Which, cx: &mut Context<Self>) {
+        let (draft, checkout_explicit) = self.picker_draft(which);
+        self.pickers(which).clone().update(cx, |pickers, cx| {
+            pickers.set_detached_draft(draft, checkout_explicit, cx);
+        });
+    }
+
+    /// What each profile's unset fields show: the engine's resolution (the
+    /// reviewer, with no reviewer configured, follows the implementation).
+    fn sync_inherited(&mut self, cx: &mut Context<Self>) {
+        if self.options().is_none() {
+            return;
+        }
+        let label = |this: &Self, harness: HarnessId, model: String| {
+            let label = model_label(this.options(), harness, &model);
+            (model, label)
+        };
+        let implementation = self.baseline(Which::Implementation).map(|resolved| {
+            (
+                resolved.harness,
+                resolved
+                    .model
+                    .clone()
+                    .map(|model| label(self, resolved.harness, model)),
+                resolved.reasoning,
+                Some(resolved.permission_mode),
+            )
+        });
+        let checkout = self
+            .options()
+            .and_then(|options| options.project_defaults.checkout);
+        let review = if self.review_inherits_implementation(Which::Review) {
+            self.effective_harness(Which::Review).map(|harness| {
+                let model = self
+                    .effective_model(Which::Review)
+                    .map(|model| label(self, harness, model));
+                let reasoning = self.implementation_in_effect().reasoning.or_else(|| {
+                    self.inherited_reasoning(Which::Review)
+                        .map(|(level, _)| level)
+                });
+                (harness, model, reasoning, None)
+            })
+        } else {
+            self.baseline(Which::Review).map(|resolved| {
+                (
+                    resolved.harness,
+                    resolved
+                        .model
+                        .clone()
+                        .map(|model| label(self, resolved.harness, model)),
+                    resolved.reasoning,
+                    None,
+                )
+            })
+        };
+        for (pickers, inherited, checkout) in [
+            (self.impl_pickers.clone(), implementation, checkout),
+            (self.review_pickers.clone(), review, None),
+        ] {
+            let (harness, model, reasoning, permission) = match inherited {
+                Some((harness, model, reasoning, permission)) => {
+                    (Some(harness), model, reasoning, permission)
+                }
+                None => (None, None, None, None),
+            };
+            pickers.update(cx, |pickers, cx| {
+                pickers.set_detached_inherited(harness, model, reasoning, permission, checkout, cx)
+            });
+        }
+    }
+
+    /// A pick in a profile's pickers: that field becomes the ticket's own
+    /// (Custom), the rest keep inheriting; unsupported leftovers are reset
+    /// with a notice and the pickers show the result.
+    fn on_pickers_changed(&mut self, which: Which, cx: &mut Context<Self>) {
+        let (draft, checkout_explicit) = {
+            let pickers = self.pickers(which).read(cx);
+            (pickers.draft().clone(), pickers.checkout_explicit())
+        };
+        let changed = match which {
+            Which::Implementation => {
+                let current = match self.implementation_mode {
+                    ImplementationMode::Custom => self.implementation.clone(),
+                    _ => BoardExecutionProfile::default(),
+                };
+                let kept_branch = match &self.implementation.checkout {
+                    Some(BoardCheckoutChoice::NewWorktree { branch, .. }) => branch.clone(),
+                    _ => None,
+                };
+                let next = BoardExecutionProfile {
+                    harness: draft.harness,
+                    provider_account_id: draft.provider_account_id.clone(),
+                    model: draft.model.clone(),
+                    reasoning: draft.reasoning,
+                    model_options: draft.model_options.clone(),
+                    permission_mode: draft.permission_mode,
+                    checkout: checkout_explicit.then(|| match draft.checkout {
+                        CheckoutKind::Local => BoardCheckoutChoice::Current,
+                        CheckoutKind::NewWorktree => BoardCheckoutChoice::NewWorktree {
+                            branch: kept_branch,
+                            base: draft.branch.clone(),
+                        },
+                    }),
+                    deferred: false,
+                };
+                if next == current {
+                    false
+                } else {
+                    let harness_changed = next.harness != current.harness;
+                    self.implementation = next;
+                    self.implementation_mode = ImplementationMode::Custom;
+                    self.reconcile(which, harness_changed);
+                    true
+                }
+            }
+            Which::Review => {
+                let current = match self.review_mode {
+                    ReviewMode::Custom => self.review.clone(),
+                    ReviewMode::ProjectDefault => BoardReviewProfile::default(),
+                };
+                let next = BoardReviewProfile {
+                    harness: draft.harness,
+                    provider_account_id: draft.provider_account_id.clone(),
+                    model: draft.model.clone(),
+                    reasoning: draft.reasoning,
+                    model_options: draft.model_options.clone(),
+                    disabled: current.disabled,
+                };
+                if next == current {
+                    false
+                } else {
+                    let harness_changed = next.harness != current.harness;
+                    self.review = next;
+                    self.review_mode = ReviewMode::Custom;
+                    self.reconcile(which, harness_changed);
+                    true
+                }
+            }
+        };
+        if changed {
+            self.sync_pickers(which, cx);
+            // The reviewer may follow the implementation's picks.
+            self.sync_inherited(cx);
+            self.changed(cx);
+        }
+    }
+
     // ---- rendering ----
 
     fn id(&self, which: Which, rest: &str) -> String {
         format!("{}-{}-{rest}", self.prefix, which.key())
     }
 
-    /// One choice control's identity. The element id is namespaced by
-    /// editor, profile, row and (for rows that depend on it) harness, plus
-    /// the control's position in its row: never a catalog id or label, so no
-    /// catalog (a model listed twice, a `default` choice beside the Default
-    /// chip) can give two controls one id, which GPUI's accessibility tree
-    /// rejects. `probe` is the semantic name QA reads.
-    fn slot(
-        &self,
-        which: Which,
-        row: &str,
-        scope: Option<HarnessId>,
-        index: usize,
-        probe: impl Into<String>,
-    ) -> Slot {
-        let scope = scope.map_or_else(|| "any".to_owned(), harness_key);
-        Slot {
-            element: format!("{}-{}-{row}-{scope}-{index}", self.prefix, which.key()),
-            probe: format!("{}-{}-{}", self.prefix, which.key(), probe.into()),
+    fn mode_label(&self, which: Which) -> &'static str {
+        match which {
+            Which::Implementation => match self.implementation_mode {
+                ImplementationMode::ProjectDefaults => "Project defaults",
+                ImplementationMode::Custom => "Custom",
+                ImplementationMode::Deferred => "Decide later",
+            },
+            Which::Review => match self.review_mode {
+                ReviewMode::ProjectDefault => "Project default",
+                ReviewMode::Custom => "Custom reviewer",
+            },
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn chip(
-        &self,
-        slot: Slot,
-        label: impl Into<SharedString>,
-        selected: bool,
-        enabled: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-        on: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-    ) -> AnyElement {
-        let label: SharedString = label.into();
-        self.probe.chip(&slot.probe, &label, selected);
-        let probe = self.probe.bounds_el(slot.probe);
-        let mut chip = button::chip(slot.element, selected, ControlSize::Sm, enabled, theme)
-            .role(gpui::Role::RadioButton)
-            .aria_label(label.clone())
-            .max_w_full();
-        if selected {
-            // The check glyph carries the choice without relying on colour.
-            chip = chip.child(
-                button::glyph(crate::icons::CHECK, ControlSize::Sm)
-                    .text_color(theme.readable_tone(theme.accent, 1.0)),
-            );
-        }
-        chip = chip
-            .child(div().min_w_0().truncate().child(label))
-            .children(probe);
-        if enabled {
-            chip = chip.on_click(cx.listener(move |this, _, _, cx| on(this, cx)));
-        }
-        chip.into_any_element()
-    }
-
-    fn row(
-        theme: &Theme,
-        title: &'static str,
-        description: Option<SharedString>,
-        chips: Vec<AnyElement>,
-    ) -> gpui::Div {
-        widgets::card_row(theme, false)
-            .child(widgets::row_text(theme, title, description))
-            .child(widgets::row_block().children(chips))
-    }
-
-    fn text_row(&self, key: &str, theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
-        let copy: SharedString = copy.into();
-        self.probe
-            .text(format!("{}-{key}", self.prefix), copy.to_string());
-        widgets::card_row(theme, false).child(
-            div()
-                .w_full()
-                .min_w_0()
-                .child(widgets::row_description(theme, copy)),
-        )
-    }
-
-    fn harness_chips(
-        &self,
-        which: Which,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(options) = self.options() else {
-            return Vec::new();
-        };
-        let values = self.values(which);
-        let inherited = if values.harness.is_some() {
-            None
+    fn toggle_mode_menu(&mut self, which: Which, cx: &mut Context<Self>) {
+        if self.mode_menu.get() == Some(&which) && !self.mode_menu.is_closing() {
+            self.close_mode_menu(cx);
         } else {
-            self.effective_harness(which)
-        };
-        let inherit_label = match (inherited, self.review_inherits_implementation(which)) {
-            (Some(harness), true) => {
-                format!("Inherit · {} (implementation)", harness_label(harness))
+            self.mode_menu.open(which);
+            cx.notify();
+        }
+    }
+
+    fn close_mode_menu(&mut self, cx: &mut Context<Self>) {
+        if self.mode_menu.begin_close() {
+            popover::reap_popup(cx, |editor: &mut Self| &mut editor.mode_menu);
+        }
+        cx.notify();
+    }
+
+    fn pick_mode(&mut self, which: Which, index: usize, cx: &mut Context<Self>) {
+        match which {
+            Which::Implementation => {
+                self.implementation_mode = match index {
+                    0 => ImplementationMode::ProjectDefaults,
+                    1 => ImplementationMode::Custom,
+                    _ => ImplementationMode::Deferred,
+                };
             }
-            (Some(harness), false) => {
-                let origin = self
-                    .baseline(which)
-                    .and_then(|resolved| source(resolved, "harness"))
-                    .map_or("project", origin_label);
-                format!("Inherit · {} ({origin})", harness_label(harness))
+            Which::Review => {
+                self.review_mode = if index == 0 {
+                    ReviewMode::ProjectDefault
+                } else {
+                    ReviewMode::Custom
+                };
             }
-            (None, _) => "Inherit · not resolved yet".to_owned(),
-        };
-        let mut chips = vec![self.chip(
-            self.slot(which, "harness", None, 0, "harness-inherit"),
-            inherit_label,
-            values.harness.is_none(),
-            true,
-            theme,
-            cx,
-            move |this, cx| this.select_harness(which, None, cx),
-        )];
-        let harnesses: Vec<HarnessId> = unique_by(
-            options
-                .harnesses
-                .iter()
-                .filter(|entry| entry.available)
-                .map(|entry| entry.harness),
-            |harness| *harness,
-        );
-        for (index, harness) in harnesses.into_iter().enumerate() {
-            chips.push(self.chip(
-                self.slot(
-                    which,
-                    "harness",
-                    None,
-                    index + 1,
-                    format!("harness:{}", harness_key(harness)),
-                ),
-                harness_label(harness),
-                values.harness == Some(harness),
-                true,
-                theme,
-                cx,
-                move |this, cx| this.select_harness(which, Some(harness), cx),
-            ));
         }
-        chips
+        self.close_mode_menu(cx);
+        self.sync_pickers(which, cx);
+        self.sync_inherited(cx);
+        self.changed(cx);
     }
 
-    fn account_row(
-        &self,
-        which: Which,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Div> {
-        let harness = self.effective_harness(which)?;
-        let entry = harness_options(self.options()?, harness)?;
-        // Account controls appear only when there is a real choice.
-        if entry.accounts.len() < 2 {
-            return None;
-        }
-        let accounts = unique_by(entry.accounts.iter().cloned(), |account| {
-            account.account_id.clone()
-        });
-        let values = self.values(which);
-        let active = accounts
-            .iter()
-            .find(|account| account.active)
-            .map(|account| account.label.clone())
-            .unwrap_or_else(|| "the active account".into());
-        let mut chips = vec![self.chip(
-            self.slot(which, "account", Some(harness), 0, "account-inherit"),
-            format!("Inherit · {active} (active)"),
-            values.account.is_none(),
-            true,
-            theme,
-            cx,
-            move |this, cx| this.select_account(which, None, cx),
-        )];
-        for (index, account) in accounts.into_iter().enumerate() {
-            let id = account.account_id.clone();
-            chips.push(self.chip(
-                self.slot(
-                    which,
-                    "account",
-                    Some(harness),
-                    index + 1,
-                    format!("account:{id}"),
+    /// The mode menu's rows: (label, detail, selected).
+    fn mode_rows(&self, which: Which) -> Vec<(&'static str, &'static str, bool)> {
+        match which {
+            Which::Implementation => vec![
+                (
+                    "Project defaults",
+                    "Use the project's agent settings",
+                    self.implementation_mode == ImplementationMode::ProjectDefaults,
                 ),
-                account.label.clone(),
-                values.account.as_deref() == Some(id.as_str()),
-                true,
-                theme,
-                cx,
-                move |this, cx| this.select_account(which, Some(id.clone()), cx),
-            ));
+                (
+                    "Custom",
+                    "Pick this ticket's own agent",
+                    self.implementation_mode == ImplementationMode::Custom,
+                ),
+                (
+                    "Decide later",
+                    "Choose before it moves to Ready",
+                    self.implementation_mode == ImplementationMode::Deferred,
+                ),
+            ],
+            Which::Review => vec![
+                (
+                    "Project default",
+                    "The project's reviewer",
+                    self.review_mode == ReviewMode::ProjectDefault,
+                ),
+                (
+                    "Custom reviewer",
+                    "Pick this ticket's reviewer",
+                    self.review_mode == ReviewMode::Custom,
+                ),
+            ],
         }
-        Some(Self::row(
-            theme,
-            "Account",
-            Some(harness_label(harness).into()),
-            chips,
-        ))
     }
 
-    fn model_row(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let harness = self.effective_harness(which)?;
-        let entry = harness_options(self.options()?, harness)?.clone();
-        let models = unique_by(entry.models.iter().cloned(), |model| model.id.clone());
-        let values = self.values(which);
-        let inherit_label = match self.inherited_model(which, harness) {
-            Some((model, origin)) => format!(
-                "Inherit · {} ({origin})",
-                model_label(self.options(), harness, &model)
-            ),
-            None => "Inherit · the provider's default model".to_owned(),
-        };
-        let mut chips = vec![self.chip(
-            self.slot(which, "model", Some(harness), 0, "model-inherit"),
-            inherit_label,
-            values.model.is_none(),
-            true,
-            theme,
-            cx,
-            move |this, cx| this.select_model(which, None, cx),
-        )];
-        let expanded = self.expanded_models.contains(&(which, harness));
-        let shown = if expanded {
-            models.len()
-        } else {
-            MODEL_CHIPS.min(models.len())
-        };
-        for (index, model) in models.iter().take(shown).enumerate() {
-            let id = model.id.clone();
-            let selected = values.model.as_deref() == Some(id.as_str());
-            chips.push(self.chip(
-                self.slot(
-                    which,
-                    "model",
-                    Some(harness),
-                    index + 1,
-                    format!("model:{id}"),
-                ),
-                model.label.clone(),
-                selected,
-                true,
-                theme,
-                cx,
-                move |this, cx| this.select_model(which, Some(id.clone()), cx),
-            ));
-        }
-        // A saved model the loaded page does not list stays visible as such.
-        if let Some(saved) = &values.model
-            && values.harness.is_none_or(|h| h == harness)
-            && !models.iter().any(|model| &model.id == saved)
-        {
-            chips.push(self.chip(
-                self.slot(
-                    which,
-                    "model",
-                    Some(harness),
-                    models.len() + 1,
-                    format!("model:{saved}"),
-                ),
-                format!("{saved} (not in the loaded catalog)"),
-                true,
-                true,
-                theme,
-                cx,
-                |_, _| {},
-            ));
-        }
-        if models.len() > shown {
-            let key = (which, harness);
-            chips.push(
-                button::button(
-                    self.id(which, "model-show-all"),
-                    ButtonKind::Ghost,
-                    ControlSize::Sm,
-                    true,
-                    theme,
-                )
-                .aria_label("Show all models")
-                .child(format!("Show all {}", models.len()))
-                .children(self.probe.bounds_el(self.id(which, "model-show-all")))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.expanded_models.push(key);
-                    cx.notify();
-                }))
-                .into_any_element(),
-            );
-        }
-        if entry.next_offset.is_some() {
-            chips.push(
-                button::button(
-                    self.id(which, "model-more"),
-                    ButtonKind::Ghost,
-                    ControlSize::Sm,
-                    self.more_task.is_none(),
-                    theme,
-                )
-                .aria_label("Load more models")
-                .child("More models…")
-                .on_click(cx.listener(move |this, _, _, cx| this.load_more_models(harness, cx)))
-                .into_any_element(),
-            );
-        }
-        Some(Self::row(
-            theme,
-            "Model",
-            Some(format!("{} catalog on this host", harness_label(harness)).into()),
-            chips,
-        ))
-    }
-
-    fn reasoning_row(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let levels = unique_by(self.supported_levels(which), |level| reasoning_key(*level));
-        let scope = self.effective_harness(which);
-        let model = self
-            .effective_model_info(which)
-            .map(|model| model.label.clone());
-        if levels.is_empty() {
-            let copy = match model {
-                Some(model) => format!("Reasoning: {model} has no reasoning levels to choose."),
-                None => "Reasoning: choose a model from the catalog to see its levels.".into(),
-            };
-            return self.text_row(&format!("{}-reasoning-none", which.key()), theme, copy);
-        }
-        let values = self.values(which);
-        let inherit_label = match self.inherited_reasoning(which) {
-            Some((level, origin)) => format!("Inherit · {} ({origin})", reasoning_label(level)),
-            None => "Inherit · the model's default".to_owned(),
-        };
-        let mut chips = vec![self.chip(
-            self.slot(which, "reasoning", scope, 0, "reasoning-inherit"),
-            inherit_label,
-            values.reasoning.is_none(),
-            true,
-            theme,
-            cx,
-            move |this, cx| this.select_reasoning(which, None, cx),
-        )];
-        for (index, level) in levels.into_iter().enumerate() {
-            chips.push(self.chip(
-                self.slot(
-                    which,
-                    "reasoning",
-                    scope,
-                    index + 1,
-                    format!("reasoning:{}", reasoning_key(level)),
-                ),
-                reasoning_label(level),
-                values.reasoning == Some(level),
-                true,
-                theme,
-                cx,
-                move |this, cx| this.select_reasoning(which, Some(level), cx),
-            ));
-        }
-        Self::row(
-            theme,
-            "Reasoning",
-            model.map(|model| format!("Supported by {model}").into()),
-            chips,
-        )
-    }
-
-    fn option_rows(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> Vec<gpui::Div> {
-        let Some(model) = self.effective_model_info(which).cloned() else {
-            return Vec::new();
-        };
-        let values = self.values(which);
-        let scope = self.effective_harness(which);
-        let mut rows = Vec::new();
-        let options = unique_by(model.options.into_iter(), |option| option.id.clone());
-        for (option_index, option) in options.into_iter().enumerate() {
-            let row = format!("option{option_index}");
-            let current = values
-                .options
-                .get(&option.id)
-                .and_then(|value| value.as_str())
-                .map(str::to_owned);
-            let default_label = option
-                .choices
-                .iter()
-                .find(|choice| choice.id == option.default_choice)
-                .map(|choice| choice.label.clone())
-                .unwrap_or_else(|| option.default_choice.clone());
-            let option_id = option.id.clone();
-            let mut chips = vec![self.chip(
-                self.slot(
-                    which,
-                    &row,
-                    scope,
-                    0,
-                    format!("option-default:{}", option.id),
-                ),
-                format!("Default · {default_label}"),
-                current.is_none(),
-                true,
-                theme,
-                cx,
-                {
-                    let option_id = option_id.clone();
-                    move |this, cx| this.select_model_option(which, option_id.clone(), None, cx)
-                },
-            )];
-            let choices = unique_by(option.choices.into_iter(), |choice| choice.id.clone());
-            for (choice_index, choice) in choices.into_iter().enumerate() {
-                let choice_id = choice.id.clone();
-                let option_id = option_id.clone();
-                chips.push(self.chip(
-                    self.slot(
-                        which,
-                        &row,
-                        scope,
-                        choice_index + 1,
-                        format!("option:{}={}", option.id, choice.id),
-                    ),
-                    choice.label.clone(),
-                    current.as_deref() == Some(choice.id.as_str()),
-                    true,
-                    theme,
-                    cx,
-                    move |this, cx| {
-                        this.select_model_option(
-                            which,
-                            option_id.clone(),
-                            Some(choice_id.clone()),
-                            cx,
-                        )
+    /// The mode pop-up button with its menu.
+    fn render_mode_menu(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.mode_menu.get() == Some(&which);
+        let closing = self.mode_menu.closing_since();
+        let element = self.id(which, "mode");
+        self.probe.chip(&element, self.mode_label(which), true);
+        let trigger =
+            crate::pickers::ghost_pill(element.clone(), self.mode_label(which), true, open, theme)
+                .aria_label(SharedString::from(format!(
+                    "{} settings: {}",
+                    match which {
+                        Which::Implementation => "Implementation",
+                        Which::Review => "Review",
                     },
-                ));
-            }
-            rows.push(
-                widgets::card_row(theme, false)
-                    .child(widgets::row_text(
-                        theme,
-                        "Model option",
-                        Some(option.label.into()),
-                    ))
-                    .child(widgets::row_block().children(chips)),
-            );
-        }
-        rows
-    }
-
-    fn access_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let harness = self.effective_harness(Which::Implementation)?;
-        let modes = unique_by(
-            harness_options(self.options()?, harness)?
-                .permission_modes
-                .iter()
-                .copied(),
-            |mode| *mode,
-        );
-        let inherit_label = match self.inherited_permission() {
-            Some((mode, origin)) => format!("Inherit · {} ({origin})", permission_label(mode)),
-            None => "Inherit · the provider's default access".to_owned(),
-        };
-        let current = self.implementation.permission_mode;
-        let mut chips = vec![self.chip(
-            self.slot(
-                Which::Implementation,
-                "access",
-                Some(harness),
-                0,
-                "access-inherit",
-            ),
-            inherit_label,
-            current.is_none(),
-            true,
-            theme,
-            cx,
-            |this, cx| this.select_permission(None, cx),
-        )];
-        for (index, mode) in modes.into_iter().enumerate() {
-            chips.push(self.chip(
-                self.slot(
-                    Which::Implementation,
-                    "access",
-                    Some(harness),
-                    index + 1,
-                    format!("access:{}", permission_key(mode)),
-                ),
-                permission_label(mode),
-                current == Some(mode),
-                true,
-                theme,
-                cx,
-                move |this, cx| this.select_permission(Some(mode), cx),
+                    self.mode_label(which)
+                )))
+                .tab_index(0)
+                .on_key_down(crate::swallow_activation_key)
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_mode_menu(which, cx)))
+                .children(self.probe.bounds_el(element.clone()));
+        let mut trigger = trigger.relative();
+        if open {
+            let popup = theme.for_popup();
+            let rows: Vec<AnyElement> = self
+                .mode_rows(which)
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, detail, selected))| {
+                    let row_id = self.id(which, &format!("mode-{index}"));
+                    popover::menu_row_nav(&popup, selected, false)
+                        .id(SharedString::from(row_id.clone()))
+                        .role(gpui::Role::MenuItem)
+                        .aria_label(SharedString::from(format!("{label}: {detail}")))
+                        .hover(|style| style.bg(popover::menu_hover_bg()))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.pick_mode(which, index, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .child(div().child(label))
+                                .child(
+                                    div()
+                                        .text_size(ui_rems(11.5))
+                                        .text_color(popup.readable_muted(0.75))
+                                        .child(detail),
+                                ),
+                        )
+                        .children(self.probe.bounds_el(row_id))
+                        .into_any_element()
+                })
+                .collect();
+            let menu = popover::popover_card(&popup)
+                .w(ui_rems(popover::MENU_W_M))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_mode_menu(cx)))
+                .flex()
+                .flex_col()
+                .gap(px(popover::MENU_GAP))
+                .children(rows)
+                .into_any_element();
+            trigger = trigger.child(popover::anchored_menu_below_leading(
+                SharedString::from(format!("{element}-menu")),
+                menu,
+                closing,
             ));
         }
-        Some(Self::row(
-            theme,
-            "Access",
-            Some(
-                "Requested for the ticket worker. Saving it grants nothing; launch applies the \
-                 existing permission rules."
-                    .into(),
-            ),
-            chips,
-        ))
+        trigger.into_any_element()
     }
 
-    fn checkout_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let options = self.options()?;
-        let inherit = format!("Inherit · {} (project)", project_checkout_label(options));
-        let current = self.implementation.checkout.clone();
-        let chips = vec![
-            self.chip(
-                self.slot(
-                    Which::Implementation,
-                    "checkout",
-                    None,
-                    0,
-                    "checkout-inherit",
+    /// The muted line under a profile row: what it inherits, or why it has
+    /// nothing to pick.
+    fn caption(&self, which: Which, cx: &App) -> Option<String> {
+        match which {
+            Which::Implementation => match self.implementation_mode {
+                ImplementationMode::Deferred => Some(
+                    "Settings stay unresolved until you choose them; Ready asks first and LUNA \
+                     never picks greater access on its own."
+                        .into(),
                 ),
-                inherit,
-                current.is_none(),
-                true,
-                theme,
-                cx,
-                |this, cx| this.select_checkout(None, cx),
-            ),
-            self.chip(
-                self.slot(
-                    Which::Implementation,
-                    "checkout",
-                    None,
-                    1,
-                    "checkout:current",
-                ),
-                "Current checkout",
-                current == Some(BoardCheckoutChoice::Current),
-                true,
-                theme,
-                cx,
-                |this, cx| this.select_checkout(Some(BoardCheckoutChoice::Current), cx),
-            ),
-            self.chip(
-                self.slot(
-                    Which::Implementation,
-                    "checkout",
-                    None,
-                    2,
-                    "checkout:worktree",
-                ),
-                "New worktree",
-                matches!(current, Some(BoardCheckoutChoice::NewWorktree { .. })),
-                true,
-                theme,
-                cx,
-                |this, cx| {
-                    this.select_checkout(
-                        Some(BoardCheckoutChoice::NewWorktree {
-                            branch: None,
-                            base: None,
+                ImplementationMode::ProjectDefaults => Some(match self.host_line(cx) {
+                    Some(host) => format!("Inherits the project's settings. {host}"),
+                    None => "Inherits the project's settings.".into(),
+                }),
+                ImplementationMode::Custom => self.host_line(cx),
+            },
+            Which::Review => match self.review_mode {
+                ReviewMode::ProjectDefault => Some(match self.options() {
+                    Some(options) if review_falls_back(options) => REVIEW_FALLBACK_TEXT.to_owned(),
+                    _ => "A temporary reviewer chat checks each result.".into(),
+                }),
+                ReviewMode::Custom => None,
+            },
+        }
+    }
+
+    /// One profile: its label, mode menu and the chat's pickers on one line,
+    /// with a muted caption. `label`: show the row's own label (the form's
+    /// implementation row sits in the description card, which names it).
+    pub fn render_row(
+        &mut self,
+        which: Which,
+        label: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let deferred = which == Which::Implementation
+            && self.implementation_mode == ImplementationMode::Deferred;
+        let caption = self.caption(which, cx);
+        if let Some(caption) = &caption {
+            self.probe.text(self.id(which, "caption"), caption.clone());
+        }
+        let pickers = self.pickers(which).clone();
+        let pickers_id = self.id(which, "pickers");
+        let line = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(ui_rems(2.0))
+            .min_w_0()
+            .when(label, |line| {
+                line.child(
+                    div()
+                        .w(ui_rems(92.0))
+                        .flex_none()
+                        .text_size(ui_rems(12.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.readable_muted(0.85))
+                        .child(match which {
+                            Which::Implementation => "Agent",
+                            Which::Review => "Reviewer",
                         }),
-                        cx,
-                    )
-                },
-            ),
-        ];
-        Some(Self::row(
-            theme,
-            "Checkout",
-            Some("A new worktree is only created when you choose it.".into()),
-            chips,
-        ))
+                )
+            })
+            .child(self.render_mode_menu(which, theme, cx))
+            .when(!deferred, |line| {
+                line.child(
+                    div()
+                        .flex_none()
+                        .w(px(1.0))
+                        .h(ui_rems(14.0))
+                        .mx(ui_rems(4.0))
+                        .bg(theme.separator(false)),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(pickers_id.clone()))
+                        .min_w_0()
+                        .child(pickers)
+                        .children(self.probe.bounds_el(pickers_id)),
+                )
+            });
+        div()
+            .id(SharedString::from(self.id(which, "row")))
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(2.0))
+            .child(line)
+            .when_some(caption, |row, caption| {
+                row.child(
+                    div()
+                        .when(label, |el| el.pl(ui_rems(92.0 + 10.0)))
+                        .when(!label, |el| el.pl(ui_rems(10.0)))
+                        .text_size(ui_rems(11.5))
+                        .line_height(ui_rems(15.0))
+                        .text_color(theme.readable_muted(0.7))
+                        .child(caption),
+                )
+            })
+            .into_any_element()
     }
 
     fn host_line(&self, cx: &App) -> Option<String> {
@@ -1513,196 +1260,94 @@ impl ExecutionSettingsEditor {
             .device_name(&options.host_device_id)
             .map(str::to_owned)
             .unwrap_or_else(|| "the project's host".into());
-        Some(format!(
-            "Runs on {name}, the host that owns this project (the only valid host)."
-        ))
+        Some(format!("Runs on {name}, the project's host."))
     }
 
-    fn notices_block(&self, theme: &Theme) -> Option<gpui::Div> {
+    /// What a pick reset, as compact warning lines.
+    pub fn render_notices(&self, theme: &Theme) -> Option<AnyElement> {
         if self.notices.is_empty() {
             return None;
         }
-        let mut block = div()
-            .w_full()
-            .mt(ui_rems(8.0))
-            .flex()
-            .flex_col()
-            .gap(ui_rems(6.0));
+        let mut block = div().w_full().flex().flex_col().gap(ui_rems(4.0));
         for (index, notice) in self.notices.iter().enumerate() {
             self.probe
                 .text(format!("{}-notice-{index}", self.prefix), notice.clone());
             block = block.child(
-                widgets::warning_strip(theme, notice.clone())
-                    .mt_0()
-                    .w_full(),
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(ui_rems(6.0))
+                    .text_size(ui_rems(11.5))
+                    .line_height(ui_rems(15.0))
+                    .text_color(theme.readable_tone(theme.warning, 0.85))
+                    .child(
+                        crate::icons::icon(crate::icons::DANGER_TRIANGLE)
+                            .size(ui_rems(12.0))
+                            .mt(ui_rems(1.5))
+                            .flex_none(),
+                    )
+                    .child(div().min_w_0().child(notice.clone())),
             );
         }
-        Some(block)
+        Some(block.into_any_element())
     }
 
-    fn implementation_section(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let which = Which::Implementation;
-        let mode = self.implementation_mode;
-        let modes = vec![
-            self.chip(
-                self.slot(which, "mode", None, 0, "mode-defaults"),
-                "Use project defaults",
-                mode == ImplementationMode::ProjectDefaults,
-                true,
-                theme,
-                cx,
-                |this, cx| this.set_implementation_mode(ImplementationMode::ProjectDefaults, cx),
-            ),
-            self.chip(
-                self.slot(which, "mode", None, 1, "mode-custom"),
-                "Choose settings",
-                mode == ImplementationMode::Custom,
-                true,
-                theme,
-                cx,
-                |this, cx| this.set_implementation_mode(ImplementationMode::Custom, cx),
-            ),
-            self.chip(
-                self.slot(which, "mode", None, 2, "mode-deferred"),
-                "Decide later",
-                mode == ImplementationMode::Deferred,
-                true,
-                theme,
-                cx,
-                |this, cx| this.set_implementation_mode(ImplementationMode::Deferred, cx),
-            ),
-        ];
-        let mut card = widgets::section_card(theme)
-            .mt(ui_rems(12.0))
-            .child(widgets::section_header(
-                theme,
-                "Implementation",
-                Some("The agent that works on the ticket after it moves to Ready.".into()),
-                vec![],
-            ))
-            .child(widgets::card_row(theme, false).child(widgets::row_block().children(modes)));
-        match mode {
-            ImplementationMode::ProjectDefaults => {
-                let copy = match self
-                    .options()
-                    .and_then(|options| options.effective_implementation.as_ref())
-                {
-                    Some(resolved) => format!(
-                        "Uses the project's defaults, currently {}.",
-                        describe_resolved(resolved, self.options(), true)
-                    ),
-                    None => "Uses the project's defaults, resolved when the ticket starts.".into(),
-                };
-                card = card.child(self.text_row("impl-summary", theme, copy));
+    /// Loading or error state of the host's catalog, if any.
+    pub fn render_status(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match &self.options {
+            OptionsState::Loading => {
+                self.probe
+                    .text(format!("{}-options", self.prefix), "loading".to_owned());
+                None
             }
-            ImplementationMode::Deferred => {
-                card = card.child(self.text_row(
-                    "impl-summary",
-                    theme,
-                    "Settings stay unresolved. Before this ticket can start, Ready asks for them; \
-                     LUNA never picks greater access on its own.",
-                ));
-            }
-            ImplementationMode::Custom => {
-                let harness_chips = self.harness_chips(which, theme, cx);
-                card = card.child(Self::row(theme, "Harness", None, harness_chips));
-                if let Some(row) = self.account_row(which, theme, cx) {
-                    card = card.child(row);
-                }
-                if let Some(row) = self.model_row(which, theme, cx) {
-                    card = card.child(row);
-                }
-                card = card.child(self.reasoning_row(which, theme, cx));
-                for row in self.option_rows(which, theme, cx) {
-                    card = card.child(row);
-                }
-                if let Some(row) = self.access_row(theme, cx) {
-                    card = card.child(row);
-                }
-                if let Some(row) = self.checkout_row(theme, cx) {
-                    card = card.child(row);
-                }
-            }
-        }
-        if let Some(line) = self.host_line(cx) {
-            card = card.child(self.text_row("host", theme, line));
-        }
-        card.into_any_element()
-    }
-
-    fn review_section(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let which = Which::Review;
-        let mode = self.review_mode;
-        let modes = vec![
-            self.chip(
-                self.slot(which, "mode", None, 0, "mode-default"),
-                "Project default",
-                mode == ReviewMode::ProjectDefault,
-                true,
-                theme,
-                cx,
-                |this, cx| this.set_review_mode(ReviewMode::ProjectDefault, cx),
-            ),
-            self.chip(
-                self.slot(which, "mode", None, 1, "mode-custom"),
-                "Choose reviewer",
-                mode == ReviewMode::Custom,
-                true,
-                theme,
-                cx,
-                |this, cx| this.set_review_mode(ReviewMode::Custom, cx),
-            ),
-        ];
-        let mut card = widgets::section_card(theme)
-            .mt(ui_rems(12.0))
-            .child(widgets::section_header(
-                theme,
-                "Review",
+            OptionsState::Error(error) => {
+                self.probe
+                    .text(format!("{}-options", self.prefix), error.clone());
                 Some(
-                    "A temporary reviewer side chat checks each result. Its access is limited \
-                     to the review contract."
-                        .into(),
-                ),
-                vec![],
-            ))
-            .child(widgets::card_row(theme, false).child(widgets::row_block().children(modes)));
-        match mode {
-            ReviewMode::ProjectDefault => {
-                let copy = match self.options() {
-                    Some(options) if review_falls_back(options) => REVIEW_FALLBACK_TEXT.to_owned(),
-                    Some(options) => match &options.effective_review {
-                        Some(review) => format!(
-                            "Uses the project's reviewer, currently {}.",
-                            describe_resolved(review, Some(options), false)
-                        ),
-                        None => REVIEW_FALLBACK_TEXT.to_owned(),
-                    },
-                    None => "Uses the project's reviewer.".into(),
-                };
-                card = card.child(self.text_row("review-summary", theme, copy));
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(ui_rems(8.0))
+                        .child(widgets::error_strip(theme, error.clone()).mt_0().flex_1())
+                        .child(
+                            button::button(
+                                format!("{}-options-retry", self.prefix),
+                                ButtonKind::Secondary,
+                                ControlSize::Sm,
+                                true,
+                                theme,
+                            )
+                            .aria_label("Retry loading the host's choices")
+                            .child("Retry")
+                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                        )
+                        .into_any_element(),
+                )
             }
-            ReviewMode::Custom => {
-                let harness_chips = self.harness_chips(which, theme, cx);
-                card = card.child(Self::row(theme, "Harness", None, harness_chips));
-                if let Some(row) = self.account_row(which, theme, cx) {
-                    card = card.child(row);
-                }
-                if let Some(row) = self.model_row(which, theme, cx) {
-                    card = card.child(row);
-                }
-                card = card.child(self.reasoning_row(which, theme, cx));
-                for row in self.option_rows(which, theme, cx) {
-                    card = card.child(row);
-                }
-            }
+            OptionsState::Ready(_) => None,
         }
-        card.into_any_element()
     }
 
     /// Fixture readback: modes, draft, notices and the loaded catalog.
     #[cfg(feature = "appshots-fixture")]
-    pub fn fixture_state(&self) -> serde_json::Value {
+    pub fn fixture_state(&self, cx: &App) -> serde_json::Value {
+        let pickers = |pickers: &Entity<Pickers>| {
+            let pickers = pickers.read(cx);
+            serde_json::json!({
+                "draft": serde_json::to_value(pickers.draft()).unwrap_or_default(),
+                "checkoutExplicit": pickers.checkout_explicit(),
+                "isOpen": pickers.is_open(),
+                "ui": pickers.fixture_detached_readback(cx),
+            })
+        };
         serde_json::json!({
+            "pickers": {
+                "implementation": pickers(&self.impl_pickers),
+                "review": pickers(&self.review_pickers),
+            },
+            "modeMenu": self.mode_menu.get().map(|which| which.key()),
             "implementationMode": self.implementation_mode.key(),
             "reviewMode": self.review_mode.key(),
             "draft": {
@@ -1730,49 +1375,71 @@ fn options_error(error: &BoardCallError) -> String {
 impl Render for ExecutionSettingsEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        let mut root = div()
+        let status = self.render_status(&theme, cx);
+        let implementation = self.render_row(Which::Implementation, true, &theme, cx);
+        let review = self.render_row(Which::Review, true, &theme, cx);
+        div()
             .id(SharedString::from(format!(
                 "{}-settings-editor",
                 self.prefix
             )))
             .w_full()
             .flex()
-            .flex_col();
-        match &self.options {
-            OptionsState::Loading => {
-                self.probe
-                    .text(format!("{}-options", self.prefix), "loading".to_owned());
-                root = root.child(widgets::row_description(
-                    &theme,
-                    "Loading the host's models, reasoning and access choices…",
-                ));
-            }
-            OptionsState::Error(error) => {
-                self.probe
-                    .text(format!("{}-options", self.prefix), error.clone());
-                root = root
-                    .child(widgets::error_strip(&theme, error.clone()).mt_0())
-                    .child(
-                        div().mt(ui_rems(8.0)).child(
-                            button::button(
-                                format!("{}-options-retry", self.prefix),
-                                ButtonKind::Secondary,
-                                ControlSize::Sm,
-                                true,
-                                &theme,
-                            )
-                            .aria_label("Retry loading the host's choices")
-                            .child("Retry")
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
-                        ),
-                    );
-            }
-            OptionsState::Ready(_) => {}
+            .flex_col()
+            .gap(ui_rems(8.0))
+            .children(status)
+            .child(implementation)
+            .children(self.render_notices(&theme))
+            .child(review)
+    }
+}
+
+/// One profile row of an editor as its own view, so a host can place the
+/// implementation row inside its description card and the reviewer below.
+pub struct SettingsRow {
+    editor: Entity<ExecutionSettingsEditor>,
+    which: Which,
+    label: bool,
+    _editor: gpui::Subscription,
+}
+
+impl SettingsRow {
+    pub fn new(
+        editor: Entity<ExecutionSettingsEditor>,
+        which: Which,
+        label: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
+        Self {
+            editor,
+            which,
+            label,
+            _editor: observer,
         }
-        root = root
-            .child(self.implementation_section(&theme, cx))
-            .children(self.notices_block(&theme))
-            .child(self.review_section(&theme, cx));
-        root
+    }
+}
+
+impl Render for SettingsRow {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
+        let (which, label) = (self.which, self.label);
+        self.editor.update(cx, |editor, cx| {
+            let status = (which == Which::Implementation)
+                .then(|| editor.render_status(&theme, cx))
+                .flatten();
+            let row = editor.render_row(which, label, &theme, cx);
+            let notices = (which == Which::Implementation)
+                .then(|| editor.render_notices(&theme))
+                .flatten();
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(ui_rems(6.0))
+                .children(status)
+                .child(row)
+                .children(notices)
+        })
     }
 }

@@ -9931,6 +9931,9 @@ impl Composer {
     fn perf_scope(&self, cx: &gpui::App) -> String {
         match &self.binding {
             crate::chat_binding::ChatBinding::Chat(chat) => format!("pane:{chat}"),
+            crate::chat_binding::ChatBinding::Detached { space_id } => {
+                format!("detached:{space_id}")
+            }
             crate::chat_binding::ChatBinding::Selected => format!(
                 "main:{}",
                 self.state.read(cx).selected_chat.as_deref().unwrap_or("-")

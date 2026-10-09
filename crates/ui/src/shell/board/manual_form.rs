@@ -19,8 +19,8 @@ use super::api::BoardCallError;
 use super::detail::{BoardProbe, new_request_id};
 use super::model::BoardModel;
 use super::settings_controls::{
-    ExecutionSettingsDraft, ExecutionSettingsEditor, SettingsEditorEvent, describe_implementation,
-    describe_review,
+    ExecutionSettingsDraft, ExecutionSettingsEditor, SettingsEditorEvent, SettingsRow, Which,
+    describe_implementation, describe_review,
 };
 use crate::AccessibleButton as _;
 use crate::button::{self, ButtonKind, ControlSize};
@@ -347,6 +347,9 @@ pub struct ManualTicketForm {
     title: Entity<ComposerInput>,
     description: Entity<ComposerInput>,
     settings: Option<Entity<ExecutionSettingsEditor>>,
+    /// The editor's rows: the agent inside the brief's card, the reviewer
+    /// below it.
+    settings_rows: Option<(Entity<SettingsRow>, Entity<SettingsRow>)>,
     phase: SavePhase,
     /// Reused verbatim after a lost answer, so a retry can never create a
     /// second ticket.
@@ -369,13 +372,17 @@ impl ManualTicketForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = cx.new(|cx| {
-            ComposerInput::new("A clear outcome, e.g. “Retry failed uploads”", cx)
+            ComposerInput::new("Ticket title, e.g. “Retry failed uploads”", cx)
                 .with_single_line()
+                .with_text_metrics(15.0, 21.0)
                 .with_accessibility_role(gpui::Role::TextInput)
         });
         let description = cx.new(|cx| {
-            ComposerInput::new("What should change, and how will we know it works?", cx)
-                .with_accessibility_role(gpui::Role::MultilineTextInput)
+            ComposerInput::new(
+                "Describe the outcome, the context and how to verify it…",
+                cx,
+            )
+            .with_accessibility_role(gpui::Role::MultilineTextInput)
         });
         let mut subscriptions = vec![
             cx.subscribe_in(&title, window, |this, _, event, window, cx| match event {
@@ -421,6 +428,12 @@ impl ManualTicketForm {
             );
             editor
         });
+        let settings_rows = settings.as_ref().map(|editor| {
+            (
+                cx.new(|cx| SettingsRow::new(editor.clone(), Which::Implementation, false, cx)),
+                cx.new(|cx| SettingsRow::new(editor.clone(), Which::Review, true, cx)),
+            )
+        });
         Self {
             model,
             project_id,
@@ -429,6 +442,7 @@ impl ManualTicketForm {
             title,
             description,
             settings,
+            settings_rows,
             phase: SavePhase::Editing,
             pending_request: None,
             errors: FieldErrors::default(),
@@ -675,47 +689,31 @@ impl ManualTicketForm {
         )
     }
 
-    fn input_field(
+    /// A borderless field inside the brief's card: the input paints its own
+    /// lines; a press anywhere in the field's box focuses it (bubbling, after
+    /// the input's own press handling), and the focusable drawer and Shell
+    /// must not take focus back.
+    fn card_field(
         &self,
         id: &'static str,
-        label: &'static str,
         input: &Entity<ComposerInput>,
         min_height: Option<f32>,
-        theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus = input.read(cx).focus_handle(cx);
         div()
+            .id(id)
+            .relative()
             .w_full()
-            .flex()
-            .flex_col()
-            .gap(ui_rems(4.0))
-            .child(
-                div()
-                    .text_size(ui_rems(12.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.readable_muted(0.9))
-                    .child(label),
-            )
-            .child(
-                crate::popover::dialog_field(input.clone().into_any_element())
-                    .id(id)
-                    .relative()
-                    .cursor_text()
-                    .rounded(px(8.0))
-                    .border_color(theme.separator(true))
-                    .text_size(ui_rems(13.0))
-                    .when_some(min_height, |frame, height| frame.min_h(ui_rems(height)))
-                    // The input paints only its own lines at the top of this
-                    // taller box: a press anywhere in the box (bubbling, after
-                    // the input's own press handling) focuses it, and the
-                    // focusable drawer and Shell must not take focus back.
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                        window.focus(&focus, cx);
-                        window.prevent_default();
-                    })
-                    .children(self.probe.bounds_el(id)),
-            )
+            .cursor_text()
+            .px(ui_rems(16.0))
+            .when_some(min_height, |frame, height| frame.min_h(ui_rems(height)))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                window.focus(&focus, cx);
+                window.prevent_default();
+            })
+            .child(input.clone())
+            .children(self.probe.bounds_el(id))
             .into_any_element()
     }
 
@@ -850,7 +848,7 @@ impl ManualTicketForm {
                 SavePhase::Saved(receipt) => serde_json::to_value(receipt.as_ref()).unwrap_or_default(),
                 _ => serde_json::Value::Null,
             },
-            "settings": self.settings.as_ref().map(|editor| editor.read(cx).fixture_state()),
+            "settings": self.settings.as_ref().map(|editor| editor.read(cx).fixture_state(cx)),
         })
     }
 }
@@ -896,25 +894,38 @@ impl Render for ManualTicketForm {
                 .children(self.probe.bounds_el("manual-close"))
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ManualFormEvent::Close))),
             );
+        let title = match &project_name {
+            Some(name) => format!("New ticket in {name}"),
+            None => "New ticket".to_owned(),
+        };
         let mut body = div()
             .w_full()
             .flex()
             .flex_col()
-            .gap(ui_rems(12.0))
+            .gap(ui_rems(10.0))
             .child(header)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .child(widgets::page_header(&theme, "Write a ticket", None))
-                    .child(widgets::page_subtitle(
-                        &theme,
-                        "Write the brief and choose how the ticket will run.",
-                    )),
+                    .gap(ui_rems(2.0))
+                    .child(
+                        div()
+                            .text_size(ui_rems(17.0))
+                            .line_height(ui_rems(22.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_rems(12.0))
+                            .text_color(theme.readable_muted(0.75))
+                            .child(
+                                "Write the brief; saving puts it in Backlog and starts nothing.",
+                            ),
+                    ),
             );
-        if let Some(name) = project_name {
-            body = body.child(widgets::row_description(&theme, format!("Project: {name}")));
-        }
         if let Some(error) = self.field_error("project", &self.errors.project, &theme) {
             body = body.child(error);
         }
@@ -923,57 +934,43 @@ impl Render for ManualTicketForm {
             body = body.child(self.render_receipt(&receipt, &theme, cx));
         } else {
             let saving = matches!(self.phase, SavePhase::Saving | SavePhase::Reconciling);
-            body = body
-                .child(self.input_field(
-                    "manual-title",
-                    "Title",
-                    &self.title.clone(),
-                    None,
-                    &theme,
-                    cx,
-                ))
-                .children(self.field_error("title", &self.errors.title, &theme))
-                .child(self.input_field(
-                    "manual-description",
-                    "Description",
-                    &self.description.clone(),
-                    Some(120.0),
-                    &theme,
-                    cx,
-                ))
+            // The brief's card: the chat composer's surface with the title,
+            // the description and, along its bottom edge, the agent's pickers.
+            let title_field = self.card_field("manual-title", &self.title.clone(), None, cx);
+            let description_field = self.card_field(
+                "manual-description",
+                &self.description.clone(),
+                Some(96.0),
+                cx,
+            );
+            let card = crate::composer::pane_composer_surface(&theme)
+                .id("manual-brief")
+                .w_full()
+                .flex()
+                .flex_col()
+                .pt(ui_rems(14.0))
+                .pb(ui_rems(8.0))
+                .gap(ui_rems(8.0))
+                .child(title_field)
                 .child(
                     div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(ui_rems(8.0))
-                        .child(widgets::row_description(
-                            &theme,
-                            "Acceptance criteria can be a section of the description.",
-                        ))
-                        .child(
-                            button::button(
-                                "manual-add-criteria",
-                                ButtonKind::Ghost,
-                                ControlSize::Sm,
-                                true,
-                                &theme,
-                            )
-                            .aria_label("Add an Acceptance criteria section")
-                            .child("Add acceptance criteria")
-                            .children(self.probe.bounds_el("manual-add-criteria"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.add_criteria(window, cx)),
-                            ),
-                        ),
+                        .mx(ui_rems(16.0))
+                        .h(px(1.0))
+                        .bg(theme.separator(false)),
                 )
-                .children(self.field_error("description", &self.errors.description, &theme));
-            if let Some(editor) = &self.settings {
-                body = body.child(editor.clone());
-            }
+                .child(description_field)
+                .when_some(
+                    self.settings_rows.as_ref().map(|(row, _)| row.clone()),
+                    |card, row| card.child(div().px(ui_rems(6.0)).child(row)),
+                );
             body = body
+                .child(card)
+                .children(self.field_error("title", &self.errors.title, &theme))
+                .children(self.field_error("description", &self.errors.description, &theme))
+                .when_some(
+                    self.settings_rows.as_ref().map(|(_, row)| row.clone()),
+                    |body, row| body.child(div().px(ui_rems(6.0)).child(row)),
+                )
                 .children(self.field_error("settings", &self.errors.settings, &theme))
                 .children(self.field_error("general", &self.errors.general, &theme));
             let status = match self.phase {
@@ -990,9 +987,28 @@ impl Render for ManualTicketForm {
                     .flex_row()
                     .flex_wrap()
                     .items_center()
-                    .justify_between()
                     .gap(ui_rems(8.0))
-                    .child(widgets::row_description(&theme, status))
+                    .child(
+                        button::button(
+                            "manual-add-criteria",
+                            ButtonKind::Ghost,
+                            ControlSize::Sm,
+                            true,
+                            &theme,
+                        )
+                        .aria_label("Add an Acceptance criteria section to the description")
+                        .child(button::glyph(crate::icons::CHECKLIST, ControlSize::Sm))
+                        .child("Acceptance criteria")
+                        .children(self.probe.bounds_el("manual-add-criteria"))
+                        .on_click(cx.listener(|this, _, window, cx| this.add_criteria(window, cx))),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_size(ui_rems(11.5))
+                            .text_color(theme.readable_muted(0.7))
+                            .child(status),
+                    )
                     .child(
                         button::button(
                             "manual-save",

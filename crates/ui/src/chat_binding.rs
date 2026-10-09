@@ -12,6 +12,12 @@
 //! notice, native tasks) live on `AppState` for the selected chat and in
 //! [`AppState::pane_chat`] for pane-bound chats. When a pane chat happens to
 //! be the selected chat too, the selected chat's live projection wins.
+//!
+//! A [`ChatBinding::Detached`] binding drives no chat at all: the same
+//! pickers (and composer) edit settings that belong to something else — a
+//! Board ticket's execution profile, a temporary ticket discussion — fixed to
+//! one project and its host. It reads no chat projection and never follows
+//! the selection.
 
 use luna_doc::{QueuedMessage, SessionMessageEntry};
 use luna_proto::{Chat, ContextControlState, ContextUsage, NativeTaskLedger, ProviderNotice};
@@ -25,6 +31,9 @@ pub enum ChatBinding {
     Selected,
     /// A fixed chat shown in the right pane.
     Chat(String),
+    /// No chat: settings owned elsewhere (a Board ticket or discussion),
+    /// fixed to this project.
+    Detached { space_id: String },
 }
 
 static EMPTY_CONTROL: std::sync::LazyLock<ContextControlState> =
@@ -38,10 +47,15 @@ impl ChatBinding {
         matches!(self, Self::Chat(_))
     }
 
+    /// A chat-less binding (settings owned by a ticket or discussion).
+    pub fn is_detached(&self) -> bool {
+        matches!(self, Self::Detached { .. })
+    }
+
     /// The fixed chat id of a pane binding.
     pub fn pane_chat(&self) -> Option<&str> {
         match self {
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
             Self::Chat(id) => Some(id),
         }
     }
@@ -51,6 +65,7 @@ impl ChatBinding {
         match self {
             Self::Selected => state.selected_chat.as_deref(),
             Self::Chat(id) => Some(id.as_str()),
+            Self::Detached { .. } => None,
         }
     }
 
@@ -63,6 +78,7 @@ impl ChatBinding {
         match self {
             Self::Selected => state.selected_chat_row(),
             Self::Chat(id) => state.chats.iter().find(|chat| chat.id == *id),
+            Self::Detached { .. } => None,
         }
     }
 
@@ -75,6 +91,7 @@ impl ChatBinding {
                 .chat_row(state)
                 .and_then(|chat| chat.space_id.clone())
                 .or_else(|| state.selected_space.clone()),
+            Self::Detached { space_id } => Some(space_id.clone()),
         }
     }
 
@@ -88,6 +105,7 @@ impl ChatBinding {
                 Some(space) => state.space_row(space),
                 None => state.selected_space_row(),
             },
+            Self::Detached { space_id } => state.space_row(space_id),
         }
     }
 
@@ -100,6 +118,10 @@ impl ChatBinding {
                 .chat_row(state)
                 .map(|chat| chat.device_id.clone())
                 .or_else(|| state.effective_device_id()),
+            // The project's own host: the only place its work runs.
+            Self::Detached { space_id } => state
+                .space_row(space_id)
+                .map(|space| space.device_id.clone()),
         }
     }
 
@@ -113,6 +135,7 @@ impl ChatBinding {
         match self {
             Self::Selected => true,
             Self::Chat(id) => state.selected_chat.as_deref() == Some(id.as_str()),
+            Self::Detached { .. } => false,
         }
     }
 
@@ -127,7 +150,7 @@ impl ChatBinding {
             Self::Chat(id) => state
                 .entry_generations(Some(id))
                 .map(|_| state.sub_revision(id)),
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
         }
     }
 
@@ -135,7 +158,7 @@ impl ChatBinding {
         match self {
             _ if self.reads_selected(state) => &state.transcript,
             Self::Chat(id) => state.sub_transcript(id),
-            Self::Selected => &[],
+            Self::Selected | Self::Detached { .. } => &[],
         }
     }
 
@@ -146,7 +169,7 @@ impl ChatBinding {
                 .pane_chat(id)
                 .map(|pane| pane.queue.as_slice())
                 .unwrap_or(&[]),
-            Self::Selected => &[],
+            Self::Selected | Self::Detached { .. } => &[],
         }
     }
 
@@ -156,7 +179,7 @@ impl ChatBinding {
         }
         match self {
             Self::Chat(id) => state.pane_chat_mut(id).map(|pane| &mut pane.queue),
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
         }
     }
 
@@ -164,7 +187,7 @@ impl ChatBinding {
         match self {
             _ if self.reads_selected(state) => state.context_usage,
             Self::Chat(id) => state.pane_chat(id).and_then(|pane| pane.context_usage),
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
         }
     }
 
@@ -175,7 +198,7 @@ impl ChatBinding {
                 .pane_chat(id)
                 .map(|pane| &pane.context_control)
                 .unwrap_or(&EMPTY_CONTROL),
-            Self::Selected => &EMPTY_CONTROL,
+            Self::Selected | Self::Detached { .. } => &EMPTY_CONTROL,
         }
     }
 
@@ -188,7 +211,7 @@ impl ChatBinding {
             Self::Chat(id) => state
                 .pane_chat(id)
                 .and_then(|pane| pane.checkpointed.as_ref()),
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
         }
     }
 
@@ -198,7 +221,7 @@ impl ChatBinding {
             Self::Chat(id) => state
                 .pane_chat(id)
                 .and_then(|pane| pane.provider_notice.as_ref()),
-            Self::Selected => None,
+            Self::Selected | Self::Detached { .. } => None,
         }
     }
 
@@ -209,7 +232,7 @@ impl ChatBinding {
                 .pane_chat(id)
                 .map(|pane| &pane.native_tasks)
                 .unwrap_or(&EMPTY_TASKS),
-            Self::Selected => &EMPTY_TASKS,
+            Self::Selected | Self::Detached { .. } => &EMPTY_TASKS,
         }
     }
 
@@ -218,7 +241,7 @@ impl ChatBinding {
         match self {
             _ if self.reads_selected(state) => state.transcript_replayed,
             Self::Chat(id) => state.pane_chat(id).is_some_and(|pane| pane.replayed),
-            Self::Selected => false,
+            Self::Selected | Self::Detached { .. } => false,
         }
     }
 
@@ -227,7 +250,7 @@ impl ChatBinding {
         match self {
             _ if self.reads_selected(state) => state.refresh_selected_queue(cx),
             Self::Chat(id) => state.refresh_pane_queue(id, cx),
-            Self::Selected => {}
+            Self::Selected | Self::Detached { .. } => {}
         }
     }
 }
