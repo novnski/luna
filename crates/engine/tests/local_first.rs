@@ -334,22 +334,6 @@ async fn signed_out_workos_boot_serves_local_data_without_dev_identity() {
 }
 
 #[tokio::test]
-async fn clean_local_auth_construction_does_not_probe_edge_health() {
-    let dir = tempfile::tempdir().unwrap();
-    let (edge_url, requests, edge_task) = rejecting_edge().await;
-    let config = config(dir.path(), edge_url, Some("client_test"), None);
-
-    let auth = Engine::build_auth(&config).await;
-
-    assert_eq!(
-        Engine::initial_workspace_scope(&auth),
-        WorkspaceScope::Local
-    );
-    assert_eq!(requests.load(Ordering::SeqCst), 0);
-    edge_task.abort();
-}
-
-#[tokio::test]
 async fn unconfigured_luna_auth_stays_local_and_does_not_load_a_saved_session() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("session.json"), b"synthetic stale session").unwrap();

@@ -99,22 +99,21 @@ async fn fake_codex_tool_uses_real_durable_queue_without_extra_approval() {
         )
         .await
         .unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        let approvals = 0;
+    // Any approval card in this turn fails the test.
+    let status = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             match events.recv().await.unwrap().event {
                 AgentEvent::InputRequested { .. } => {
                     panic!("Ordinary app coordination must not ask again")
                 }
-                AgentEvent::Done { status, .. } => break (approvals, status),
+                AgentEvent::Done { status, .. } => break status,
                 _ => {}
             }
         }
     })
     .await
     .expect("synthetic provider turn settled");
-    assert_eq!(result.0, 0);
-    assert_eq!(result.1, DoneStatus::Completed);
+    assert_eq!(status, DoneStatus::Completed);
     let receipt = core
         .doc_host
         .task_command_receipt("l25-send-1")
