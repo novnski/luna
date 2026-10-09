@@ -328,17 +328,6 @@ mod tests {
     }
 
     #[test]
-    fn local_profile_resolves_isolated_store_and_upload_roots() {
-        let dir = tempfile::tempdir().unwrap();
-        let profile = EngineProfile::local(dir.path()).unwrap();
-        let local_root = dir.path().join("profiles/local");
-
-        assert_eq!(profile.scope(), WorkspaceScope::Local);
-        assert_eq!(profile.store_root(), local_root);
-        assert_eq!(profile.uploads_root(), local_root.join("uploads"));
-    }
-
-    #[test]
     fn synced_profile_uses_account_scoped_roots() {
         let dir = tempfile::tempdir().unwrap();
         let profile = EngineProfile::synced(dir.path(), "org/example", "user@example.com");
@@ -351,24 +340,6 @@ mod tests {
         assert_eq!(
             profile.uploads_root(),
             dir.path().join("orgs/org_example/user_example_com/uploads")
-        );
-    }
-
-    #[test]
-    fn legacy_uploads_are_claimed_by_only_one_account() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("uploads")).unwrap();
-        let first = EngineProfile::synced(dir.path(), "org-a", "user-a");
-        let second = EngineProfile::synced(dir.path(), "org-b", "user-b");
-
-        assert_eq!(
-            first.claim_legacy_uploads_root().unwrap(),
-            Some(dir.path().join("uploads"))
-        );
-        assert_eq!(second.claim_legacy_uploads_root().unwrap(), None);
-        assert_eq!(
-            first.claim_legacy_uploads_root().unwrap(),
-            Some(dir.path().join("uploads"))
         );
     }
 

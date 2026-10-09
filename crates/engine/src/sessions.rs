@@ -1977,47 +1977,6 @@ impl SessionsEngine {
         })
     }
 
-    #[cfg(test)]
-    async fn wait_and_claim_luna_provider_call(
-        &self,
-        chat_id: &str,
-        run_id: &str,
-        provider_thread_id: &str,
-        provider_turn_id: &str,
-        provider_call_id: &str,
-        deadline: tokio::time::Instant,
-    ) -> bool {
-        self.wait_and_claim_luna_provider_call_evidence(
-            chat_id,
-            run_id,
-            provider_thread_id,
-            provider_turn_id,
-            provider_call_id,
-            deadline,
-        )
-        .await
-        .is_some()
-    }
-
-    #[cfg(test)]
-    fn claim_luna_provider_call(
-        &self,
-        chat_id: &str,
-        run_id: &str,
-        provider_thread_id: &str,
-        provider_turn_id: &str,
-        provider_call_id: &str,
-    ) -> bool {
-        self.claim_luna_provider_call_evidence(
-            chat_id,
-            run_id,
-            provider_thread_id,
-            provider_turn_id,
-            provider_call_id,
-        )
-        .is_some()
-    }
-
     fn claimed_call_cancel_state(
         &self,
         claim: &ClaimedProviderCall,
@@ -14714,7 +14673,7 @@ mod tests {
         let waiting_task = task_id.clone();
         let waiter = tokio::spawn(async move {
             sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &waiting_task,
                     "run-a",
                     "provider-thread-a",
@@ -14723,6 +14682,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_secs(5),
                 )
                 .await
+                .is_some()
         });
         tokio::task::yield_now().await;
         assert!(!waiter.is_finished());
@@ -14739,7 +14699,7 @@ mod tests {
         assert!(
             !core
                 .sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -14748,6 +14708,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_millis(100),
                 )
                 .await
+                .is_some()
         );
         assert_eq!(
             core.sessions.active_turn_id(&task_id).as_deref(),
@@ -14762,7 +14723,7 @@ mod tests {
         let waiting_task = task_id.clone();
         let waiter = tokio::spawn(async move {
             sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &waiting_task,
                     "run-a",
                     "provider-thread-a",
@@ -14771,6 +14732,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_secs(5),
                 )
                 .await
+                .is_some()
         });
         tokio::task::yield_now().await;
         assert!(
@@ -14801,7 +14763,7 @@ mod tests {
         assert!(
             !core
                 .sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -14810,6 +14772,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_millis(100),
                 )
                 .await
+                .is_some()
         );
 
         let (root, core, task_id) = managed_codex_wait_fixture();
@@ -14823,7 +14786,7 @@ mod tests {
         assert!(
             !core
                 .sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -14832,6 +14795,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_millis(100),
                 )
                 .await
+                .is_some()
         );
     }
 
@@ -14843,7 +14807,7 @@ mod tests {
             let waiting_task = task_id.clone();
             let waiter = tokio::spawn(async move {
                 sessions
-                    .wait_and_claim_luna_provider_call(
+                    .wait_and_claim_luna_provider_call_evidence(
                         &waiting_task,
                         "run-a",
                         "provider-thread-a",
@@ -14852,6 +14816,7 @@ mod tests {
                         tokio::time::Instant::now() + Duration::from_secs(5),
                     )
                     .await
+                    .is_some()
             });
             tokio::task::yield_now().await;
             match end {
@@ -14886,7 +14851,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let claimed = core
             .sessions
-            .wait_and_claim_luna_provider_call(
+            .wait_and_claim_luna_provider_call_evidence(
                 &task_id,
                 "run-a",
                 "provider-thread-a",
@@ -14894,13 +14859,14 @@ mod tests {
                 "call-a",
                 started + Duration::from_secs(60),
             )
-            .await;
+            .await
+            .is_some();
         assert!(!claimed);
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(
             !core
                 .sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -14909,6 +14875,7 @@ mod tests {
                     tokio::time::Instant::now(),
                 )
                 .await
+                .is_some()
         );
 
         let (root, core, task_id) = managed_codex_wait_fixture();
@@ -14917,7 +14884,7 @@ mod tests {
         let waiting_task = task_id.clone();
         let waiter = tokio::spawn(async move {
             sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &waiting_task,
                     "run-a",
                     "provider-thread-a",
@@ -14926,6 +14893,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_secs(5),
                 )
                 .await
+                .is_some()
         });
         tokio::task::yield_now().await;
         let cwd = root.path().join("project-a");
@@ -14975,7 +14943,7 @@ mod tests {
         ));
         assert!(
             core.sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -14984,6 +14952,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_millis(100),
                 )
                 .await
+                .is_some()
         );
         core.sessions
             .inner
@@ -15011,7 +14980,7 @@ mod tests {
         assert!(
             !core
                 .sessions
-                .wait_and_claim_luna_provider_call(
+                .wait_and_claim_luna_provider_call_evidence(
                     &task_id,
                     "run-a",
                     "provider-thread-a",
@@ -15020,6 +14989,7 @@ mod tests {
                     tokio::time::Instant::now() + Duration::from_millis(100),
                 )
                 .await
+                .is_some()
         );
     }
 
@@ -15531,13 +15501,17 @@ mod tests {
         request_id: &str,
     ) -> LunaSyntheticArchiveProposal {
         let source_call_id = format!("call-{request_id}");
-        assert!(core.sessions.claim_luna_provider_call(
-            source_task_id,
-            "run-a",
-            "provider-thread-a",
-            "turn-a",
-            &source_call_id,
-        ));
+        assert!(
+            core.sessions
+                .claim_luna_provider_call_evidence(
+                    source_task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    &source_call_id,
+                )
+                .is_some()
+        );
         let source_binding = core
             .sessions
             .inner

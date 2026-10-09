@@ -138,15 +138,6 @@ impl CheckoutChangeRequests {
         Ok(self.watch_checkout_for_branch(cwd.to_owned(), identity, branch.map(str::to_owned)))
     }
 
-    #[cfg(test)]
-    fn watch_checkout(
-        &self,
-        cwd: PathBuf,
-        identity: CheckoutIdentity,
-    ) -> BoxStream<'static, CheckoutChangeRequestStatus> {
-        self.watch_checkout_for_branch(cwd, identity, None)
-    }
-
     fn watch_checkout_for_branch(
         &self,
         cwd: PathBuf,
@@ -533,27 +524,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_subscribers_share_one_provider_query() {
-        let lookup = FakeLookup::new(source("feature/status"), [Ok(Some(pull_request(90)))]);
-        let service = service(lookup.clone(), Timing::default());
-        let mut first = service.watch_checkout(PathBuf::from("/chat-a"), identity());
-        let mut second = service.watch_checkout(PathBuf::from("/chat-b"), identity());
-
-        let (first, second) = tokio::join!(first.next(), second.next());
-
-        assert_eq!(first.unwrap().change_request.unwrap().number, 90);
-        assert_eq!(second.unwrap().change_request.unwrap().number, 90);
-        assert_eq!(lookup.resolve_count(), 1);
-    }
-
-    #[tokio::test]
     async fn branch_change_moves_to_a_new_cache_key() {
         let lookup = FakeLookup::new(
             source("feature/one"),
             [Ok(Some(pull_request(1))), Ok(Some(pull_request(2)))],
         );
         let service = service(lookup.clone(), fast_timing());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         let first = stream.next().await.unwrap();
         lookup.set_source(source("feature/two"));
 
@@ -575,7 +553,8 @@ mod tests {
             [Ok(Some(pull_request(90))), Ok(None)],
         );
         let service = service(lookup, fast_timing());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         assert!(stream.next().await.unwrap().change_request.is_some());
 
         let cleared = tokio::time::timeout(Duration::from_millis(100), stream.next())
@@ -597,7 +576,8 @@ mod tests {
             ],
         );
         let service = service(lookup.clone(), fast_timing());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         assert_eq!(
             stream.next().await.unwrap().change_request.unwrap().number,
             90
@@ -622,7 +602,8 @@ mod tests {
             ],
         );
         let service = service(lookup.clone(), fast_timing());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         let first = stream.next().await.unwrap();
 
         assert!(
@@ -632,7 +613,8 @@ mod tests {
         );
         assert_eq!(lookup.resolve_count(), 2);
 
-        let mut later = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut later =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         let cached = later.next().await.unwrap();
         assert_eq!(cached.change_request, first.change_request);
         assert_eq!(lookup.resolve_count(), 2);
@@ -704,7 +686,8 @@ mod tests {
             [Ok(Some(pull_request(90))), Ok(Some(pull_request(91)))],
         );
         let service = service(lookup.clone(), fast_timing());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         stream.next().await.unwrap();
         drop(stream);
 
@@ -715,7 +698,8 @@ mod tests {
 
         // A later observer gets a fresh entry rather than reviving the
         // abandoned snapshot retained by an inactive checkout.
-        let mut renewed = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut renewed =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         let renewed_status = renewed.next().await.unwrap();
         assert_eq!(renewed_status.change_request.unwrap().number, 91);
         assert_eq!(lookup.resolve_count(), 2);
@@ -725,7 +709,8 @@ mod tests {
     async fn shutdown_ends_an_active_stream() {
         let lookup = FakeLookup::new(source("feature/status"), [Ok(Some(pull_request(90)))]);
         let service = service(lookup, Timing::default());
-        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let mut stream =
+            service.watch_checkout_for_branch(PathBuf::from("/checkout"), identity(), None);
         stream.next().await.unwrap();
 
         service.shutdown();

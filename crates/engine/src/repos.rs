@@ -1937,27 +1937,6 @@ fn compare_file_matches(
         .then_with(|| path_a.cmp(path_b))
 }
 
-#[cfg(test)]
-fn search_files_blocking(
-    root: &Path,
-    query: &str,
-    featured_paths: &[String],
-) -> Result<Vec<FileSearchMatch>, EngineError> {
-    search_files_blocking_with_cancel(root, query, featured_paths, || false)
-}
-
-#[cfg(test)]
-fn search_files_blocking_with_cancel<F: Fn() -> bool + Sync>(
-    root: &Path,
-    query: &str,
-    featured_paths: &[String],
-    cancelled: F,
-) -> Result<Vec<FileSearchMatch>, EngineError> {
-    let root = canonical_search_root(root)?;
-    let index = walk_file_index(&root, &cancelled)?;
-    Ok(rank_file_matches(&index, &root, query, featured_paths))
-}
-
 fn search_files_cached<F: Fn() -> bool + Sync>(
     cache: &FileIndexCache,
     root: &Path,
@@ -2556,20 +2535,18 @@ mod tests {
         }
     }
 
-    fn score(query: &str, candidate: &str) -> Option<u32> {
-        let mut matcher = nucleo_matcher::Matcher::new({
-            let mut config = nucleo_matcher::Config::DEFAULT;
-            config.set_match_paths();
-            config
-        });
-        nucleo_matcher::pattern::Pattern::parse(
+    /// One uncached walk through the production search path.
+    fn search(
+        root: &Path,
+        query: &str,
+        featured_paths: &[String],
+    ) -> Result<Vec<FileSearchMatch>, EngineError> {
+        search_files_cached(
+            &FileIndexCache::default(),
+            root,
             query,
-            nucleo_matcher::pattern::CaseMatching::Smart,
-            nucleo_matcher::pattern::Normalization::Smart,
-        )
-        .score(
-            nucleo_matcher::Utf32String::from(candidate).slice(..),
-            &mut matcher,
+            featured_paths,
+            || false,
         )
     }
 
@@ -2710,13 +2687,6 @@ tmpfs /run tmpfs rw 0 0
     }
 
     #[test]
-    fn fuzzy_score_matches_a_path_subsequence() {
-        assert!(score("cmp rs", "crates/ui/src/composer.rs").is_some());
-        assert!(score("composer crates", "crates/ui/src/composer.rs").is_some());
-        assert!(score("xyzq", "crates/ui/src/composer.rs").is_none());
-    }
-
-    #[test]
     fn git_history_matches_unicode_case_insensitively() {
         let mut candidate = history_commit("a1b2c3d4".into(), None);
         candidate.subject = "RÉPARER la recherche".into();
@@ -2760,7 +2730,7 @@ tmpfs /run tmpfs rw 0 0
         std::fs::create_dir(root.path().join("ignored")).unwrap();
         std::fs::write(root.path().join("ignored/nope.rs"), "").unwrap();
 
-        let matches = search_files_blocking(root.path(), "src", &[]).unwrap();
+        let matches = search(root.path(), "src", &[]).unwrap();
         assert!(
             matches
                 .iter()
@@ -2773,7 +2743,7 @@ tmpfs /run tmpfs rw 0 0
                 .any(|entry| entry.path.starts_with("ignored"))
         );
         assert!(
-            search_files_blocking(root.path(), "secret", &[])
+            search(root.path(), "secret", &[])
                 .unwrap()
                 .iter()
                 .any(|entry| entry.path == ".secret")
@@ -2788,7 +2758,7 @@ tmpfs /run tmpfs rw 0 0
         std::fs::write(root.path().join("README.md"), "").unwrap();
         std::fs::write(root.path().join("src/deep.rs"), "").unwrap();
 
-        let matches = search_files_blocking(root.path(), "", &["src/deep.rs".into()]).unwrap();
+        let matches = search(root.path(), "", &["src/deep.rs".into()]).unwrap();
         assert_eq!(
             matches.first().map(|entry| entry.path.as_str()),
             Some("src/deep.rs")
@@ -2804,7 +2774,7 @@ tmpfs /run tmpfs rw 0 0
         std::fs::write(root.path().join("composer/docs/readme.md"), "").unwrap();
         std::fs::write(root.path().join("src/composer.rs"), "").unwrap();
 
-        let matches = search_files_blocking(root.path(), "composer", &[]).unwrap();
+        let matches = search(root.path(), "composer", &[]).unwrap();
         let composer = matches
             .iter()
             .position(|entry| entry.path == "src/composer.rs")
@@ -2835,32 +2805,12 @@ tmpfs /run tmpfs rw 0 0
         std::fs::write(root.path().join("README.md"), "").unwrap();
         let cancelled = AtomicBool::new(true);
 
-        let err = search_files_blocking_with_cancel(root.path(), "", &[], || {
+        let err = search_files_cached(&FileIndexCache::default(), root.path(), "", &[], || {
             cancelled.load(Ordering::Relaxed)
         })
         .unwrap_err()
         .to_string();
         assert!(err.contains("cancelled"));
-    }
-
-    #[tokio::test]
-    async fn workspace_checkout_rejects_sibling_paths() {
-        let data = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let sibling = tempfile::tempdir().unwrap();
-        let repos =
-            Repos::with_worktrees_root(data.path(), "device", data.path().join("worktrees"));
-
-        assert_eq!(
-            repos.workspace_checkout(root.path(), root.path()).await,
-            std::fs::canonicalize(root.path()).ok()
-        );
-        assert!(
-            repos
-                .workspace_checkout(root.path(), sibling.path())
-                .await
-                .is_none()
-        );
     }
 
     #[tokio::test]

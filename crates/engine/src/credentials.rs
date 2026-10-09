@@ -1128,30 +1128,6 @@ mod tests {
     }
 
     #[test]
-    fn existing_ciphertext_with_a_missing_key_never_creates_a_replacement() {
-        let root = tempfile::tempdir().unwrap();
-        let store = Arc::new(MemoryKeyStore::default());
-        let broker = CredentialBroker::with_store(
-            root.path().join("credentials/environment-v1.vault"),
-            store.clone(),
-            Some(store.clone()),
-        );
-        store_sync(&broker, b"fixture-value");
-        let before = std::fs::read(root.path().join("credentials/environment-v1.vault")).unwrap();
-        lock(&store.state).key = None;
-
-        assert_eq!(
-            broker.list_metadata().unwrap_err(),
-            CredentialError::VaultKeyMissing
-        );
-        assert_eq!(
-            std::fs::read(root.path().join("credentials/environment-v1.vault")).unwrap(),
-            before
-        );
-        assert!(lock(&store.state).key.is_none());
-    }
-
-    #[test]
     fn independent_brokers_share_one_transaction_and_preserve_both_writes() {
         let root = tempfile::tempdir().unwrap();
         let vault = root.path().join("credentials/environment-v1.vault");

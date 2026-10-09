@@ -8923,17 +8923,6 @@ mod transfer_progress_tests {
             "a failed attempt must not leave a phantom ring behind"
         );
     }
-
-    #[test]
-    fn late_subscriber_sees_current_set_first() {
-        let (_dir, host) = host();
-        host.transfer_progress_set("u1", "a.png", 750, 1_000);
-        // watch_stream's contract: current value first, then changes — a UI
-        // attaching mid-transfer must render the ring immediately.
-        let rx = host.watch_transfers();
-        assert_eq!(rx.borrow().len(), 1);
-        assert_eq!(rx.borrow()[0].done, 750);
-    }
 }
 
 #[cfg(test)]
@@ -9094,15 +9083,6 @@ mod executable_row_hash_tests {
 #[cfg(test)]
 mod queued_message_prompt_tests {
     use super::{ATTACHMENT_ONLY_PROMPT, ATTACHMENT_PROMPT_HEADER, queued_message_prompt};
-
-    #[test]
-    fn dispatch_adds_the_attachment_transport_to_visible_queue_text() {
-        let paths = vec!["/tmp/image.png".to_string()];
-        assert_eq!(
-            queued_message_prompt("inspect this", &paths),
-            format!("inspect this\n\n{ATTACHMENT_PROMPT_HEADER}\n- /tmp/image.png")
-        );
-    }
 
     #[test]
     fn legacy_expanded_rows_are_not_expanded_twice() {

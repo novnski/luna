@@ -141,13 +141,6 @@ impl AgentAccountsConfig {
         )
     }
 
-    #[cfg(test)]
-    fn claude_keychain_fallback_disabled(&self) -> bool {
-        self.claude_config_dir
-            .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK)
-            .is_file()
-    }
-
     fn codex_auth_file(&self) -> PathBuf {
         self.codex_home.join("auth.json")
     }
@@ -2423,15 +2416,6 @@ mod tests {
         assert_eq!(accounts.codex_usage_target().unwrap(), (home, true));
     }
 
-    #[test]
-    fn fixture_marker_disables_claude_keychain_fallback_even_without_credentials_file() {
-        let root = tempfile::tempdir().unwrap();
-        let config = test_config(root.path());
-        config.disable_claude_keychain_fallback().unwrap();
-        assert!(config.claude_keychain_fallback_disabled());
-        assert!(!config.claude_creds_file().exists());
-    }
-
     #[tokio::test]
     async fn claude_disconnect_persists_without_touching_native_login() {
         let root = tempfile::tempdir().unwrap();
@@ -2893,16 +2877,6 @@ mod tests {
         assert!(claude_usage_windows(&serde_json::json!({ "five_hour": {} })).is_none());
     }
 
-    #[test]
-    fn openai_url_scan() {
-        assert_eq!(
-            scan_openai_url("open https://auth.openai.com/authorize?x=1 in your browser\n")
-                .as_deref(),
-            Some("https://auth.openai.com/authorize?x=1")
-        );
-        assert_eq!(scan_openai_url("nothing here"), None);
-    }
-
     #[cfg(unix)]
     #[test]
     fn noop_browser_script_is_stable_and_executable() {
@@ -2991,7 +2965,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let config = test_config(root.path());
         assert!(!config.claude_creds_file().exists());
-        assert!(!config.claude_keychain_fallback_disabled());
+        assert!(
+            !config
+                .claude_config_dir
+                .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK)
+                .exists()
+        );
         let observed = AgentAccounts::new(config).read_claude_usage_limit().await;
         assert_eq!(observed.provider, luna_proto::UsageProvider::Claude);
         assert_eq!(

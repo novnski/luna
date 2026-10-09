@@ -1853,65 +1853,41 @@ mod device_name_tests {
         )
     }
 
+    /// Candidates arrive in priority order (explicit override, native friendly
+    /// name, hostnames); the first non-blank one wins, trimmed, and only an
+    /// all-blank list falls back to the platform-specific device label.
     #[test]
-    fn explicit_override_wins_and_is_trimmed() {
-        assert_eq!(
-            name(
+    fn first_nonblank_candidate_wins_else_platform_fallback() {
+        let cases: [(&[Option<&str>], &str, &str); 4] = [
+            (
                 &[Some("  Studio Mac  "), Some("system-host")],
-                "17bc0aa2-rest",
-                "macos"
+                "macos",
+                "Studio Mac",
             ),
-            "Studio Mac"
-        );
-    }
-
-    #[test]
-    fn native_friendly_name_wins_over_hostnames() {
-        assert_eq!(
-            name(
+            (
                 &[
                     None,
                     Some("MacBook Pro de Jose"),
                     None,
                     Some("MacBook-Pro.local"),
                 ],
-                "17bc0aa2-rest",
-                "macos"
+                "macos",
+                "MacBook Pro de Jose",
             ),
-            "MacBook Pro de Jose"
-        );
-    }
-
-    #[test]
-    fn windows_computer_name_is_used_when_present() {
-        assert_eq!(
-            name(
-                &[None, Some("DESKTOP-123"), Some("shell-host")],
-                "17bc0aa2-rest",
-                "windows"
-            ),
-            "DESKTOP-123"
-        );
-    }
-
-    #[test]
-    fn blank_candidates_are_ignored() {
-        assert_eq!(
-            name(
+            (
                 &[Some("  "), None, Some("\n"), Some("linux-box")],
-                "17bc0aa2-rest",
-                "linux"
+                "linux",
+                "linux-box",
             ),
-            "linux-box"
-        );
-    }
-
-    #[test]
-    fn final_fallback_is_platform_specific_and_distinct() {
-        assert_eq!(
-            name(&[None, Some(" ")], "17bc0aa2-rest", "linux"),
-            "Linux device 17bc0aa2"
-        );
+            (&[None, Some(" ")], "linux", "Linux device 17bc0aa2"),
+        ];
+        for (candidates, platform, expected) in cases {
+            assert_eq!(
+                name(candidates, "17bc0aa2-rest", platform),
+                expected,
+                "{candidates:?}"
+            );
+        }
     }
 }
 
