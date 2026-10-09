@@ -1607,39 +1607,6 @@ mod admission_tests {
         client.shutdown().await;
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn legacy_constructor_still_applies_fake_socket_frames_without_a_gate() {
-        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
-        let (connector, pipes) = connector();
-        let (socket, mut outgoing, incoming) = pipe();
-        pipes.send(socket).await.unwrap();
-        let connecting = tokio::spawn({
-            let doc = doc.clone();
-            async move {
-                RegistryClient::connect_with_transport(
-                    connector,
-                    doc,
-                    "device-a",
-                    RegistryTuning::default(),
-                    None,
-                )
-                .await
-            }
-        });
-        outgoing.recv().await.unwrap();
-        incoming
-            .send(r#"{"t":"state","seq":0,"full":false,"rows":[]}"#.into())
-            .await
-            .unwrap();
-        let client = connecting.await.unwrap().unwrap();
-        incoming
-            .send(r#"{"t":"rows","seq":1,"rows":[]}"#.into())
-            .await
-            .unwrap();
-        wait_until(|| lock(&doc).cursor() == 1).await;
-        client.shutdown().await;
-    }
-
     struct AckTransport {
         started: Mutex<Option<oneshot::Sender<()>>>,
         release: Mutex<Option<oneshot::Receiver<()>>>,

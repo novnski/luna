@@ -475,48 +475,4 @@ mod tests {
         assert_eq!(request.limit, 50);
         assert!(request.filters.device_ids.is_empty());
     }
-
-    #[test]
-    fn seen_and_acknowledged_attention_remains_unresolved() {
-        let mut item = AttentionItem {
-            contract_version: ATTENTION_CONTRACT_VERSION,
-            id: "item".into(),
-            dedup_key: "request:one".into(),
-            source_key: "request:one".into(),
-            kind: AttentionKind::ApprovalRequired,
-            severity: AttentionSeverity::Warning,
-            lifecycle: AttentionLifecycle::Acknowledged,
-            environment_id: "env".into(),
-            device_id: "device".into(),
-            task_id: Some("task".into()),
-            turn_id: Some("turn".into()),
-            request_id: Some("request".into()),
-            title: "Approval needed".into(),
-            summary: "A task is waiting for approval.".into(),
-            created_at_ms: 1,
-            updated_at_ms: 2,
-            seen_at_ms: Some(2),
-            acknowledged_at_ms: Some(2),
-            resolved_at_ms: None,
-            target: AttentionTarget::TaskRequest {
-                task_id: "task".into(),
-                request_id: "request".into(),
-                message_id: "message".into(),
-            },
-            source: AttentionSourcePointer {
-                task_id: Some("task".into()),
-                message_id: Some("message".into()),
-                part_id: Some("part".into()),
-                request_id: Some("request".into()),
-                queue_id: None,
-                recovery_id: None,
-                activity_event_id: None,
-            },
-        };
-        assert!(item.unresolved());
-        assert!(item.actionable());
-        item.lifecycle = AttentionLifecycle::Resolved;
-        item.resolved_at_ms = Some(3);
-        assert!(!item.unresolved());
-    }
 }

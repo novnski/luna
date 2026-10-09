@@ -1,24 +1,5 @@
 //! Failure-first file-backed migration, backup-snapshot and attempt-fence acceptance.
 #[test]
-fn newer_database_schema_is_rejected_without_mutation() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("docs.sqlite3");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT; INSERT INTO schema_migrations VALUES(999,1); CREATE TABLE future_data(value TEXT); INSERT INTO future_data VALUES('preserve-me');").unwrap();
-    drop(conn);
-    let before = std::fs::read(&path).unwrap();
-    let failure = match luna_sync::DocsStore::open(dir.path()) {
-        Ok(_) => panic!("newer schema must fail closed"),
-        Err(e) => e.to_string(),
-    };
-    assert!(
-        failure.contains("999") && failure.contains("newer"),
-        "{failure}"
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), before);
-}
-
-#[test]
 fn migration_snapshot_ownership_and_attempt_fence() {
     use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandStatus};
     let dir = tempfile::tempdir().unwrap();

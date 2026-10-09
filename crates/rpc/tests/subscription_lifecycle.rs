@@ -183,10 +183,22 @@ fn subscriptions_from_a_foreign_executor_use_the_clients_runtime() {
         .unwrap();
     let (_socket, client, released) = runtime.block_on(connect());
     assert!(tokio::runtime::Handle::try_current().is_err());
+    // Each drop must release its own server lease: `Notify` holds a single
+    // permit, so one wait after both drops could not tell them apart.
+    let lease_released = || {
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), released.notified())
+                .await
+                .expect("dropped subscription kept its server lease");
+        })
+    };
     futures::executor::block_on(async {
         let mut plain = client.subscribe("Watch", Value::Null).await.unwrap();
         assert_eq!(plain.recv().await, Some(json!(0)));
         drop(plain);
+    });
+    lease_released();
+    futures::executor::block_on(async {
         let mut checked = client
             .subscribe_checked("Watch", Value::Null)
             .await
@@ -195,9 +207,5 @@ fn subscriptions_from_a_foreign_executor_use_the_clients_runtime() {
         drop(checked);
         assert_eq!(client.call("Echo", json!("alive")).await.unwrap(), "alive");
     });
-    runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(2), released.notified())
-            .await
-            .unwrap();
-    });
+    lease_released();
 }

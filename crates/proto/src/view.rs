@@ -193,59 +193,46 @@ mod gate_tests {
         }
     }
 
+    /// One table for the whole boot gate: connection state first, then the
+    /// runtime's workspace scope, then auth. Only a synced (or unknown-scope)
+    /// runtime is ever held behind sign-in or the org gate.
     #[test]
-    fn workspace_scope_controls_the_auth_gate() {
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Local),
-                Some(&AuthState::SignedOut),
-            ),
-            GatePhase::Ready
-        );
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Synced),
-                Some(&AuthState::SignedOut),
-            ),
-            GatePhase::SignIn
-        );
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Synced),
-                Some(&AuthState::NeedsOrganization { user: user() }),
-            ),
-            GatePhase::OrgGate
-        );
-    }
-
-    #[test]
-    fn development_and_local_never_use_the_workos_gate() {
-        for scope in [WorkspaceScope::Local, WorkspaceScope::Development] {
-            for auth in [
-                AuthState::SignedOut,
-                AuthState::NeedsOrganization { user: user() },
-                AuthState::SignedIn {
-                    user: user(),
-                    org_id: Some("org-1".into()),
-                },
-            ] {
-                assert_eq!(
-                    gate_phase(&ConnectionStatus::Ready, Some(scope), Some(&auth)),
-                    GatePhase::Ready
-                );
-            }
+    fn gate_phase_resolves_connection_scope_and_auth() {
+        let connecting = ConnectionStatus::Connecting;
+        let failed = ConnectionStatus::Failed("boom".into());
+        let ready = ConnectionStatus::Ready;
+        let signed_out = AuthState::SignedOut;
+        let needs_org = AuthState::NeedsOrganization { user: user() };
+        let signed_in = AuthState::SignedIn {
+            user: user(),
+            org_id: Some("org-1".into()),
+        };
+        let synced = Some(WorkspaceScope::Synced);
+        let local = Some(WorkspaceScope::Local);
+        let development = Some(WorkspaceScope::Development);
+        let cases = [
+            (&connecting, None, None, GatePhase::Loading),
+            (&failed, None, None, GatePhase::Failed("boom".into())),
+            // A missing scope is an old daemon: it stays behind the synced gate.
+            (&ready, None, None, GatePhase::SignIn),
+            (&ready, synced, Some(&signed_out), GatePhase::SignIn),
+            (&ready, synced, Some(&needs_org), GatePhase::OrgGate),
+            (&ready, synced, Some(&signed_in), GatePhase::Ready),
+            // Local and development runtimes never use the WorkOS gate.
+            (&ready, local, Some(&signed_out), GatePhase::Ready),
+            (&ready, local, Some(&needs_org), GatePhase::Ready),
+            (&ready, local, Some(&signed_in), GatePhase::Ready),
+            (&ready, development, Some(&signed_out), GatePhase::Ready),
+            (&ready, development, Some(&needs_org), GatePhase::Ready),
+            (&ready, development, Some(&signed_in), GatePhase::Ready),
+        ];
+        for (connection, scope, auth, expected) in cases {
+            assert_eq!(
+                gate_phase(connection, scope, auth),
+                expected,
+                "{connection:?} {scope:?} {auth:?}"
+            );
         }
-    }
-
-    #[test]
-    fn missing_scope_falls_back_to_a_synced_gate() {
-        assert_eq!(
-            gate_phase(&ConnectionStatus::Ready, None, None),
-            GatePhase::SignIn
-        );
     }
 }
 
@@ -693,146 +680,4 @@ pub mod dot {
     pub const ERRORED: (f32, f32, f32) = (0.704, 0.191, 22.216);
     /// Finished but unseen. Emerald — reads as "ready for you".
     pub const COMPLETED: (f32, f32, f32) = (0.765, 0.177, 163.223);
-}
-
-// ---------------------------------------------------------------------------
-// Checkout selection (new sessions)
-// ---------------------------------------------------------------------------
-
-/// Where a new session runs (t3code's env-mode: `local | worktree`).
-///
-/// "Current worktree" is deliberately **not** a third mode — it is `Local` when
-/// the picked ref already happens to be materialized as a worktree, in which
-/// case the session reuses that checkout's path. Modelling it as three states
-/// would let the UI hold a combination the engine cannot honour.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CheckoutKind {
-    /// The space's own folder — or the picked ref's existing worktree.
-    #[default]
-    Local,
-    /// A fresh isolated worktree created off the picked base ref on send.
-    NewWorktree,
-}
-
-/// The resolved on-send checkout action.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CheckoutPlan {
-    /// Run in the space folder as-is. `branch` is the checkout's branch (the
-    /// picked or current ref), carried onto `createChat` so the session names
-    /// it from the first frame; `None` = refs never loaded.
-    CurrentCheckout { branch: Option<String> },
-    /// Reuse the picked ref's existing worktree (a cwd override; no git).
-    ReuseWorktree { path: String, branch: String },
-    /// `CreateWorktree` off `base` on send (the engine mints a `luna/<name>`
-    /// branch). `base: None` = refs never loaded — send falls back to the space
-    /// folder rather than failing.
-    NewWorktree { base: Option<String> },
-}
-
-/// Resolve the on-send action from the mode and the picked ref.
-pub fn checkout_plan(kind: CheckoutKind, picked: Option<&crate::RepoRef>) -> CheckoutPlan {
-    let name = picked.map(|r| r.name.clone());
-    match kind {
-        CheckoutKind::NewWorktree => CheckoutPlan::NewWorktree { base: name },
-        CheckoutKind::Local => match picked.and_then(|r| r.worktree_path.clone()) {
-            Some(path) => CheckoutPlan::ReuseWorktree {
-                path,
-                branch: name.unwrap_or_default(),
-            },
-            None => CheckoutPlan::CurrentCheckout { branch: name },
-        },
-    }
-}
-
-/// Label of the checkout-kind trigger (t3code `resolveEnvModeLabel`).
-pub fn checkout_label(kind: CheckoutKind, picked: Option<&crate::RepoRef>) -> &'static str {
-    match kind {
-        CheckoutKind::NewWorktree => "New worktree",
-        CheckoutKind::Local => {
-            if picked.is_some_and(|r| r.worktree_path.is_some()) {
-                "Current worktree"
-            } else {
-                "Current checkout"
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod checkout_tests {
-    use super::*;
-    use crate::RepoRef;
-
-    fn plain(name: &str) -> RepoRef {
-        RepoRef {
-            name: name.into(),
-            current: false,
-            worktree_path: None,
-        }
-    }
-
-    fn materialized(name: &str, path: &str) -> RepoRef {
-        RepoRef {
-            name: name.into(),
-            current: false,
-            worktree_path: Some(path.into()),
-        }
-    }
-
-    #[test]
-    fn local_resolves_by_whether_the_ref_has_a_worktree() {
-        // The same mode means two different things depending on the ref — which
-        // is exactly why "current worktree" is not its own state.
-        assert_eq!(
-            checkout_plan(CheckoutKind::Local, Some(&plain("main"))),
-            CheckoutPlan::CurrentCheckout {
-                branch: Some("main".into())
-            }
-        );
-        assert_eq!(
-            checkout_plan(CheckoutKind::Local, Some(&materialized("feat", "/wt/feat"))),
-            CheckoutPlan::ReuseWorktree {
-                path: "/wt/feat".into(),
-                branch: "feat".into()
-            }
-        );
-        // No ref picked at all is still the space folder — with no branch to
-        // stamp until refs load.
-        assert_eq!(
-            checkout_plan(CheckoutKind::Local, None),
-            CheckoutPlan::CurrentCheckout { branch: None }
-        );
-    }
-
-    #[test]
-    fn new_worktree_carries_its_base_and_tolerates_none() {
-        assert_eq!(
-            checkout_plan(CheckoutKind::NewWorktree, Some(&plain("main"))),
-            CheckoutPlan::NewWorktree {
-                base: Some("main".into())
-            }
-        );
-        // Refs never loaded: send falls back to the space folder rather than
-        // failing, so the base is allowed to be absent.
-        assert_eq!(
-            checkout_plan(CheckoutKind::NewWorktree, None),
-            CheckoutPlan::NewWorktree { base: None }
-        );
-    }
-
-    #[test]
-    fn labels_say_which_of_the_three_outcomes_you_will_get() {
-        assert_eq!(
-            checkout_label(CheckoutKind::Local, Some(&plain("main"))),
-            "Current checkout"
-        );
-        assert_eq!(
-            checkout_label(CheckoutKind::Local, Some(&materialized("f", "/wt/f"))),
-            "Current worktree"
-        );
-        assert_eq!(
-            checkout_label(CheckoutKind::NewWorktree, Some(&plain("main"))),
-            "New worktree"
-        );
-    }
 }
