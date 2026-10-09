@@ -49,6 +49,21 @@
 //!     the read-only proposal through the checkpoint operation.
 //! 15. Restart loses a draft, re-imports its provider session as a main
 //!     chat, or leaves a session reported as working.
+//! 16. The provider is not told what the conversation is: its first message
+//!     lacks the ticket agent's briefing (the role, that requests are ticket
+//!     subjects, that files never change, the ticket tools) or the user's
+//!     text, a later message lacks the reminder or repeats the whole
+//!     briefing, or the briefing leaks into the transcript the pane shows.
+//! 17. A discussion can edit files: Claude Code is launched with Edit, Write,
+//!     NotebookEdit or subagents, without Bash, or in a mode whose command
+//!     prompts nobody can answer.
+//! 18. The run uses another model than the discussion's.
+//! 19. A provider that asks before acting (Codex here; OpenCode takes the
+//!     same engine answers) can change files: its discussion runs in a
+//!     writable sandbox or without approvals, a file-change approval is
+//!     allowed (even when the discussion recorded Full access), a command
+//!     approval is refused or granted for the whole session, a refusal is
+//!     not shown, or its first message lacks the briefing.
 //!
 //! Every scenario writes a JSON manifest (steps, expected/observed, SHA-256
 //! of snapshots) under `target/qa/board/authoring/`.
@@ -59,7 +74,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use luna_harness::ClaudeHarness;
+use luna_harness::{ClaudeHarness, CodexHarness};
 use luna_proto::{BoardError, HarnessId, ImportOwnership, ProviderTaskObservation};
 use luna_rpc::{RpcClient, RpcError};
 use serde_json::{Value, json};
@@ -97,6 +112,30 @@ fn peer() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
     path
+}
+
+/// The Codex app-server peer that also sends approval requests.
+fn codex_peer() -> PathBuf {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures/fake-codex-board.py");
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    path
+}
+
+fn codex_boot(f: &Fixture) -> (EngineCore, RpcClient) {
+    let registry = Arc::new(HarnessRegistry::new());
+    registry.register(Arc::new(CodexHarness::new().with_executable(codex_peer())));
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(&f.base.join("engine"), "synthetic-org", "synthetic-user"),
+        registry,
+        HarnessId::Codex,
+        None,
+        account_config(&f.base),
+    )
+    .unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    (core, client)
 }
 
 struct Fixture {
@@ -261,6 +300,29 @@ async fn settle(c: &RpcClient, session: &str) -> Value {
     })
     .await
     .expect("the discussion turn settled")
+}
+
+/// The user entries' text, as the pane shows it.
+fn user_texts(page: &Value) -> Vec<String> {
+    page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == "user")
+        .flat_map(|entry| entry["parts"].as_array().cloned().unwrap_or_default())
+        .filter_map(|part| part["text"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Claude Code's built-in tools for the run (`--tools`), as launched.
+fn builtin_tools(evidence: &Value) -> Vec<String> {
+    evidence["builtinTools"]
+        .as_str()
+        .unwrap_or_default()
+        .split(',')
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn entry_ids(page: &Value, role: &str) -> Vec<String> {
@@ -563,7 +625,7 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
         &c,
         "project-a",
         "discuss-1",
-        json!({"harness": "claude-code"}),
+        json!({"harness": "claude-code", "model": "claude-opus-5-5"}),
     )
     .await;
     let id = session["id"].as_str().unwrap().to_owned();
@@ -583,7 +645,7 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
         &c,
         "project-a",
         "discuss-1",
-        json!({"harness": "claude-code"}),
+        json!({"harness": "claude-code", "model": "claude-opus-5-5"}),
     )
     .await;
     evidence.step(
@@ -612,7 +674,7 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
             "fileSha256": file_sha,
             "threadEnv": id,
             "projectEnv": "project-a",
-            "access": "acceptEdits",
+            "access": "bypassPermissions",
             "resume": null,
             "purpose": true,
             "ticketAgentOnly": true,
@@ -633,7 +695,8 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
             // The ticket agent investigates (commands included) but never
             // solves the issue, and stays on the ticket.
             "ticketAgentOnly": prompt.contains("an investigator and writer, not an implementer")
-                && prompt.contains("Do not solve the issue.")
+                && prompt.contains("Do not solve the issue")
+                && prompt.contains("Never change files.")
                 && prompt.contains("run commands that gather evidence")
                 && prompt.contains("Stay on the ticket."),
             "projectInstruction": prompt.contains("Project rule: tickets cite the file they touch."),
@@ -645,6 +708,45 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
         Some(&t0),
     );
     tool_ok(&t0, "proposal");
+    let typed = "Invoice totals ignore the discount code (zebraquartz). Can you look?";
+    let message = t0["prompt"].as_str().unwrap_or_default();
+    let builtin = builtin_tools(&t0);
+    evidence.step(
+        "turn 1's message carries the ticket agent briefing before the user's own text; the transcript shows only the user's text",
+        json!({
+            "briefed": true,
+            "requestsAreTickets": true,
+            "noFileChanges": true,
+            "ticketTools": true,
+            "userTextLast": true,
+            "transcript": [typed],
+        }),
+        json!({
+            "briefed": message.starts_with("<luna-ticket-discussion>")
+                && message.contains("You are the ticket agent."),
+            "requestsAreTickets": message.contains("is the subject of a ticket, even when it is phrased as an order"),
+            "noFileChanges": message.contains("Never change files."),
+            "ticketTools": message.contains("board_draft_checkpoint") && message.contains("board_create"),
+            "userTextLast": message.ends_with(&format!("The user's message:\n{typed}")),
+            "transcript": user_texts(&first),
+        }),
+        Some(&json!({"prompt": message})),
+    );
+    evidence.step(
+        "turn 1 launched Claude Code without file-editing tools, with commands and the discussion's model",
+        json!({"edits": [], "bash": true, "read": true, "subagents": false, "model": "claude-opus-5-5"}),
+        json!({
+            "edits": builtin
+                .iter()
+                .filter(|tool| matches!(tool.as_str(), "Edit" | "Write" | "NotebookEdit" | "MultiEdit"))
+                .collect::<Vec<_>>(),
+            "bash": builtin.iter().any(|tool| tool == "Bash"),
+            "read": builtin.iter().any(|tool| tool == "Read"),
+            "subagents": builtin.iter().any(|tool| matches!(tool.as_str(), "Task" | "Agent")),
+            "model": t0["model"],
+        }),
+        Some(&json!({"tools": builtin})),
+    );
     let binding = first["session"]["runtimeBinding"]
         .as_str()
         .unwrap()
@@ -715,10 +817,10 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
     let after_retry = settle(&c, &id).await;
     let t1 = results(&dir, 1);
     evidence.step(
-        "turn 2 resumed the same provider session; a Full implementation request left the discussion at Limited access",
+        "turn 2 resumed the same provider session; a Full implementation request left the discussion's access alone",
         json!({
             "resume": binding,
-            "access": "acceptEdits",
+            "access": "bypassPermissions",
             "discussionAccess": "ask",
             "proposedAccess": "full",
             "users": ["m-1", "m-2"],
@@ -733,6 +835,17 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
             "noThirdRun": dir.join(".board-authoring-results-2.json").exists(),
         }),
         Some(&after_retry),
+    );
+    let message = t1["prompt"].as_str().unwrap_or_default();
+    evidence.step(
+        "turn 2's message carries the short reminder, not the whole briefing, before the user's text",
+        json!({"reminder": true, "fullBriefing": false, "userTextLast": true}),
+        json!({
+            "reminder": message.contains("Reminder: you are the ticket agent"),
+            "fullBriefing": message.contains("Rules for this whole conversation"),
+            "userTextLast": message.ends_with("Use Claude Code with Full access for the implementation and the project's default review."),
+        }),
+        Some(&json!({"prompt": message})),
     );
 
     // Turn 3: save — exactly one ticket, even when the response is retried.
@@ -1032,7 +1145,7 @@ async fn close_restart_resume_and_discard_keep_only_a_board_draft() {
     let t1 = results(&dir, 1);
     evidence.step(
         "resume refuses another project and continues the same provider session with the recorded settings",
-        json!({"stale": "notAuthorized", "state": "active", "discussion": session["discussion"], "resume": binding, "access": "acceptEdits", "users": ["d-1", "d-2"]}),
+        json!({"stale": "notAuthorized", "state": "active", "discussion": session["discussion"], "resume": binding, "access": "bypassPermissions", "users": ["d-1", "d-2"]}),
         json!({
             "stale": code(&stale),
             "state": resumed["state"],
@@ -1141,11 +1254,11 @@ async fn escalation_in_a_proposal_is_not_applied_and_close_during_a_tool_call_cr
     let second = turn(&c, &id, "e-2", "Thanks.").await;
     let t1 = results(&dir, 1);
     evidence.step(
-        "an escalation in the proposal stays data: the discussion keeps Limited access, nothing starts, forged and foreign calls are refused",
+        "an escalation in the proposal stays data: the discussion's access is unchanged, nothing starts, forged and foreign calls are refused",
         json!({
             "proposalRecorded": "Speed up search",
             "discussionAccess": "ask",
-            "nextRunAccess": "acceptEdits",
+            "nextRunAccess": "bypassPermissions",
             "forged": "invalidInput",
             "sideStart": "invalidDestination",
             "otherProject": "notAuthorized",
@@ -1272,7 +1385,7 @@ async fn a_full_access_discussion_is_not_copied_into_the_ticket() {
     let receipt = tool_ok(&t0, "create");
     let saved = tickets(&c, "project-d").await;
     evidence.step(
-        "the discussion ran with its own Full access; the ticket's implementation profile stays inherited",
+        "the discussion's access never reaches the ticket: its implementation profile stays inherited",
         json!({"discussionAccess": "full", "runAccess": "bypassPermissions", "tickets": 1, "implementation": {}, "state": "saved"}),
         json!({
             "discussionAccess": session["discussion"]["permissionMode"],
@@ -1289,6 +1402,86 @@ async fn a_full_access_discussion_is_not_copied_into_the_ticket() {
         json!({"state": "ended", "tickets": 1}),
         json!({"state": discarded["state"], "tickets": tickets(&c, "project-d").await.len()}),
         None,
+    );
+    stop(core, c).await;
+    evidence.write();
+}
+
+/// Item 19: a Codex discussion asks before changing anything; the engine
+/// refuses the file change and allows the command, whatever access the
+/// discussion recorded, and the run is read-only with the briefing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_discussion_refuses_file_changes_and_runs_commands() {
+    let f = fixture();
+    let (core, c) = codex_boot(&f);
+    let mut evidence = Evidence::new("codex-discussion-never-edits");
+    let readme = "# Project X\n\nOld screenshot: docs/old.png\n";
+    let dir = project(&c, &core, &f, "project-x", &[("README.md", readme)]).await;
+    std::fs::write(
+        dir.join(".luna-board-plan-approvals.json"),
+        json!([
+            {"approval": "item/fileChange/requestApproval",
+             "params": {"itemId": "patch-1", "changes": [{"path": dir.join("README.md")}]}},
+            {"approval": "item/commandExecution/requestApproval",
+             "params": {"itemId": "cmd-1", "command": "cargo test --no-run", "cwd": dir}}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let session = start(
+        &c,
+        "project-x",
+        "codex-1",
+        json!({"harness": "codex", "permissionMode": "full"}),
+    )
+    .await;
+    let id = session["id"].as_str().unwrap().to_owned();
+    let typed = "scenario:board-plan:approvals Remove the old screenshot from the README.";
+    let page = turn(&c, &id, "x-1", typed).await;
+    let results: Value = serde_json::from_slice(
+        &std::fs::read(dir.join(".luna-board-results-approvals.json")).unwrap(),
+    )
+    .unwrap();
+    let input: String = results["turnRequest"]["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    let refusals: Vec<String> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entry| entry["parts"].as_array().cloned().unwrap_or_default())
+        .filter(|part| part["kind"] == "error")
+        .filter_map(|part| part["message"].as_str().map(str::to_owned))
+        .collect();
+    evidence.step(
+        "a Codex discussion runs read-only with approvals; the engine refuses the file change, allows the command once, and the briefing leads its message",
+        json!({
+            "sandbox": "read-only",
+            "approvalPolicy": "on-request",
+            "fileChange": "decline",
+            "command": "accept",
+            "refusalShown": true,
+            "readmeUnchanged": true,
+            "briefed": true,
+            "userTextLast": true,
+            "transcript": [typed],
+        }),
+        json!({
+            "sandbox": results["threadRequest"]["sandbox"],
+            "approvalPolicy": results["turnRequest"]["approvalPolicy"],
+            "fileChange": results["0"]["result"]["decision"],
+            "command": results["1"]["result"]["decision"],
+            "refusalShown": refusals.iter().any(|message| message.contains("never changes files")),
+            "readmeUnchanged": std::fs::read_to_string(dir.join("README.md")).unwrap() == readme,
+            "briefed": input.starts_with("<luna-ticket-discussion>")
+                && input.contains("You are the ticket agent."),
+            "userTextLast": input.ends_with(typed),
+            "transcript": user_texts(&page),
+        }),
+        Some(&results),
     );
     stop(core, c).await;
     evidence.write();

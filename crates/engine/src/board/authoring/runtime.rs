@@ -343,10 +343,14 @@ pub(crate) fn start_turn(
     Ok(())
 }
 
-/// A temporary discussion cannot approve actions or answer blocking
-/// prompts: every provider request is declined at once (the least
-/// privileged answer) and the decline is shown in the transcript.
-fn decline_inputs(
+/// What a ticket discussion answers when its provider asks (nobody is
+/// prompted here): commands and network access run, since investigating is
+/// the discussion's job; file changes are refused, since it never changes
+/// files; anything else (provider permission grants, paths outside the
+/// project, other chats, blocking questions for the user) is declined, and the
+/// assistant asks in the conversation instead. Refusals show in the
+/// transcript.
+fn answer_inputs(
     runtimes: Arc<AuthoringRuntimes>,
     session_id: String,
     turn_id: String,
@@ -357,34 +361,80 @@ fn decline_inputs(
 > {
     Box::new(move |questions: Vec<UserInputQuestion>| {
         let (answer, receiver) = tokio::sync::oneshot::channel();
-        let answers = questions
-            .iter()
-            .map(|question| UserInputAnswer {
+        let mut answers = Vec::with_capacity(questions.len());
+        for question in &questions {
+            let allowed = question.approval.as_ref().is_some_and(|approval| {
+                matches!(
+                    approval.action_kind,
+                    luna_proto::ApprovalActionKind::Command
+                        | luna_proto::ApprovalActionKind::Network
+                )
+            });
+            if allowed && let Some(label) = allow_once_label(question) {
+                answers.push(UserInputAnswer {
+                    question_id: question.id.clone(),
+                    labels: vec![label],
+                });
+                continue;
+            }
+            answers.push(UserInputAnswer {
                 question_id: question.id.clone(),
                 labels: vec![decline_label(question)],
-            })
-            .collect();
-        for question in &questions {
+            });
             let what = if question.header.trim().is_empty() {
                 question.question.trim()
             } else {
                 question.header.trim()
+            };
+            let what: String = what.chars().take(120).collect();
+            let message = match question
+                .approval
+                .as_ref()
+                .map(|approval| approval.action_kind)
+            {
+                Some(luna_proto::ApprovalActionKind::FileChange) => format!(
+                    "Refused “{what}”: a ticket discussion never changes files. The ticket's implementation agent makes the change once the ticket moves to Ready."
+                ),
+                Some(_) => format!(
+                    "Declined “{what}”: a ticket discussion only reads, searches and runs commands in this project."
+                ),
+                None => format!(
+                    "Declined “{what}”: the assistant asks you in this conversation instead."
+                ),
             };
             runtimes.push_part(
                 &session_id,
                 &turn_id,
                 MessagePart::Error {
                     id: format!("declined-{}", uuid::Uuid::new_v4().simple()),
-                    message: format!(
-                        "Declined “{}”: a temporary Board discussion cannot approve actions or answer prompts. Make changes from a normal chat.",
-                        what.chars().take(120).collect::<String>()
-                    ),
+                    message,
                 },
             );
         }
         let _ = answer.send(answers);
         receiver
     })
+}
+
+/// The one-time allow choice of an approval (never a session-wide grant).
+fn allow_once_label(question: &UserInputQuestion) -> Option<String> {
+    let lower = |label: &String| label.trim().to_ascii_lowercase();
+    question
+        .options
+        .iter()
+        .find(|label| lower(label) == "allow once")
+        .or_else(|| {
+            question.options.iter().find(|label| {
+                let label = lower(label);
+                (label.starts_with("allow")
+                    || label.starts_with("approve")
+                    || label.starts_with("accept")
+                    || label == "yes")
+                    && !label.contains("session")
+                    && !label.contains("always")
+            })
+        })
+        .cloned()
 }
 
 fn decline_label(question: &UserInputQuestion) -> String {
@@ -473,7 +523,7 @@ async fn drive(
     // One turn per run: the provider ends its input after this message.
     drop(steer);
     let controls = RunControls {
-        request_input: decline_inputs(runtimes.clone(), session_id.clone(), turn_id.clone()),
+        request_input: answer_inputs(runtimes.clone(), session_id.clone(), turn_id.clone()),
         steering,
         interrupt: interrupt.clone(),
         invoke_luna_tool: Some(tool_executor(

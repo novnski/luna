@@ -234,6 +234,7 @@ ACTIONS = PLAN[TURN] if TURN < len(PLAN) else [{"say": "Noted."}]
 evidence = {
     "turn": TURN, "session": SESSION, "resume": RESUME, "cwd": CWD, "permissionMode": MODE,
     "model": flag_value("--model"), "prompt": message, "systemPrompt": flag_value("--append-system-prompt"),
+    "builtinTools": flag_value("--tools"),
     "mcpUrl": URL, "pid": os.getpid(), "env": {
         key: os.environ.get(key) for key in ("LUNA_THREAD_ID", "LUNA_PROJECT_ID")
     },

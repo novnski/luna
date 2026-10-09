@@ -33,6 +33,13 @@ use luna_proto::{
 /// runtime.
 pub const LUNA_PROVIDER_AUTH_INSTANCE_OPTION: &str = "lunaProviderAuthInstance";
 
+/// Engine-only run option (`true`) for a run that must never change files,
+/// such as a Board ticket discussion: an adapter that can remove its
+/// file-editing tools does so (Claude Code launches without Edit, Write and
+/// NotebookEdit). Adapters that cannot rely on the engine refusing their
+/// file-change approvals.
+pub const LUNA_NO_FILE_EDITS_OPTION: &str = "lunaNoFileEdits";
+
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
     #[error("harness binary not found: {0}")]

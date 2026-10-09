@@ -73,6 +73,20 @@ pub const READ_ONLY_TOOL_GRANT: &[&str] = &[
     "WebSearch",
 ];
 
+/// The built-in tools of a run that must never change files (a Board ticket
+/// discussion): reading, searching, commands and the web. No Edit, Write or
+/// NotebookEdit, no subagents (which could edit), no worktree or plan-mode
+/// switches, and no blocking question tool (the discussion asks in text).
+pub const NO_EDIT_TOOL_GRANT: &[&str] = &[
+    "Glob",
+    "Grep",
+    "Read",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "Skill",
+];
+
 /// Which built-in tools a launch asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolSelection {
@@ -83,6 +97,8 @@ pub enum ToolSelection {
     Disabled,
     /// [`READ_ONLY_TOOL_GRANT`] for an engine-resolved read-only sandbox.
     ReadOnly,
+    /// [`NO_EDIT_TOOL_GRANT`] for a run that must never change files.
+    NoEdits,
 }
 
 /// The configuration identity of one Claude process: permission policy, tools,
@@ -132,6 +148,9 @@ impl ClaudeLaunchProfile {
             ToolSelection::Disabled => args.extend(["--tools".into(), String::new()]),
             ToolSelection::ReadOnly => {
                 args.extend(["--tools".into(), READ_ONLY_TOOL_GRANT.join(",")]);
+            }
+            ToolSelection::NoEdits => {
+                args.extend(["--tools".into(), NO_EDIT_TOOL_GRANT.join(",")]);
             }
             ToolSelection::ModeDefault if self.restricted() => {
                 args.extend(["--tools".into(), ASK_AUTO_TOOL_GRANT.join(",")]);

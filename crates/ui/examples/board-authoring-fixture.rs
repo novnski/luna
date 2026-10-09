@@ -15,9 +15,11 @@
 //! 3. The assistant's reply, the read-only proposed ticket or the saved
 //!    receipt (key, Backlog, Open ticket) is missing; clicking the proposal
 //!    and typing edits it.
-//! 4. The discussion assistant controls do not show the harness, model,
-//!    reasoning and effective access, or a Full implementation request in
-//!    the conversation changes the discussion's own access.
+//! 4. The discussion assistant controls do not show the harness, model and
+//!    reasoning, still offer an access control (a discussion's access is
+//!    fixed: it reads, searches and runs commands and never edits files), or
+//!    a Full implementation request in the conversation changes the
+//!    discussion's own access.
 //! 5. Close leaves the pane open or the runtime working, or the unfinished
 //!    discussion is not listed as a Board draft (or appears as a chat).
 //! 6. Resume opens an empty or different discussion (transcript or
@@ -34,6 +36,9 @@
 //! 11. An image dropped on the discussion is not staged in its composer, is
 //!     not uploaded with the message (no `Attached images` block, no
 //!     thumbnail row), or never reaches the assistant's run as an image.
+//! 12. The model the composer's pill shows is not the one that runs: a
+//!     discussion opened without a model keeps none, so the provider runs
+//!     its own default instead.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-authoring-fixture
@@ -441,21 +446,30 @@ async fn scenario(
     capture(window, cx, output.join("02-discuss.png"))?;
     // The assistant's settings are the chat composer's own pickers.
     let chips = &opened["composer"]["pickers"]["chips"];
-    let controls = ["model", "access"]
-        .iter()
-        .all(|chip| !chips[*chip].is_null());
+    let controls = !chips["model"].is_null() && chips["access"].is_null();
     evidence.step(
-        "Discuss with AI is a conversation only: one composer, no title or description field",
-        json!({"textInputs": ["composer"], "state": "active", "proposal": null, "access": "ask", "harness": "claude-code", "controls": true}),
+        "Discuss with AI is a conversation only: one composer, no title or description field, a model pill and no access control",
+        json!({"textInputs": ["composer"], "state": "active", "proposal": null, "harness": "claude-code", "controls": true}),
         json!({
             "textInputs": opened["textInputs"],
             "state": opened["state"],
             "proposal": opened["proposal"],
-            "access": opened["effectiveAccess"],
             "harness": opened["discussion"]["harness"],
             "controls": controls,
         }),
         &opened,
+    )?;
+    // The model the pill shows is recorded on the discussion.
+    let recorded = wait_for(window, cx, "the shown model recorded", pane_readback, |r| {
+        r["discussion"]["model"].is_string() && r["busy"] == json!(false)
+    })
+    .await?;
+    let shown_model = recorded["discussion"]["model"].clone();
+    evidence.step(
+        "the model the pill shows is recorded on the discussion without a notice",
+        json!({"notice": null, "recorded": true}),
+        json!({"notice": recorded["notice"], "recorded": shown_model.is_string()}),
+        &recorded,
     )?;
     let session = opened["sessionId"].as_str().unwrap_or_default().to_owned();
 
@@ -505,10 +519,17 @@ async fn scenario(
             "tools": kinds.contains(&"tools"),
             "markdown": kinds.contains(&"markdown"),
             "model": chip(&first, "model").is_ok(),
-            "access": chip(&first, "access").is_ok(),
+            "access": chip(&first, "access").is_err(),
             "send": !first["bounds"]["send"].is_null(),
             "bespoke": bespoke,
         }),
+        &first,
+    )?;
+    let turns = peer_turns(project);
+    evidence.step(
+        "the first run uses the model the pill showed",
+        json!({"model": shown_model}),
+        json!({"model": turns.first().map(|turn| turn["model"].clone()).unwrap_or_default()}),
         &first,
     )?;
     // Clicking the proposal and typing changes nothing.
@@ -618,11 +639,10 @@ async fn scenario(
     )?;
     evidence.step(
         "a Full implementation request leaves the discussion's own access unchanged",
-        json!({"implementation": "full", "discussion": "ask", "access": "ask"}),
+        json!({"implementation": "full", "discussion": "ask"}),
         json!({
             "implementation": settings["proposal"]["implementation"]["permissionMode"],
             "discussion": settings["discussion"]["permissionMode"],
-            "access": settings["effectiveAccess"],
         }),
         &settings,
     )?;

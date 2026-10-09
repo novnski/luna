@@ -709,8 +709,16 @@ impl ClaudeHarness {
         )
         .await?;
         tracing::info!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
+        let no_file_edits = request
+            .model_options
+            .remove(crate::LUNA_NO_FILE_EDITS_OPTION)
+            .is_some_and(|value| value == Value::Bool(true));
         let tools = if title_only {
             ToolSelection::Disabled
+        } else if no_file_edits {
+            // A run that must never change files (a Board ticket discussion):
+            // the editing tools are not offered at all.
+            ToolSelection::NoEdits
         } else if request.sandbox == luna_proto::SandboxLevel::ReadOnly
             && request
                 .permission_policy

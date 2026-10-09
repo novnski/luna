@@ -98,6 +98,9 @@ pub struct AuthoringPane {
     transcript: Option<Entity<Transcript>>,
     /// The discussion profile last shown in the composer's pickers.
     shown_profile: Option<AuthoringDiscussionProfile>,
+    /// The model the pickers show was recorded for a discussion that had
+    /// none (once per pane), so the engine runs the model the user sees.
+    model_recorded: bool,
     focus_pending: bool,
     composer_width: Rc<Cell<f32>>,
     composer_height: Rc<Cell<f32>>,
@@ -165,6 +168,11 @@ impl AuthoringPane {
             _ => {}
         });
         let pickers = composer.read(cx).pickers().clone();
+        // The engine fixes a discussion's access (it reads, searches and runs
+        // commands; it never edits), so there is no access or checkout chip.
+        pickers.update(cx, |pickers, cx| {
+            pickers.set_detached_chips(false, false, cx)
+        });
         let settings = cx.observe(&pickers, |pane: &mut Self, _, cx| {
             pane.on_pickers_changed(cx)
         });
@@ -189,6 +197,7 @@ impl AuthoringPane {
             composer,
             transcript: None,
             shown_profile: None,
+            model_recorded: false,
             focus_pending: true,
             composer_width: Rc::new(Cell::new(0.0)),
             composer_height: Rc::new(Cell::new(0.0)),
@@ -469,11 +478,49 @@ impl AuthoringPane {
         pickers.update(cx, |pickers, cx| {
             pickers.set_detached_draft(Self::draft_of(&profile), false, cx)
         });
+        self.record_shown_model(cx);
+    }
+
+    /// A discussion without a model shows the app's default for its
+    /// assistant in the pill; record that one, or the provider would run its
+    /// own default. Retried as the pickers update (their model catalog loads
+    /// after the discussion opens), once it succeeds never again.
+    fn record_shown_model(&mut self, cx: &mut Context<Self>) {
+        if self.model_recorded || self.busy || self.working {
+            return;
+        }
+        let Some(profile) = self.session.as_ref().map(|s| s.discussion.clone()) else {
+            return;
+        };
+        if profile.model.is_some() {
+            return;
+        }
+        let resolved = self.composer.read(cx).pickers().read(cx).resolved(cx);
+        let Some(model) = resolved.model else {
+            return;
+        };
+        self.model_recorded = true;
+        let next = AuthoringDiscussionProfile {
+            harness: resolved.harness.or(profile.harness),
+            model: Some(model),
+            reasoning: profile.reasoning.or(resolved.reasoning),
+            ..profile
+        };
+        // The pickers show it as the pick it now is, so their next change
+        // notification is not mistaken for the user's.
+        self.shown_profile = Some(next.clone());
+        let draft = Self::draft_of(&next);
+        let pickers = self.composer.read(cx).pickers().clone();
+        pickers.update(cx, |pickers, cx| {
+            pickers.set_detached_draft(draft, false, cx)
+        });
+        self.change_discussion(next, cx);
     }
 
     /// A pick in the composer's pickers changes the discussion assistant
     /// through the engine (validated there; never the ticket's profile).
     fn on_pickers_changed(&mut self, cx: &mut Context<Self>) {
+        self.record_shown_model(cx);
         let Some(shown) = self.shown_profile.clone() else {
             return;
         };
@@ -1194,10 +1241,11 @@ impl AuthoringPane {
                     .line_height(crate::typography::ui_rems(18.0))
                     .text_color(theme.readable_muted(0.75))
                     .child(SharedString::from(format!(
-                        "The ticket agent explores {project}, can run commands to reproduce the \
-                         problem, asks what is missing and saves the ticket when you say so. It \
-                         writes the ticket; it does not fix the issue. This discussion never \
-                         appears in chats; closing keeps an unfinished one as a Board draft."
+                        "The ticket agent explores {project}: it reads, searches and runs commands \
+                         to reproduce the problem, asks what is missing and saves the ticket when \
+                         you say so. It never edits files; the ticket's agent does the work. This \
+                         discussion never appears in chats; closing keeps an unfinished one as a \
+                         Board draft."
                     ))),
             )
             .into_any_element()

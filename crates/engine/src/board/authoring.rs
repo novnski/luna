@@ -760,10 +760,30 @@ impl EngineRpc {
         }
         let mut model_options = discussion.model_options.clone();
         model_options.retain(|key, _| !private_option(key));
+        // The ticket agent's briefing travels with the message itself, for
+        // every provider: in full when a provider session starts (the first
+        // message, or a new assistant), as a reminder after that.
+        let tools = self.authoring_tools();
+        let briefing = if session.runtime_binding.is_none() {
+            instructions::first_turn_briefing(space, &tools)
+        } else {
+            instructions::turn_reminder(space)
+        };
+        // A discussion never changes files and its commands run without
+        // asking, whatever access the discussion once recorded: Claude Code
+        // launches with no file-editing tools at all and Full access for its
+        // commands; the others run with Limited access (Codex read-only
+        // sandbox) and the engine answers their approvals (file changes
+        // refused, commands allowed; `runtime::answer_inputs`).
+        let permission_mode = match harness_id {
+            HarnessId::ClaudeCode => PermissionMode::Full,
+            _ => PermissionMode::Ask,
+        };
+        model_options.insert(luna_harness::LUNA_NO_FILE_EDITS_OPTION.into(), true.into());
         let mut request = RunRequest {
             review: None,
             goal: None,
-            prompt: prompt.to_owned(),
+            prompt: instructions::briefed_prompt(&briefing, prompt),
             input_items: input_items.to_vec(),
             harness: Some(harness_id),
             provider_account_id: discussion.provider_account_id.clone(),
@@ -773,7 +793,7 @@ impl EngineRpc {
             cwd: space.path.clone(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: false,
-            permission_mode: discussion.permission_mode.unwrap_or(PermissionMode::Ask),
+            permission_mode,
             parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,
@@ -818,14 +838,25 @@ impl EngineRpc {
                 );
             }
         }
-        // The same policy resolver as every chat run: the discussion's own
-        // requested access, clamped by machine/environment ceilings.
+        // The same policy resolver as every chat run, clamped by machine and
+        // environment ceilings. A clamp only narrows a discussion (Claude
+        // without Full access cannot run commands here; edits stay off).
         let policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
         if crate::permissions::hidden_ask_fallback(&policy) {
-            return Err(BoardError::invalid(
-                "discussion.permissionMode",
-                "the requested access would fall back to Limited access; choose Limited access or another mode",
-            ));
+            tracing::info!(
+                session_id = %session.id,
+                harness = ?harness_id,
+                "board discussion access narrowed by a ceiling"
+            );
+        }
+        if harness_id == HarnessId::Codex {
+            // Codex writes inside a writable sandbox without asking: a
+            // discussion keeps its sandbox read-only, so a patch always asks
+            // (and is refused) and a command needing writes asks to escalate.
+            request.sandbox = SandboxLevel::ReadOnly;
+            let mut policy = policy;
+            policy.network_policy = luna_proto::PermissionNetworkPolicy::Restricted;
+            request.permission_policy = Some(policy);
         }
         let contract = self.authoring_contract(session, space, harness_id, &request, delivery)?;
         request.model_options.insert(

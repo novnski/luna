@@ -17,8 +17,10 @@ per-process `luna` server (`-c mcp_servers.luna.url=...`, bearer token in
   writing replies to `.luna-board-results-<label>.json`. Plan items may be
   `{"tool", "arguments"}` (arguments may use `"$ref:<step>.<path>"` to reuse a
   field of an earlier JSON reply), `{"relist": true}` (rediscover the
-  catalog) or `{"frame": {...}}` or `{"frames": [...]}` (raw notifications; `$THREAD`/`$TURN` are
-  substituted, e.g. a mid-turn `contextCompaction` item);
+  catalog), `{"frame": {...}}` or `{"frames": [...]}` (raw notifications; `$THREAD`/`$TURN` are
+  substituted, e.g. a mid-turn `contextCompaction` item), or `{"approval": method, "params": {...}}`
+  (a server request such as `item/fileChange/requestApproval`; the client's reply is recorded);
+  the results also record the turn's `turn/start` params (input, sandbox, approval policy);
 - any other prompt is one plain turn (child chats, workers started by board
   tools); it records its LUNA instructions in `.luna-board-turn-<task>.txt`.
 
@@ -141,7 +143,22 @@ def substitute(value, thread, turn):
     return value
 
 
-def run_plan(label, thread, turn, thread_request, resumed):
+def approve(method, params, thread, turn, request_id):
+    """Send one approval request and wait for the client's reply."""
+    emit({"id": request_id, "method": method,
+          "params": dict(params, threadId=thread, turnId=turn)})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return {"error": "stdin closed"}
+        message = json.loads(line)
+        if message.get("id") == request_id and "method" not in message:
+            return {"result": message.get("result"), "error": message.get("error")}
+        if message.get("id") is not None and message.get("method"):
+            respond(message["id"], {})
+
+
+def run_plan(label, thread, turn, thread_request, resumed, turn_request=None):
     with open(os.path.join(CWD, f".luna-board-plan-{label}.json")) as source:
         steps = json.load(source)
     results = {
@@ -150,6 +167,8 @@ def run_plan(label, thread, turn, thread_request, resumed):
             "tokenInEnv": bool(TOKEN), "tokenInArgv": bool(TOKEN) and any(TOKEN in arg for arg in ARGV),
         },
         "instructions": (thread_request or {}).get("developerInstructions"),
+        "threadRequest": thread_request,
+        "turnRequest": turn_request,
         "handshake": list_tools(),
     }
     for index, item in enumerate(steps):
@@ -162,6 +181,10 @@ def run_plan(label, thread, turn, thread_request, resumed):
             continue
         if item.get("relist"):
             results[str(index)] = list_tools()
+            continue
+        if "approval" in item:
+            results[str(index)] = approve(
+                item["approval"], item.get("params", {}), thread, turn, f"approval-{label}-{index}")
             continue
         arguments = resolve(item.get("arguments", {}), results)
         results[str(index)] = call(item["tool"], arguments, thread, turn, f"call-{label}-{index}")
@@ -215,7 +238,7 @@ def main():
             # turn start before the first tools/call reaches its fence.
             time.sleep(0.3)
             if label and MCP_URL:
-                run_plan(label.group(1), thread, turn, thread_request, resumed)
+                run_plan(label.group(1), thread, turn, thread_request, resumed, params)
             elif TASK and not (thread_request or {}).get("ephemeral"):
                 with open(os.path.join(CWD, f".luna-board-turn-{TASK}.txt"), "w") as out:
                     out.write((thread_request or {}).get("developerInstructions") or "")
