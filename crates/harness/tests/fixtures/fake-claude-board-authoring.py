@@ -71,6 +71,12 @@ if frame.get("type") != "user":
     # A discovery probe (initialize control request), not a turn.
     sys.exit(1)
 message = frame["message"]["content"]
+# What the turn carried besides text (image blocks from attachments).
+CONTENT_TYPES = (
+    [block.get("type") for block in message if isinstance(block, dict)]
+    if isinstance(message, list)
+    else ["text"]
+)
 if isinstance(message, list):
     message = " ".join(block.get("text", "") for block in message if isinstance(block, dict))
 
@@ -232,6 +238,7 @@ evidence = {
         key: os.environ.get(key) for key in ("LUNA_THREAD_ID", "LUNA_PROJECT_ID")
     },
     "steps": {},
+    "contentTypes": CONTENT_TYPES,
 }
 evidence["tools"] = handshake() if URL else []
 emit({

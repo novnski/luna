@@ -24,6 +24,16 @@
 //!    proposal lost).
 //! 7. Save then close keeps the session listed, or the ticket is missing.
 //! 8. Discard (from the pane or the drafts list) leaves the draft listed.
+//! 9. The discussion is not the chat UI: its messages are not rows of the
+//!    main transcript (user row, tool group, markdown reply), or the
+//!    composer is not the main composer (no model pill, access lock or
+//!    Send), or the old bespoke controls remain.
+//! 10. A model picked in the composer's pill does not reach the engine's
+//!     discussion profile (or its next run), or changes the proposed
+//!     ticket's own settings.
+//! 11. An image dropped on the discussion is not staged in its composer, is
+//!     not uploaded with the message (no `Attached images` block, no
+//!     thumbnail row), or never reaches the assistant's run as an image.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-authoring-fixture
@@ -270,6 +280,50 @@ async fn wait_for(
     }
 }
 
+/// Center of one of the composer's picker chips (`model`, `access`).
+fn chip(readback: &Value, name: &str) -> anyhow::Result<(f32, f32)> {
+    let rect = readback["composer"]["pickers"]["chips"][name]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("no {name} chip: {}", readback["composer"]["pickers"]))?;
+    let n = |i: usize| rect.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    Ok((n(0) + n(2) / 2.0, n(1) + n(3) / 2.0))
+}
+
+/// Drop files on the window the way the platform does (enter, hover, drop).
+async fn drop_files(
+    window: Win,
+    cx: &mut AsyncApp,
+    at: (f32, f32),
+    paths: Vec<PathBuf>,
+) -> anyhow::Result<()> {
+    let position = point(px(at.0), px(at.1));
+    let events = [
+        gpui::FileDropEvent::Entered {
+            position,
+            paths: gpui::ExternalPaths(paths.into()),
+        },
+        gpui::FileDropEvent::Pending { position },
+        gpui::FileDropEvent::Submit { position },
+    ];
+    for event in events {
+        input(window, cx, PlatformInput::FileDrop(event))?;
+        frames(window, cx, 80).await?;
+    }
+    frames(window, cx, 300).await
+}
+
+/// The fake peer's per-turn evidence (`.board-authoring-results-N.json`).
+fn peer_turns(project: &Path) -> Vec<Value> {
+    (0..32)
+        .filter_map(|turn| {
+            let path = project.join(format!(".board-authoring-results-{turn}.json"));
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        })
+        .collect()
+}
+
 fn entries(readback: &Value, role: &str) -> Vec<String> {
     readback["entries"]
         .as_array()
@@ -362,6 +416,7 @@ async fn scenario(
     window: Win,
     cx: &mut AsyncApp,
     output: &Path,
+    project: &Path,
     state: Entity<state::AppState>,
 ) -> anyhow::Result<Value> {
     let mut evidence = Evidence { steps: Vec::new() };
@@ -384,14 +439,11 @@ async fn scenario(
     })
     .await?;
     capture(window, cx, output.join("02-discuss.png"))?;
-    let controls = [
-        "authoring-harness",
-        "authoring-model",
-        "authoring-reasoning",
-        "authoring-access",
-    ]
-    .iter()
-    .all(|label| !opened["bounds"][*label].is_null());
+    // The assistant's settings are the chat composer's own pickers.
+    let chips = &opened["composer"]["pickers"]["chips"];
+    let controls = ["model", "access"]
+        .iter()
+        .all(|chip| !chips[*chip].is_null());
     evidence.step(
         "Discuss with AI is a conversation only: one composer, no title or description field",
         json!({"textInputs": ["composer"], "state": "active", "proposal": null, "access": "ask", "harness": "claude-code", "controls": true}),
@@ -421,6 +473,41 @@ async fn scenario(
             "readOnly": first["proposal"]["readOnly"],
             "rendered": first["proposal"]["rendered"],
             "composer": first["composerText"],
+        }),
+        &first,
+    )?;
+    // The conversation is the main chat's transcript and composer.
+    let rows = first["transcriptRows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let kinds: Vec<&str> = rows.iter().filter_map(|row| row["kind"].as_str()).collect();
+    let user_id = first["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["role"] == "user")
+        .map(|entry| entry["id"].clone())
+        .unwrap_or_default();
+    let bespoke = [
+        "authoring-harness",
+        "authoring-model",
+        "authoring-reasoning",
+        "authoring-access",
+    ]
+    .iter()
+    .any(|label| !first["bounds"][*label].is_null());
+    evidence.step(
+        "the discussion is the chat UI: transcript rows and the chat composer",
+        json!({"userRow": true, "tools": true, "markdown": true, "model": true, "access": true, "send": true, "bespoke": false}),
+        json!({
+            "userRow": rows.iter().any(|row| row["kind"] == "user" && row["entryId"] == user_id),
+            "tools": kinds.contains(&"tools"),
+            "markdown": kinds.contains(&"markdown"),
+            "model": chip(&first, "model").is_ok(),
+            "access": chip(&first, "access").is_ok(),
+            "send": !first["bounds"]["send"].is_null(),
+            "bespoke": bespoke,
         }),
         &first,
     )?;
@@ -470,6 +557,51 @@ async fn scenario(
         json!({"session": resumed["sessionId"], "users": entries(&resumed, "user"), "proposal": resumed["proposal"]["title"]}),
         &resumed,
     )?;
+    // The assistant's model through the composer's pill: search, Enter.
+    let before_model = resumed["discussion"]["model"].clone();
+    let proposal_before = resumed["proposal"]["implementation"].clone();
+    click(window, cx, chip(&resumed, "model")?).await?;
+    wait_for(window, cx, "the model menu", pane_readback, |r| {
+        r["composer"]["pickers"]["open"] == "HarnessModel"
+    })
+    .await?;
+    type_text(window, cx, "sonnet").await?;
+    let listed = wait_for(window, cx, "a sonnet model", pane_readback, |r| {
+        r["composer"]["pickers"]["modelRows"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] != before_model))
+    })
+    .await?;
+    let wanted = listed["composer"]["pickers"]["modelRows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"] != before_model)
+        .map(|row| row["id"].clone())
+        .unwrap_or_default();
+    let index = listed["composer"]["pickers"]["modelRows"]
+        .as_array()
+        .and_then(|rows| rows.iter().position(|row| row["id"] == wanted))
+        .unwrap_or(0);
+    for _ in 0..index {
+        keys(window, cx, &["down"]).await?;
+    }
+    keys(window, cx, &["enter"]).await?;
+    let picked = wait_for(
+        window,
+        cx,
+        "the discussion's new model",
+        pane_readback,
+        |r| r["discussion"]["model"] == wanted && r["busy"] == json!(false),
+    )
+    .await?;
+    keys(window, cx, &["escape"]).await?;
+    evidence.step(
+        "a model picked in the composer's pill changes the discussion, not the proposal",
+        json!({"model": wanted, "proposal": proposal_before}),
+        json!({"model": picked["discussion"]["model"], "proposal": picked["proposal"]["implementation"]}),
+        &picked,
+    )?;
     let settings = send_message(
         window,
         cx,
@@ -477,6 +609,13 @@ async fn scenario(
         true,
     )
     .await?;
+    let turns = peer_turns(project);
+    evidence.step(
+        "the next run uses the picked model",
+        json!({"model": wanted}),
+        json!({"model": turns.last().map(|turn| turn["model"].clone()).unwrap_or_default()}),
+        &settings,
+    )?;
     evidence.step(
         "a Full implementation request leaves the discussion's own access unchanged",
         json!({"implementation": "full", "discussion": "ask", "access": "ask"}),
@@ -547,7 +686,62 @@ async fn scenario(
         r["status"] == "Ready" && r["sessionId"].is_string() && r["sessionId"] != json!(session)
     })
     .await?;
-    send_message(window, cx, "also the list is slow", true).await?;
+    // A screenshot dropped on the discussion is staged in its composer.
+    let screenshot = output.join("drop-screenshot.png");
+    let mut image = image::RgbaImage::new(24, 16);
+    for (x, _, pixel) in image.enumerate_pixels_mut() {
+        *pixel = image::Rgba([40 + (x as u8) * 8, 90, 200, 255]);
+    }
+    image.save(&screenshot)?;
+    let ready = pane_readback(window, cx)?.unwrap_or_default();
+    drop_files(
+        window,
+        cx,
+        center(&ready, "composer")?,
+        vec![screenshot.clone()],
+    )
+    .await?;
+    let staged = wait_for(window, cx, "the staged screenshot", pane_readback, |r| {
+        r["composer"]["attachments"]
+            .as_array()
+            .is_some_and(|names| !names.is_empty())
+    })
+    .await?;
+    let staged_names = staged["composer"]["attachments"].clone();
+    let sent = send_message(window, cx, "also the list is slow", true).await?;
+    let user_text = entries(&sent, "user").last().cloned().unwrap_or_default();
+    let image_rows = sent["transcriptRows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["kind"] == "user")
+        .filter_map(|row| row["attachments"].as_u64())
+        .max()
+        .unwrap_or(0);
+    let turns = peer_turns(project);
+    let peer_types = turns
+        .iter()
+        .find(|turn| {
+            turn["prompt"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains("also the list is slow"))
+        })
+        .map(|turn| turn["contentTypes"].clone())
+        .unwrap_or_default();
+    evidence.step(
+        "a dropped image is staged, uploaded with the message, shown as a thumbnail and reaches the run",
+        json!({"staged": 1, "attachedBlock": true, "thumbnails": 1, "runImage": true, "composer": []}),
+        json!({
+            "staged": staged_names.as_array().map_or(0, Vec::len),
+            "attachedBlock": user_text.contains("Attached images (local files"),
+            "thumbnails": image_rows,
+            "runImage": peer_types
+                .as_array()
+                .is_some_and(|types| types.iter().any(|kind| kind == "image")),
+            "composer": sent["composer"]["attachments"],
+        }),
+        &sent,
+    )?;
     let second = pane_readback(window, cx)?.unwrap_or_default();
     click(window, cx, center(&second, "close")?).await?;
     let listed = wait_for(
@@ -734,6 +928,7 @@ fn main() -> anyhow::Result<()> {
     let failure = Arc::new(Mutex::new(None::<String>));
     let failure_for_ui = failure.clone();
     let output_for_ui = output.clone();
+    let project_for_ui = project.clone();
     gpui_platform::headless().with_assets(icons::Assets).run(move |cx| {
         gpui_tokio::init(cx);
         gpui_base::init(cx);
@@ -806,9 +1001,10 @@ fn main() -> anyhow::Result<()> {
             .unwrap();
         let _ = window.update(cx, |_, window, _| window.activate_window());
         let ui_state = state.clone();
+        let project_for_ui = project_for_ui.clone();
         cx.spawn(async move |cx| {
             let output = output_for_ui;
-            let result = scenario(window, cx, &output, ui_state).await;
+            let result = scenario(window, cx, &output, &project_for_ui, ui_state).await;
             match result.and_then(|record| {
                 let body = serde_json::to_vec_pretty(&record)?;
                 std::fs::write(output.join("readback.json"), &body)?;

@@ -1,8 +1,13 @@
-//! Discuss with AI (A6): the temporary authoring conversation — a message
-//! stream and one composer with the discussion assistant's harness, model,
-//! reasoning and effective access; a read-only proposed-ticket summary; the
-//! saved receipt with Open ticket; Close (keeps an unfinished discussion as
-//! a resumable Board draft) and Discard. There is no editable title or
+//! Discuss with AI (A6): the temporary authoring conversation, shown with the
+//! main chat's own surfaces — the [`Transcript`] (markdown, tool cards, the
+//! working trailer) over the discussion's entries and the [`Composer`]
+//! (attachments, `@` files, `$` skills, `/` commands, the model pill and the
+//! access lock) bound to no chat ([`ChatBinding::Detached`]): its sends,
+//! Stop and assistant settings come here and go to the engine's authoring
+//! session. A compact header names the project and the temporary nature; a
+//! read-only proposed-ticket card (then the saved receipt with Open ticket)
+//! sits above the composer; Close keeps an unfinished discussion as a
+//! resumable Board draft and Discard drops it. There is no editable title or
 //! description anywhere in this mode: the user revises the proposal by
 //! talking to the assistant, and the engine owns every rule (authority,
 //! exclusion from chat surfaces, runtime stop, cleanup).
@@ -11,38 +16,43 @@
 //! issue chooser) and [`AuthoringPane::resume`] (Resume draft);
 //! [`BoardPage::open_authoring`] mounts either in the Board page, and
 //! [`AuthoringDrafts`] lists the resumable drafts for the page.
+//!
+//! [`ChatBinding::Detached`]: crate::chat_binding::ChatBinding::Detached
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight,
-    IntoElement, ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Task,
-    WeakEntity, Window, div, prelude::*, px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FontWeight, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
+    prelude::*, px,
 };
-use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use luna_engine::registry::HarnessDescriptor;
+use luna_doc::SessionMessageEntry;
 use luna_proto::{
     AuthoringDiscussionProfile, AuthoringProposal, AuthoringState, BoardAuthoringListRequest,
     BoardAuthoringPage, BoardAuthoringSendRequest, BoardAuthoringSessionRequest,
     BoardAuthoringStartRequest, BoardExecutionProfile, BoardReadRequest, BoardReviewProfile,
-    BoardScope, HarnessId, PermissionMode, ReasoningLevel, TicketAuthoringSession, ToolCall,
-    WorkItem,
+    BoardScope, HarnessId, PermissionMode, ReasoningLevel, TicketAuthoringSession, WorkItem,
 };
-use luna_rpc::methods;
 
 use super::api::{BoardApi, BoardCallError};
 use super::model::BoardModel;
 use super::page::BoardPage;
 use crate::button::{ButtonKind, ControlSize};
-use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::composer::{Composer, ComposerEvent, DetachedMessage};
 use crate::icons;
+use crate::pickers::DraftConfig;
 use crate::settings::widgets;
-use crate::theme::{FillTier, Theme};
+use crate::theme::Theme;
+use crate::transcript::Transcript;
 
 /// A watch that ended while the discussion is open is retried this often.
 const WATCH_RETRY: Duration = Duration::from_secs(2);
-/// The proposal summary shows this much of the brief.
-const SUMMARY_CHARS: usize = 900;
+/// The proposal card shows this much of the brief.
+const SUMMARY_CHARS: usize = 360;
+/// The composer's prompt in this mode.
+const PLACEHOLDER: &str = "Describe what should change, attach screenshots, or mention files…";
 
 /// What the pane tells its host.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,15 +72,6 @@ enum PaneStatus {
     Error(String),
 }
 
-/// The discussion-assistant control whose choices are open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Menu {
-    Harness,
-    Model,
-    Reasoning,
-    Access,
-}
-
 /// The authoring pane for one temporary session.
 pub struct AuthoringPane {
     pub(crate) model: Entity<BoardModel>,
@@ -80,37 +81,39 @@ pub struct AuthoringPane {
     request_id: String,
     session: Option<TicketAuthoringSession>,
     entries: Vec<SessionMessageEntry>,
-    /// The message being sent, shown until the engine records it.
-    pending: Option<(String, String)>,
     working: bool,
     effective_access: Option<PermissionMode>,
     status: PaneStatus,
     notice: Option<String>,
+    /// A message is uploading or being recorded.
     sending: bool,
     /// A Close/Discard/settings change is in flight.
     busy: bool,
     tickets: HashMap<String, WorkItem>,
     loading_tickets: HashSet<String>,
-    input: Entity<ComposerInput>,
+    /// The main chat's composer, bound to no chat: its owner sends.
+    composer: Entity<Composer>,
+    /// The main chat's transcript over this discussion's entries (from the
+    /// first engine answer on).
+    transcript: Option<Entity<Transcript>>,
+    /// The discussion profile last shown in the composer's pickers.
+    shown_profile: Option<AuthoringDiscussionProfile>,
     focus_pending: bool,
-    menu: Option<Menu>,
-    harnesses: Vec<HarnessDescriptor>,
-    models: Vec<luna_proto::Model>,
-    models_for: Option<HarnessId>,
-    scroll: ScrollHandle,
+    composer_width: Rc<Cell<f32>>,
+    composer_height: Rc<Cell<f32>>,
+    last_layout: (f32, f32),
     watch_generation: u64,
     start_task: Option<Task<()>>,
     watch_task: Option<Task<()>>,
     send_task: Option<Task<()>>,
     op_task: Option<Task<()>>,
-    catalog_task: Option<Task<()>>,
     ticket_tasks: Vec<Task<()>>,
     #[cfg(feature = "appshots-fixture")]
     probe: std::rc::Rc<std::cell::RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
     /// QA: the send path's recent steps (focus, submit, send, frames).
     #[cfg(feature = "appshots-fixture")]
     trace: std::collections::VecDeque<String>,
-    _input: Subscription,
+    _composer: [Subscription; 2],
 }
 
 impl EventEmitter<AuthoringPaneEvent> for AuthoringPane {}
@@ -144,19 +147,30 @@ impl AuthoringPane {
         session_id: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| {
-            ComposerInput::new(
-                "Explain the issue, add details, or choose execution settings…",
-                cx,
-            )
-            .with_accessibility_role(gpui::Role::TextInput)
+        let state = model.read(cx).state().clone();
+        let binding = crate::chat_binding::ChatBinding::Detached {
+            space_id: project_id.clone(),
+        };
+        let composer = cx.new(|cx| {
+            let mut composer = Composer::new_bound(state, binding, cx);
+            composer.set_placeholder(PLACEHOLDER, cx);
+            composer
         });
-        let events = cx.subscribe(&input, |pane: &mut Self, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Submitted) {
+        let events = cx.subscribe(&composer, |pane: &mut Self, _, event, cx| match event {
+            ComposerEvent::DetachedSend(message) => {
                 pane.trace("composer submitted");
-                pane.send(cx);
+                pane.send(message.clone(), cx);
             }
+            ComposerEvent::DetachedStop => pane.stop(cx),
+            _ => {}
         });
+        let pickers = composer.read(cx).pickers().clone();
+        let settings = cx.observe(&pickers, |pane: &mut Self, _, cx| {
+            pane.on_pickers_changed(cx)
+        });
+        // The discussion's rows live in the app state only while it is open.
+        cx.on_release(|pane: &mut Self, cx| pane.release_rows(cx))
+            .detach();
         Self {
             model,
             project_id,
@@ -164,7 +178,6 @@ impl AuthoringPane {
             request_id: format!("authoring-{}", uuid::Uuid::new_v4().simple()),
             session: None,
             entries: Vec::new(),
-            pending: None,
             working: false,
             effective_access: None,
             status: PaneStatus::Starting,
@@ -173,25 +186,24 @@ impl AuthoringPane {
             busy: false,
             tickets: HashMap::new(),
             loading_tickets: HashSet::new(),
-            input,
+            composer,
+            transcript: None,
+            shown_profile: None,
             focus_pending: true,
-            menu: None,
-            harnesses: Vec::new(),
-            models: Vec::new(),
-            models_for: None,
-            scroll: ScrollHandle::new(),
+            composer_width: Rc::new(Cell::new(0.0)),
+            composer_height: Rc::new(Cell::new(0.0)),
+            last_layout: (0.0, 0.0),
             watch_generation: 0,
             start_task: None,
             watch_task: None,
             send_task: None,
             op_task: None,
-            catalog_task: None,
             ticket_tasks: Vec::new(),
             #[cfg(feature = "appshots-fixture")]
             probe: Default::default(),
             #[cfg(feature = "appshots-fixture")]
             trace: Default::default(),
-            _input: events,
+            _composer: [events, settings],
         }
     }
 
@@ -236,7 +248,6 @@ impl AuthoringPane {
             }
             this.update(cx, |pane, cx| pane.started(result, cx)).ok();
         }));
-        self.load_harnesses(cx);
     }
 
     fn started(
@@ -250,6 +261,8 @@ impl AuthoringPane {
                 let id = session.id.clone();
                 self.session = Some(session);
                 self.status = PaneStatus::Ready;
+                self.mount_transcript(&id, cx);
+                self.sync_pickers(cx);
                 self.start_watch(id, cx);
             }
             Err(error) => {
@@ -258,6 +271,31 @@ impl AuthoringPane {
             }
         }
         cx.notify();
+    }
+
+    /// The main transcript over this session's rows (pushed by the watch).
+    fn mount_transcript(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.transcript.is_some() {
+            return;
+        }
+        let state = self.model.read(cx).state().clone();
+        let id = session_id.to_owned();
+        state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(id.clone(), Vec::new());
+            cx.notify();
+        });
+        self.transcript = Some(cx.new(|cx| Transcript::for_doc(state, id, true, cx)));
+    }
+
+    /// Drop this discussion's rows from the app state (pane closed).
+    fn release_rows(&mut self, cx: &mut App) {
+        if let Some(id) = self.session_id.clone() {
+            let state = self.model.read(cx).state().clone();
+            state.update(cx, |state, cx| {
+                state.unwatch_subagent_doc(&id);
+                cx.notify();
+            });
+        }
     }
 
     fn start_watch(&mut self, session_id: String, cx: &mut Context<Self>) {
@@ -313,13 +351,6 @@ impl AuthoringPane {
             .into_iter()
             .filter_map(|entry| serde_json::from_value(entry).ok())
             .collect();
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|(id, _)| self.entries.iter().any(|entry| &entry.id == id))
-        {
-            self.pending = None;
-        }
         self.working = page.working;
         self.effective_access = page.effective_access;
         let frame = format!(
@@ -330,12 +361,25 @@ impl AuthoringPane {
         );
         self.trace(frame);
         let created = page.session.created_item_ids.clone();
+        let id = page.session.id.clone();
         self.session = Some(page.session);
         self.status = PaneStatus::Ready;
-        for id in created {
-            self.load_ticket(id, cx);
+        for item in created {
+            self.load_ticket(item, cx);
         }
-        self.scroll.scroll_to_bottom();
+        // The transcript renders the engine's rows, like a chat's.
+        self.mount_transcript(&id, cx);
+        let state = self.model.read(cx).state().clone();
+        let entries = self.entries.clone();
+        state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(id, entries);
+            cx.notify();
+        });
+        let running = self.working || self.sending;
+        self.composer.update(cx, |composer, cx| {
+            composer.set_detached_running(running, cx)
+        });
+        self.sync_pickers(cx);
         cx.notify();
     }
 
@@ -360,59 +404,6 @@ impl AuthoringPane {
                 pane.loading_tickets.remove(&work_item_id);
                 if let Ok(detail) = result {
                     pane.tickets.insert(work_item_id, detail.view.item);
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-    }
-
-    fn load_harnesses(&mut self, cx: &mut Context<Self>) {
-        let Some(engine) = self.model.read(cx).state().read(cx).engine().cloned() else {
-            return;
-        };
-        self.catalog_task = Some(cx.spawn(async move |this, cx| {
-            let listed = engine
-                .client()
-                .call(methods::LIST_HARNESSES, serde_json::json!({}))
-                .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<Vec<HarnessDescriptor>>(value).ok())
-                .unwrap_or_default();
-            this.update(cx, |pane, cx| {
-                pane.harnesses = listed
-                    .into_iter()
-                    .filter(|descriptor| descriptor.installed && descriptor.enabled != Some(false))
-                    .collect();
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
-    fn load_models(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
-        if self.models_for == Some(harness) {
-            return;
-        }
-        let Some(engine) = self.model.read(cx).state().read(cx).engine().cloned() else {
-            return;
-        };
-        self.models_for = Some(harness);
-        self.models.clear();
-        self.catalog_task = Some(cx.spawn(async move |this, cx| {
-            let listed = engine
-                .client()
-                .call(
-                    methods::LIST_MODELS,
-                    serde_json::json!({ "harness": harness }),
-                )
-                .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<Vec<luna_proto::Model>>(value).ok())
-                .unwrap_or_default();
-            this.update(cx, |pane, cx| {
-                if pane.models_for == Some(harness) {
-                    pane.models = listed;
                     cx.notify();
                 }
             })
@@ -451,10 +442,67 @@ impl AuthoringPane {
             && !self.busy
     }
 
-    /// Send the composer's text as the next user message.
-    pub fn send(&mut self, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).text().trim().to_owned();
-        if text.is_empty() {
+    // ---- the assistant's settings: the composer's pickers ----
+
+    fn draft_of(profile: &AuthoringDiscussionProfile) -> DraftConfig {
+        DraftConfig {
+            harness: profile.harness,
+            provider_account_id: profile.provider_account_id.clone(),
+            model: profile.model.clone(),
+            reasoning: profile.reasoning,
+            model_options: profile.model_options.clone(),
+            permission_mode: profile.permission_mode,
+            ..DraftConfig::default()
+        }
+    }
+
+    /// Show the session's discussion profile in the composer's pickers.
+    fn sync_pickers(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.session.as_ref().map(|s| s.discussion.clone()) else {
+            return;
+        };
+        if self.shown_profile.as_ref() == Some(&profile) {
+            return;
+        }
+        self.shown_profile = Some(profile.clone());
+        let pickers = self.composer.read(cx).pickers().clone();
+        pickers.update(cx, |pickers, cx| {
+            pickers.set_detached_draft(Self::draft_of(&profile), false, cx)
+        });
+    }
+
+    /// A pick in the composer's pickers changes the discussion assistant
+    /// through the engine (validated there; never the ticket's profile).
+    fn on_pickers_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = self.shown_profile.clone() else {
+            return;
+        };
+        let draft = self.composer.read(cx).pickers().read(cx).draft().clone();
+        if draft == Self::draft_of(&shown) {
+            return;
+        }
+        let next = AuthoringDiscussionProfile {
+            harness: draft.harness,
+            provider_account_id: draft.provider_account_id,
+            model: draft.model,
+            reasoning: draft.reasoning,
+            model_options: draft.model_options,
+            permission_mode: draft.permission_mode,
+        };
+        self.shown_profile = Some(next.clone());
+        self.change_discussion(next, cx);
+    }
+
+    // ---- messages ----
+
+    /// Send the composer's message (text, `@`/`$` selections, images) as the
+    /// discussion's next user message. Images upload to the project's host
+    /// first, as for a chat; a refusal hands everything back to the composer.
+    pub fn send(&mut self, message: DetachedMessage, cx: &mut Context<Self>) {
+        if message.text.trim().is_empty()
+            && message.attachments.is_empty()
+            && message.input_items.is_empty()
+        {
             self.trace("send skipped: the composer is empty");
             return;
         }
@@ -467,50 +515,108 @@ impl AuthoringPane {
                 self.busy
             );
             self.trace(reason);
+            self.composer
+                .update(cx, |composer, cx| composer.restore_detached(message, cx));
             return;
         }
-        let (Some(session_id), Some(api)) = (self.session_id.clone(), self.api(cx)) else {
+        let state = self.model.read(cx).state().clone();
+        let (Some(session_id), Some(api), Some(engine)) = (
+            self.session_id.clone(),
+            self.api(cx),
+            state.read(cx).engine().cloned(),
+        ) else {
             self.trace("send skipped: no session or engine connection");
+            self.composer
+                .update(cx, |composer, cx| composer.restore_detached(message, cx));
             return;
         };
-        self.trace(format!("send started ({} bytes)", text.len()));
+        // Uploads go to the project's host, like a chat's on that host.
+        let host = {
+            let state = state.read(cx);
+            state
+                .space_row(&self.project_id)
+                .map(|space| space.device_id.clone())
+                .filter(|device| state.local_device_id.as_deref() != Some(device.as_str()))
+        };
+        self.trace(format!(
+            "send started ({} bytes, {} images, {} selections)",
+            message.text.len(),
+            message.attachments.len(),
+            message.input_items.len()
+        ));
         let message_id = format!("msg-{}", uuid::Uuid::new_v4().simple());
-        self.pending = Some((message_id.clone(), text.clone()));
-        self.input.update(cx, |input, cx| input.set_text("", cx));
         self.sending = true;
         self.notice = None;
-        self.menu = None;
-        let request = BoardAuthoringSendRequest {
-            session_id,
-            message_id,
-            text: text.clone(),
-        };
+        self.composer
+            .update(cx, |composer, cx| composer.set_detached_running(true, cx));
         self.send_task = Some(cx.spawn(async move |this, cx| {
+            let mut paths = Vec::new();
+            for attachment in &message.attachments {
+                let upload_id = uuid::Uuid::new_v4().to_string();
+                match crate::attachments::upload_attachment(
+                    &engine,
+                    cx.background_executor(),
+                    host.as_deref(),
+                    &upload_id,
+                    attachment,
+                    None,
+                )
+                .await
+                {
+                    Ok(path) => paths.push(path),
+                    Err(error) => {
+                        tracing::warn!(%error, "authoring attachment upload failed");
+                        this.update(cx, |pane, cx| {
+                            pane.send_failed(
+                                message.clone(),
+                                format!("{} couldn't upload; nothing was sent.", attachment.name),
+                                cx,
+                            )
+                        })
+                        .ok();
+                        return;
+                    }
+                }
+            }
+            let request = BoardAuthoringSendRequest {
+                session_id,
+                message_id,
+                text: crate::attachments::with_attachments(message.text.trim(), &paths),
+                input_items: message.input_items.clone(),
+                attachments: paths,
+            };
             let mut result = api.authoring_send(request.clone()).await;
             if matches!(result, Err(BoardCallError::Lost)) {
                 // The message id is the no-replay key.
                 result = api.authoring_send(request).await;
             }
-            this.update(cx, |pane, cx| {
-                pane.sending = false;
-                match result {
-                    // The watch reports the turn; a reply can be older
-                    // than a frame that already arrived.
-                    Ok(session) => {
-                        pane.trace(format!("send accepted (version {})", session.version));
-                        pane.adopt(session);
-                    }
-                    Err(error) => {
-                        pane.trace(format!("send refused: {}", error.message()));
-                        pane.pending = None;
-                        pane.notice = Some(error.message());
-                        pane.input.update(cx, |input, cx| input.set_text(text, cx));
-                    }
+            this.update(cx, |pane, cx| match result {
+                // The watch reports the turn; a reply can be older than a
+                // frame that already arrived.
+                Ok(session) => {
+                    pane.trace(format!("send accepted (version {})", session.version));
+                    pane.sending = false;
+                    pane.adopt(session);
+                    cx.notify();
                 }
-                cx.notify();
+                Err(error) => {
+                    pane.trace(format!("send refused: {}", error.message()));
+                    pane.send_failed(message.clone(), error.message(), cx);
+                }
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    fn send_failed(&mut self, message: DetachedMessage, why: String, cx: &mut Context<Self>) {
+        self.sending = false;
+        self.notice = Some(why);
+        let running = self.working;
+        self.composer.update(cx, |composer, cx| {
+            composer.set_detached_running(running, cx);
+            composer.restore_detached(message, cx);
+        });
         cx.notify();
     }
 
@@ -551,7 +657,6 @@ impl AuthoringPane {
             return;
         };
         self.busy = true;
-        self.menu = None;
         cx.notify();
         self.op_task = Some(cx.spawn(async move |this, cx| {
             let request = BoardAuthoringSessionRequest { session_id };
@@ -593,7 +698,7 @@ impl AuthoringPane {
     /// there; never the ticket's implementation profile).
     fn change_discussion(
         &mut self,
-        change: impl FnOnce(&mut AuthoringDiscussionProfile),
+        discussion: AuthoringDiscussionProfile,
         cx: &mut Context<Self>,
     ) {
         let (Some(session), Some(api)) = (self.session.clone(), self.api(cx)) else {
@@ -601,12 +706,11 @@ impl AuthoringPane {
         };
         if self.working || self.busy {
             self.notice = Some("Change the assistant after this reply.".into());
+            self.shown_profile = None;
+            self.sync_pickers(cx);
             cx.notify();
             return;
         }
-        let mut discussion = session.discussion.clone();
-        change(&mut discussion);
-        self.menu = None;
         self.busy = true;
         let request = BoardAuthoringStartRequest {
             request_id: format!("authoring-settings-{}", uuid::Uuid::new_v4().simple()),
@@ -625,20 +729,13 @@ impl AuthoringPane {
                     }
                     Err(error) => pane.notice = Some(error.message()),
                 }
+                // Show what the engine kept (a refused pick snaps back).
+                pane.shown_profile = None;
+                pane.sync_pickers(cx);
                 cx.notify();
             })
             .ok();
         }));
-        cx.notify();
-    }
-
-    fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
-        self.menu = (self.menu != Some(menu)).then_some(menu);
-        if self.menu == Some(Menu::Model)
-            && let Some(harness) = self.session.as_ref().and_then(|s| s.discussion.harness)
-        {
-            self.load_models(harness, cx);
-        }
         cx.notify();
     }
 
@@ -650,18 +747,6 @@ impl AuthoringPane {
             .space_row(&self.project_id)
             .map(|space| space.display_name().to_owned())
             .unwrap_or_else(|| "this project".into())
-    }
-
-    fn harness_label(&self, harness: Option<HarnessId>) -> String {
-        match harness {
-            Some(harness) => self
-                .harnesses
-                .iter()
-                .find(|descriptor| descriptor.id == harness)
-                .map(|descriptor| descriptor.name.clone())
-                .unwrap_or_else(|| harness_name(harness).into()),
-            None => "Choose an assistant".into(),
-        }
     }
 }
 
@@ -694,8 +779,10 @@ fn reasoning_label(level: ReasoningLevel) -> String {
     }
 }
 
-/// A one-line label for a recorded tool use in the transcript.
-fn tool_label(call: &ToolCall) -> String {
+/// A one-line label for a recorded tool use (QA readback).
+#[cfg(feature = "appshots-fixture")]
+fn tool_label(call: &luna_proto::ToolCall) -> String {
+    use luna_proto::ToolCall;
     let short = |path: &str| {
         path.rsplit(['/', '\\'])
             .take(2)
@@ -807,121 +894,119 @@ impl AuthoringPane {
         element.into_any_element()
     }
 
-    fn render_entry(&self, entry: &SessionMessageEntry, theme: &Theme) -> AnyElement {
-        let (who, user) = match entry.role {
-            MessageRole::User => ("You", true),
-            MessageRole::Assistant => ("Ticket assistant", false),
-            MessageRole::System => ("LUNA", false),
-        };
-        let mut body = div().flex().flex_col().gap(crate::typography::ui_rems(4.0));
-        for part in &entry.parts {
-            match part {
-                MessagePart::Text { text, .. } if !text.trim().is_empty() => {
-                    body = body.child(
-                        div()
-                            .min_w_0()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .line_height(crate::typography::ui_rems(19.0))
-                            .text_color(theme.text)
-                            .child(SharedString::from(text.trim().to_owned())),
-                    );
-                }
-                MessagePart::Tool { call, is_error, .. } => {
-                    body = body.child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(crate::typography::ui_rems(6.0))
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.readable_muted(0.8))
-                            .child(
-                                icons::icon(icons::CHAT_LINE)
-                                    .size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.readable_muted(0.7)),
-                            )
-                            .child(SharedString::from(if *is_error {
-                                format!("{} (refused)", tool_label(call))
-                            } else {
-                                tool_label(call)
-                            })),
-                    );
-                }
-                MessagePart::AsyncQuestion { questions, .. } => {
-                    for question in questions {
-                        let options = question
-                            .options
-                            .as_ref()
-                            .map(|options| options.join(" · "))
-                            .unwrap_or_default();
-                        body = body.child(
-                            div()
-                                .px(crate::typography::ui_rems(10.0))
-                                .py(crate::typography::ui_rems(8.0))
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme.separator(false))
-                                .flex()
-                                .flex_col()
-                                .gap(crate::typography::ui_rems(2.0))
-                                .child(
-                                    div()
-                                        .text_size(crate::typography::ui_rems(13.0))
-                                        .text_color(theme.text)
-                                        .child(SharedString::from(question.title.clone())),
-                                )
-                                .when(!options.is_empty(), |card| {
-                                    card.child(widgets::row_description(theme, options))
-                                })
-                                .child(widgets::row_description(
-                                    theme,
-                                    "Answer in your next message.",
-                                )),
-                        );
-                    }
-                }
-                MessagePart::Error { message, .. } => {
-                    body = body.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.readable_tone(theme.warning, 0.9))
-                            .child(SharedString::from(message.clone())),
-                    );
-                }
-                _ => {}
-            }
-        }
-        if entry.status == Some(MessageStatus::Streaming) {
-            body = body.child(widgets::row_description(theme, "…"));
-        }
-        div()
-            .id(SharedString::from(format!("authoring-entry-{}", entry.id)))
-            .w_full()
+    /// The compact header: back to the Board, what this is, where, and the
+    /// two ways out.
+    fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let project = self.project_name(cx);
+        let enabled = !self.busy && self.session.is_some();
+        let saved = self.saved();
+        let pill = div()
             .flex()
-            .flex_col()
-            .when(user, |row| row.items_end())
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(4.0))
+            .px(crate::typography::ui_rems(7.0))
+            .py(crate::typography::ui_rems(2.0))
+            .rounded_full()
+            .bg(theme.fill(crate::theme::FillTier::Quaternary))
+            .text_size(crate::typography::ui_rems(11.0))
+            .text_color(theme.readable_muted(0.85))
+            .child(
+                icons::icon(icons::CHAT_ROUND_LINE)
+                    .size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.readable_muted(0.85)),
+            )
+            .child("Temporary");
+        let close = crate::button::button(
+            "authoring-close",
+            if saved {
+                ButtonKind::Primary
+            } else {
+                ButtonKind::Ghost
+            },
+            ControlSize::Sm,
+            enabled,
+            theme,
+        )
+        .aria_label(if saved {
+            "Close discussion"
+        } else {
+            "Close and keep a Board draft"
+        })
+        .tooltip(crate::popover::text_tooltip(if saved {
+            "The ticket is saved; this discussion ends."
+        } else {
+            "Keeps this unfinished discussion as a Board draft you can resume."
+        }))
+        .child(if saved { "Close" } else { "Close (keep draft)" })
+        .on_click(cx.listener(|pane, _, _, cx| pane.close(cx)));
+        let discard = (!saved).then(|| {
+            self.probed(
+                "discard",
+                crate::button::button(
+                    "authoring-discard",
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    enabled,
+                    theme,
+                )
+                .aria_label("Discard discussion")
+                .tooltip(crate::popover::text_tooltip(
+                    "Drops this discussion; nothing is kept.",
+                ))
+                .child(crate::button::glyph(
+                    icons::TRASH_BIN_MINIMALISTIC,
+                    ControlSize::Sm,
+                ))
+                .child("Discard")
+                .on_click(cx.listener(|pane, _, _, cx| pane.discard(cx))),
+            )
+        });
+        div()
+            .id("authoring-header")
+            .w_full()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(8.0))
+            .px(crate::typography::ui_rems(16.0))
+            .py(crate::typography::ui_rems(10.0))
+            .border_b_1()
+            .border_color(theme.separator(false))
             .child(
                 div()
-                    .max_w(crate::typography::ui_rems(560.0))
-                    .px(crate::typography::ui_rems(12.0))
-                    .py(crate::typography::ui_rems(10.0))
-                    .rounded(px(10.0))
-                    .when(user, |bubble| bubble.bg(theme.fill(FillTier::Quaternary)))
+                    .flex_1()
+                    .min_w_0()
                     .flex()
-                    .flex_col()
-                    .gap(crate::typography::ui_rems(4.0))
+                    .flex_row()
+                    .items_center()
+                    .gap(crate::typography::ui_rems(8.0))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.readable_muted(0.75))
-                            .child(who),
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child("Discuss a ticket"),
                     )
-                    .child(body),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.readable_muted(0.75))
+                            .child(SharedString::from(project)),
+                    )
+                    .child(pill),
             )
+            .children(discard)
+            .child(self.probed("close", close))
             .into_any_element()
     }
 
+    /// The read-only proposal (until it is saved), compact, above the
+    /// composer.
     fn render_proposal(&self, proposal: &AuthoringProposal, theme: &Theme) -> AnyElement {
         let title = if proposal.title.trim().is_empty() {
             "Untitled ticket".to_owned()
@@ -932,67 +1017,76 @@ impl AuthoringPane {
             .id("authoring-proposal")
             .w_full()
             .px(crate::typography::ui_rems(14.0))
-            .py(crate::typography::ui_rems(12.0))
-            .rounded(px(10.0))
+            .py(crate::typography::ui_rems(10.0))
+            .rounded(px(14.0))
             .border_1()
-            .border_color(theme.accent.opacity(0.35))
-            .bg(theme.accent_wash)
+            .border_color(theme.separator(true))
+            .bg(theme.fill(crate::theme::FillTier::Quaternary))
             .flex()
             .flex_col()
-            .gap(crate::typography::ui_rems(6.0))
+            .gap(crate::typography::ui_rems(4.0))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(crate::typography::ui_rems(6.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.readable_muted(0.85))
                     .child(
                         icons::icon(icons::CLIPBOARD_LIST)
-                            .size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.readable_muted(0.85)),
+                            .size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.accent),
                     )
-                    .child("Proposed ticket · read only"),
-            )
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(15.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
-                    .child(SharedString::from(title)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(SharedString::from(title)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.readable_muted(0.7))
+                            .child("Proposed · read only"),
+                    ),
             )
             .when(!proposal.description.trim().is_empty(), |card| {
                 card.child(
                     div()
-                        .text_size(crate::typography::ui_rems(12.5))
-                        .line_height(crate::typography::ui_rems(18.0))
-                        .text_color(theme.readable_muted(0.95))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .line_height(crate::typography::ui_rems(17.0))
+                        .text_color(theme.readable_muted(0.9))
                         .child(SharedString::from(clip(
                             proposal.description.trim(),
                             SUMMARY_CHARS,
                         ))),
                 )
             })
-            .child(widgets::row_description(
-                theme,
-                format!(
-                    "Implement: {} · Review: {}",
-                    profile_text(&proposal.implementation),
-                    review_text(&proposal.review)
-                ),
-            ))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(theme.readable_muted(0.75))
+                    .child(SharedString::from(format!(
+                        "Implement: {} · Review: {}",
+                        profile_text(&proposal.implementation),
+                        review_text(&proposal.review)
+                    ))),
+            )
             .when(!proposal.unresolved.is_empty(), |card| {
-                card.child(widgets::row_description(
-                    theme,
-                    format!("Still to decide: {}", proposal.unresolved.join(", ")),
-                ))
-            })
-            .child(widgets::row_description(
-                theme,
-                "Tell the assistant what to change.",
-            ));
+                card.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(theme.readable_tone(theme.warning, 0.85))
+                        .child(SharedString::from(format!(
+                            "Still to decide: {}",
+                            proposal.unresolved.join(", ")
+                        ))),
+                )
+            });
         self.probed("proposal", card)
     }
 
@@ -1025,17 +1119,18 @@ impl AuthoringPane {
                     .id(SharedString::from(format!("authoring-receipt-{index}")))
                     .w_full()
                     .px(crate::typography::ui_rems(14.0))
-                    .py(crate::typography::ui_rems(12.0))
-                    .rounded(px(10.0))
+                    .py(crate::typography::ui_rems(10.0))
+                    .rounded(px(14.0))
                     .border_1()
                     .border_color(theme.separator(true))
+                    .bg(theme.fill(crate::theme::FillTier::Quaternary))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(crate::typography::ui_rems(12.0))
+                    .gap(crate::typography::ui_rems(10.0))
                     .child(
                         icons::icon(icons::CLIPBOARD_LIST)
-                            .size(crate::typography::ui_rems(16.0))
+                            .size(crate::typography::ui_rems(15.0))
                             .text_color(theme.readable_muted(0.9)),
                     )
                     .child(
@@ -1051,10 +1146,12 @@ impl AuthoringPane {
                                     .text_color(theme.text)
                                     .child(SharedString::from(headline)),
                             )
-                            .child(widgets::row_description(
-                                theme,
-                                "No working chat was created. This temporary discussion can now close.",
-                            )),
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.5))
+                                    .text_color(theme.readable_muted(0.75))
+                                    .child("No chat was created; this discussion can close."),
+                            ),
                     )
                     .child(self.probed(&format!("open-ticket-{index}"), open));
                 self.probed(&format!("receipt-{index}"), card)
@@ -1062,437 +1159,89 @@ impl AuthoringPane {
             .collect()
     }
 
-    fn render_assistant_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let Some(session) = &self.session else {
-            return div().into_any_element();
-        };
-        let discussion = &session.discussion;
-        let enabled = !self.working && !self.busy;
-        let chip = |id: &'static str, label: String, menu: Menu, cx: &mut Context<Self>| {
-            let open = self.menu == Some(menu);
-            self.probed(
-                id,
-                crate::button::select(id, label, ControlSize::Sm, open, enabled, theme)
-                    .aria_label(match menu {
-                        Menu::Harness => "Discussion assistant provider",
-                        Menu::Model => "Discussion assistant model",
-                        Menu::Reasoning => "Discussion assistant reasoning",
-                        Menu::Access => "Discussion assistant access",
-                    })
-                    .on_click(cx.listener(move |pane, _, _, cx| pane.toggle_menu(menu, cx))),
-            )
-        };
-        let access = self
-            .effective_access
-            .or(discussion.permission_mode)
-            .unwrap_or(PermissionMode::Ask);
-        let mut access_text = access_label(access).to_owned();
-        if let Some(requested) = discussion.permission_mode
-            && requested != access
-        {
-            access_text = format!("{access_text} (asked for {})", access_label(requested));
-        }
-        let mut row = div()
-            .id("authoring-assistant")
-            .w_full()
+    /// Before the first message: what the assistant does, where.
+    fn render_intro(&self, theme: &Theme, cx: &App) -> AnyElement {
+        let project = self.project_name(cx);
+        div()
+            .id("authoring-intro")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .pt(crate::typography::ui_rems(56.0))
+            .px(crate::typography::ui_rems(24.0))
             .flex()
-            .flex_row()
-            .flex_wrap()
+            .flex_col()
             .items_center()
             .gap(crate::typography::ui_rems(6.0))
             .child(
-                div()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.readable_muted(0.85))
-                    .child("Discussion assistant"),
-            );
-        row = row.child(chip(
-            "authoring-harness",
-            self.harness_label(discussion.harness),
-            Menu::Harness,
-            cx,
-        ));
-        row = row.child(chip(
-            "authoring-model",
-            discussion
-                .model
-                .clone()
-                .unwrap_or_else(|| "Default model".into()),
-            Menu::Model,
-            cx,
-        ));
-        row = row.child(chip(
-            "authoring-reasoning",
-            discussion
-                .reasoning
-                .map(reasoning_label)
-                .unwrap_or_else(|| "Default reasoning".into()),
-            Menu::Reasoning,
-            cx,
-        ));
-        row = row.child(chip("authoring-access", access_text, Menu::Access, cx));
-        let mut column = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(crate::typography::ui_rems(6.0))
-            .child(row);
-        if let Some(menu) = self.menu {
-            column = column.child(self.render_menu(menu, discussion, theme, cx));
-        }
-        column
-            .child(widgets::row_description(
-                theme,
-                "These settings affect this temporary discussion, not the future ticket worker.",
-            ))
-            .into_any_element()
-    }
-
-    fn render_menu(
-        &self,
-        menu: Menu,
-        discussion: &AuthoringDiscussionProfile,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let mut choices: Vec<AnyElement> = Vec::new();
-        let mut push = |id: String,
-                        label: String,
-                        selected: bool,
-                        element: Box<dyn Fn(&mut AuthoringDiscussionProfile)>,
-                        cx: &mut Context<Self>| {
-            let element = std::rc::Rc::new(element);
-            choices.push(
-                self.probed(
-                    &id,
-                    crate::button::chip(
-                        SharedString::from(id.clone()),
-                        selected,
-                        ControlSize::Sm,
-                        true,
-                        theme,
-                    )
-                    .child(SharedString::from(label))
-                    .on_click(cx.listener(move |pane, _, _, cx| {
-                        let element = element.clone();
-                        pane.change_discussion(move |profile| element(profile), cx);
-                    })),
-                ),
-            );
-        };
-        match menu {
-            Menu::Harness => {
-                for descriptor in &self.harnesses {
-                    let harness = descriptor.id;
-                    push(
-                        format!(
-                            "authoring-harness-{}",
-                            harness_name(harness).replace(' ', "-").to_lowercase()
-                        ),
-                        descriptor.name.clone(),
-                        discussion.harness == Some(harness),
-                        Box::new(move |profile| {
-                            if profile.harness != Some(harness) {
-                                profile.harness = Some(harness);
-                                profile.model = None;
-                                profile.reasoning = None;
-                                profile.model_options.clear();
-                            }
-                        }),
-                        cx,
-                    );
-                }
-            }
-            Menu::Model => {
-                push(
-                    "authoring-model-default".into(),
-                    "Default model".into(),
-                    discussion.model.is_none(),
-                    Box::new(|profile| profile.model = None),
-                    cx,
-                );
-                for model in &self.models {
-                    let id = model.id.clone();
-                    push(
-                        format!("authoring-model-{}", model.id),
-                        model.label.clone(),
-                        discussion.model.as_deref() == Some(model.id.as_str()),
-                        Box::new(move |profile| profile.model = Some(id.clone())),
-                        cx,
-                    );
-                }
-            }
-            Menu::Reasoning => {
-                let levels = discussion
-                    .harness
-                    .and_then(|harness| {
-                        self.harnesses
-                            .iter()
-                            .find(|descriptor| descriptor.id == harness)
-                            .map(|descriptor| descriptor.reasoning_levels.clone())
-                    })
-                    .unwrap_or_default();
-                push(
-                    "authoring-reasoning-default".into(),
-                    "Default reasoning".into(),
-                    discussion.reasoning.is_none(),
-                    Box::new(|profile| profile.reasoning = None),
-                    cx,
-                );
-                for level in levels {
-                    push(
-                        format!(
-                            "authoring-reasoning-{}",
-                            reasoning_label(level).to_lowercase()
-                        ),
-                        reasoning_label(level),
-                        discussion.reasoning == Some(level),
-                        Box::new(move |profile| profile.reasoning = Some(level)),
-                        cx,
-                    );
-                }
-            }
-            Menu::Access => {
-                for mode in [
-                    PermissionMode::Ask,
-                    PermissionMode::Auto,
-                    PermissionMode::Full,
-                ] {
-                    push(
-                        format!(
-                            "authoring-access-{}",
-                            access_label(mode).replace(' ', "-").to_lowercase()
-                        ),
-                        access_label(mode).into(),
-                        discussion.permission_mode.unwrap_or(PermissionMode::Ask) == mode,
-                        Box::new(move |profile| profile.permission_mode = Some(mode)),
-                        cx,
-                    );
-                }
-            }
-        }
-        div()
-            .id("authoring-menu")
-            .w_full()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(crate::typography::ui_rems(6.0))
-            .children(choices)
-            .into_any_element()
-    }
-
-    fn render_composer(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let enabled = self.can_send();
-        let action = if self.working {
-            crate::button::button(
-                "authoring-stop",
-                ButtonKind::Secondary,
-                ControlSize::Md,
-                true,
-                theme,
+                icons::icon(icons::CHAT_ROUND_LINE)
+                    .size(crate::typography::ui_rems(22.0))
+                    .text_color(theme.readable_muted(0.6)),
             )
-            .aria_label("Stop the temporary assistant")
-            .child(crate::button::glyph(icons::STOP, ControlSize::Md))
-            .child("Stop")
-            .on_click(cx.listener(|pane, _, _, cx| pane.stop(cx)))
-        } else {
-            crate::button::button(
-                "authoring-send",
-                ButtonKind::Primary,
-                ControlSize::Md,
-                enabled,
-                theme,
-            )
-            .aria_label("Send to temporary assistant")
-            .child(
-                crate::button::glyph(icons::ARROW_UP, ControlSize::Md).text_color(theme.on_solid),
-            )
-            .on_click(cx.listener(|pane, _, _, cx| pane.send(cx)))
-        };
-        let frame = crate::popover::dialog_field(self.input.clone().into_any_element())
-            .px(crate::typography::ui_rems(10.0))
-            .py(crate::typography::ui_rems(8.0))
-            .rounded(px(10.0))
-            .border_color(theme.separator(true))
-            .bg(theme.fill(FillTier::Quaternary))
-            .text_size(crate::typography::ui_rems(13.0))
-            .min_h(crate::typography::ui_rems(64.0))
-            .cursor(gpui::CursorStyle::IBeam)
-            // The input is one line at the top of this taller box and blurs
-            // itself on any press outside its own bounds: a press anywhere
-            // in the box (bubbling, after that blur) puts focus back in it.
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|pane, _, window, cx| {
-                    window.focus(&pane.input.focus_handle(cx), cx);
-                    // Like GPUI's own focus transfer: a focusable ancestor
-                    // (the Shell) must not take focus back during bubbling.
-                    window.prevent_default();
-                    pane.trace("composer box pressed: input focused");
-                }),
-            );
-        div()
-            .id("authoring-composer")
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(crate::typography::ui_rems(8.0))
-            .child(self.probed("composer", frame))
             .child(
                 div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(crate::typography::ui_rems(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(crate::typography::ui_rems(6.0))
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.readable_muted(0.8))
-                            .child(
-                                icons::icon(icons::FOLDER)
-                                    .size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.readable_muted(0.8)),
-                            )
-                            .child("Project context available"),
-                    )
-                    .child(div().flex_1())
-                    .child(self.probed(if self.working { "stop" } else { "send" }, action)),
+                    .text_size(crate::typography::ui_rems(15.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child("What should the ticket be?"),
+            )
+            .child(
+                div()
+                    .max_w(crate::typography::ui_rems(460.0))
+                    .text_center()
+                    .text_size(crate::typography::ui_rems(12.5))
+                    .line_height(crate::typography::ui_rems(18.0))
+                    .text_color(theme.readable_muted(0.75))
+                    .child(SharedString::from(format!(
+                        "The ticket agent explores {project}, can run commands to reproduce the \
+                         problem, asks what is missing and saves the ticket when you say so. It \
+                         writes the ticket; it does not fix the issue. This discussion never \
+                         appears in chats; closing keeps an unfinished one as a Board draft."
+                    ))),
             )
             .into_any_element()
-    }
-
-    fn render_actions(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let enabled = !self.busy && self.session.is_some();
-        let mut row = div()
-            .id("authoring-actions")
-            .w_full()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .justify_end()
-            .gap(crate::typography::ui_rems(8.0));
-        if self.saved() {
-            row = row.child(
-                self.probed(
-                    "close",
-                    crate::button::button(
-                        "authoring-close",
-                        ButtonKind::Primary,
-                        ControlSize::Md,
-                        enabled,
-                        theme,
-                    )
-                    .aria_label("Close discussion")
-                    .child("Close discussion")
-                    .on_click(cx.listener(|pane, _, _, cx| pane.close(cx))),
-                ),
-            );
-        } else {
-            row = row
-                .child(
-                    self.probed(
-                        "discard",
-                        crate::button::button(
-                            "authoring-discard",
-                            ButtonKind::Danger,
-                            ControlSize::Md,
-                            enabled,
-                            theme,
-                        )
-                        .aria_label("Discard discussion")
-                        .child("Discard discussion")
-                        .on_click(cx.listener(|pane, _, _, cx| pane.discard(cx))),
-                    ),
-                )
-                .child(
-                    self.probed(
-                        "close",
-                        crate::button::button(
-                            "authoring-close",
-                            ButtonKind::Secondary,
-                            ControlSize::Md,
-                            enabled,
-                            theme,
-                        )
-                        .aria_label("Close and keep a Board draft")
-                        .child("Close (keep draft)")
-                        .on_click(cx.listener(|pane, _, _, cx| pane.close(cx))),
-                    ),
-                );
-        }
-        row.into_any_element()
     }
 }
 
 impl Render for AuthoringPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.focus_pending) {
-            window.focus(&self.input.focus_handle(cx), cx);
+            let focus = gpui::Focusable::focus_handle(self.composer.read(cx), cx);
+            window.focus(&focus, cx);
         }
         let theme = Theme::of(cx).clone();
-        let project = self.project_name(cx);
-        let mut messages = div()
-            .id("authoring-messages")
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(crate::typography::ui_rems(10.0))
-            .child(
-                div()
-                    .px(crate::typography::ui_rems(12.0))
-                    .flex()
-                    .flex_col()
-                    .gap(crate::typography::ui_rems(2.0))
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.readable_muted(0.75))
-                            .child("Ticket assistant"),
-                    )
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .text_color(theme.text)
-                            .child(SharedString::from(format!(
-                                "Tell me what should change in {project}. I can look at the project, ask what is missing and save the ticket when you say so."
-                            ))),
-                    ),
-            );
-        for entry in &self.entries {
-            messages = messages.child(self.render_entry(entry, &theme));
+        let ended = matches!(
+            self.state(),
+            Some(AuthoringState::Ended | AuthoringState::Discarded)
+        );
+        // The main view's layout: the transcript spans the body and the
+        // composer stack floats over its bottom; the transcript's last row
+        // clears the measured stack.
+        let width = self.composer_width.get();
+        if width > 0.0 {
+            self.composer.update(cx, |composer, cx| {
+                composer.set_available_width(width.min(crate::composer::COMPOSER_MAX_WIDTH), cx)
+            });
         }
-        if let Some((id, text)) = &self.pending
-            && !self.entries.iter().any(|entry| &entry.id == id)
-        {
-            let echo = SessionMessageEntry {
-                id: id.clone(),
-                role: MessageRole::User,
-                parts: vec![MessagePart::Text {
-                    id: "t0".into(),
-                    text: text.clone(),
-                }],
-                created_at: 0,
-                device_id: String::new(),
-                status: Some(MessageStatus::Streaming),
-                continuation_of: None,
-            };
-            messages = messages.child(self.render_entry(&echo, &theme));
+        let clearance = if ended {
+            0.0
+        } else {
+            self.composer_height.get()
+        };
+        let layout = (width, clearance);
+        let relayout = (self.last_layout.0 - layout.0).abs() > 0.5
+            || (self.last_layout.1 - layout.1).abs() > 0.5;
+        self.last_layout = layout;
+        if let Some(transcript) = &self.transcript {
+            transcript.update(cx, |transcript, cx| {
+                transcript.set_bottom_clearance(clearance, cx);
+                if relayout {
+                    transcript.snap_to_end_if_pinned(cx);
+                }
+            });
         }
-        let saved = self.saved();
-        if let Some(proposal) = self.session.as_ref().and_then(|s| s.proposal.as_ref())
-            && !saved
-        {
-            messages = messages.child(self.render_proposal(proposal, &theme));
-        }
-        messages = messages.children(self.render_receipts(&theme, cx));
+        let header = self.render_header(&theme, cx);
         let status = match &self.status {
             PaneStatus::Starting => {
                 Some(widgets::row_description(&theme, "Opening the discussion…"))
@@ -1504,79 +1253,105 @@ impl Render for AuthoringPane {
             .notice
             .clone()
             .or_else(|| self.session.as_ref().and_then(|s| s.last_error.clone()))
-            .map(|notice| widgets::warning_strip(&theme, notice));
-        let ended = matches!(
-            self.state(),
-            Some(AuthoringState::Ended | AuthoringState::Discarded)
-        );
-        let tag = |label: String, glyph: &'static str| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(crate::typography::ui_rems(5.0))
-                .px(crate::typography::ui_rems(8.0))
-                .py(crate::typography::ui_rems(3.0))
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(theme.separator(false))
-                .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.readable_muted(0.9))
-                .child(
-                    icons::icon(glyph)
-                        .size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.readable_muted(0.9)),
+            .map(|notice| widgets::warning_strip(&theme, notice).mt_0());
+        let saved = self.saved();
+        let proposal = self
+            .session
+            .as_ref()
+            .and_then(|s| s.proposal.as_ref())
+            .filter(|_| !saved)
+            .cloned()
+            .map(|proposal| self.render_proposal(&proposal, &theme));
+        let receipts = self.render_receipts(&theme, cx);
+        let intro = (self.entries.is_empty() && self.status == PaneStatus::Ready)
+            .then(|| self.render_intro(&theme, cx));
+        let measured = self.composer_width.clone();
+        let measured_height = self.composer_height.clone();
+        // The composer stack: the proposal or receipt, then the composer
+        // (which carries the main column's gutter and bottom margin).
+        let gutter = crate::typography::ui_rems(16.0);
+        let stack = div()
+            .id("authoring-composer-stack")
+            .w_full()
+            .flex()
+            .flex_col()
+            .relative()
+            .child(
+                gpui::canvas(
+                    move |bounds, window, _| {
+                        let next = f32::from(bounds.size.width);
+                        let height = f32::from(bounds.size.height);
+                        if (measured.get() - next).abs() > 0.5
+                            || (measured_height.get() - height).abs() > 0.5
+                        {
+                            measured.set(next);
+                            measured_height.set(height);
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
                 )
-                .child(SharedString::from(label))
-        };
+                .absolute()
+                .inset_0(),
+            )
+            .when(
+                proposal.is_some() || !receipts.is_empty() || notice.is_some(),
+                |stack| {
+                    stack.child(
+                        div()
+                            .w_full()
+                            .max_w(crate::typography::ui_rems(
+                                crate::composer::COMPOSER_MAX_WIDTH,
+                            ))
+                            .mx_auto()
+                            .px(gutter)
+                            .pb(crate::typography::ui_rems(8.0))
+                            .flex()
+                            .flex_col()
+                            .gap(crate::typography::ui_rems(8.0))
+                            .children(notice)
+                            .children(proposal)
+                            .children(receipts),
+                    )
+                },
+            )
+            .when(!ended, |stack| {
+                stack.child(self.probed("composer", self.composer.clone()))
+            });
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .relative()
+            .children(self.transcript.clone())
+            .children(intro)
+            .child(div().absolute().left_0().right_0().bottom_0().child(stack));
         div()
             .id("board-authoring")
             .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .child(
+            .flex()
+            .flex_col()
+            .text_color(theme.text)
+            // A press here (after the composer focused its input, bubbling)
+            // must not let the focusable Board page take focus back.
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                window.prevent_default()
+            })
+            // Files dropped anywhere on the discussion stage in its composer.
+            .on_drop(cx.listener(|pane, paths: &gpui::ExternalPaths, _, cx| {
+                let paths = paths.paths().to_vec();
+                pane.composer
+                    .update(cx, |composer, cx| composer.add_paths(paths, cx));
+                cx.stop_propagation();
+            }))
+            .child(header)
+            .children(status.map(|status| {
                 div()
-                    .w_full()
-                    .max_w(crate::typography::ui_rems(760.0))
-                    .mx_auto()
-                    .px(crate::typography::ui_rems(24.0))
-                    .pt(crate::typography::ui_rems(28.0))
-                    .pb(crate::typography::ui_rems(48.0))
-                    .flex()
-                    .flex_col()
-                    .gap(crate::typography::ui_rems(14.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(widgets::page_title_bar(&theme, "Discuss the ticket", None, vec![]))
-                            .child(widgets::page_subtitle(
-                                &theme,
-                                "A temporary, project-aware conversation. The assistant writes the ticket; you change it by talking.",
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap(crate::typography::ui_rems(6.0))
-                            .child(tag("Temporary discussion".into(), icons::CHAT_ROUND_LINE))
-                            .child(tag(format!("{project} attached"), icons::FOLDER)),
-                    )
-                    .children(status)
-                    .child(messages)
-                    .children(notice)
-                    .when(!ended, |page| {
-                        page.child(self.render_assistant_controls(&theme, cx))
-                            .child(self.render_composer(&theme, cx))
-                            .child(widgets::row_description(
-                                &theme,
-                                "This discussion never appears in chats, Settled or Archive. Closing keeps only an unfinished Board draft.",
-                            ))
-                            .child(self.render_actions(&theme, cx))
-                    }),
-            )
+                    .px(crate::typography::ui_rems(16.0))
+                    .pt(crate::typography::ui_rems(10.0))
+                    .child(status)
+            }))
+            .child(body)
     }
 }
 
@@ -1584,7 +1359,7 @@ impl Render for AuthoringPane {
 impl AuthoringPane {
     /// QA: what the pane rendered and where its controls are.
     pub fn fixture_readback(&self, window: &Window, cx: &App) -> serde_json::Value {
-        let bounds: serde_json::Map<String, serde_json::Value> = self
+        let mut bounds: serde_json::Map<String, serde_json::Value> = self
             .probe
             .borrow()
             .iter()
@@ -1600,6 +1375,10 @@ impl AuthoringPane {
                 )
             })
             .collect();
+        let composer = self.composer.read(cx).fixture_detached_readback(window, cx);
+        if !composer["send"].is_null() {
+            bounds.insert("send".into(), composer["send"].clone());
+        }
         let entries: Vec<serde_json::Value> = self
             .entries
             .iter()
@@ -1608,11 +1387,11 @@ impl AuthoringPane {
                     "id": entry.id,
                     "role": entry.role,
                     "text": entry.parts.iter().filter_map(|part| match part {
-                        MessagePart::Text { text, .. } => Some(text.as_str()),
+                        luna_doc::MessagePart::Text { text, .. } => Some(text.as_str()),
                         _ => None,
                     }).collect::<Vec<_>>().join("\n"),
                     "tools": entry.parts.iter().filter_map(|part| match part {
-                        MessagePart::Tool { call, .. } => Some(tool_label(call)),
+                        luna_doc::MessagePart::Tool { call, .. } => Some(tool_label(call)),
                         _ => None,
                     }).collect::<Vec<_>>(),
                 })
@@ -1627,10 +1406,12 @@ impl AuthoringPane {
             "status": format!("{:?}", self.status),
             "notice": self.notice,
             "entries": entries,
-            "composerText": self.input.read(cx).text(),
-            "composerFocused": self.input.read(cx).focus_handle(cx).is_focused(window),
-            "sendEnabled": self.can_send() && !self.input.read(cx).text().trim().is_empty(),
-            "pending": self.pending.as_ref().map(|(id, text)| serde_json::json!({"id": id, "text": text})),
+            "composerText": composer["text"],
+            "composerFocused": composer["focused"],
+            "sendEnabled": self.can_send() && composer["sendEnabled"] == true,
+            "composer": composer,
+            "transcriptRows": self.transcript.as_ref().map(|t| t.read(cx).fixture_rows(cx)),
+            "pending": serde_json::Value::Null,
             "trace": self.trace.iter().collect::<Vec<_>>(),
             // The only text input in this mode is the composer: no title or
             // description field exists to report.

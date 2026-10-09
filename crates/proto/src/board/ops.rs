@@ -721,7 +721,16 @@ pub struct BoardAuthoringSendRequest {
     pub session_id: String,
     /// Client-minted message id (no-replay key).
     pub message_id: String,
+    /// The message as a chat sends it: the user's words, in the provider's
+    /// own syntax, with an `Attached images` block naming `attachments`.
     pub text: String,
+    /// `@` file mentions and `$` skills, exactly as a chat sends them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
+    /// Images staged on the project's host through UploadChunk/UploadCommit
+    /// (durable upload paths, like a chat message's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

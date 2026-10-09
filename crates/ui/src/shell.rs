@@ -2739,6 +2739,8 @@ impl Shell {
                     });
                 }
                 ComposerEvent::DraftFlushCompleted => cx.notify(),
+                // The main composer is never detached.
+                ComposerEvent::DetachedSend(_) | ComposerEvent::DetachedStop => {}
             }
         });
         // Spawn chips open their subagent's transcript as a right-pane tab.

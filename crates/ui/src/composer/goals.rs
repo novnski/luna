@@ -413,7 +413,10 @@ impl Composer {
     /// Goal mode needs Codex or Claude Code: the chat's provider, or the
     /// new-chat picker's.
     pub(super) fn goal_mode_available(&self, cx: &App) -> bool {
-        self.editing_queued.is_none() && self.goal_provider(cx).is_some()
+        // A detached composer's owner (a ticket discussion) has no goals.
+        !self.binding.is_detached()
+            && self.editing_queued.is_none()
+            && self.goal_provider(cx).is_some()
     }
 
     pub(super) fn goal_mode_on(&self, cx: &App) -> bool {
@@ -433,6 +436,10 @@ impl Composer {
 
     /// The provider's goal placeholder while goal mode is on.
     pub(super) fn sync_goal_placeholder(&mut self, cx: &mut Context<Self>) {
+        // A detached owner names its own placeholder.
+        if self.binding.is_detached() {
+            return;
+        }
         let wanted = match self.goal_provider(cx) {
             Some(provider) if self.goal_mode_on(cx) => provider.placeholder(),
             _ => MESSAGE_PLACEHOLDER,

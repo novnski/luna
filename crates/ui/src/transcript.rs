@@ -15823,6 +15823,9 @@ impl Transcript {
                             .as_ref()
                             .map(|ids| ids.contains(&row.entry_id)),
                     });
+                    if let RowKind::User { attachments, .. } = &row.kind {
+                        readback["attachments"] = attachments.len().into();
+                    }
                     if let RowKind::ToolGroup { tools, .. } = &row.kind {
                         readback["groupGlyph"] = tool_group_glyph(tools).into();
                         readback["glyphs"] =

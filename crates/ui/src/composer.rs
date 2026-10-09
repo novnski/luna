@@ -4676,6 +4676,34 @@ pub enum ComposerEvent {
     Queued { chat_id: String, message_id: String },
     /// Wake the shell after an orderly-close flush completes.
     DraftFlushCompleted,
+    /// A detached composer's message ([`ChatBinding::Detached`]): its owner
+    /// (a temporary ticket discussion) sends it. Nothing here creates, runs
+    /// or queues a chat.
+    ///
+    /// [`ChatBinding::Detached`]: crate::chat_binding::ChatBinding::Detached
+    DetachedSend(DetachedMessage),
+    /// A detached composer's Stop: its owner interrupts its own run.
+    DetachedStop,
+}
+
+/// What a detached composer hands its owner on send: the text in the
+/// provider's own syntax (skills as `/name` for Claude), the `@` and `$`
+/// selections, and the staged files and images (window captures included).
+#[derive(Clone)]
+pub struct DetachedMessage {
+    pub text: String,
+    pub input_items: Vec<luna_proto::ComposerInput>,
+    pub attachments: Vec<StagedAttachment>,
+}
+
+impl std::fmt::Debug for DetachedMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DetachedMessage")
+            .field("text", &self.text.len())
+            .field("input_items", &self.input_items)
+            .field("attachments", &self.attachments.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5008,6 +5036,10 @@ pub struct Composer {
     /// they never show at once (mutually exclusive by token shape).
     popup_bar: crate::popover::MenuScrollbarState,
     pub(crate) current_key: String,
+    /// A detached composer's owner reports its run (Send turns into Stop).
+    detached_running: bool,
+    /// A detached composer's Send/Stop disc as last painted (QA).
+    detached_send_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     sending: bool,
     /// Armed immediately before a blank-canvas send selects its minted chat.
     /// The state observer consumes it to distinguish that handoff from normal
@@ -5244,6 +5276,97 @@ impl Composer {
     }
 
     /// The picker entity, for the shell's canvas target selectors.
+    /// A detached composer's owner reports its run: Send turns into Stop
+    /// (which emits [`ComposerEvent::DetachedStop`]) while it is running.
+    pub fn set_detached_running(&mut self, running: bool, cx: &mut Context<Self>) {
+        if self.detached_running != running {
+            self.detached_running = running;
+            cx.notify();
+        }
+    }
+
+    /// The input's placeholder (a detached owner names its purpose).
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let text = text.into();
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(text, cx));
+    }
+
+    /// Put text back after the owner's send failed (nothing is lost).
+    pub fn restore_detached(&mut self, message: DetachedMessage, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        if !message.attachments.is_empty() {
+            self.attachments
+                .entry(key.clone())
+                .or_default()
+                .extend(message.attachments);
+        }
+        if !message.input_items.is_empty() {
+            self.input_items
+                .entry(key)
+                .or_default()
+                .extend(message.input_items);
+        }
+        if self.input.read(cx).text().trim().is_empty() {
+            self.set_input_text_without_draft_edit(message.text, cx);
+        }
+        cx.notify();
+    }
+
+    /// QA: a detached composer's text, focus, Send state and where Send
+    /// is, its staged files and selections, and its pickers.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_detached_readback(&self, window: &Window, cx: &App) -> serde_json::Value {
+        let mode = self.button_mode(cx);
+        let text = self.input.read(cx).text().to_owned();
+        let has_content = composer_has_content(
+            &text,
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
+            0,
+        );
+        serde_json::json!({
+            "text": text,
+            "focused": self.input.read(cx).focus_handle(cx).is_focused(window),
+            "mode": format!("{mode:?}"),
+            "sendEnabled": mode == SendButtonMode::Send
+                && has_content
+                && self.send_blocked_reason(cx).is_none(),
+            "send": self.detached_send_bounds.get().map(|bounds| serde_json::json!({
+                "x": f32::from(bounds.origin.x),
+                "y": f32::from(bounds.origin.y),
+                "w": f32::from(bounds.size.width),
+                "h": f32::from(bounds.size.height),
+            })),
+            "attachments": self.staged().iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+            "inputItems": self.input_items.get(&self.current_key).cloned().unwrap_or_default(),
+            "pickers": self.pickers.read(cx).fixture_detached_readback(cx),
+        })
+    }
+
+    /// Hand the message to the detached owner and clear the composer.
+    fn send_detached(&mut self, text: String, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        let input_items = self.input_items.remove(&key).unwrap_or_default();
+        let mut attachments = self.attachments.remove(&key).unwrap_or_default();
+        attachments.extend(
+            self.appshots
+                .remove(&key)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|appshot| appshot.screenshot),
+        );
+        self.failure = None;
+        self.set_input_text_without_draft_edit(String::new(), cx);
+        cx.emit(ComposerEvent::DetachedSend(DetachedMessage {
+            text,
+            input_items,
+            attachments,
+        }));
+        cx.notify();
+    }
+
     pub fn pickers(&self) -> &Entity<Pickers> {
         &self.pickers
     }
@@ -5461,6 +5584,8 @@ impl Composer {
             completion_exits: CompletionExits::default(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
             current_key,
+            detached_running: false,
+            detached_send_bounds: Default::default(),
             sending: false,
             launching_new_chat: false,
             failure: None,
@@ -6590,6 +6715,10 @@ impl Composer {
         delay: Duration,
         cx: &mut Context<Self>,
     ) {
+        // A detached composer's draft lives with its owner, in memory only.
+        if self.binding.is_detached() {
+            return;
+        }
         if self.draft_is_saved(&key) {
             self.finish_close_flush_if_ready(cx);
             return;
@@ -7508,6 +7637,10 @@ impl Composer {
 
     fn load_draft(&mut self, key: String, cx: &mut Context<Self>) {
         if self.draft_loaded.contains(&key) || self.draft_load_tasks.contains_key(&key) {
+            return;
+        }
+        if self.binding.is_detached() {
+            self.draft_loaded.insert(key);
             return;
         }
         let (engine, engine_generation) = {
@@ -10249,6 +10382,9 @@ impl Composer {
     }
 
     pub(crate) fn run_live(&self, cx: &App) -> bool {
+        if self.binding.is_detached() {
+            return self.detached_running;
+        }
         let s = self.state.read(cx);
         let Some(chat_id) = self.binding.chat_id(s) else {
             return false;
@@ -10274,7 +10410,7 @@ impl Composer {
         if state.review_comment_flush_pending(&self.current_key) {
             return Some("Saving review comments…");
         }
-        if self.binding.chat_id(state).is_some() {
+        if self.binding.chat_id(state).is_some() || self.binding.is_detached() {
             return None;
         }
         if state.selected_space_row().is_none() {
@@ -10291,6 +10427,10 @@ impl Composer {
     }
 
     fn require_project_for_new_session(&mut self, cx: &mut Context<Self>) -> bool {
+        // A detached composer is fixed to its owner's project.
+        if self.binding.is_detached() {
+            return true;
+        }
         let state = self.state.read(cx);
         let missing_project =
             self.binding.chat_id(state).is_none() && state.selected_space_row().is_none();
@@ -10423,6 +10563,10 @@ impl Composer {
     ) {
         // Skills are typed `$name`; Claude still receives its own `/name`.
         let text = self.skill_wire_text(text, cx);
+        if self.binding.is_detached() {
+            self.send_detached(text, cx);
+            return;
+        }
         // Goal mode or `/goal <objective>` starts a Codex goal: the engine
         // runs Codex's own goal start on a loaded runtime, so work begins
         // immediately. A goal is never queued behind the current turn.
@@ -11452,6 +11596,10 @@ impl Composer {
     }
 
     pub(crate) fn interrupt_selected(&mut self, cx: &mut Context<Self>) {
+        if self.binding.is_detached() {
+            cx.emit(ComposerEvent::DetachedStop);
+            return;
+        }
         let Some(chat_id) = self
             .binding
             .chat_id(self.state.read(cx))
@@ -13162,6 +13310,20 @@ impl Composer {
                 disc.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
             }
             _ => disc,
+        };
+        // A detached owner's QA reads where Send is.
+        let disc = if self.binding.is_detached() {
+            let measured = self.detached_send_bounds.clone();
+            disc.child(
+                gpui::canvas(
+                    move |bounds, _, _| measured.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+        } else {
+            disc
         };
         disc.into_any_element()
     }

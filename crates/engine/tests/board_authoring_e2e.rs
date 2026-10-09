@@ -615,6 +615,7 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
             "access": "acceptEdits",
             "resume": null,
             "purpose": true,
+            "ticketAgentOnly": true,
             "projectInstruction": true,
             "claimsChatRole": false,
             "boardCreate": true,
@@ -629,6 +630,12 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
             "access": t0["permissionMode"],
             "resume": t0["resume"],
             "purpose": prompt.contains(&format!("temporary Board authoring session {id}")),
+            // The ticket agent investigates (commands included) but never
+            // solves the issue, and stays on the ticket.
+            "ticketAgentOnly": prompt.contains("an investigator and writer, not an implementer")
+                && prompt.contains("Do not solve the issue.")
+                && prompt.contains("run commands that gather evidence")
+                && prompt.contains("Stay on the ticket."),
             "projectInstruction": prompt.contains("Project rule: tickets cite the file they touch."),
             "claimsChatRole": prompt.contains("Chat role:"),
             "boardCreate": tools.iter().any(|tool| tool == "board_create"),

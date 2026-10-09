@@ -49,8 +49,11 @@ pub(crate) use runtime::{register_service, shutdown_all};
 pub(crate) const AUTHORING_ID_PREFIX: &str = "auth-";
 const PAGE_DEFAULT: usize = 200;
 const PAGE_MAX: usize = 1000;
-/// One user message (the composer has no attachments in this mode).
+/// One user message's text (attachments travel as upload paths).
 const MESSAGE_MAX_BYTES: usize = 32 * 1024;
+/// Images per message, and `@`/`$` selections per message.
+const MESSAGE_ATTACHMENTS_MAX: usize = 10;
+const MESSAGE_INPUT_ITEMS_MAX: usize = 32;
 const UNRESOLVED_MAX: usize = 16;
 const UNRESOLVED_ITEM_MAX_CHARS: usize = 200;
 /// A fresh provider run gets at most this much of the discussion so far.
@@ -621,6 +624,28 @@ impl EngineRpc {
                 format!("use at most {MESSAGE_MAX_BYTES} bytes per message"),
             ));
         }
+        if request.attachments.len() > MESSAGE_ATTACHMENTS_MAX {
+            return Err(BoardError::invalid(
+                "attachments",
+                format!("attach at most {MESSAGE_ATTACHMENTS_MAX} images per message"),
+            ));
+        }
+        if request.input_items.len() > MESSAGE_INPUT_ITEMS_MAX {
+            return Err(BoardError::invalid(
+                "inputItems",
+                format!("use at most {MESSAGE_INPUT_ITEMS_MAX} mentions and skills per message"),
+            ));
+        }
+        // Only this host's own uploads: never an arbitrary path on disk.
+        let attachments = request
+            .attachments
+            .iter()
+            .map(|path| {
+                self.uploads.owned_blob_path(path).ok_or_else(|| {
+                    BoardError::invalid("attachments", "attach images uploaded to this host")
+                })
+            })
+            .collect::<BoardResult<Vec<String>>>()?;
         let runtimes = self.authoring_runtimes();
         let _gate = runtimes.gate(&request.session_id).await;
         let session = self.authoring_load(&request.session_id)?;
@@ -655,7 +680,8 @@ impl EngineRpc {
             });
         }
         // Everything that can refuse runs before the message is recorded.
-        let prepared = self.authoring_prepare_run(&session, &space, text)?;
+        let prepared =
+            self.authoring_prepare_run(&session, &space, text, &request.input_items, &attachments)?;
         let device = self.engine_info.device_id.clone();
         let entry = entry_json(
             &request.message_id,
@@ -701,6 +727,8 @@ impl EngineRpc {
         session: &TicketAuthoringSession,
         space: &Space,
         prompt: &str,
+        input_items: &[luna_proto::ComposerInput],
+        attachments: &[String],
     ) -> BoardResult<PreparedRun> {
         // Every turn re-validates the recorded settings against what this
         // host offers now (a removed provider, account or effort is an
@@ -736,7 +764,7 @@ impl EngineRpc {
             review: None,
             goal: None,
             prompt: prompt.to_owned(),
-            input_items: Vec::new(),
+            input_items: input_items.to_vec(),
             harness: Some(harness_id),
             provider_account_id: discussion.provider_account_id.clone(),
             model: discussion.model.clone(),
@@ -750,11 +778,18 @@ impl EngineRpc {
             environment_permission_ceiling: None,
             permission_policy: None,
             resume: session.runtime_binding.clone(),
-            attachments: Vec::new(),
+            attachments: attachments.to_vec(),
             worktree: None,
         };
-        crate::provider_inputs::admit(harness_id, request.model.as_deref(), &[], &[])
-            .map_err(|error| BoardError::invalid("discussion.model", error.to_string()))?;
+        // The provider must take what the message carries (images, skills,
+        // mentions), exactly as for a chat.
+        crate::provider_inputs::admit(
+            harness_id,
+            request.model.as_deref(),
+            &request.attachments,
+            &request.input_items,
+        )
+        .map_err(|error| BoardError::invalid("message", error.to_string()))?;
         if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex) {
             let execution = self
                 .agent_accounts

@@ -13,6 +13,8 @@
 
 Do not render the manual title/description fields beside, below, or hidden within the AI discussion. The assistant maintains the candidate ticket internally and can show a **read-only** proposed-ticket summary in the conversation. The user changes its wording by speaking to the assistant. After the ticket is saved, its normal Board editor remains available.
 
+**Updated 2026-10-09 (user decision):** both experiences use the app's own chat surfaces. Discuss with AI renders the discussion with the main chat transcript and the main chat composer (attachments and pasted or dropped images, `@` files, `$` skills, `/` commands, the model pill and the access lock), bound to no chat. A message's images upload to the project's host like a chat message's and reach the assistant's run; it stays a temporary authoring session, never a chat. Write manually and the ticket drawer choose implementation and review settings with the chat composer's pickers (model pill with reasoning/options, access lock, checkout) plus one mode menu (project defaults, custom, decide later).
+
 Both modes use the same validated ticket creation operation and save no implementation chat by default. Backlog → Ready still controls execution. “Create and start” can explicitly request both steps; an ordinary discussion about a bug cannot silently launch implementation.
 
 ## 2. Temporary means outside the normal chat lifecycle
@@ -53,6 +55,7 @@ Supply an engine-owned purpose/context block to the authoring harness. Its respo
 
 - Identify the selected project and temporary session purpose. Do not claim to be a main or side chat, or invent a main parent.
 - Understand the issue through back-and-forth discussion; inspect relevant project context when useful and permitted.
+- Act as the ticket agent: an investigator and writer, not an implementer (user decision 2026-10-09). It may read and search files and run commands that gather evidence (build, run the failing test, reproduce the error, print logs). It must not solve the issue, implement fixes, refactor or change project code, configuration or dependencies; the proposed approach goes into the ticket. Writing is not removed but is reserved for what authoring needs (a temporary reproduction or captured output, removed afterwards); commands that would change files are asked about first. Unrelated requests, or "fix it now", are steered back to the ticket (capture it, or save and start so the implementation agent does it).
 - Capture desired behavior, reproduction/evidence, acceptance criteria, scope and useful references. Do not demand a long questionnaire when the user has already supplied enough.
 - Query available implementation/review models, reasoning levels, access choices and effective defaults; ask for missing preferences once.
 - Maintain a proposed ticket internally; show a read-only summary when useful. No manual title/description editor exists in this mode.
