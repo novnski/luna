@@ -144,6 +144,38 @@ impl EngineRpc {
         })
     }
 
+    /// Whether the transcript shows provider output for the turn started by
+    /// `message_id`: an assistant reply after that exact user message with
+    /// content other than an engine-reported error.
+    fn board_turn_produced(&self, task_id: &str, message_id: &str) -> bool {
+        if task_id.is_empty() {
+            return false;
+        }
+        let Ok(handle) = self.doc_host.open(task_id) else {
+            return false;
+        };
+        let Ok(entries) = handle.doc().read_entries() else {
+            return false;
+        };
+        let Some(index) = entries
+            .iter()
+            .position(|entry| entry.id == message_id && entry.role == MessageRole::User)
+        else {
+            return false;
+        };
+        entries[index + 1..]
+            .iter()
+            .take_while(|entry| entry.role != MessageRole::User)
+            .filter(|entry| entry.role == MessageRole::Assistant)
+            .any(|entry| {
+                entry.parts.iter().any(|part| match part {
+                    MessagePart::Text { text, .. } => !text.trim().is_empty(),
+                    MessagePart::Error { .. } => false,
+                    _ => true,
+                })
+            })
+    }
+
     /// Whether a chat exists on this host and is running a turn.
     pub(crate) fn board_chat_live(&self, task_id: &str) -> (bool, bool) {
         let available = self
@@ -349,26 +381,35 @@ impl EngineRpc {
         // owned reviewers, with ids derived from this Stop (repeat-safe).
         self.board_stop_reviewers(&ticket.item.id, generation, worker, &command_id)
             .await;
+        // The command's own receipt does not prove termination either way (a
+        // turn that already ended supersedes the interrupt): the barrier
+        // settles only from the run's observed end, or turns Unknown when the
+        // run outlives the stop window.
         if let Some(barrier) = ticket.intent.stop.as_mut() {
+            barrier.state = BoardStopState::Stopping;
             match result {
                 Ok(receipt)
-                    if matches!(
+                    if !matches!(
                         receipt.status,
                         CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
                     ) =>
                 {
-                    barrier.state = BoardStopState::Stopping;
-                }
-                Ok(receipt) => {
-                    barrier.state = BoardStopState::Unknown;
                     barrier.detail = Some(receipt.reason.map_or_else(
-                        || "The chat refused the Stop command.".into(),
-                        |reason| format!("The chat refused the Stop command: {}", reason.message),
+                        || "The chat did not apply the Stop command; waiting for the run to end."
+                            .into(),
+                        |reason| {
+                            format!(
+                                "The chat did not apply the Stop command ({}); waiting for the run to end.",
+                                reason.message
+                            )
+                        },
                     ));
                 }
+                Ok(_) => {}
                 Err(error) => {
-                    barrier.state = BoardStopState::Unknown;
-                    barrier.detail = Some(format!("Stop could not be delivered: {error}"));
+                    barrier.detail = Some(format!(
+                        "Stop could not be delivered ({error}); waiting for the run to end."
+                    ));
                 }
             }
         }
@@ -544,6 +585,16 @@ impl EngineRpc {
                 let outcome = self.board_classify_launch(ticket, &receipt, &message_id, this_boot);
                 self.board_record_launch(ticket, outcome)
             }
+            // Reconcile an uncertain delivery by its original message id:
+            // recorded provider output for that exact turn settles it.
+            BoardLaunchState::Unknown => {
+                let message_id = ticket.intent.active_message_id.clone().unwrap_or_default();
+                let worker = ticket.intent.working_task_id.clone().unwrap_or_default();
+                if !message_id.is_empty() && self.board_turn_produced(&worker, &message_id) {
+                    return self.board_record_launch(ticket, LaunchOutcome::Delivered);
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -558,6 +609,17 @@ impl EngineRpc {
         match receipt.status {
             CommandReceiptStatus::Applied
                 if receipt.correlation_id.as_deref() == Some(message_id) =>
+            {
+                LaunchOutcome::Delivered
+            }
+            // Harness-independent evidence: the engine recorded provider
+            // output for this exact turn (not every adapter reports a
+            // session start the receipt can correlate).
+            CommandReceiptStatus::Applied | CommandReceiptStatus::Pending
+                if self.board_turn_produced(
+                    ticket.intent.working_task_id.as_deref().unwrap_or_default(),
+                    message_id,
+                ) =>
             {
                 LaunchOutcome::Delivered
             }
@@ -607,7 +669,9 @@ impl EngineRpc {
         let command_id = ticket.intent.active_command_id.clone().unwrap_or_default();
         let message_id = ticket.intent.active_message_id.clone().unwrap_or_default();
         let first = matches!(&ticket.intent.first_prompt,
-            FirstPromptDelivery::Pending { command_id: pending, .. } if *pending == command_id);
+            FirstPromptDelivery::Pending { command_id: pending, .. }
+                | FirstPromptDelivery::Unknown { command_id: pending, .. }
+                if *pending == command_id);
         let worker = ticket.intent.working_task_id.clone();
         let previous = ticket.intent.launch_state;
         let mut unknown_event = false;
