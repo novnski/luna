@@ -385,16 +385,8 @@ pub(super) async fn dispatch(
         }
         BOARD_TOOL_AUTHORING_CHECKPOINT => {
             let proposal = checkpoint_proposal(arguments)?;
-            let current = rpc.authoring_load(&session.id)?;
             let saved = rpc
-                .board_authoring_checkpoint(
-                    caller,
-                    BoardAuthoringCheckpointRequest {
-                        session_id: session.id.clone(),
-                        expected_version: current.version,
-                        proposal,
-                    },
-                )
+                .authoring_store_proposal(caller, &session.id, None, proposal)
                 .await?;
             Ok(json!({
                 "sessionId": saved.id,

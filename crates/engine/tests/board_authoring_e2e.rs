@@ -862,6 +862,18 @@ async fn close_restart_resume_and_discard_keep_only_a_board_draft() {
         .to_owned();
     let pid = t0["pid"].as_u64().unwrap();
     let url = t0["mcpUrl"].as_str().unwrap().to_owned();
+    // The checkpoint is stored synchronously inside the tool call: its
+    // receipt (and the settled page) already carry it before Close begins.
+    let checkpoint = tool_ok(&t0, "proposal");
+    evidence.step(
+        "the assistant's checkpoint receipt and the stored proposal agree before closing",
+        json!({"receipt": "Document the release checklist", "stored": "Document the release checklist"}),
+        json!({
+            "receipt": checkpoint["proposal"]["title"],
+            "stored": first["session"]["proposal"]["title"],
+        }),
+        Some(&t0),
+    );
 
     // Close unfinished → a resumable Board draft; the runtime is stopped.
     let closed = ok(&c, "BoardAuthoringClose", json!({"sessionId": id})).await;

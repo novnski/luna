@@ -1025,7 +1025,32 @@ impl EngineRpc {
                 });
             }
         }
-        let session = self.authoring_load(&request.session_id)?;
+        self.authoring_store_proposal(
+            caller,
+            &request.session_id,
+            Some(request.expected_version),
+            request.proposal,
+        )
+        .await
+    }
+
+    /// Validate and record a proposal. `expected_version` is the RPC's
+    /// optimistic check; the assistant's own tool call passes `None`: its
+    /// checkpoint is the latest candidate by definition, and the session row
+    /// also changes for unrelated reasons during a turn (provider binding,
+    /// a saved ticket), which must never make a checkpoint fail. The write
+    /// is synchronous inside the tool call, so its receipt means it is
+    /// stored before Close can stop the turn (Close waits for running tool
+    /// calls); a call that was already running when Close began still lands
+    /// in the kept draft.
+    pub(super) async fn authoring_store_proposal(
+        &self,
+        caller: &BoardCaller,
+        session_id: &str,
+        expected_version: Option<u64>,
+        proposal: AuthoringProposal,
+    ) -> BoardResult<TicketAuthoringSession> {
+        let session = self.authoring_load(session_id)?;
         if !matches!(
             session.state,
             AuthoringState::Active | AuthoringState::Saved
@@ -1035,20 +1060,29 @@ impl EngineRpc {
                 "This discussion is closed; resume it first.",
             ));
         }
-        validate_proposal(&request.proposal)?;
+        validate_proposal(&proposal)?;
         let space = self.board_project(caller, &session.project_id, BoardAccess::Read)?;
         match self.board_validate_requested_settings(
             &space,
-            &request.proposal.implementation,
-            &request.proposal.review,
+            &proposal.implementation,
+            &proposal.review,
         ) {
             Ok(()) | Err(BoardError::NotImplemented { .. }) => {}
             Err(error) => return Err(error),
         }
-        let mut proposal = request.proposal;
+        let mut proposal = proposal;
         proposal.title = proposal.title.trim().to_owned();
         self.authoring_update(&session.id, |session| {
-            if session.version != request.expected_version {
+            if matches!(
+                session.state,
+                AuthoringState::Ended | AuthoringState::Discarded
+            ) {
+                return Err(BoardError::invalid(
+                    "sessionId",
+                    "This discussion has ended; the proposal was not recorded.",
+                ));
+            }
+            if expected_version.is_some_and(|expected| session.version != expected) {
                 return Err(BoardError::Busy {
                     reason:
                         "The proposal changed since it was read; read the session and try again."
