@@ -62,6 +62,12 @@ fn ago(at_ms: i64) -> String {
     }
 }
 
+/// `1 comment`, `2 comments`.
+fn count(n: impl Into<u64>, singular: &str, plural: &str) -> String {
+    let n = n.into();
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
 /// A short date from an ISO-8601 timestamp (`2026-10-08`).
 fn day(iso: &str) -> &str {
     iso.get(..10).unwrap_or(iso)
@@ -1076,7 +1082,7 @@ impl GitHubIssuePicker {
             }
             meta.push(format!("updated {}", day(&row.updated_at)));
             if row.comments > 0 {
-                meta.push(format!("{} comments", row.comments));
+                meta.push(count(row.comments, "comment", "comments"));
             }
             let on_board = row
                 .linked_work_item_id
@@ -1133,13 +1139,8 @@ impl GitHubIssuePicker {
         let mut footer = Vec::new();
         if self.pull_requests_excluded > 0 {
             footer.push(format!(
-                "{} pull request{} hidden (issues only).",
-                self.pull_requests_excluded,
-                if self.pull_requests_excluded == 1 {
-                    ""
-                } else {
-                    "s"
-                }
+                "{} hidden (issues only).",
+                count(self.pull_requests_excluded, "pull request", "pull requests")
             ));
         }
         if let Some(page) = &self.page
@@ -1291,7 +1292,7 @@ impl GitHubIssuePicker {
                 action_button(
                     theme,
                     "load-comments",
-                    &format!("Load comments ({comment_count})"),
+                    &format!("Load {}", count(comment_count, "comment", "comments")),
                     ButtonKind::Ghost,
                     true,
                 )
@@ -1305,8 +1306,9 @@ impl GitHubIssuePicker {
             pane = pane.child(meta_text(
                 theme,
                 format!(
-                    "Select comments to include ({} selected). Unselected comments stay out of the brief.",
-                    self.selected_comments.len()
+                    "Select comments to include: {} of {} selected. Unselected comments stay out of the brief.",
+                    self.selected_comments.len(),
+                    count(self.comments.len() as u64, "comment", "comments")
                 ),
             ));
         }
