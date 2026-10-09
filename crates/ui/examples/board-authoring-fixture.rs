@@ -162,11 +162,11 @@ async fn type_text(window: Win, cx: &mut AsyncApp, text: &str) -> anyhow::Result
 /// The open Discuss with AI pane's readback (`None` when no pane is open).
 fn pane_readback(window: Win, cx: &mut AsyncApp) -> anyhow::Result<Option<Value>> {
     draw(window, cx)?;
-    window.update(cx, |shell, _, cx| {
+    window.update(cx, |shell, window, cx| {
         shell
             .fixture_board_page()
             .and_then(|page| page.read(cx).authoring_pane())
-            .map(|pane| pane.read(cx).fixture_readback(cx))
+            .map(|pane| pane.read(cx).fixture_readback(window, cx))
     })
 }
 
@@ -241,16 +241,31 @@ async fn wait_for(
     ready: impl Fn(&Value) -> bool,
 ) -> anyhow::Result<Value> {
     let start = Instant::now();
+    let mut last = Value::Null;
     loop {
-        if let Some(value) = read(window, cx)?
-            && ready(&value)
-        {
-            return Ok(value);
+        if let Some(value) = read(window, cx)? {
+            if ready(&value) {
+                return Ok(value);
+            }
+            last = value;
         }
-        anyhow::ensure!(
-            start.elapsed() < Duration::from_secs(60),
-            "timed out waiting for {what}"
-        );
+        if start.elapsed() >= Duration::from_secs(60) {
+            // Name the step that broke: the last readback carries the
+            // composer text/focus, Send state, pending message and trace.
+            let mut detail = serde_json::to_string(&json!({
+                "composerText": last["composerText"],
+                "composerFocused": last["composerFocused"],
+                "sendEnabled": last["sendEnabled"],
+                "pending": last["pending"],
+                "working": last["working"],
+                "sending": last["sending"],
+                "state": last["state"],
+                "notice": last["notice"],
+                "trace": last["trace"],
+            }))?;
+            detail.truncate(4000);
+            anyhow::bail!("timed out waiting for {what}; last readback: {detail}");
+        }
         frames(window, cx, 100).await?;
     }
 }
@@ -305,11 +320,27 @@ async fn send_message(
     let before = pane_readback(window, cx)?.unwrap_or_default();
     let users = entries(&before, "user").len();
     click(window, cx, center(&before, "composer")?).await?;
+    let focused = pane_readback(window, cx)?.unwrap_or_default();
+    anyhow::ensure!(
+        focused["composerFocused"] == json!(true),
+        "clicking the composer did not focus it: {}",
+        json!({"composerFocused": focused["composerFocused"], "trace": focused["trace"]})
+    );
     type_text(window, cx, text).await?;
+    let typed = pane_readback(window, cx)?.unwrap_or_default();
+    anyhow::ensure!(
+        typed["composerText"] == json!(text) && typed["sendEnabled"] == json!(true),
+        "typed text did not reach an enabled composer: {}",
+        json!({
+            "composerText": typed["composerText"],
+            "composerFocused": typed["composerFocused"],
+            "sendEnabled": typed["sendEnabled"],
+            "trace": typed["trace"],
+        })
+    );
     if with_enter {
         keys(window, cx, &["enter"]).await?;
     } else {
-        let typed = pane_readback(window, cx)?.unwrap_or_default();
         click(window, cx, center(&typed, "send")?).await?;
     }
     wait_for(
@@ -624,6 +655,7 @@ fn main() -> anyhow::Result<()> {
         "board-authoring.pass",
         "failure.txt",
         "failure.png",
+        "failure-readback.json",
     ] {
         let _ = std::fs::remove_file(output.join(stale));
     }
@@ -808,6 +840,14 @@ fn main() -> anyhow::Result<()> {
                     *failure_for_ui.lock().unwrap() = Some(format!("{error:#}"));
                     let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                     let _ = capture(window, cx, output.join("failure.png"));
+                    let readback = json!({
+                        "pane": pane_readback(window, cx).ok().flatten(),
+                        "drafts": drafts_readback(window, cx).ok(),
+                    });
+                    let _ = std::fs::write(
+                        output.join("failure-readback.json"),
+                        serde_json::to_vec_pretty(&readback).unwrap_or_default(),
+                    );
                     // The headless platform's quit can end the process with
                     // status 0 before `main` reads the failure: exit here.
                     std::process::exit(1);
