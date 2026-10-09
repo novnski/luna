@@ -1279,8 +1279,13 @@ async fn v2_terminal_failures_emit_one_persistent_error() {
     }
 }
 
+/// A step that fails mid-reply is retried as a new step (a new assistant
+/// message) that OpenCode tells to continue "without repeating completed
+/// content" (the recorded 2.0.24 shape). The failure is a transient warning,
+/// and the retry's text continues the interrupted text: no message end
+/// between them, so the engine never breaks the sentence into two parts.
 #[tokio::test]
-async fn v2_recovered_step_failure_is_a_transient_warning() {
+async fn v2_retried_step_warns_and_continues_its_interrupted_text() {
     let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
@@ -1288,23 +1293,37 @@ async fn v2_recovered_step_failure_is_a_transient_warning() {
     let failure = json!({"sessionID":"foreign","error":{"type":"provider.quota","message":"foreign failure"}});
     wire.v2("session.step.failed", failure);
     wire.v2(
+        "session.step.started",
+        json!({"sessionID":"fixture","assistantMessageID":"msg_failed"}),
+    );
+    wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_failed","ordinal":0,"text":"The answer is"}));
+    let error = json!({"type":"provider.rate_limit","message":"Retrying"});
+    wire.v2(
         "session.step.failed",
-        json!({"sessionID":"fixture","error":{"type":"provider.rate_limit","message":"Retrying"}}),
+        json!({"sessionID":"fixture","assistantMessageID":"msg_failed","error":error}),
+    );
+    wire.v2(
+        "session.retry.scheduled",
+        json!({"sessionID":"fixture","assistantMessageID":"msg_failed","attempt":2,"error":error}),
+    );
+    wire.v2(
+        "session.synthetic",
+        json!({"sessionID":"fixture","text":"The previous response was interrupted. Continue from where you left off without repeating completed content."}),
     );
     wire.v2(
         "session.step.started",
         json!({"sessionID":"fixture","assistantMessageID":"msg_recovered"}),
     );
-    wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_recovered","ordinal":0,"text":"recovered"}));
+    wire.v2("session.text.ended", json!({"sessionID":"fixture","assistantMessageID":"msg_recovered","ordinal":0,"text":" 42."}));
     wire.v2(
         "session.execution.succeeded",
         json!({"sessionID":"fixture"}),
     );
-    let (status, terminal, errors, warnings, text) =
+    let (status, terminal, errors, warnings, reply) =
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut errors = Vec::new();
             let mut warnings = Vec::new();
-            let mut text = String::new();
+            let mut reply = Vec::new();
             loop {
                 match wire.events.recv().await.unwrap().unwrap() {
                     AgentEvent::Error { message } => errors.push(message),
@@ -1313,9 +1332,10 @@ async fn v2_recovered_step_failure_is_a_transient_warning() {
                     {
                         warnings.push(notice.message)
                     }
-                    AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                    AgentEvent::TextDelta { text } => reply.push(text),
+                    AgentEvent::AssistantMessageCompleted { .. } => reply.push("<end>".into()),
                     AgentEvent::Done { status, error, .. } => {
-                        return (status, error, errors, warnings, text);
+                        return (status, error, errors, warnings, reply);
                     }
                     _ => {}
                 }
@@ -1328,7 +1348,7 @@ async fn v2_recovered_step_failure_is_a_transient_warning() {
     assert!(errors.is_empty());
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("Retrying"));
-    assert_eq!(text, "recovered");
+    assert_eq!(reply, ["The answer is", " 42.", "<end>"]);
 }
 
 #[tokio::test]

@@ -922,6 +922,9 @@ pub(super) async fn run_session(session: Session) {
             if let Some(bridge) = luna.as_mut() {
                 bridge.end_turn();
             }
+            // One message end per turn, never per step: a new step follows a
+            // tool call or a steer (already a chip or a user row between the
+            // texts), or retries a failed step whose text it continues.
             let (prev, _next) = rotate(&mut assistant_message_id);
             if !send(&event_tx, AgentEvent::AssistantMessageCompleted {
                 assistant_message_id: prev,
