@@ -391,6 +391,13 @@ async fn leak_report(
         "chatLookup": core.workspace.chat(session).unwrap().is_some(),
         "sideChatParent": core.workspace.side_chat_parent(session).is_some(),
         "taskIdentity": core.task_identity.view(session).is_some(),
+        // Runtime discovery and sync/recovery: no chat run, no chat document
+        // (so no snapshot or sync room) exists for the discussion.
+        "liveChatRun": core.sessions.has_live_run(session),
+        "chatDocument": core.doc_host.open(session).is_ok(),
+        "chatIdentity": call(c, "BoardChatIdentity", json!({"taskId": session}))
+            .await
+            .is_ok(),
         "historyHits": search["events"].as_array().map_or(0, Vec::len),
         "providerImport": import,
     })
@@ -405,6 +412,9 @@ fn clean_report(binding: bool) -> Value {
         "chatLookup": false,
         "sideChatParent": false,
         "taskIdentity": false,
+        "liveChatRun": false,
+        "chatDocument": false,
+        "chatIdentity": false,
         "historyHits": 0,
         "providerImport": binding.then(|| json!({"imported": false, "refusedAsBoardDiscussion": true})),
     })
@@ -885,16 +895,37 @@ async fn close_restart_resume_and_discard_keep_only_a_board_draft() {
         )),
         None,
     );
+    // Every chat creation path refuses the id at admission: the legacy
+    // Mutate route, the task-command route and the registry itself.
     let as_chat = call(
         &c,
         "Mutate",
         json!({"op": "createChat", "chatId": id, "spaceId": "project-b"}),
     )
     .await;
+    let as_command = call(
+        &c,
+        "ExecuteTaskCommand",
+        json!({"commandId": "create-auth", "taskId": id, "expectedTaskRevision": 0,
+               "intent": {"kind": "createChat", "spaceId": "project-b", "cwd": dir.to_string_lossy(),
+                          "config": {"harness": "claude-code", "sandbox": "workspace-write", "permissionMode": "ask"}}}),
+    )
+    .await;
+    let as_row = core
+        .workspace
+        .create_chat(&id, Some("project-b"), None, None, None);
+    let as_document = core.doc_host.open(&id);
     evidence.step(
-        "the storage projection refuses a chat row named after the discussion",
-        json!({"created": false, "rows": 0}),
-        json!({"created": as_chat.is_ok(), "rows": core.workspace.read_chats().unwrap().len()}),
+        "the storage projection refuses a chat, task or chat document named after the discussion",
+        json!({"mutate": false, "taskCommand": false, "registryRow": false, "chatDocument": false, "rows": 0, "taskIdentity": false}),
+        json!({
+            "mutate": as_chat.is_ok(),
+            "taskCommand": as_command.is_ok(),
+            "registryRow": as_row.is_ok(),
+            "chatDocument": as_document.is_ok(),
+            "rows": core.workspace.read_chats().unwrap().len(),
+            "taskIdentity": core.task_identity.view(&id).is_some(),
+        }),
         None,
     );
     let leaks = leak_report(
