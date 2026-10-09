@@ -16,8 +16,12 @@
 //! 6. A notice landing during the final answer, then a bare provider message
 //!    end, closes the last entry early: Done then has no entry for its
 //!    checkpoint, or writes an empty stub.
+//! 7. A notice written after the run journaled output, but before that
+//!    output's first coalesced flush, lands above it: the reply's entry is
+//!    only created at the flush, below the notice, so the create call reads
+//!    as if it happened after its own card.
 //!
-//! `TIMELINE_ORDER_EVIDENCE_DIR` keeps the final parent transcript as JSON.
+//! `TIMELINE_ORDER_EVIDENCE_DIR` keeps each final parent transcript as JSON.
 use async_trait::async_trait;
 use futures::{StreamExt, stream, stream::BoxStream};
 use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
@@ -125,6 +129,7 @@ impl Harness for Timeline {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let child = request.prompt.contains("TIMELINE_CHILD");
+        let early_card = request.prompt.contains("TIMELINE_EARLY_CARD");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -164,6 +169,16 @@ impl Harness for Timeline {
                 let released = hold(child_gate).await;
                 if released {
                     send(text("CHILD_ANSWER_42"));
+                }
+                released
+            } else if early_card {
+                // The create call opens the reply and returns at once; the
+                // card lands before the reply's first coalesced flush.
+                send(tool("spawn-1", "create_thread"));
+                send(result("spawn-1", "created"));
+                let released = hold(created).await;
+                if released {
+                    send(text("PARENT_AFTER_CARD"));
                 }
                 released
             } else {
@@ -299,23 +314,26 @@ async fn until(label: &str, core: &EngineCore, parent: &str, mut ready: impl FnM
     }
 }
 
-fn evidence(value: Value) {
+fn evidence(name: &str, value: Value) {
     if let Ok(dir) = std::env::var("TIMELINE_ORDER_EVIDENCE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            std::path::Path::new(&dir).join("timeline-order.json"),
+            std::path::Path::new(&dir).join(format!("{name}.json")),
             serde_json::to_vec_pretty(&value).unwrap(),
         )
         .unwrap();
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn notices_written_mid_turn_stay_in_chronological_order() {
+/// A real engine and RPC client with one parent chat whose first turn,
+/// `prompt`, is already queued on the controlled harness.
+async fn start(
+    harness: Arc<Timeline>,
+    prompt: &str,
+) -> (tempfile::TempDir, EngineCore, luna_rpc::RpcClient, String) {
     let root = tempfile::tempdir().unwrap();
-    let harness = Arc::new(Timeline::default());
     let registry = Arc::new(HarnessRegistry::new());
-    registry.register(harness.clone());
+    registry.register(harness);
     let core = EngineCore::assemble(root.path(), registry, HarnessId::Mock, None).unwrap();
     let rpc = luna_rpc::memory_client(core.rpc_service());
     let parent = uuid::Uuid::new_v4().to_string();
@@ -331,10 +349,18 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
     rpc.call("Mutate", json!({"op":"createChat","chatId":parent,"spaceId":"timeline","cwd":root.path(),"config":{"harness":"mock","model":null,"modelOptions":{},"sandbox":"read-only","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
     rpc.call(
         "QueueMessage",
-        json!({"chatId":parent,"messageId":"timeline-ask","text":"Create one helper and report back","holdForTurnEnd":true}),
+        json!({"chatId":parent,"messageId":"timeline-ask","text":prompt,"holdForTurnEnd":true}),
     )
     .await
     .unwrap();
+    (root, core, rpc, parent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notices_written_mid_turn_stay_in_chronological_order() {
+    let harness = Arc::new(Timeline::default());
+    let (_root, core, rpc, parent) =
+        start(harness.clone(), "Create one helper and report back").await;
 
     // The live reply must already be in the doc before anything lands below.
     until("parent streams its create call", &core, &parent, || {
@@ -424,7 +450,10 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
 
     let entries = messages(&core, &parent);
     let lines = outline(&entries);
-    evidence(json!({ "outline": lines, "entries": entries }));
+    evidence(
+        "timeline-order",
+        json!({ "outline": lines, "entries": entries }),
+    );
     let shape: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap())
@@ -499,6 +528,97 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
             .as_deref(),
         Some("timeline-turn"),
         "Case 6: the turn's checkpoint lands on its last written entry\n{}",
+        lines.join("\n")
+    );
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notice_landing_before_the_first_flush_stays_below_journaled_output() {
+    let harness = Arc::new(Timeline::default());
+    let (_root, core, rpc, parent) = start(harness.clone(), "TIMELINE_EARLY_CARD").await;
+
+    // The create call and its result are journaled (subscribers have seen
+    // them) well inside the reply's first STREAM_COMMIT_MS window.
+    let (replay, mut live) = core.sessions.subscribe(&parent, 0).unwrap();
+    let create_returned =
+        |event: &AgentEvent| matches!(event, AgentEvent::ToolResult { id, .. } if id == "spawn-1");
+    if !replay
+        .iter()
+        .any(|journaled| create_returned(&journaled.event))
+    {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !create_returned(&live.recv().await.unwrap().event) {}
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Timed out: create call journaled\n{}",
+                outline(&messages(&core, &parent)).join("\n")
+            )
+        });
+    }
+    // The created card, written the way the child sweeper appends it: a
+    // finished System entry pushed below whatever the doc holds now. The
+    // sweeper itself runs on a 2 s tick and cannot be aimed inside this
+    // window on demand.
+    core.doc_host
+        .open(&parent)
+        .unwrap()
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "child-created:early-helper".into(),
+            role: MessageRole::System,
+            parts: vec![MessagePart::Text {
+                id: "text".into(),
+                text: "Created child Early helper. Fresh context.".into(),
+            }],
+            created_at: 0,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    harness.created.release();
+    until("parent turn completes", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Complete)
+                && body(entry).contains("PARENT_AFTER_CARD")
+        })
+    })
+    .await;
+
+    let entries = messages(&core, &parent);
+    let lines = outline(&entries);
+    evidence(
+        "notice-before-first-flush",
+        json!({ "outline": lines, "entries": entries }),
+    );
+    let shape: Vec<&str> = lines
+        .iter()
+        .map(|line| line.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(
+        shape,
+        ["user", "assistant", "child-created", "assistant"],
+        "Case 7: output journaled before the card stays above it\n{}",
+        lines.join("\n")
+    );
+    let replies: Vec<&SessionMessageEntry> = entries
+        .iter()
+        .filter(|entry| entry.role == MessageRole::Assistant)
+        .collect();
+    assert_eq!(
+        tool_ids(replies[0]),
+        [("spawn-1".to_string(), true)],
+        "Case 7: the create call sits above its card, resolved in place\n{}",
+        lines.join("\n")
+    );
+    assert_eq!(
+        body(replies[1]),
+        "PARENT_AFTER_CARD",
+        "Case 7: output after the card lands below it\n{}",
         lines.join("\n")
     );
     drop(rpc);
