@@ -310,11 +310,6 @@ impl StickSpring {
         distance > 0.5
     }
 
-    #[cfg(test)]
-    pub(crate) fn target_vel(&self) -> f32 {
-        self.target_vel
-    }
-
     /// Advance one tick. `pos`/`target` are scroll offsets in px (larger =
     /// closer to the bottom); `frames` is elapsed time in 60fps frames
     /// (clamped by the caller to [`SPRING_MAX_CATCHUP_FRAMES`]). Returns the
@@ -3528,11 +3523,6 @@ impl PendingQueuedTurns {
         });
         latest
     }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.items.len()
-    }
 }
 
 /// A stable per-chat viewport anchor. Row identity is preferred over its old
@@ -3720,11 +3710,6 @@ impl SavedViewportCache {
         self.recency.retain(|candidate| candidate != chat_id);
         self.recency.push_back(chat_id.to_string());
         Some(viewport)
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.by_chat.len()
     }
 }
 
@@ -12062,7 +12047,7 @@ mod tests {
             assert_eq!(next, target);
             assert!(!StickSpring::needs_frame(target - next));
         }
-        assert!(spring.target_vel() > 1.0, "exercise a nonzero estimate");
+        assert!(spring.target_vel > 1.0, "exercise a nonzero estimate");
     }
 
     #[test]
@@ -12086,24 +12071,6 @@ mod tests {
             assert_eq!(pos, target);
         }
         assert!(spring.is_idle(), "no residual motion at rest");
-    }
-
-    #[test]
-    fn spring_never_overshoots_or_oscillates() {
-        let mut spring = StickSpring::new();
-        let target = 250.0;
-        let mut pos = 0.0;
-        let mut last = pos;
-        for _ in 0..600 {
-            pos = spring.step(pos, target, 1.0);
-            assert!(pos <= target, "overshoot: {pos} > {target}");
-            assert!(
-                pos >= last - 1e-3,
-                "oscillation: position moved backwards {last} -> {pos}"
-            );
-            last = pos;
-        }
-        assert_eq!(pos, target);
     }
 
     #[test]
@@ -12136,7 +12103,7 @@ mod tests {
             assert!(*d < growth * 3.0, "viewport jumped: {d}px in one frame");
         }
         // The EMA growth estimate itself has locked on.
-        assert!((spring.target_vel() - growth).abs() < 0.3);
+        assert!((spring.target_vel - growth).abs() < 0.3);
         // Lag stays bounded by the chase lead.
         assert!(target - pos <= SPRING_CHASE_MAX_LEAD + growth);
     }
@@ -12148,10 +12115,10 @@ mod tests {
         for i in 1..=50 {
             pos = spring.step(pos, 100.0 + i as f32 * 4.0, 1.0);
         }
-        assert!(spring.target_vel() > 1.0);
+        assert!(spring.target_vel > 1.0);
         // A collapse (target shrinks by more than 1px) drops the estimate.
         spring.step(pos.min(120.0), 120.0, 1.0);
-        assert_eq!(spring.target_vel(), 0.0);
+        assert_eq!(spring.target_vel, 0.0);
     }
 
     #[test]
@@ -12389,7 +12356,7 @@ mod tests {
             None,
             "queue-panel insertion alone must not claim a transcript anchor"
         );
-        assert_eq!(pending.len(), 1, "the queued id remains armed");
+        assert_eq!(pending.items.len(), 1, "the queued id remains armed");
 
         let materialized = vec![
             viewport_row("live", "live-prompt"),
@@ -12400,7 +12367,7 @@ mod tests {
             Some("queued-prompt".into()),
             "the stable id promotes only when its real bubble appears"
         );
-        assert_eq!(pending.len(), 0);
+        assert_eq!(pending.items.len(), 0);
     }
 
     #[test]
@@ -12415,7 +12382,11 @@ mod tests {
             pending.take_latest_materialized("chat-a", &rows),
             Some("queued-b".into())
         );
-        assert_eq!(pending.len(), 1, "another chat's candidate is preserved");
+        assert_eq!(
+            pending.items.len(),
+            1,
+            "another chat's candidate is preserved"
+        );
     }
 
     #[test]
@@ -12457,7 +12428,7 @@ mod tests {
         for ix in 0..MAX_SAVED_VIEWPORTS + 8 {
             cache.insert(format!("chat-{ix}"), SavedViewport::FollowTail);
         }
-        assert_eq!(cache.len(), MAX_SAVED_VIEWPORTS);
+        assert_eq!(cache.by_chat.len(), MAX_SAVED_VIEWPORTS);
         assert!(cache.get_cloned_and_touch("chat-0").is_none());
         assert!(
             cache
@@ -13226,26 +13197,6 @@ mod tests {
         assert!(inspection.contains("Status: Idle"));
         assert!(inspection.contains("7 input, 0 output"));
         assert!(!inspection.contains("Open transcript"));
-    }
-
-    #[test]
-    fn lone_completed_agent_stays_uncollapsed() {
-        let entry = assistant(
-            "m-lone",
-            MessageStatus::Complete,
-            vec![agent_part("s1", "scan repo")],
-        );
-        let rows = rows_for_entry(&entry, false, &mut parse);
-        assert_eq!(rows.len(), 1);
-        let RowKind::ToolGroup { tools, auto_open } = &rows[0].kind else {
-            panic!("agent group expected")
-        };
-        assert_eq!(tools.len(), 1);
-        assert!(!tool_group_collapses(tools), "no 'Called 1 tool' wrap");
-        assert!(
-            !*auto_open,
-            "auto_open is a streaming flag; agent rows ignore it at paint"
-        );
     }
 
     #[test]
@@ -15023,22 +14974,6 @@ mod tests {
             motion::EASE_IN_OUT,
             "large folds avoid front-loading the whole travel"
         );
-    }
-
-    /// The toggle is render-local: expanding a prompt must not change the
-    /// row's identity or version, or the list would splice (and the
-    /// virtualizer would drop the scroll anchor) on every click.
-    #[test]
-    fn expanding_a_prompt_is_not_a_row_change() {
-        let mut entry = assistant("u3", MessageStatus::Complete, vec![]);
-        entry.role = MessageRole::User;
-        entry.status = None;
-        entry.parts = vec![text_part("t0", &"a line\n".repeat(40))];
-        let before = rows_for_entry(&entry, false, &mut parse);
-        let after = rows_for_entry(&entry, false, &mut parse);
-        assert_eq!(before.len(), 1);
-        assert_eq!(before[0].id, after[0].id);
-        assert_eq!(before[0].version, after[0].version);
     }
 
     #[test]

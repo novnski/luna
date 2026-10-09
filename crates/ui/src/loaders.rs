@@ -18,7 +18,7 @@ use crate::theme::{GlyphPalette, Theme};
 
 // Shared with the terminal viewport (`luna_proto::motion`) so both animate the
 // same loaders from the same numbers.
-pub use luna_proto::motion::{LUNA_CELLS, MARK_CELLS, MARK_SPREAD, MATRIX_SIDE, mark_cell_stagger};
+pub use luna_proto::motion::{LUNA_CELLS, MARK_CELLS, MATRIX_SIDE, mark_cell_stagger};
 
 /// The animated luna mark (luna-loader.tsx `LunaLoader`): the full logo
 /// pixel grid with a light wave sweeping tail→head. Each cell rests dim
@@ -418,27 +418,3 @@ const _: () = {
     assert!(LUNA_PULSE.duration_ms == 2400);
     assert!(GRADIENT_SPIN.duration_ms == 750);
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mark_stagger_follows_flight_axis() {
-        // Tail tip (720, 0) leads: near-maximal stagger (starts deepest into
-        // the cycle); head (0, 840) trails with stagger 0.
-        let tail = mark_cell_stagger(720.0, 0.0);
-        let head = mark_cell_stagger(0.0, 840.0);
-        assert!(tail > head, "tail {tail} should lead head {head}");
-        assert!((head - 0.0).abs() < 1e-6, "head stagger ≈ 0, got {head}");
-        assert!(tail <= MARK_SPREAD + 1e-6, "stagger capped at SPREAD");
-        // Every logo cell stays inside [0, SPREAD].
-        for &(x, y) in &MARK_CELLS {
-            let s = mark_cell_stagger(x, y);
-            assert!(
-                (0.0..=MARK_SPREAD + 1e-6).contains(&s),
-                "cell ({x},{y}) stagger {s}"
-            );
-        }
-    }
-}

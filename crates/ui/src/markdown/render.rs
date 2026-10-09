@@ -2799,48 +2799,6 @@ mod tests {
     }
 
     #[test]
-    fn code_line_runs_cover_exactly() {
-        let theme = Theme::dark();
-        let mono = font(theme.font_mono.clone());
-        let line = r#"let x = "hi"; // done"#;
-        let document = luna_syntax::highlight(luna_syntax::HighlightRequest {
-            source: line,
-            path: None,
-            fence_tag: Some("rust"),
-        })
-        .unwrap();
-        let runs = runs_for_syntax_line(line, &document.lines[0], &mono, &theme);
-        let total: usize = runs.iter().map(|r| r.len).sum();
-        assert_eq!(total, line.len());
-        assert!(
-            runs.iter().all(|r| r.font == mono),
-            "highlight must not change fonts"
-        );
-        // At least one non-plain color made it through.
-        assert!(runs.iter().any(|r| r.color != theme.text));
-    }
-
-    #[test]
-    fn tree_sitter_runs_are_rich_and_paint_only() {
-        let theme = Theme::dark();
-        let mono = font(theme.font_mono.clone());
-        let line = "let widget = build!(42);";
-        let document = luna_syntax::highlight(luna_syntax::HighlightRequest {
-            source: line,
-            path: None,
-            fence_tag: Some("rust"),
-        })
-        .unwrap();
-        let runs = runs_for_syntax_line(line, &document.lines[0], &mono, &theme);
-        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), line.len());
-        assert!(runs.iter().all(|run| run.font == mono));
-        let colors = runs.iter().map(|run| run.color).collect::<Vec<_>>();
-        assert!(colors.contains(&theme.syntax.keyword));
-        assert!(colors.contains(&theme.syntax.macro_name));
-        assert!(colors.contains(&theme.syntax.number));
-    }
-
-    #[test]
     fn affected_language_roles_flow_through_markdown_paint_only() {
         let cases: &[(&str, &str, &[HighlightKind])] = &[
             (

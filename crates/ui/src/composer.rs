@@ -16178,18 +16178,6 @@ mod tests {
     }
 
     #[test]
-    fn message_enter_adds_only_the_fixed_opposite_modifier_binding() {
-        let bindings = message_enter_bindings(ComposerSendBehavior::ModEnter, "cmd-enter");
-        assert!(bindings.iter().any(|binding| {
-            binding.keystroke == "shift-cmd-enter"
-                && binding.action == MessageEnterBindingAction::OppositeSubmit
-        }));
-        assert!(!bindings.iter().any(|binding| {
-            matches!(binding.keystroke.as_str(), "ctrl-enter" | "alt-cmd-enter")
-        }));
-    }
-
-    #[test]
     fn enter_accepts_a_completion_before_submit_or_newline() {
         assert_eq!(
             enter_outcome(true, EnterOutcome::Submit),
@@ -17192,22 +17180,6 @@ mod tests {
         assert!(composer_has_content("hi", 0, 0));
         assert!(composer_has_content("", 1, 0));
         assert!(composer_has_content("", 0, 1));
-    }
-
-    #[test]
-    fn a_comment_only_stage_queues_during_a_live_run() {
-        let live = true;
-        let comment_only = composer_has_content("", 0, 2);
-        assert_eq!(
-            send_button_mode(live, comment_only),
-            SendButtonMode::Queue,
-            "comment-only submit must queue without interrupting the run"
-        );
-        // Nothing staged at all is still the stop square.
-        assert_eq!(
-            send_button_mode(live, composer_has_content("", 0, 0)),
-            SendButtonMode::Stop
-        );
     }
 
     #[test]

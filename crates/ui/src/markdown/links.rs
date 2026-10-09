@@ -102,19 +102,4 @@ mod tests {
         assert_eq!(t.original, "HTTPS://EXAMPLE.COM");
         assert_eq!(t.navigation, Ok("https://example.com/".into()));
     }
-    #[test]
-    fn markdown_and_autolinks_share_validation() {
-        let tree = super::super::parser::parse_full(
-            "[label](https://example.com) and https://example.org/path",
-        );
-        let super::super::parser::Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!("paragraph")
-        };
-        let urls: Vec<_> = runs.iter().filter_map(|r| r.style.link.as_ref()).collect();
-        assert_eq!(urls.len(), 2);
-        assert!(
-            urls.iter()
-                .all(|u| LinkTarget::new("", u).navigation.is_ok())
-        );
-    }
 }

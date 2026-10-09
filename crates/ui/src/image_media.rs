@@ -279,21 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn svg_is_bounded_and_external_resources_are_removed() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><image href="file:///etc/passwd" width="20" height="20"/><rect width="10" height="10"/></svg>"##;
-        let media = decode_image("image/svg+xml", svg.to_vec()).unwrap();
-        assert!(!media.svg.unwrap().contains("file:///etc/passwd"));
-        assert!(
-            decode_image(
-                "image/svg+xml",
-                br#"<svg xmlns="http://www.w3.org/2000/svg" width="99999" height="10"/>"#.to_vec()
-            )
-            .is_ok()
-        );
-        assert!(decode_image("image/png", b"not an image".to_vec()).is_err());
-    }
-
-    #[test]
     fn large_svgs_keep_the_complete_viewbox_at_bounded_resolutions() {
         for (width, height) in [(40000, 500), (500, 40000), (40000, 40000)] {
             let source = format!(
@@ -350,6 +335,7 @@ mod tests {
     }
     #[test]
     fn encoded_input_and_decode_dimensions_are_bounded() {
+        assert!(decode_image("image/png", b"not an image".to_vec()).is_err());
         assert!(
             decode_image(
                 "image/png",

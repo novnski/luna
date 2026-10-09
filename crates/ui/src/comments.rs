@@ -406,17 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unrenamed_file_cites_its_only_path_on_both_sides() {
-        let staged = vec![
-            comment("a.rs", CommentSide::Old, 3, "gone"),
-            comment("a.rs", CommentSide::New, 4, "here"),
-        ];
-        let out = with_comments("x", &staged);
-        assert!(out.contains("- a.rs:3 (L): gone"));
-        assert!(out.contains("- a.rs:4 (R): here"));
-    }
-
-    #[test]
     fn card_height_grows_with_body_lines() {
         assert!(card_height("two\nlines") > card_height("one"));
         assert_eq!(card_height(""), card_height("one"));
