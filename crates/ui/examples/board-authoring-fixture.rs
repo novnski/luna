@@ -808,6 +808,9 @@ fn main() -> anyhow::Result<()> {
                     *failure_for_ui.lock().unwrap() = Some(format!("{error:#}"));
                     let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                     let _ = capture(window, cx, output.join("failure.png"));
+                    // The headless platform's quit can end the process with
+                    // status 0 before `main` reads the failure: exit here.
+                    std::process::exit(1);
                 }
             }
             let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, window, _| window.remove_window());
