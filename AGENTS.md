@@ -4,6 +4,10 @@ Follow the parent workspace instructions. Work from this repository root, read `
 
 After completing a feature and its required checks, follow [the commit-and-push skill](.codex/skills/commit-and-push/SKILL.md) to clean up task artifacts, commit all feature changes, merge into `main` if needed, and push and verify `origin/main`. Honor an explicit user request to stop earlier.
 
+## Tests
+
+Write, change, review and sweep tests through [the test-audit skill](.codex/skills/test-audit/SKILL.md); it is the default way to test in this repository. Every new or changed test passes its authoring gate: it names the behavior and the credible regression it catches, has one owner at the strongest real boundary (prefer end-to-end and integration suites), and needs no test-only production seam. Use its campaign mode ([CAMPAIGN.md](.codex/skills/test-audit/CAMPAIGN.md)) for whole-crate sweeps. Codex finds the skill through `.agents/skills` and Claude Code through `.claude/skills`; both link to `.codex/skills`.
+
 ## macOS developer app handoff
 
 - After each meaningful LUNA code change and its relevant checks, run `scripts/run-macos-dev.sh --refresh` yourself so the user gets a new **LUNA Dev** app to try. Do not ask the user to build, reinstall, or run the command. This handles UI and engine changes with the same incremental Cargo cache.
