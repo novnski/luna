@@ -4,7 +4,8 @@
 //! Pragmatic port of luna's `sessions.ts` (spec: feature-inventory §3.2):
 //! - every `AgentEvent` is (a) appended to the on-disk run journal, (b) broadcast to
 //!   in-process subscribers, (c) folded via `fold_event_into_parts` and diffed into the
-//!   chat's `SessionDoc` through `SegmentWriter` on a coalesced `STREAM_COMMIT_MS` timer;
+//!   chat's `SessionDoc` through `SegmentWriter` (a segment's entry opens with its first
+//!   part; later growth coalesces on a `STREAM_COMMIT_MS` timer);
 //! - the user message entry is pushed to the doc immediately on dispatch (id = the
 //!   command's client-minted message id, so optimistic echoes never flicker);
 //! - a `Steered` event splits the assistant entry at the exact boundary;
@@ -10813,6 +10814,24 @@ async fn drive_run(
             };
         }
 
+        // A segment's entry exists from its first part on. Only a live writer
+        // can see an entry another path appended below it (`is_buried`);
+        // opening the entry at the first coalesced flush let a notice written
+        // in that window land above output this run had already journaled.
+        // Later growth still coalesces on the STREAM_COMMIT_MS tick.
+        if writer.is_none()
+            && !folded.is_empty()
+            && let Err(err) = sync_segment(
+                doc_ref,
+                &mut writer,
+                &entry_id,
+                &device_id,
+                segment_started,
+                &folded,
+            )
+        {
+            tracing::warn!(chat = %chat_id, error = %err, "segment open failed");
+        }
         if !folded.is_empty() && !dirty {
             dirty = true;
             flush_at =
