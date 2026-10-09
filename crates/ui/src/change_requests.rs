@@ -387,6 +387,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: Some("checkout".into()),
             created_at: Utc.timestamp_opt(0, 0).unwrap(),
+            removed_at: None,
         }
     }
 

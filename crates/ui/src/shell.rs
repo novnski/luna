@@ -2473,8 +2473,8 @@ pub struct Shell {
     rename_space_dialog: Option<RenameSpaceDialog>,
     /// Board "From GitHub issue" picker or issue writeback confirmation.
     board_github: Option<board::github_picker::BoardGitHubHost>,
-    /// Space id awaiting delete confirmation (hard delete + session cascade).
-    delete_space_confirm: Option<String>,
+    /// Space id awaiting remove confirmation (hides it; sessions are kept).
+    remove_space_confirm: Option<String>,
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
@@ -3025,7 +3025,7 @@ impl Shell {
             space_menu: popover::Popup::default(),
             rename_space_dialog: None,
             board_github: None,
-            delete_space_confirm: None,
+            remove_space_confirm: None,
             add_space: None,
             add_space_flow_seq: 0,
             command_palette: None,
@@ -6168,14 +6168,6 @@ impl Shell {
             cx.notify();
             return;
         };
-        let deleted_project = (params.get("op").and_then(|op| op.as_str()) == Some("deleteSpace"))
-            .then(|| {
-                params
-                    .get("spaceId")
-                    .and_then(|id| id.as_str())
-                    .map(str::to_owned)
-            })
-            .flatten();
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
             if let Err(err) = engine.client().call(methods::MUTATE, params).await {
                 this.update(cx, |shell, cx| {
@@ -6183,36 +6175,6 @@ impl Shell {
                     cx.notify();
                 })
                 .ok();
-            } else if let Some(project_id) = deleted_project {
-                let status = engine
-                    .client()
-                    .call(
-                        methods::GET_PROJECT_CLEANUP,
-                        serde_json::json!({ "projectId": project_id }),
-                    )
-                    .await;
-                let notice = match status {
-                    Ok(value) if value.is_null() => {
-                        Some("Project deletion committed; cleanup status is missing.".to_string())
-                    }
-                    Ok(value) => value
-                        .get("detail")
-                        .and_then(|detail| detail.as_str())
-                        .filter(|_| {
-                            value.get("state").and_then(|state| state.as_str()) != Some("completed")
-                        })
-                        .map(str::to_owned),
-                    Err(error) => Some(format!(
-                        "Project deleted; cleanup status is unavailable: {error}"
-                    )),
-                };
-                if let Some(notice) = notice {
-                    this.update(cx, |shell, cx| {
-                        shell.sidebar_notice = Some(notice.into());
-                        cx.notify();
-                    })
-                    .ok();
-                }
             }
         }));
     }
@@ -11446,7 +11408,7 @@ impl Shell {
     /// Enter could submit it while the dialog asked for confirmation.
     fn confirmation_open(&self) -> bool {
         self.task_action_confirm.is_some()
-            || self.delete_space_confirm.is_some()
+            || self.remove_space_confirm.is_some()
             || self.sync_flow.has_visible_overlay()
     }
 
@@ -11538,7 +11500,7 @@ impl Shell {
             }
             _ => {}
         }
-        if self.task_action_confirm.take().is_some() || self.delete_space_confirm.take().is_some() {
+        if self.task_action_confirm.take().is_some() || self.remove_space_confirm.take().is_some() {
             cx.notify();
             return true;
         }
@@ -16478,6 +16440,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             created_at: chrono::DateTime::UNIX_EPOCH,
+            removed_at: None,
         }];
         let devices = vec![luna_proto::Device {
             id: "device-id".into(),
@@ -18187,6 +18150,7 @@ mod exit_regressions {
                     git_checked_at: None,
                     checkout_id: None,
                     created_at: Utc::now(),
+                    removed_at: None,
                 }];
                 state.chats = chats;
                 state.selected_chat = selected_chat;
@@ -18328,6 +18292,7 @@ mod exit_regressions {
                     git_checked_at: None,
                     checkout_id: None,
                     created_at: Utc::now(),
+                    removed_at: None,
                 }];
                 state.chats = [HANDOFF_SOURCE, "other"]
                     .into_iter()
@@ -18452,6 +18417,7 @@ mod exit_regressions {
                         git_checked_at: None,
                         checkout_id: None,
                         created_at: Utc::now(),
+                        removed_at: None,
                     })
                     .collect();
                 state.chats = vec![
@@ -18864,6 +18830,7 @@ mod exit_regressions {
                     git_checked_at: None,
                     checkout_id: None,
                     created_at: Utc::now(),
+                    removed_at: None,
                 }];
                 state.selected_space = Some("project-a".into());
                 state
@@ -19094,6 +19061,7 @@ mod exit_regressions {
                     git_checked_at: None,
                     checkout_id: None,
                     created_at: Utc::now(),
+                    removed_at: None,
                 }];
                 let mut alpha = palette_chat("stable-a", Some("project-a"), "Stable alpha");
                 let mut beta = palette_chat("stable-b", Some("project-a"), "Stable beta");
@@ -19278,6 +19246,7 @@ mod exit_regressions {
                         git_checked_at: None,
                         checkout_id: None,
                         created_at: Utc::now(),
+                        removed_at: None,
                     })
                     .collect();
                 state.selected_space = Some("project-a".into());
@@ -19477,6 +19446,7 @@ mod exit_regressions {
                         git_checked_at: None,
                         checkout_id: None,
                         created_at: Utc::now(),
+                        removed_at: None,
                     })
                     .collect();
                 let mut alpha_chat = handoff_chat("alpha-chat");

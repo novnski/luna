@@ -69,9 +69,18 @@ pub struct Space {
     #[serde(default)]
     pub execution_defaults: crate::ProjectExecutionDefaults,
     pub created_at: DateTime<Utc>,
+    /// Set when the user removed the project. The row and its sessions stay
+    /// intact (hidden everywhere); re-adding the same (device, folder) clears
+    /// it and brings every session back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<DateTime<Utc>>,
 }
 
 impl Space {
+    pub fn is_removed(&self) -> bool {
+        self.removed_at.is_some()
+    }
+
     /// Name override, else basename(path), else the path itself.
     /// Lives here (proto) so UI and engine agree on the derivation.
     pub fn display_name(&self) -> &str {

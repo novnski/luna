@@ -55,6 +55,9 @@ struct Space: Identifiable, Hashable {
     var gitCheckedAt: Int64?
     var checkoutId: String?
     var createdAt: Int64
+    /// Set when the user removed the project; its sessions are kept and come
+    /// back when the same (device, folder) is added again.
+    var removedAt: Int64? = nil
 
     /// Display name: explicit name, else the folder's basename.
     var displayName: String {

@@ -1505,7 +1505,8 @@ impl WorkspaceHost {
     }
 
     /// An own-device space whose path matches, else one at the path's parent
-    /// checkout root, else a freshly created one at that root.
+    /// checkout root, else a freshly created one at that root. A removed
+    /// match is restored: a run in its folder brings the project back.
     ///
     /// A linked-worktree cwd resolves to the checkout root FIRST: claiming at
     /// the worktree path itself minted a phantom sidebar space named after the
@@ -1513,18 +1514,17 @@ impl WorkspaceHost {
     fn space_for_path(&self, path: &str) -> Result<String, EngineError> {
         let device_id = &self.inner.config.device_id;
         let spaces = self.read(|doc| doc.read_spaces())?;
-        if let Some(space) = spaces
-            .iter()
-            .find(|s| s.device_id == *device_id && s.path == path)
-        {
-            return Ok(space.id.clone());
-        }
-        let root = linked_worktree_root(std::path::Path::new(path));
-        if let Some(root) = root.as_deref()
-            && let Some(space) = spaces
+        let at = |folder: &str| {
+            spaces
                 .iter()
-                .find(|s| s.device_id == *device_id && s.path == root)
-        {
+                .filter(|s| s.device_id == *device_id && s.path == folder)
+                .min_by_key(|s| s.is_removed())
+        };
+        let root = linked_worktree_root(std::path::Path::new(path));
+        if let Some(space) = at(path).or_else(|| root.as_deref().and_then(at)) {
+            if space.is_removed() {
+                self.mutate(|doc| doc.set_space_removed(&space.id, None))?;
+            }
             return Ok(space.id.clone());
         }
         let space = Space {
@@ -1537,6 +1537,7 @@ impl WorkspaceHost {
             checkout_id: None,
             execution_defaults: Default::default(),
             created_at: Utc::now(),
+            removed_at: None,
         };
         self.mutate(|doc| doc.upsert_space(&space))?;
         Ok(space.id)
@@ -1700,10 +1701,17 @@ impl WorkspaceHost {
         git_detected: bool,
     ) -> Result<(), EngineError> {
         let spaces = self.read(|doc| doc.read_spaces())?;
-        if spaces
+        // A live row for this id or (device, folder) is the same project; a
+        // removed one comes back with every session it kept.
+        if let Some(existing) = spaces
             .iter()
-            .any(|s| s.id == space_id || (s.device_id == device_id && s.path == path))
+            .filter(|s| s.id == space_id || (s.device_id == device_id && s.path == path))
+            .min_by_key(|s| (s.is_removed(), s.id != space_id))
         {
+            if existing.is_removed() {
+                let existing_id = existing.id.clone();
+                self.mutate(|doc| doc.set_space_removed(&existing_id, None))?;
+            }
             return Ok(());
         }
         self.mutate(|doc| {
@@ -1717,9 +1725,19 @@ impl WorkspaceHost {
                 checkout_id: None,
                 execution_defaults: Default::default(),
                 created_at: Utc::now(),
+                removed_at: None,
             })
         })?;
         Ok(())
+    }
+
+    /// Hide a project and its sessions without deleting anything. `false`
+    /// when the row is gone or already removed.
+    pub fn remove_space(&self, space_id: &str) -> Result<bool, EngineError> {
+        self.mutate(|doc| match doc.space(space_id)? {
+            Some(space) if !space.is_removed() => doc.set_space_removed(space_id, Some(Utc::now())),
+            _ => Ok(false),
+        })
     }
 
     pub fn rename_space(&self, space_id: &str, name: Option<&str>) -> Result<bool, EngineError> {
@@ -2788,6 +2806,7 @@ mod tests {
             checkout_id: None,
             execution_defaults: Default::default(),
             created_at: Utc::now(),
+            removed_at: None,
         };
         let error = host
             .import_space_row_admitted(&space, &foreign_ticket)

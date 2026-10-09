@@ -656,6 +656,7 @@ fn main() -> anyhow::Result<()> {
                     checkout_id: None,
                     execution_defaults: Default::default(),
                     created_at: Utc::now() - TimeDelta::days(30),
+                    removed_at: None,
                 }];
                 state.chats = vec![
                     chat(FIRST, "Shortcut tooltips", 2),

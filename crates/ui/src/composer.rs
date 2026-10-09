@@ -15258,6 +15258,7 @@ mod tests {
                 git_checked_at: None,
                 checkout_id: None,
                 created_at: chrono::Utc::now(),
+                removed_at: None,
             }];
             state.selected_space = Some("first-send-project".into());
         });

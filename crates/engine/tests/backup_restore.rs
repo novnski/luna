@@ -783,6 +783,7 @@ fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
             git_checked_at: None,
             checkout_id: None,
             created_at: now,
+            removed_at: None,
         })
         .unwrap();
     registry

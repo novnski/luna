@@ -18,7 +18,9 @@ import Observation
 @Observable
 final class WorkspaceStore {
     private(set) var devices: [DeviceRow] = []
+    /// Live projects only; removed ones live in `removedSpaces`.
     private(set) var spaces: [Space] = []
+    private(set) var removedSpaces: [Space] = []
     private(set) var chats: [Chat] = []
     private(set) var sessions: [String: SessionRow] = [:]
     private(set) var presence: [String: Int64] = [:]  // deviceId → last beat ms
@@ -325,7 +327,7 @@ final class WorkspaceStore {
                                 .compactMap(\.stringValue))
         }.sorted { $0.name < $1.name }
 
-        spaces = doc.overlayRows(kind: "spaces").compactMap { row in
+        let allSpaces = doc.overlayRows(kind: "spaces").compactMap { row -> Space? in
             let f = row.fields
             guard let deviceId = f["deviceId"]?.stringValue,
                   let path = f["path"]?.stringValue else { return nil }
@@ -334,10 +336,14 @@ final class WorkspaceStore {
                          gitDetected: f["gitDetected"]?.boolValue ?? false,
                          gitCheckedAt: f["gitCheckedAt"]?.int64Value,
                          checkoutId: f["checkoutId"]?.stringValue,
-                         createdAt: f["createdAt"]?.int64Value ?? 0)
+                         createdAt: f["createdAt"]?.int64Value ?? 0,
+                         removedAt: f["removedAt"]?.int64Value)
         }.sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }  // creation order, id tiebreak
+        spaces = allSpaces.filter { $0.removedAt == nil }
+        removedSpaces = allSpaces.filter { $0.removedAt != nil }
+        let removedSpaceIds = Set(removedSpaces.map(\.id))
 
-        chats = doc.overlayRows(kind: "chats").compactMap { row in
+        chats = doc.overlayRows(kind: "chats").compactMap { row -> Chat? in
             let f = row.fields
             guard let deviceId = f["deviceId"]?.stringValue else { return nil }
             var chatConfig: ChatConfig?
@@ -361,6 +367,9 @@ final class WorkspaceStore {
                         spaceId: f["spaceId"]?.stringValue,
                         lastSeenAt: f["lastSeenAt"]?.int64Value,
                         roomGen: f["roomGen"]?.int64Value.map(Int.init))
+        }.filter { chat in
+            // A removed project's sessions stay in the registry, hidden.
+            chat.spaceId.map(removedSpaceIds.contains) != true
         }
 
         var rows: [String: SessionRow] = [:]
@@ -684,6 +693,23 @@ final class WorkspaceStore {
         if let existing = spaces.first(where: { $0.deviceId == deviceId && $0.path == path }) {
             return existing.id
         }
+        // A removed project for this folder comes back with its sessions.
+        if let removed = removedSpaces.first(where: { $0.deviceId == deviceId && $0.path == path }) {
+            struct OkReply: Decodable { var ok: Bool? }
+            let params: [String: Any] = [
+                "op": "createSpace",
+                "spaceId": removed.id,
+                "deviceId": deviceId,
+                "path": path,
+                "gitDetected": gitDetected,
+            ]
+            let viaHost: OkReply? = try? await relay(for: deviceId).call(method: "Mutate", params: params)
+            if viaHost == nil {
+                doc.write(kind: "spaces", id: removed.id, op: .update, set: ["removedAt": .null])
+            }
+            afterLocalWrite()
+            return removed.id
+        }
         let spaceId = UUID().uuidString.lowercased()
         struct OkReply: Decodable { var ok: Bool? }
         let params: [String: Any] = [
@@ -739,17 +765,17 @@ final class WorkspaceStore {
         afterLocalWrite()
     }
 
-    /// Hard-delete a space and cascade to its chats: ONE batch tombstones the
-    /// space row and every chat/session row whose spaceId matches — the
-    /// server applies the batch atomically.
-    func deleteSpace(spaceId: String) {
-        var keys: [(kind: String, id: String)] = []
-        for chat in chats where chat.spaceId == spaceId {
-            keys.append(("chats", chat.id))
-            keys.append(("sessions", chat.id))
+    /// Remove a project: hide it and its sessions, deleting nothing. The
+    /// owning host stops live runs (`Mutate {op:removeSpace}`); unreachable,
+    /// the flag is set here. `createSpace` for the same folder restores it.
+    func removeSpace(spaceId: String) async {
+        guard let space = spaces.first(where: { $0.id == spaceId }) else { return }
+        struct OkReply: Decodable { var ok: Bool? }
+        let params: [String: Any] = ["op": "removeSpace", "spaceId": spaceId]
+        let viaHost: OkReply? = try? await relay(for: space.deviceId).call(method: "Mutate", params: params)
+        if viaHost == nil {
+            doc.write(kind: "spaces", id: spaceId, op: .update, set: ["removedAt": .int(nowMs())])
         }
-        keys.append(("spaces", spaceId))
-        doc.deleteRows(keys)
         afterLocalWrite()
     }
 

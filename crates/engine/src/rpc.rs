@@ -1189,6 +1189,10 @@ enum MutateParams {
         defaults: luna_proto::ProjectExecutionDefaults,
         expected_defaults: luna_proto::ProjectExecutionDefaults,
     },
+    /// Hide a project and its sessions; nothing is deleted. Live local runs
+    /// stop first. `CreateSpace` for the same (device, folder) restores it.
+    #[serde(rename_all = "camelCase")]
+    RemoveSpace { space_id: String },
     /// Permanent local deletion; the UI supplies the exact reviewed child set.
     #[serde(rename_all = "camelCase")]
     DeleteSpace {
@@ -2774,6 +2778,50 @@ impl EngineRpc {
                     &expected_defaults,
                 )
                 .map_err(failed),
+            MutateParams::RemoveSpace { space_id } => {
+                let space = self
+                    .workspace
+                    .space(&space_id)
+                    .map_err(failed)?
+                    .ok_or_else(|| RpcError::BadParams("project no longer exists".into()))?;
+                if space.is_removed() {
+                    return Ok(());
+                }
+                if space.device_id != self.engine_info.device_id {
+                    return Err(RpcError::Failed(
+                        "Remove this project on the device that owns it.".into(),
+                    ));
+                }
+                let task_ids: Vec<String> = self
+                    .workspace
+                    .read_chats()
+                    .map_err(failed)?
+                    .into_iter()
+                    .filter(|chat| {
+                        chat.space_id.as_deref() == Some(&space_id)
+                            && chat.device_id == self.engine_info.device_id
+                    })
+                    .map(|chat| chat.id)
+                    .collect();
+                // Hold every task's command gate until the row is hidden so no
+                // run can start in a session that is about to disappear.
+                let mut _gates = Vec::with_capacity(task_ids.len());
+                for task_id in &task_ids {
+                    _gates.push(self.doc_host.task_command_gate(task_id).await);
+                }
+                for task_id in &task_ids {
+                    self.sessions.interrupt(task_id).await.map_err(failed)?;
+                    if self.sessions.has_live_run(task_id) {
+                        return Err(RpcError::Failed(format!(
+                            "task {task_id} did not stop; project was not removed"
+                        )));
+                    }
+                }
+                self.workspace
+                    .remove_space(&space_id)
+                    .map_err(failed)
+                    .map(drop)
+            }
             MutateParams::DeleteSpace {
                 space_id,
                 expected_chat_ids,
@@ -3617,7 +3665,7 @@ impl EngineRpc {
         })?;
         let destination = spaces
             .iter()
-            .find(|space| space.id == destination_space_id)
+            .find(|space| space.id == destination_space_id && !space.is_removed())
             .cloned()
             .ok_or_else(|| {
                 (
@@ -7873,6 +7921,7 @@ fn task_intent_from_mutation(mutation: MutateParams) -> Option<(String, TaskComm
         MutateParams::CreateSpace { .. }
         | MutateParams::RenameSpace { .. }
         | MutateParams::SetProjectExecutionDefaults { .. }
+        | MutateParams::RemoveSpace { .. }
         | MutateParams::DeleteSpace { .. }
         | MutateParams::RenameDevice { .. } => return None,
     })
@@ -11266,13 +11315,23 @@ impl EngineRpc {
                         serde_json::to_value(workspace.watch_chats().borrow().clone()).unwrap_or_default()
                     })).boxed()
                 } else { changes };
+                // Removing or restoring a project hides or reveals its sessions.
+                let spaces_workspace = workspace.clone();
+                let changes = futures::stream::select(changes, watch_stream(workspace.watch_spaces()).map(move |_| {
+                    serde_json::to_value(spaces_workspace.watch_chats().borrow().clone()).unwrap_or_default()
+                })).boxed();
                 Ok(RpcReply::Stream(changes.map(move |mut value| {
                     // Fork origin augments the ordinary project row. A source
                     // disappearing never hides a surviving fork.
                     let side_states = side_chats.as_ref().and_then(|service| service.published_states().ok()).unwrap_or_default();
+                    let removed_spaces: std::collections::HashSet<String> = workspace.watch_spaces().borrow()
+                        .iter().filter(|space| space.is_removed()).map(|space| space.id.clone()).collect();
                     if let Some(items) = value.as_array_mut() {
                         items.retain_mut(|chat| {
                             let Some(id) = chat.get("id").and_then(|id| id.as_str()).map(str::to_owned) else { return false };
+                            if chat.get("spaceId").and_then(|id| id.as_str()).is_some_and(|space| removed_spaces.contains(space)) {
+                                return false;
+                            }
                             if let Ok(Some(execution)) = sessions.execution_summary(&id)
                                 && let Some(object) = chat.as_object_mut() {
                                 object.insert("execution".into(), serde_json::to_value(execution).unwrap_or_default());
@@ -12990,6 +13049,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             created_at: chrono::DateTime::UNIX_EPOCH,
+            removed_at: None,
         }
     }
 

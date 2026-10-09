@@ -167,6 +167,7 @@ impl WorkspaceDoc {
             LoroValue::from(serde_json::to_value(&space.execution_defaults)?),
         )?;
         row.insert("createdAt", space.created_at.timestamp_millis())?;
+        set_opt_ms(&row, "removedAt", space.removed_at)?;
         self.doc.commit();
         Ok(())
     }
@@ -728,6 +729,8 @@ pub(crate) struct RawSpace {
     checkout_id: Option<String>,
     #[serde(default)]
     created_at: i64,
+    #[serde(default)]
+    removed_at: Option<i64>,
 }
 
 impl From<RawSpace> for Space {
@@ -742,6 +745,7 @@ impl From<RawSpace> for Space {
             git_checked_at: raw.git_checked_at.map(dt),
             checkout_id: raw.checkout_id,
             created_at: dt(raw.created_at),
+            removed_at: raw.removed_at.map(dt),
         }
     }
 }
@@ -943,6 +947,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             created_at: ts(1_500),
+            removed_at: None,
         }
     }
 

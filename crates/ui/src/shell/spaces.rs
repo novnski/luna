@@ -3702,20 +3702,36 @@ impl Shell {
         };
         flow.submit_busy = true;
         flow.error = None;
-        let space_id = uuid::Uuid::new_v4().to_string();
+        // A folder the user removed earlier restores that project (same id),
+        // bringing back every session it kept.
+        let restored = self
+            .state
+            .read(cx)
+            .removed_spaces
+            .iter()
+            .find(|space| space.device_id == device.id && space.path == path)
+            .cloned();
         // Optimistic echo: the watch frame carrying the real row replaces it
         // by id (apply_spaces re-sorts; same-id upsert is idempotent).
-        let space = Space {
-            execution_defaults: Default::default(),
-            id: space_id.clone(),
-            device_id: device.id.clone(),
-            path: path.clone(),
-            name: None,
-            git_detected,
-            git_checked_at: None,
-            checkout_id: None,
-            created_at: Utc::now(),
+        let space = match restored {
+            Some(space) => Space {
+                removed_at: None,
+                ..space
+            },
+            None => Space {
+                execution_defaults: Default::default(),
+                id: uuid::Uuid::new_v4().to_string(),
+                device_id: device.id.clone(),
+                path: path.clone(),
+                name: None,
+                git_detected,
+                git_checked_at: None,
+                checkout_id: None,
+                created_at: Utc::now(),
+                removed_at: None,
+            },
         };
+        let space_id = space.id.clone();
         self.state.update(cx, |s, cx| {
             if !s.spaces.iter().any(|existing| existing.id == space.id) {
                 s.spaces.push(space);
@@ -4483,26 +4499,17 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn delete_space(&mut self, space_id: String, cx: &mut Context<Self>) {
-        self.delete_space_confirm = None;
-        let mut expected_chat_ids: Vec<String> = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .filter(|chat| chat.space_id.as_deref() == Some(&space_id))
-            .map(|chat| chat.id.clone())
-            .collect();
-        expected_chat_ids.sort();
+    /// Hide the project and its sessions; re-adding the folder restores both.
+    pub(super) fn remove_space(&mut self, space_id: String, cx: &mut Context<Self>) {
+        self.remove_space_confirm = None;
         self.mutate(
-            serde_json::json!({ "op": "deleteSpace", "spaceId": space_id,
-                "expectedChatIds": expected_chat_ids }),
+            serde_json::json!({ "op": "removeSpace", "spaceId": space_id }),
             cx,
         );
         cx.notify();
     }
 
-    /// Space context menu + rename dialog + delete confirm (appended to the
+    /// Space context menu + rename dialog + remove confirm (appended to the
     /// shell's overlay list).
     pub(super) fn render_space_overlays(
         &mut self,
@@ -4516,7 +4523,7 @@ impl Shell {
         if let Some((space_id, position)) = self.space_menu.get().cloned() {
             let closing = self.space_menu.closing_since();
             let rename_id = space_id.clone();
-            let delete_id = space_id.clone();
+            let remove_id = space_id.clone();
             let menu = popover::popover_card(&theme)
                 .w(crate::typography::ui_rems(170.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -4539,12 +4546,12 @@ impl Shell {
                 )
                 .child(popover::menu_separator())
                 .child(
-                    popover::menu_row(&theme, false, format!("space-menu-delete-{space_id}"))
-                        .id("space-menu-delete")
+                    popover::menu_row(&theme, false, format!("space-menu-remove-{space_id}"))
+                        .id("space-menu-remove")
                         .text_color(theme.readable_tone(theme.danger, 1.0))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_space_menu(cx);
-                            this.delete_space_confirm = Some(delete_id.clone());
+                            this.remove_space_confirm = Some(remove_id.clone());
                             cx.notify();
                         }))
                         .child(
@@ -4609,18 +4616,14 @@ impl Shell {
             overlays.push(popover::modal("rename-space-dialog", viewport, card));
         }
 
-        if let Some(space_id) = self.delete_space_confirm.clone() {
-            let (name, device, count) = {
+        if let Some(space_id) = self.remove_space_confirm.clone() {
+            let (name, count) = {
                 let state = self.state.read(cx);
-                let space = state.space_row(&space_id);
                 (
-                    space
+                    state
+                        .space_row(&space_id)
                         .map(|s| s.display_name().to_string())
                         .unwrap_or_else(|| "this project".into()),
-                    space
-                        .and_then(|s| state.device_name(&s.device_id))
-                        .unwrap_or("its device")
-                        .to_string(),
                     state
                         .chats
                         .iter()
@@ -4628,20 +4631,18 @@ impl Shell {
                         .count(),
                 )
             };
-            let copy = if count == 1 {
-                format!(
-                    "Permanently delete “{name}” and its 1 LUNA session on {device}? This can’t be undone."
-                )
-            } else {
-                format!(
-                    "Permanently delete “{name}” and its {count} LUNA sessions on {device}? This can’t be undone."
-                )
+            let copy = match count {
+                0 => format!("Remove “{name}” from LUNA?"),
+                1 => format!("Remove “{name}” from LUNA? Its session is kept, not deleted."),
+                _ => format!(
+                    "Remove “{name}” from LUNA? Its {count} sessions are kept, not deleted."
+                ),
             };
             let card = popover::dialog_card(&theme)
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(crate::typography::ui_rems(6.0)).child(popover::dialog_body(&theme, copy)))
                 .child(div().mt(crate::typography::ui_rems(6.0)).child(popover::dialog_body(&theme,
-                    "Every session in this project, including any side chat listed in the count, is deleted. Side chats outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
+                    "Running sessions stop. Add the same folder again to bring the project back with all of its sessions, whether open, settled or archived. Project files are not touched.",
                 )))
                 .child(
                     div()
@@ -4651,24 +4652,24 @@ impl Shell {
                         .justify_end()
                         .gap(crate::typography::ui_rems(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "delete-space-cancel")
-                                .id("delete-space-cancel")
+                            popover::btn_ghost(&theme, "Cancel", "remove-space-cancel")
+                                .id("remove-space-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.delete_space_confirm = None;
+                                    this.remove_space_confirm = None;
                                     cx.notify();
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Remove")
-                                .id("delete-space-confirm")
+                            popover::btn_primary(&theme, "Remove")
+                                .id("remove-space-confirm")
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.delete_space(space_id.clone(), cx)
+                                    this.remove_space(space_id.clone(), cx)
                                 })),
                         ),
                 )
                 .into_any_element();
             overlays.push(popover::modal(
-                "delete-space-dialog",
+                "remove-space-dialog",
                 viewport,
                 self.confirmation_card(card, cx),
             ));
@@ -5437,6 +5438,7 @@ mod project_flow_tests {
             git_checked_at: None,
             checkout_id: None,
             created_at: Utc::now(),
+            removed_at: None,
         };
         assert_eq!(
             existing_project_id(&[project.clone()], "local", &project.path),

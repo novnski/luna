@@ -112,11 +112,12 @@ impl SpacesSync {
     }
 }
 
-/// (Re)build the entry set for the spaces THIS device owns.
+/// (Re)build the entry set for the live spaces THIS device owns. A removed
+/// project stops being checked until it is restored.
 fn reconcile(inner: &Arc<SpacesSyncInner>, spaces: &[Space]) {
     let owned: HashMap<&str, &Space> = spaces
         .iter()
-        .filter(|s| s.device_id == inner.device_id)
+        .filter(|s| s.device_id == inner.device_id && !s.is_removed())
         .map(|s| (s.id.as_str(), s))
         .collect();
 
@@ -260,6 +261,7 @@ fn sweep_orphans(inner: &Arc<SpacesSyncInner>) {
         return;
     }
     let spaces = inner.workspace.watch_spaces().borrow().clone();
+    // Removed projects are still rows: their chats are kept, never orphans.
     let live: std::collections::HashSet<&str> = spaces.iter().map(|s| s.id.as_str()).collect();
     let chats = inner.workspace.watch_chats().borrow().clone();
     for chat in chats {

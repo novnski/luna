@@ -1395,6 +1395,209 @@ async fn project_delete_requires_exact_children_and_preserves_workspace_files() 
     core.shutdown().await;
 }
 
+/// Next `WatchChats` frame whose task ids satisfy `pred`.
+async fn chats_frame_where(
+    rx: &mut tokio::sync::mpsc::Receiver<serde_json::Value>,
+    pred: impl Fn(&[String]) -> bool,
+) -> Vec<serde_json::Value> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let frame = rx.recv().await.expect("chats stream alive");
+            let rows = frame.as_array().cloned().unwrap_or_default();
+            let ids: Vec<String> = rows
+                .iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                .collect();
+            if pred(&ids) {
+                break rows;
+            }
+        }
+    })
+    .await
+    .expect("expected WatchChats frame")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removed_project_keeps_sessions_and_readding_the_folder_restores_them() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let other = root.path().join("other");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let project_path = project.to_str().unwrap().to_string();
+    let runs = Arc::new(AtomicUsize::new(0));
+    // Held runs stay live until interrupted, so removal must stop one.
+    let core = assemble(root.path(), runs.clone(), true);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    for (id, path) in [("project-a", &project), ("project-b", &other)] {
+        client
+            .call(
+                methods::MUTATE,
+                serde_json::json!({
+                    "op": "createSpace", "spaceId": id,
+                    "deviceId": core.device_id, "path": path,
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    create_task_in_space(&client, "open-a", "project-a", &project).await;
+    create_task_in_space(&client, "archived-a", "project-a", &project).await;
+    create_task_in_space(&client, "keep-b", "project-b", &other).await;
+    core.workspace
+        .set_chat_archived("archived-a", true)
+        .unwrap();
+    run_once(&client, "open-a", "open-a-first-run", "first turn").await;
+    assert!(core.sessions.has_live_run("open-a"));
+    let before = core.workspace.chat("open-a").unwrap().unwrap();
+
+    let mut chats = client
+        .subscribe(methods::WATCH_CHATS, serde_json::json!({}))
+        .await
+        .unwrap();
+    chats_frame_where(&mut chats, |ids| ids.iter().any(|id| id == "open-a")).await;
+
+    // Remove: the live run stops, the project and its sessions leave every
+    // client-facing list, and nothing is deleted.
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({ "op": "removeSpace", "spaceId": "project-a" }),
+        )
+        .await
+        .unwrap();
+    assert!(!core.sessions.has_live_run("open-a"));
+    let hidden = chats_frame_where(&mut chats, |ids| {
+        !ids.iter().any(|id| id == "open-a" || id == "archived-a")
+    })
+    .await;
+    assert!(hidden.iter().any(|row| row["id"] == "keep-b"));
+    let removed = core.workspace.space("project-a").unwrap().unwrap();
+    assert!(removed.is_removed());
+    for task_id in ["open-a", "archived-a"] {
+        let row = core.workspace.chat(task_id).unwrap().unwrap();
+        assert_eq!(row.space_id.as_deref(), Some("project-a"));
+        assert!(
+            core.task_identity
+                .view(task_id)
+                .is_none_or(|view| !view.task.tombstoned)
+        );
+    }
+    assert!(core.workspace.chat("archived-a").unwrap().unwrap().archived);
+    let kept = core.workspace.chat("open-a").unwrap().unwrap();
+    assert_eq!(kept.harness_session_id, before.harness_session_id);
+    assert_eq!(kept.title, before.title);
+    assert!(core.store.has_snapshot("open-a").unwrap());
+    // The project row stays visible to clients as removed so re-adding the
+    // folder can restore it.
+    let mut spaces = client
+        .subscribe(methods::WATCH_SPACES, serde_json::json!({}))
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(5), spaces.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let row = frame
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "project-a")
+        .cloned()
+        .expect("removed project row");
+    assert!(row["removedAt"].is_string(), "{row}");
+    // Moving another task into a removed project would hide it.
+    let move_in = execute(
+        &client,
+        envelope(
+            "move-into-removed",
+            "keep-b",
+            Some(&snapshot(&client, "keep-b").await),
+            serde_json::json!({"kind":"moveProject","destinationSpaceId":"project-a"}),
+        ),
+    )
+    .await;
+    assert_ne!(move_in.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.workspace
+            .chat("keep-b")
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("project-b")
+    );
+
+    // Re-add the same folder under a freshly minted id (a client that never
+    // saw the removed row): the original project comes back instead.
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "createSpace", "spaceId": "minted-elsewhere",
+                "deviceId": core.device_id, "path": project_path,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(core.workspace.space("minted-elsewhere").unwrap().is_none());
+    assert!(
+        !core
+            .workspace
+            .space("project-a")
+            .unwrap()
+            .unwrap()
+            .is_removed()
+    );
+    let restored = chats_frame_where(&mut chats, |ids| {
+        ids.iter().any(|id| id == "open-a") && ids.iter().any(|id| id == "archived-a")
+    })
+    .await;
+    for row in &restored {
+        if row["id"] == "open-a" || row["id"] == "archived-a" {
+            assert_eq!(row["spaceId"], "project-a");
+        }
+    }
+
+    // Remove again and restore by the original id (the desktop path).
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({ "op": "removeSpace", "spaceId": "project-a" }),
+        )
+        .await
+        .unwrap();
+    chats_frame_where(&mut chats, |ids| !ids.iter().any(|id| id == "open-a")).await;
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "createSpace", "spaceId": "project-a",
+                "deviceId": core.device_id, "path": project_path,
+            }),
+        )
+        .await
+        .unwrap();
+    chats_frame_where(&mut chats, |ids| ids.iter().any(|id| id == "open-a")).await;
+    assert_eq!(
+        core.workspace
+            .read_spaces()
+            .unwrap()
+            .iter()
+            .filter(|space| space.path == project_path)
+            .count(),
+        1,
+        "restoring never duplicates the project"
+    );
+
+    // The restored session continues.
+    let runs_before = runs.load(Ordering::SeqCst);
+    run_once(&client, "open-a", "open-a-after-restore", "second turn").await;
+    wait_for_run_count(&runs, runs_before + 1).await;
+    assert!(core.sessions.has_live_run("open-a"));
+    core.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_cleanup_failure_resumes_from_durable_child_list() {
     let root = tempfile::tempdir().unwrap();

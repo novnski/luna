@@ -967,8 +967,12 @@ pub struct AppState {
     /// frame. The default `Disabled` value is only a placeholder and must not
     /// seed notification decisions before the watch is authoritative.
     pub(crate) connectivity_observed: bool,
-    /// Sorted (see [`sort_spaces`]).
+    /// Sorted (see [`sort_spaces`]). Live projects only.
     pub spaces: Vec<Space>,
+    /// Projects the user removed. Hidden everywhere (the engine also drops
+    /// their sessions from `WatchChats`); kept so re-adding the same folder
+    /// restores the original project and its sessions.
+    pub removed_spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
     pub(crate) chat_reference_version: u64,
@@ -1417,6 +1421,7 @@ impl AppState {
             connectivity: luna_proto::Connectivity::default(),
             connectivity_observed: false,
             spaces: Vec::new(),
+            removed_spaces: Vec::new(),
             chats: Vec::new(),
             chat_reference_version: 0,
             chat_reference_cache: None,
@@ -1689,7 +1694,10 @@ impl AppState {
         changed
     }
 
-    pub fn apply_spaces(&mut self, mut spaces: Vec<Space>) {
+    pub fn apply_spaces(&mut self, spaces: Vec<Space>) {
+        let (removed, mut spaces): (Vec<_>, Vec<_>) =
+            spaces.into_iter().partition(Space::is_removed);
+        self.removed_spaces = removed;
         sort_spaces(&mut spaces);
         if spaces.len() != self.spaces.len()
             || spaces
@@ -4953,6 +4961,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             created_at: base + TimeDelta::minutes(created_min),
+            removed_at: None,
         }
     }
 

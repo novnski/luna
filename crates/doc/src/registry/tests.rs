@@ -298,6 +298,7 @@ fn space(id: &str, device_id: &str, path: &str) -> Space {
         git_checked_at: None,
         checkout_id: None,
         created_at: ts(1_500),
+        removed_at: None,
     }
 }
 

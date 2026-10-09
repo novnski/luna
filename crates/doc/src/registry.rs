@@ -778,6 +778,7 @@ impl RegistryDoc {
                 serde_json::to_value(&space.execution_defaults)?,
             ),
             ("createdAt", json!(space.created_at.timestamp_millis())),
+            ("removedAt", opt_ms(space.removed_at)),
         ]);
         self.write(KIND_SPACES, &space.id.clone(), OpKind::Upsert, set);
         Ok(())
@@ -829,6 +830,26 @@ impl RegistryDoc {
             space_id,
             OpKind::Update,
             fields([("executionDefaults", serde_json::to_value(defaults)?)]),
+        );
+        Ok(true)
+    }
+
+    /// Hide (`Some`) or restore (`None`) a project without touching its
+    /// sessions. A targeted field update, so a concurrent rename or git stamp
+    /// from another device survives. `false` when no such row.
+    pub fn set_space_removed(
+        &mut self,
+        space_id: &str,
+        removed_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_SPACES, space_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_SPACES,
+            space_id,
+            OpKind::Update,
+            fields([("removedAt", opt_ms(removed_at))]),
         );
         Ok(true)
     }

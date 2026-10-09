@@ -310,6 +310,7 @@ fn space(id: &str, name: &str) -> luna_proto::Space {
         checkout_id: None,
         execution_defaults: Default::default(),
         created_at: Utc::now() - TimeDelta::days(30),
+        removed_at: None,
     }
 }
 
