@@ -291,34 +291,3 @@ async fn main() {
 
     println!("PASS: two-device e2e smoke complete");
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transcript_reset_frame_is_materialized() {
-        let mut transcript = Vec::new();
-        apply_transcript_item(
-            &mut transcript,
-            &serde_json::json!({
-                "reset": [{
-                    "id": "assistant-1",
-                    "role": "assistant",
-                    "parts": [{ "kind": "text", "id": "t0", "text": MOCK_TEXT }],
-                    "createdAt": 1,
-                    "deviceId": "device-a",
-                    "status": "complete"
-                }]
-            }),
-        )
-        .expect("reset frame");
-
-        assert_eq!(transcript.len(), 1);
-        assert_eq!(transcript[0].device_id, "device-a");
-        assert_eq!(
-            transcript[0].status,
-            Some(luna_doc::MessageStatus::Complete)
-        );
-    }
-}

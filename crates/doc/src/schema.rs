@@ -1866,23 +1866,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_message_entries() {
-        let doc = SessionDoc::init("chat-1").unwrap();
-        doc.push_message(&user_entry("m1", "hello")).unwrap();
-        let entries = doc.read_entries().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "m1");
-        assert_eq!(
-            entries[0].parts,
-            vec![MessagePart::Text {
-                id: "t0".into(),
-                text: "hello".into()
-            }]
-        );
-        assert_eq!(doc.chat_id().as_deref(), Some("chat-1"));
-    }
-
-    #[test]
     fn conversation_replacement_keeps_non_conversation_state() {
         let doc = SessionDoc::init("chat-history-rewrite").unwrap();
         doc.push_message(&user_entry("old", "old text")).unwrap();
@@ -2360,7 +2343,7 @@ mod tests {
                 }),
             },
         );
-        crate::parts::apply_sidecar_refs("chat-2", &mut folded);
+        crate::parts::apply_journal_output_refs("chat-2", &mut folded);
         writer.sync(&folded).unwrap();
         writer.finish(&folded, MessageStatus::Complete).unwrap();
 
@@ -2459,10 +2442,12 @@ mod tests {
     fn command_queue_and_outcome_round_trip() {
         use crate::commands::{SessionCommandPayload, SessionCommandStatus};
         let doc = SessionDoc::init("chat-1").unwrap();
+        // A non-empty attachment list proves payload arrays survive the Loro
+        // ledger conversion, not only serde.
         let entry = SessionCommandEntry {
             id: "c1".into(),
             payload: SessionCommandPayload::Steer {
-                attachments: Vec::new(),
+                attachments: vec!["/tmp/a.png".into()],
                 input_items: Vec::new(),
                 prompt: "focus".into(),
                 message_id: None,

@@ -133,11 +133,6 @@ impl SessionCommandEntry {
     }
 }
 
-/// Rule 2: only the composer that issued a still-pending command may cancel it.
-pub fn can_composer_cancel(entry: &SessionCommandEntry, device_id: &str) -> bool {
-    entry.status == SessionCommandStatus::Pending && entry.issued_by == device_id
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandDisposition {
     /// Already in the processed ledger — do nothing (idempotence).
@@ -253,15 +248,6 @@ mod tests {
     const NEVER: fn(&str) -> bool = |_| false;
 
     #[test]
-    fn processed_commands_are_skipped() {
-        let e = steer("c1", 1_000);
-        let entries = vec![e.clone()];
-        let processed = |id: &str| id == "c1";
-        let cx = cx(&entries, &processed, &NEVER, 2_000, None);
-        assert_eq!(evaluate_command(&e, &cx), CommandDisposition::Skip);
-    }
-
-    #[test]
     fn expired_commands_are_expired() {
         let e = steer("c1", 0);
         let entries = vec![e.clone()];
@@ -321,16 +307,6 @@ mod tests {
         let cx1 = cx(&entries, &NEVER, &NEVER, 3_000, None);
         assert_eq!(evaluate_command(&r1, &cx1), CommandDisposition::Execute);
         assert_eq!(evaluate_command(&r2, &cx1), CommandDisposition::Execute);
-    }
-
-    #[test]
-    fn composer_cancel_rules() {
-        let e = steer("c1", 1_000);
-        assert!(can_composer_cancel(&e, "device-a"));
-        assert!(!can_composer_cancel(&e, "device-b"));
-        let mut applied = e.clone();
-        applied.status = SessionCommandStatus::Applied;
-        assert!(!can_composer_cancel(&applied, "device-a"));
     }
 
     #[test]

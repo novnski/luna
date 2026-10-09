@@ -1,4 +1,4 @@
-//! Message parts: the event fold, the render-only privacy policy, and continuation splitting.
+//! Message parts: the event fold and the render-only privacy policy.
 //!
 //! Ports of `packages/control/src/parts.ts` (fold) and
 //! `packages/session-doc/src/{render-parts,messages}.ts`.
@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use luna_proto::{
     AgentEvent, SUBAGENT_INPUT_KEEP, ToolActivityKind, ToolCall, ToolDiff, UserInputQuestion,
 };
-
-use crate::constants::MSG_INLINE_MAX;
 
 /// Char cap for the tool-output SUMMARY persisted into the doc: first
 /// non-empty line, nothing more. The per-part 4KB cap (c951c3e) bounded each
@@ -955,34 +953,12 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
     }
 }
 
-/// Stamp sidecar keys onto resolved tool parts that have sidecar content.
+/// Point full output and diff details at the owning host's run journal.
 ///
 /// Separate from the fold because the fold is chat-agnostic and pure; the
 /// caller (who knows the chat id) runs this right after each fold step, before
-/// the parts hit the doc. Idempotent. Key shape `{chatId}/{partId}` (+
-/// `.diff`) matches the edge's `/blob/{chatId}/{partId}` route.
-pub fn apply_sidecar_refs(chat_id: &str, parts: &mut [MessagePart]) {
-    for part in parts.iter_mut() {
-        if let MessagePart::Tool {
-            id,
-            output_ref,
-            output_bytes,
-            diff_ref,
-            diff_stats,
-            ..
-        } = part
-        {
-            if output_ref.is_none() && output_bytes.is_some() {
-                *output_ref = Some(format!("{chat_id}/{id}"));
-            }
-            if diff_ref.is_none() && diff_stats.is_some() {
-                *diff_ref = Some(format!("{chat_id}/{id}.diff"));
-            }
-        }
-    }
-}
-
-/// Point full output and diff details at the owning host's run journal.
+/// the parts hit the doc. Stamps only parts that have stripped content, and is
+/// idempotent. Key shape `{chatId}/{partId}` (+ `.diff`).
 pub fn apply_journal_output_refs(chat_id: &str, parts: &mut [MessagePart]) {
     for part in parts.iter_mut() {
         if let MessagePart::Tool {
@@ -1004,32 +980,13 @@ pub fn apply_journal_output_refs(chat_id: &str, parts: &mut [MessagePart]) {
     }
 }
 
-/// What a [`AgentEvent::ToolResult`] owes the sidecar: the full output text
-/// and/or the full diff (as JSON), keyed by part id. `None` when the event
-/// carries nothing worth uploading.
+/// What a tool result owes the sidecar: the full output text and/or the full
+/// diff (as JSON), keyed by part id.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidecarPayload {
     pub part_id: String,
     pub output: Option<String>,
     pub diff: Option<ToolDiff>,
-}
-
-pub fn sidecar_payload(event: &AgentEvent) -> Option<SidecarPayload> {
-    let AgentEvent::ToolResult {
-        id, output, diff, ..
-    } = event
-    else {
-        return None;
-    };
-    let output = output.clone().filter(|o| !o.trim().is_empty());
-    if output.is_none() && diff.is_none() {
-        return None;
-    }
-    Some(SidecarPayload {
-        part_id: id.clone(),
-        output,
-        diff: diff.clone(),
-    })
 }
 
 /// Render-only privacy policy — strip heavy/sensitive tool inputs before a call enters the doc.
@@ -1093,83 +1050,6 @@ fn spawn_badge(call: &ToolCall) -> Option<serde_json::Value> {
         })
         .collect();
     (!kept.is_empty()).then(|| serde_json::Value::Object(kept))
-}
-
-/// Deterministic continuation id: `"{root}#c{n}"`.
-pub fn continuation_id(root: &str, index: usize) -> String {
-    format!("{root}#c{index}")
-}
-
-/// Split an oversized parts list into chunks each under `MSG_INLINE_MAX` bytes.
-///
-/// Splitting happens at part boundaries; an oversized text part is itself chunked at char
-/// boundaries. Returns one Vec per resulting entry — the first keeps the root id, the rest are
-/// continuations (`continuation_id(root, i)`), matching `splitMessageEntry` in luna.
-pub fn split_parts(parts: &[MessagePart]) -> Vec<Vec<MessagePart>> {
-    let mut chunks: Vec<Vec<MessagePart>> = vec![Vec::new()];
-    let mut current_bytes = 0usize;
-
-    let push_part = |chunks: &mut Vec<Vec<MessagePart>>, current: &mut usize, part: MessagePart| {
-        let len = part.byte_len();
-        if *current > 0 && *current + len > MSG_INLINE_MAX {
-            chunks.push(Vec::new());
-            *current = 0;
-        }
-        *current += len;
-        chunks.last_mut().unwrap().push(part);
-    };
-
-    for part in parts {
-        // Both text-bodied kinds chunk the same way; extended thinking can
-        // exceed the cap just as easily as a long reply.
-        let (id, text, reasoning) = match part {
-            MessagePart::Text { id, text } if text.len() > MSG_INLINE_MAX => (id, text, false),
-            MessagePart::Reasoning { id, text } if text.len() > MSG_INLINE_MAX => (id, text, true),
-            other => {
-                push_part(&mut chunks, &mut current_bytes, other.clone());
-                continue;
-            }
-        };
-        // Chunk oversized text at char boundaries.
-        let mut start = 0usize;
-        let mut piece = 0usize;
-        while start < text.len() {
-            let mut end = (start + MSG_INLINE_MAX).min(text.len());
-            while end < text.len() && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            // Guard: ensure forward progress on pathological boundaries.
-            if end <= start {
-                end = text.len();
-            }
-            let sub_id = if piece == 0 {
-                id.clone()
-            } else {
-                format!("{id}~{piece}")
-            };
-            let body = text[start..end].to_string();
-            let sub = if reasoning {
-                MessagePart::Reasoning {
-                    id: sub_id,
-                    text: body,
-                }
-            } else {
-                MessagePart::Text {
-                    id: sub_id,
-                    text: body,
-                }
-            };
-            push_part(&mut chunks, &mut current_bytes, sub);
-            start = end;
-            piece += 1;
-        }
-    }
-    chunks
-}
-
-/// Render-time inverse of splitting: concatenate continuation entries' parts in list order.
-pub fn join_continuations(entries: Vec<Vec<MessagePart>>) -> Vec<MessagePart> {
-    entries.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
@@ -1292,24 +1172,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_reasoning_splits_like_text() {
-        let big = "x".repeat(MSG_INLINE_MAX + 10);
-        let parts = vec![MessagePart::Reasoning {
-            id: "r0".into(),
-            text: big,
-        }];
-        let chunks = split_parts(&parts);
-        let flat = join_continuations(chunks);
-        assert!(flat.len() >= 2, "{}", flat.len());
-        assert!(
-            flat.iter()
-                .all(|p| matches!(p, MessagePart::Reasoning { .. }))
-        );
-        assert!(flat.iter().all(|p| p.byte_len() <= MSG_INLINE_MAX));
-        assert_eq!(flat[1].id(), "r0~1");
-    }
-
-    #[test]
     fn generated_image_fold_is_ordered_atomic_and_idempotent() {
         let mut parts = vec![];
         fold_event_into_parts(&mut parts, &text_delta("before"));
@@ -1334,7 +1196,6 @@ mod tests {
         fold_event_into_parts(&mut parts, &event);
         assert_eq!(parts.len(), 4);
         assert!(matches!(&parts[2], MessagePart::Image { id, .. } if id == "i:image"));
-        assert_eq!(join_continuations(split_parts(&parts)), parts);
     }
 
     #[test]
@@ -1376,21 +1237,6 @@ mod tests {
             },
         );
         assert!(parts.is_empty());
-    }
-
-    #[test]
-    fn tool_call_refresh_is_idempotent() {
-        let call = AgentEvent::ToolCall {
-            id: "t".into(),
-            call: ToolCall::Exec {
-                command: "ls".into(),
-            },
-        };
-        let mut once = Vec::new();
-        fold_event_into_parts(&mut once, &call);
-        let mut twice = once.clone();
-        fold_event_into_parts(&mut twice, &call);
-        assert_eq!(once, twice);
     }
 
     #[test]
@@ -1506,60 +1352,6 @@ mod tests {
         assert_eq!(clean.subagent_model(), None);
     }
 
-    #[test]
-    fn split_and_join_round_trip() {
-        let big = "x".repeat(MSG_INLINE_MAX * 2 + 100);
-        let parts = vec![
-            MessagePart::Text {
-                id: "t0".into(),
-                text: big.clone(),
-            },
-            MessagePart::Tool {
-                id: "tool-1".into(),
-                call: ToolCall::Exec {
-                    command: "ls".into(),
-                },
-                is_error: false,
-                resolved: true,
-                output: None,
-                diff: None,
-                output_ref: None,
-                output_bytes: None,
-                diff_ref: None,
-                diff_stats: None,
-                subagent_ref: None,
-                subagent_status: None,
-                subagent_tail: None,
-                subagent_activity: None,
-            },
-        ];
-        let chunks = split_parts(&parts);
-        assert!(
-            chunks.len() >= 3,
-            "expected >=3 chunks, got {}",
-            chunks.len()
-        );
-        for chunk in &chunks {
-            let bytes: usize = chunk.iter().map(|p| p.byte_len()).sum();
-            assert!(bytes <= MSG_INLINE_MAX, "chunk over cap: {bytes}");
-        }
-        let joined = join_continuations(chunks);
-        let text: String = joined
-            .iter()
-            .filter_map(|p| match p {
-                MessagePart::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, big);
-        assert!(matches!(joined.last().unwrap(), MessagePart::Tool { .. }));
-    }
-
-    #[test]
-    fn continuation_ids_are_deterministic() {
-        assert_eq!(continuation_id("m1", 1), "m1#c1");
-    }
-
     // ── A1 strip (docs/chat2-sync.md) ───────────────────────────────────────
 
     #[test]
@@ -1645,7 +1437,7 @@ mod tests {
                 }),
             },
         );
-        apply_sidecar_refs("chat-9", &mut parts);
+        apply_journal_output_refs("chat-9", &mut parts);
         match &parts[0] {
             MessagePart::Tool {
                 output,
@@ -1680,7 +1472,7 @@ mod tests {
             },
         );
         // Unresolved: no refs yet.
-        apply_sidecar_refs("chat-9", &mut parts);
+        apply_journal_output_refs("chat-9", &mut parts);
         assert!(matches!(
             &parts[0],
             MessagePart::Tool {
@@ -1703,8 +1495,8 @@ mod tests {
                 }),
             },
         );
-        apply_sidecar_refs("chat-9", &mut parts);
-        apply_sidecar_refs("chat-9", &mut parts); // idempotent
+        apply_journal_output_refs("chat-9", &mut parts);
+        apply_journal_output_refs("chat-9", &mut parts); // idempotent
         match &parts[0] {
             MessagePart::Tool {
                 output,
@@ -1949,32 +1741,5 @@ mod tests {
             } => assert_eq!(*subagent_status, None),
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn sidecar_payload_carries_full_texts() {
-        assert_eq!(
-            sidecar_payload(&AgentEvent::TextDelta { text: "x".into() }),
-            None
-        );
-        assert_eq!(
-            sidecar_payload(&AgentEvent::ToolResult {
-                id: "t".into(),
-                is_error: false,
-                output: Some("   \n".into()),
-                diff: None,
-            }),
-            None,
-            "blank output uploads nothing"
-        );
-        let payload = sidecar_payload(&AgentEvent::ToolResult {
-            id: "t".into(),
-            is_error: true,
-            output: Some("full output".into()),
-            diff: None,
-        })
-        .unwrap();
-        assert_eq!(payload.part_id, "t");
-        assert_eq!(payload.output.as_deref(), Some("full output"));
     }
 }

@@ -227,6 +227,13 @@ fn catch_up_plan_covers_the_decision_table() {
         plan_catch_up(2, &state(9, 5), false),
         CatchUpPlan::CheckpointThenRows { after: 5 }
     );
+    // A fresh reader that cannot read the frontier ("Add Tweets", 2026-08-18:
+    // an empty frontier label on a present checkpoint) must fetch it. The
+    // containment check itself is owned by the engine's chat sink.
+    assert_eq!(
+        plan_catch_up(0, &state(75, 5), false),
+        CatchUpPlan::CheckpointThenRows { after: 5 }
+    );
     // Server lost state (cursor ahead of head): cursor is meaningless.
     assert_eq!(
         plan_catch_up(50, &state(3, 0), true),
@@ -382,82 +389,6 @@ async fn missing_frontier_fetches_and_imports_the_checkpoint_first() {
         vec![(b"checkpoint-bytes".to_vec(), 5)]
     );
     assert_eq!(*lock(&sink.rows), vec![(vec![6u8], 6)]);
-    client.shutdown().await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn unacked_pushes_survive_reconnect_and_acks_retire_them() {
-    let (pipe1, mut end1) = pipe_pair();
-    let (pipe2, mut end2) = pipe_pair();
-    let sink = Arc::new(RecordingSink::default());
-    let (fetch, _) = fetcher(b"");
-
-    let empty_state = serde_json::json!({"headSeq": 0, "seqFloor": 0,
-        "checkpointSeq": 0, "checkpointSize": 0, "rowCount": 0, "rowBytes": 0});
-
-    let s1 = tokio::spawn({
-        let state = empty_state.clone();
-        async move {
-            serve_join(&mut end1, state, &[], vec![], false).await;
-            // Receive the push but die before acking — the client must
-            // re-push the SAME batch id on the next session.
-            let push = expect_kind(&mut end1, frame_type::PUSH).await;
-            let batch_id = push.header["batchId"].as_str().unwrap().to_string();
-            assert_eq!(push.payload, vec![0xd1u8]);
-            drop(end1); // socket dies
-            batch_id
-        }
-    });
-
-    let client = ChatClient::connect_with_tuned(
-        connector(vec![pipe1, pipe2]),
-        sink.clone(),
-        fetch,
-        "dev-a",
-        0,
-        ChatTuning::default(),
-    )
-    .await
-    .expect("join succeeds");
-
-    client.enqueue_update(vec![0xd1]);
-    let first_batch = s1.await.unwrap();
-    assert_eq!(
-        client.stats().pending_pushes,
-        1,
-        "unacked batch stays queued"
-    );
-
-    // Second session: same handshake, then the replayed push gets acked.
-    let s2 = tokio::spawn({
-        let state = empty_state.clone();
-        async move {
-            serve_join(&mut end2, state, &[], vec![], true).await;
-            let push = expect_kind(&mut end2, frame_type::PUSH).await;
-            let batch_id = push.header["batchId"].as_str().unwrap().to_string();
-            send(
-                &end2,
-                frame_type::ACK,
-                serde_json::json!({"batchId": batch_id, "seq": 1, "dup": false}),
-                &[],
-            )
-            .await;
-            (batch_id, end2)
-        }
-    });
-    let (replayed_batch, _keep_alive) = s2.await.unwrap();
-    assert_eq!(
-        replayed_batch, first_batch,
-        "reconnect replays the same batch id"
-    );
-
-    // Ack lands asynchronously — wait for the pending queue to drain.
-    let mut events = client.events();
-    while client.stats().pending_pushes > 0 {
-        let _ = events.recv().await;
-    }
-    assert_eq!(client.stats().cursor, 1, "ack advanced the cursor");
-    assert_eq!(*lock(&sink.cursor_advances), vec![1]);
     client.shutdown().await;
 }
 
@@ -941,30 +872,6 @@ async fn pending_push_flushes_before_backfill_completes() {
     client.shutdown().await;
 }
 
-/// A checkpoint that EXISTS (size > 0) but whose frontier payload is empty
-/// must be fetched, not skipped: the empty-frontier-means-contained shortcut
-/// made every fresh reader of such a room skip the chat's founding ops and
-/// park all dependent rows invisibly ("Add Tweets" incident, 2026-08-18).
-/// Fetching is always safe (full-state merge); skipping history never is.
-#[test]
-fn empty_frontier_with_real_checkpoint_is_not_contained() {
-    let state = wire::StateHeader {
-        head_seq: 75,
-        seq_floor: 5,
-        checkpoint_seq: 5,
-        checkpoint_size: 2728,
-        row_count: 70,
-        row_bytes: 17150,
-    };
-    // The sink cannot vouch for a frontier it cannot read — an empty payload
-    // must plan a checkpoint fetch for a cursor-0 reader.
-    assert_eq!(
-        plan_catch_up(0, &state, false),
-        CatchUpPlan::CheckpointThenRows { after: 5 },
-        "fresh reader must fetch a present checkpoint when the frontier is unreadable"
-    );
-}
-
 // ── flaky-network suite (durable-by-design §Phase 3) ────────────────────────
 //
 // The deterministic drop harness: a scripted connector where each dial slot
@@ -1029,6 +936,7 @@ async fn drops_and_refused_dials_deliver_the_push_exactly_once() {
             serve_join(&mut end1, state, &[], vec![], false).await;
             let push = expect_kind(&mut end1, frame_type::PUSH).await;
             let batch_id = push.header["batchId"].as_str().unwrap().to_string();
+            assert_eq!(push.payload, vec![0xEEu8]);
             drop(end1); // mid-push socket death: no ack
             batch_id
         }
@@ -1048,6 +956,11 @@ async fn drops_and_refused_dials_deliver_the_push_exactly_once() {
 
     client.enqueue_update(vec![0xEE]);
     let first_batch = s1.await.unwrap();
+    assert_eq!(
+        client.stats().pending_pushes,
+        1,
+        "unacked batch stays queued"
+    );
 
     // The outage narrates: a Disconnected event reaches subscribers.
     let mut saw_disconnect = false;

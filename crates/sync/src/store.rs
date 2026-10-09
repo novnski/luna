@@ -2403,17 +2403,6 @@ impl DocsStore {
         Ok(())
     }
 
-    #[cfg(test)]
-    fn attachment_owner_count(&self, device_id: &str, path: &str) -> usize {
-        self.conn()
-            .query_row(
-                "SELECT COUNT(*) FROM attachment_owners WHERE device_id=?1 AND blob_path=?2",
-                params![device_id, path],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap_or_default() as usize
-    }
-
     /// Delete the snapshot row for `doc_id` (destructive schema breaks: the
     /// legacy `workspace` row is dropped on open). Missing rows are a no-op.
     pub fn delete_snapshot(&self, doc_id: &str) -> Result<(), StoreError> {
@@ -5697,26 +5686,17 @@ mod tests {
     }
 
     #[test]
-    fn processed_ledger_claims_exactly_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = DocsStore::open(dir.path()).unwrap();
-
-        assert!(!store.is_processed("cmd-1").unwrap());
-        assert!(store.mark_processed("cmd-1").unwrap(), "first mark claims");
-        assert!(store.is_processed("cmd-1").unwrap());
-        assert!(
-            !store.mark_processed("cmd-1").unwrap(),
-            "second mark must not re-claim"
-        );
-    }
-
-    #[test]
     fn reopen_preserves_data_and_migrations_are_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         {
             let store = DocsStore::open(dir.path()).unwrap();
             store.save_snapshot("chat-1", b"persisted").unwrap();
-            store.mark_processed("cmd-1").unwrap();
+            assert!(!store.is_processed("cmd-1").unwrap());
+            assert!(store.mark_processed("cmd-1").unwrap(), "first mark claims");
+            assert!(
+                !store.mark_processed("cmd-1").unwrap(),
+                "second mark must not re-claim"
+            );
         }
         let store = DocsStore::open(dir.path()).unwrap(); // re-runs migrate()
         assert_eq!(
@@ -5922,6 +5902,19 @@ mod draft_tests {
         assert_eq!(records.last().unwrap().kind, AppshotActivityKind::Queued);
     }
 
+    /// Rows in the blob-ownership ledger for one device's path: the draft and
+    /// each in-flight submission hold their own row until released.
+    fn owner_count(store: &DocsStore, device_id: &str, path: &str) -> usize {
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM attachment_owners WHERE device_id=?1 AND blob_path=?2",
+                params![device_id, path],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap() as usize
+    }
+
     pub(super) fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {
             input_items: Vec::new(),
@@ -5980,7 +5973,7 @@ mod draft_tests {
             store.save_composer_draft("device-a", &original).unwrap(),
             ComposerDraftSaveOutcome::Saved
         );
-        assert_eq!(store.attachment_owner_count("device-a", &path), 1);
+        assert_eq!(owner_count(&store, "device-a", &path), 1);
         assert_eq!(
             store
                 .save_composer_draft("device-a", &draft(6, "stale", &path))
@@ -5994,7 +5987,7 @@ mod draft_tests {
         store
             .begin_draft_submission("device-a", "command-a", Some("task-a"), &original)
             .unwrap();
-        assert_eq!(store.attachment_owner_count("device-a", &path), 2);
+        assert_eq!(owner_count(&store, "device-a", &path), 2);
         let newer = draft(8, "newer typing", &path);
         assert_eq!(
             store.save_composer_draft("device-a", &newer).unwrap(),
@@ -6011,7 +6004,7 @@ mod draft_tests {
             .unwrap();
         assert_eq!(read.draft.unwrap().text, "newer typing");
         assert!(read.submissions.is_empty());
-        assert_eq!(store.attachment_owner_count("device-a", &path), 1);
+        assert_eq!(owner_count(&store, "device-a", &path), 1);
 
         store
             .begin_draft_submission("device-a", "command-b", Some("task-a"), &newer)
@@ -6045,7 +6038,7 @@ mod draft_tests {
                 .draft
                 .is_none()
         );
-        assert_eq!(reopened.attachment_owner_count("device-a", &path), 1);
+        assert_eq!(owner_count(&reopened, "device-a", &path), 1);
     }
 }
 

@@ -1,7 +1,8 @@
 //! RegistryDoc unit tests. The merge cases mirror
 //! `edge/src/registry-core.test.ts` — shared vectors; change both together.
-//! The typed-API cases mirror `workspace.rs`'s tests so the drop-in claim is
-//! tested, not asserted.
+//! Transport-level convergence is owned by `crates/sync/tests/registry_client.rs`
+//! (and the live-edge `registry_edge.rs`); these cases pin the doc's own
+//! cursor, overlay, persistence and migration rules.
 
 use super::*;
 use luna_proto::{HarnessId, SandboxLevel, SessionStatus};
@@ -606,49 +607,6 @@ fn chat_seen_is_monotonic() {
         Some(ts(5_000))
     );
     assert!(!ws.set_chat_seen("nope", ts(1)).unwrap());
-}
-
-#[test]
-fn two_docs_converge_through_a_server() {
-    let mut a = RegistryDoc::new("dev-a");
-    let mut b = RegistryDoc::new("dev-b");
-    a.upsert_device(&device("dev-a", "laptop")).unwrap();
-    a.upsert_chat(&chat("chat-a", "dev-a")).unwrap();
-    a.upsert_session(&session("chat-a", "dev-a", SessionStatus::Working))
-        .unwrap();
-    b.upsert_device(&device("dev-b", "vps")).unwrap();
-    b.upsert_chat(&chat("chat-b", "dev-b")).unwrap();
-
-    let mut server = HashMap::new();
-    let mut seq = 0u64;
-    server_round(&mut server, &mut seq, &mut [&mut a, &mut b]);
-
-    let sa = a.read_all().unwrap();
-    let sb = b.read_all().unwrap();
-    assert_eq!(sa, sb);
-    assert_eq!(
-        sa.devices.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-        vec!["dev-a", "dev-b"]
-    );
-    assert_eq!(
-        sa.chats.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
-        vec!["chat-a", "chat-b"]
-    );
-    assert_eq!(sa.sessions.len(), 1);
-    assert_eq!(a.pending_len(), 0);
-    assert_eq!(b.pending_len(), 0);
-
-    // Concurrent same-field rename settles identically on both.
-    a.rename_chat("chat-a", "from a").unwrap();
-    b.rename_chat("chat-a", "from b").unwrap();
-    server_round(&mut server, &mut seq, &mut [&mut a, &mut b]);
-    let title_a = a.chat("chat-a").unwrap().unwrap().title;
-    let title_b = b.chat("chat-a").unwrap().unwrap().title;
-    assert_eq!(title_a, title_b);
-    assert!(matches!(
-        title_a.as_deref(),
-        Some("from a") | Some("from b")
-    ));
 }
 
 /// The command plane outruns the registry channel: the host's

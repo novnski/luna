@@ -184,8 +184,12 @@ async fn cursor_delta_sync_on_reconnect() {
     client_a.shutdown().await;
 }
 
+/// An acked write is retired: it pushes exactly one batch, and a later
+/// reconnect with nothing pending pushes nothing. Replaying an UNACKED batch
+/// as a no-op is owned by the merge layer (`luna-doc` registry
+/// `reconnect_replay_is_idempotent`).
 #[tokio::test]
-async fn unacked_writes_replay_idempotently_after_reconnect() {
+async fn acked_write_is_not_re_pushed_on_reconnect() {
     let server = MockRegistryServer::start().await;
     let doc = new_doc("dev-a");
     {
@@ -199,8 +203,6 @@ async fn unacked_writes_replay_idempotently_after_reconnect() {
     wait_until(|| doc.lock().unwrap().pending_len() == 0).await;
     let seq_before = server.seq();
 
-    // Simulate an ack lost to a dropped connection: mark the pending batch
-    // un-flighted and replay it through a fresh session.
     {
         let mut d = doc.lock().unwrap();
         d.rename_chat("chat-1", "replayed").unwrap();
@@ -211,10 +213,7 @@ async fn unacked_writes_replay_idempotently_after_reconnect() {
     assert_eq!(seq_after_first, seq_before + 1);
     client.shutdown().await;
 
-    // Manually re-enqueue the same logical write (same value, fresh clock
-    // would win; instead we assert the SERVER state is unchanged when the
-    // exact same batch replays — covered at the merge layer — and that a
-    // reconnect with nothing pending doesn't grow seq).
+    // A fresh session must not re-push the retired batch.
     let client = RegistryClient::connect(&server.url(), doc.clone(), "dev-a")
         .await
         .expect("reconnects");

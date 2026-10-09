@@ -138,7 +138,7 @@ fn next_schema_is_rejected_before_wal_or_migration_changes() {
         Err(error) => error.to_string(),
     };
     assert!(
-        error.contains("17") && error.contains("supported 16"),
+        error.contains("17") && error.contains("newer") && error.contains("supported 16"),
         "{error}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);

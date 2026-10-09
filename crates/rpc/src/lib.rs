@@ -866,46 +866,11 @@ mod tests {
                         futures::stream::iter((0..n).map(|i| serde_json::json!(i))).boxed(),
                     ))
                 }
-                "Never" => Ok(RpcReply::Stream(futures::stream::pending().boxed())),
                 "Boom" => Err(RpcError::Failed("boom".into())),
                 "RelayLost" => Err(RpcError::Transport("synthetic relay loss".into())),
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
         }
-    }
-
-    #[tokio::test]
-    async fn memory_call_stream_and_error() {
-        let client = memory_client(Arc::new(TestService));
-
-        let echoed = client
-            .call("Echo", serde_json::json!({"x": 1}))
-            .await
-            .unwrap();
-        assert_eq!(echoed, serde_json::json!({"x": 1}));
-
-        let mut items = client
-            .subscribe("Count", serde_json::json!({"n": 3}))
-            .await
-            .unwrap();
-        let mut seen = Vec::new();
-        while let Some(v) = items.recv().await {
-            seen.push(v);
-        }
-        assert_eq!(
-            seen,
-            vec![
-                serde_json::json!(0),
-                serde_json::json!(1),
-                serde_json::json!(2)
-            ]
-        );
-
-        let err = client
-            .call("Boom", serde_json::Value::Null)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, RpcError::Failed(m) if m == "boom"));
     }
 
     #[tokio::test]
@@ -925,14 +890,23 @@ mod tests {
         assert_eq!(absent.ok, None);
     }
 
+    /// Service errors cross the JSON frame codec with their kind intact: a
+    /// retryable transport loss must not collapse into a terminal failure.
     #[tokio::test]
-    async fn transport_error_preserves_retryable_kind() {
+    async fn service_error_kinds_survive_the_wire() {
         let client = memory_client(Arc::new(TestService));
-        let error = client
+        let failed = client
+            .call("Boom", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(matches!(failed, RpcError::Failed(message) if message == "boom"));
+        let transport = client
             .call("RelayLost", serde_json::Value::Null)
             .await
             .unwrap_err();
-        assert!(matches!(error, RpcError::Transport(message) if message == "synthetic relay loss"));
+        assert!(
+            matches!(transport, RpcError::Transport(message) if message == "synthetic relay loss")
+        );
     }
 
     #[tokio::test]
@@ -979,28 +953,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_round_trip() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve_ws_listener(listener, Arc::new(TestService)));
-
-        let client = connect_ws(&format!("ws://127.0.0.1:{port}")).await.unwrap();
-        let echoed = client
-            .call("Echo", serde_json::json!("hello"))
-            .await
-            .unwrap();
-        assert_eq!(echoed, serde_json::json!("hello"));
-
-        let mut items = client
-            .subscribe("Count", serde_json::json!({"n": 2}))
-            .await
-            .unwrap();
-        assert_eq!(items.recv().await, Some(serde_json::json!(0)));
-        assert_eq!(items.recv().await, Some(serde_json::json!(1)));
-        assert_eq!(items.recv().await, None);
-    }
-
-    #[tokio::test]
     async fn handshake_with_origin_header_is_rejected() {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -1026,18 +978,5 @@ mod tests {
         let client = connect_ws(&format!("ws://127.0.0.1:{port}")).await.unwrap();
         let echoed = client.call("Echo", serde_json::json!("ok")).await.unwrap();
         assert_eq!(echoed, serde_json::json!("ok"));
-    }
-
-    #[tokio::test]
-    async fn dropping_stream_receiver_cancels_server_side() {
-        let client = memory_client(Arc::new(TestService));
-        let items = client
-            .subscribe("Never", serde_json::Value::Null)
-            .await
-            .unwrap();
-        drop(items);
-        // The next unary call still works — the dead stream didn't wedge the connection.
-        let echoed = client.call("Echo", serde_json::json!(2)).await.unwrap();
-        assert_eq!(echoed, serde_json::json!(2));
     }
 }

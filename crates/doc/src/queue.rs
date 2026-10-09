@@ -222,24 +222,6 @@ impl SessionDoc {
         Ok(())
     }
 
-    /// Put a row back at `index` (clamped). The host's undo for a send that
-    /// failed after the row was taken: it goes back where it was rather than to
-    /// the back of the queue, so a failed "send now" doesn't demote the message
-    /// the user just called urgent.
-    pub fn insert_queued(&self, index: usize, item: &QueuedMessage) -> Result<(), DocError> {
-        if item.id.trim().is_empty() {
-            return Err(DocError::Schema("queued message id required".into()));
-        }
-        if item.text.trim().is_empty() {
-            return Err(DocError::Schema("queued message text required".into()));
-        }
-        let queue = self.doc().get_movable_list("queue");
-        let map = queue.insert_container(index.min(queue.len()), loro::LoroMap::new())?;
-        write_queued_map(&map, item)?;
-        self.doc().commit();
-        Ok(())
-    }
-
     /// Retype one row. Empty text means "I don't want to send this after all",
     /// so the row goes — that is the delete gesture, not an error.
     /// `false` when the row is missing, already claimed, or unchanged.
@@ -375,34 +357,14 @@ impl SessionDoc {
         Ok(held)
     }
 
-    /// Resolve an edit in one document commit. `None` cancels and preserves
-    /// the old text; an empty replacement discards the row; any other value
-    /// updates the text and clears the delivery gate atomically.
+    /// Resolve an edit in one document commit. A `None` replacement cancels
+    /// and preserves the old text; an empty replacement discards the row; any
+    /// other value updates the text and clears the delivery gate atomically.
+    /// Attachment paths and input items ride the same commit: `None` preserves
+    /// them for older clients; an empty slice explicitly removes them.
     ///
     /// Lease ownership is deliberately checked by `DocHost` while holding
     /// its drain lock immediately before this method is called.
-    pub fn finish_queued_edit(
-        &self,
-        id: &str,
-        replacement: Option<&str>,
-        now_ms: i64,
-    ) -> Result<bool, DocError> {
-        self.finish_queued_edit_with_attachments(id, replacement, None, now_ms)
-    }
-
-    /// Replace text and optional attachment paths in the same CRDT commit
-    /// that releases the row. `None` preserves attachments for older clients;
-    /// an empty slice explicitly removes all attachments.
-    pub fn finish_queued_edit_with_attachments(
-        &self,
-        id: &str,
-        replacement: Option<&str>,
-        attachments: Option<&[String]>,
-        now_ms: i64,
-    ) -> Result<bool, DocError> {
-        self.finish_queued_edit_with_inputs(id, replacement, attachments, None, now_ms)
-    }
-
     pub fn finish_queued_edit_with_inputs(
         &self,
         id: &str,
@@ -768,36 +730,6 @@ impl SessionDoc {
         self.doc().commit();
         Ok(self.read_queue()?.into_iter().find(|item| item.id == id))
     }
-
-    /// Remove a row and hand it back — the host's "send this one" path.
-    /// `None` when it is already gone, which is the race we want: two devices
-    /// popping the same row means exactly one of them gets it.
-    pub fn take_queued(&self, id: &str) -> Result<Option<QueuedMessage>, DocError> {
-        let queue = self.doc().get_movable_list("queue");
-        let Some(index) = index_of(&queue, id) else {
-            return Ok(None);
-        };
-        let item = self.read_queue()?.into_iter().find(|item| item.id == id);
-        // Delivery gates are a model invariant, not merely a UI/engine
-        // convention. This keeps future take call sites from accidentally
-        // sending a row that is being edited or awaiting review.
-        if item.as_ref().is_some_and(|item| {
-            item.delivery_gate.is_some() || !matches!(item.status, QueueMessageStatus::Held)
-        }) {
-            return Ok(None);
-        }
-        queue.delete(index, 1)?;
-        self.doc().commit();
-        Ok(item)
-    }
-
-    /// Remove and return the head — the host's turn-end flush.
-    pub fn take_queue_head(&self) -> Result<Option<QueuedMessage>, DocError> {
-        let Some(head) = self.read_queue()?.into_iter().next() else {
-            return Ok(None);
-        };
-        self.take_queued(&head.id)
-    }
 }
 
 fn index_of(queue: &loro::LoroMovableList, id: &str) -> Option<usize> {
@@ -989,29 +921,6 @@ mod tests {
             .collect()
     }
 
-    /// A send that fails after the row was taken puts it back where it was,
-    /// not at the end: the queue is an order the user chose.
-    #[test]
-    fn insert_restores_a_taken_row_at_the_head() {
-        let doc = doc();
-        for (id, text) in [("q1", "first"), ("q2", "second"), ("q3", "third")] {
-            doc.push_queued(&item(id, text)).unwrap();
-        }
-        let taken = doc.take_queued("q2").unwrap().expect("row taken");
-        assert_eq!(texts(&doc), vec!["first", "third"]);
-
-        doc.insert_queued(0, &taken).unwrap();
-        assert_eq!(texts(&doc), vec!["second", "first", "third"]);
-    }
-
-    #[test]
-    fn insert_past_the_end_appends_rather_than_failing() {
-        let doc = doc();
-        doc.push_queued(&item("q1", "first")).unwrap();
-        doc.insert_queued(99, &item("q2", "second")).unwrap();
-        assert_eq!(texts(&doc), vec!["first", "second"]);
-    }
-
     #[test]
     fn push_and_read_round_trip() {
         let doc = doc();
@@ -1100,7 +1009,7 @@ mod tests {
         assert!(json[0]["deliveryGate"].get("lease_id").is_none());
 
         assert!(
-            doc.finish_queued_edit("q1", Some("revised"), 2_000)
+            doc.finish_queued_edit_with_inputs("q1", Some("revised"), None, None, 2_000)
                 .unwrap()
         );
         let row = doc.read_queue().unwrap().pop().unwrap();
@@ -1120,10 +1029,11 @@ mod tests {
         doc.push_queued(&item("after", "last")).unwrap();
         let paths = vec!["new.png".to_string(), "second.png".to_string()];
         assert!(
-            doc.finish_queued_edit_with_attachments(
+            doc.finish_queued_edit_with_inputs(
                 "edited",
                 Some("new text"),
                 Some(&paths),
+                None,
                 2_000,
             )
             .unwrap()
@@ -1138,7 +1048,7 @@ mod tests {
         assert_eq!(rows[1].issued_at, edited.issued_at);
         assert!(rows[1].hold_for_turn_end);
         assert!(
-            doc.finish_queued_edit_with_attachments("edited", Some("text only"), Some(&[]), 3_000,)
+            doc.finish_queued_edit_with_inputs("edited", Some("text only"), Some(&[]), None, 3_000)
                 .unwrap()
         );
         assert!(doc.read_queue().unwrap()[1].attachments.is_empty());
@@ -1155,13 +1065,19 @@ mod tests {
             base_text_hash: "hash".into(),
         };
         assert!(doc.set_queued_delivery_gate("q1", Some(&review)).unwrap());
-        assert!(doc.finish_queued_edit("q1", None, 3_000).unwrap());
+        assert!(
+            doc.finish_queued_edit_with_inputs("q1", None, None, None, 3_000)
+                .unwrap()
+        );
         let row = doc.read_queue().unwrap().pop().unwrap();
         assert_eq!(row.text, "original");
         assert_eq!(row.delivery_gate, None);
 
         assert!(doc.set_queued_delivery_gate("q1", Some(&review)).unwrap());
-        assert!(doc.finish_queued_edit("q1", Some("  "), 4_000).unwrap());
+        assert!(
+            doc.finish_queued_edit_with_inputs("q1", Some("  "), None, None, 4_000)
+                .unwrap()
+        );
         assert!(doc.read_queue().unwrap().is_empty());
     }
 
@@ -1210,22 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn take_head_pops_in_order_and_take_is_once_only() {
-        let doc = doc();
-        doc.push_queued(&item("q1", "first")).unwrap();
-        doc.push_queued(&item("q2", "second")).unwrap();
-
-        let head = doc.take_queue_head().unwrap().unwrap();
-        assert_eq!(head.text, "first");
-        assert_eq!(texts(&doc), vec!["second"]);
-
-        assert_eq!(doc.take_queued("q2").unwrap().unwrap().text, "second");
-        assert!(doc.take_queued("q2").unwrap().is_none());
-        assert!(doc.take_queue_head().unwrap().is_none());
-    }
-
-    #[test]
-    fn delivery_gate_makes_row_untakeable() {
+    fn delivery_gate_blocks_a_claim() {
         let doc = doc();
         let mut row = item("q1", "still editing");
         row.delivery_gate = Some(QueueDeliveryGate::Editing {
@@ -1238,9 +1139,14 @@ mod tests {
         });
         doc.push_queued(&row).unwrap();
 
-        assert!(doc.take_queued("q1").unwrap().is_none());
-        assert!(doc.take_queue_head().unwrap().is_none());
-        assert_eq!(texts(&doc), vec!["still editing"]);
+        assert!(matches!(
+            doc.claim_queued("q1", 1, "claim-1", QueueClaimMode::SendNow, 2_000)
+                .unwrap(),
+            QueueClaimOutcome::Blocked(_)
+        ));
+        let rows = doc.read_queue().unwrap();
+        assert_eq!(rows[0].text, "still editing");
+        assert!(matches!(rows[0].status, QueueMessageStatus::Held));
     }
 
     #[test]
@@ -1256,8 +1162,12 @@ mod tests {
             "stale removal cannot consume a claimed row"
         );
         assert!(
-            doc.take_queued("q1").unwrap().is_none(),
-            "no second dispatch can take the claim"
+            matches!(
+                doc.claim_queued("q1", 1, "claim-2", QueueClaimMode::SendNow, 2_500)
+                    .unwrap(),
+                QueueClaimOutcome::Blocked(_)
+            ),
+            "no second dispatch can claim the row"
         );
         assert!(matches!(
             doc.claim_queued("q1", 1, "claim-1", QueueClaimMode::SendNow, 3_000)
