@@ -554,13 +554,15 @@ async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
     let send = json!({"id":id,"lease":lease,"messageId":uuid::Uuid::new_v4().to_string(),"text":"SIDE_QUESTION"});
     client.call("SendSideChat", send.clone()).await.unwrap();
     client.call("SendSideChat", send).await.unwrap();
+    // The reply streams into the page while its turn still runs; `working`
+    // clears only once the run has ended and been released.
     let page = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let page = client
                 .call("ReadSideChat", json!({"id":id,"lease":lease}))
                 .await
                 .unwrap();
-            if page.to_string().contains("SIDE_CHAT_ACK") {
+            if page.to_string().contains("SIDE_CHAT_ACK") && page["working"] == false {
                 break page;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
