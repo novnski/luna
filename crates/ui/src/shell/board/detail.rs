@@ -2936,12 +2936,14 @@ async fn reconcile(
 impl Render for BoardDetail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        // The root tracks focus (a press anywhere focuses the drawer, so
+        // Escape reaches it); the header stays put and only the body scrolls.
         let root = div()
             .id("board-detail")
             .track_focus(&self.focus)
             .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll);
+            .flex()
+            .flex_col();
         let detail = match &self.loaded {
             Loaded::Loading => {
                 self.probe.text("detail-loading", "Loading the ticket…");
@@ -3001,15 +3003,29 @@ impl Render for BoardDetail {
         let outcome = evidence::render_evidence(&detail, &ecx);
         let dispatch = evidence::render_dispatch(&detail, self.expanded_launch.as_deref(), &ecx);
         let history = evidence::render_history(&detail, &ecx);
-        let body = div()
+        // Pinned header: key, status, title (or its rename editor) and Close
+        // stay reachable however far the body is scrolled, in any width.
+        let header = div()
+            .id("detail-header")
+            .relative()
+            .flex_none()
             .w_full()
             .px(ui_rems(20.0))
             .pt(ui_rems(14.0))
+            .pb(ui_rems(10.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.bg)
+            .child(self.render_header(&detail, &theme, cx))
+            .children(self.probe.bounds_el("detail-header"));
+        let body = div()
+            .w_full()
+            .px(ui_rems(20.0))
+            .pt(ui_rems(12.0))
             .pb(ui_rems(48.0))
             .flex()
             .flex_col()
             .gap(ui_rems(10.0))
-            .child(self.render_header(&detail, &theme, cx))
             .children(self.render_notice(&theme))
             .children(self.render_attention(&detail, &theme, cx))
             .child(self.render_actions(&detail, &theme, cx))
@@ -3024,8 +3040,24 @@ impl Render for BoardDetail {
             .children(self.render_dependencies(&detail, &theme, cx))
             .children(self.render_archive(&detail, &theme, cx))
             .children(self.probe.bounds_el("detail-body"));
-        root.child(body)
-            .children(self.probe.bounds_el("detail-scroll"))
+        // The scroller fills a non-scrolling frame, whose bounds are the
+        // visible body area (the probe there never moves with the content).
+        let scroller = div()
+            .id("detail-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .child(body);
+        root.child(header)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(scroller)
+                    .children(self.probe.bounds_el("detail-scroll")),
+            )
             .into_any_element()
     }
 }
