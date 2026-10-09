@@ -89,6 +89,31 @@ fn text(entries: &[SessionMessageEntry], role: MessageRole) -> String {
         .collect()
 }
 
+/// A first turn running the fake app-server's `scenario:{scenario}` script.
+fn run_request(dir: &Path, scenario: &str) -> RunRequest {
+    RunRequest {
+        review: None,
+        goal: None,
+        input_items: Vec::new(),
+        prompt: format!("scenario:{scenario}"),
+        harness: None,
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: dir.display().to_string(),
+        sandbox: SandboxLevel::ReadOnly,
+        auto_approve: true,
+        permission_mode: luna_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        attachments: vec![],
+        worktree: None,
+        resume: None,
+    }
+}
+
 async fn check_persistence(
     scenario: &str,
     alpha_status: SubagentStatus,
@@ -102,27 +127,7 @@ async fn check_persistence(
         "v2"
     };
     let (core, profile) = assemble(dir.path(), Some(replay_kind));
-    let request = RunRequest {
-        review: None,
-        goal: None,
-        input_items: Vec::new(),
-        prompt: format!("scenario:{scenario}"),
-        harness: None,
-        provider_account_id: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: dir.path().display().to_string(),
-        sandbox: SandboxLevel::ReadOnly,
-        auto_approve: true,
-        permission_mode: luna_proto::PermissionMode::Ask,
-        parent_permission_ceiling: None,
-        environment_permission_ceiling: None,
-        permission_policy: None,
-        attachments: vec![],
-        worktree: None,
-        resume: None,
-    };
+    let request = run_request(dir.path(), scenario);
     core.sessions
         .dispatch(
             CHAT,
@@ -309,27 +314,7 @@ async fn v2_followup_appends_to_the_original_document_and_updates_the_original_c
 async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let (core, _profile) = assemble(dir.path(), None);
-    let request = RunRequest {
-        review: None,
-        goal: None,
-        input_items: Vec::new(),
-        prompt: "scenario:child-unobserved".into(),
-        harness: None,
-        provider_account_id: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: dir.path().display().to_string(),
-        sandbox: SandboxLevel::ReadOnly,
-        auto_approve: true,
-        permission_mode: luna_proto::PermissionMode::Ask,
-        parent_permission_ceiling: None,
-        environment_permission_ceiling: None,
-        permission_policy: None,
-        attachments: vec![],
-        worktree: None,
-        resume: None,
-    };
+    let request = run_request(dir.path(), "child-unobserved");
     core.sessions
         .dispatch(CHAT, HarnessId::Codex, request, Some("user-prompt".into()))
         .await
@@ -351,6 +336,70 @@ async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
             MessageRole::Assistant
         )
         .contains("still working")
+    );
+    core.shutdown().await;
+}
+
+/// The parent steers a child while the child's read is still running, and
+/// the read completes only after the child answered the steer. Its late
+/// completion (Codex re-announces a classified command, then reports the
+/// result) must resolve the ORIGINAL chip above the steer: before the fix the
+/// steer reset the child's fold, the original chip stayed running forever and
+/// the result either vanished or minted a second chip below the steer.
+#[tokio::test(flavor = "multi_thread")]
+async fn child_tool_finishing_after_a_steer_resolves_its_original_chip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _profile) = assemble(dir.path(), None);
+    let request = run_request(dir.path(), "child-late-result");
+    core.sessions
+        .dispatch(CHAT, HarnessId::Codex, request, Some("user-prompt".into()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if core.sessions.session_status(CHAT)
+                .is_some_and(|status| status.status == SessionStatus::Idle)
+                && entries(&core, CHAT).iter().flat_map(|entry| &entry.parts).any(|part| matches!(part,
+                    MessagePart::Tool { id, subagent_status: Some(SubagentStatus::Done), .. }
+                        if id == "spawn-late"
+                )) { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("parent completes after its child settles");
+    let child = entries(&core, &format!("{CHAT}--sub--spawn-late"));
+    let outline: Vec<String> = child
+        .iter()
+        .map(|entry| {
+            let parts: Vec<String> = entry
+                .parts
+                .iter()
+                .map(|part| match part {
+                    MessagePart::Text { text, .. } => text.trim().to_owned(),
+                    MessagePart::Tool {
+                        id,
+                        resolved,
+                        output,
+                        ..
+                    } => format!(
+                        "tool {id} resolved={resolved} output={}",
+                        output.as_deref().unwrap_or("")
+                    ),
+                    other => other.id().to_owned(),
+                })
+                .collect();
+            format!("{:?}: {}", entry.role, parts.join(" | "))
+        })
+        .collect();
+    assert_eq!(
+        outline,
+        [
+            "User: Read the slow file",
+            "Assistant: tool slow-read resolved=true output=SLOW_READ_OUTPUT",
+            "User: Also summarize it",
+            "Assistant: CHILD_FOLLOW_UP",
+        ],
+        "the late result resolves the original chip above the steer, and the \
+         reply to the steer stays below it without a second chip"
     );
     core.shutdown().await;
 }
