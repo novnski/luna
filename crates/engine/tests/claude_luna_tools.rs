@@ -211,24 +211,21 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
         )
         .await
         .unwrap();
-    let (approvals, status) = tokio::time::timeout(Duration::from_secs(60), async {
-        let approvals = 0;
+    // Built-in coordination must not add permission prompts: any approval
+    // card in this turn fails the test.
+    let status = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             match events.recv().await.unwrap().event {
                 AgentEvent::InputRequested { .. } => {
                     panic!("Ordinary app coordination must not ask again")
                 }
-                AgentEvent::Done { status, .. } => break (approvals, status),
+                AgentEvent::Done { status, .. } => break status,
                 _ => {}
             }
         }
     })
     .await
     .expect("Claude plan turn settled");
-    assert_eq!(
-        approvals, 0,
-        "built-in coordination must not add permission prompts"
-    );
     assert_eq!(status, DoneStatus::Completed);
 
     let run1 = read_results(&project_a, "run1").await;

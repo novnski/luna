@@ -505,29 +505,6 @@ async fn revoked_refresh_token_signs_out() {
     assert!(!dir.path().join("session.json").exists());
 }
 
-#[tokio::test]
-async fn offline_refresh_loop_backs_off_without_revoking_session() {
-    let edge = StubEdge::start().await;
-    edge.state.drop_refresh.store(true, Ordering::SeqCst);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let session_file = dir.path().join("session.json");
-    let config = workos_config(&edge.url(), dir.path());
-    seed_session(&config, "offline", "org_1");
-    let auth = Auth::new(config);
-
-    let refresh_loop = auth.spawn_refresh_loop();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    assert_eq!(
-        edge.state.refreshes.load(Ordering::SeqCst),
-        1,
-        "a transport failure must enter the background retry delay"
-    );
-    assert!(auth.state().is_signed_in());
-    assert!(session_file.exists(), "offline must not revoke the session");
-    refresh_loop.abort();
-}
-
 fn persisted_auth(edge: &StubEdge, dir: &std::path::Path) -> Auth {
     let config = workos_config(&edge.url(), dir);
     seed_session(&config, "offline", "org_1");

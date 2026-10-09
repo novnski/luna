@@ -124,63 +124,45 @@ fn concurrent_engine_info(
         .collect()
 }
 
+/// A fresh device root and a legacy root whose `device-id` file was truncated
+/// must both publish exactly one identity to every concurrent viewport, and
+/// the runtime assembled afterwards must use that same identity.
 #[tokio::test]
 async fn concurrent_engine_info_and_runtime_share_one_device_identity() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config = Arc::new(config(
-        dir.path(),
-        "http://127.0.0.1:1".into(),
-        Some("client_test"),
-        None,
-    ));
-    let announced = concurrent_engine_info(config, 32);
+    for seeded in [None, Some(&b""[..])] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        if let Some(bytes) = seeded {
+            std::fs::write(dir.path().join("device-id"), bytes).expect("seed truncated identity");
+        }
+        let config = Arc::new(config(
+            dir.path(),
+            "http://127.0.0.1:1".into(),
+            Some("client_test"),
+            None,
+        ));
+        let announced = concurrent_engine_info(config, 32);
 
-    assert_eq!(announced.len(), 1, "every viewport announces one identity");
-    let announced = announced.into_iter().next().expect("announced id");
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("device-id"))
-            .expect("persisted device id")
-            .trim(),
-        announced
-    );
+        assert_eq!(
+            announced.len(),
+            1,
+            "every viewport announces one identity (seeded: {seeded:?})"
+        );
+        let announced = announced.into_iter().next().expect("announced id");
+        assert!(!announced.trim().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("device-id"))
+                .expect("persisted device id")
+                .trim(),
+            announced
+        );
 
-    let core = assemble(EngineProfile::local(dir.path()).expect("local profile"));
-    assert_eq!(
-        core.device_id, announced,
-        "the assembled runtime must use the identity already announced"
-    );
-    shutdown(core).await;
-}
-
-#[tokio::test]
-async fn empty_legacy_device_identity_is_repaired_once_for_all_boots() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("device-id"), b"").expect("seed truncated identity");
-    let config = Arc::new(config(
-        dir.path(),
-        "http://127.0.0.1:1".into(),
-        Some("client_test"),
-        None,
-    ));
-
-    let announced = concurrent_engine_info(config, 32);
-    assert_eq!(
-        announced.len(),
-        1,
-        "legacy repair must publish one identity"
-    );
-    let announced = announced.into_iter().next().expect("repaired id");
-    assert!(!announced.trim().is_empty());
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("device-id"))
-            .expect("repaired device id")
-            .trim(),
-        announced
-    );
-
-    let core = assemble(EngineProfile::local(dir.path()).expect("local profile"));
-    assert_eq!(core.device_id, announced);
-    shutdown(core).await;
+        let core = assemble(EngineProfile::local(dir.path()).expect("local profile"));
+        assert_eq!(
+            core.device_id, announced,
+            "the assembled runtime must use the identity already announced"
+        );
+        shutdown(core).await;
+    }
 }
 
 #[tokio::test]

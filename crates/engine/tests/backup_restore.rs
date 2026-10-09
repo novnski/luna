@@ -528,22 +528,9 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
 }
 
 #[test]
-fn managed_offline_backup_refuses_missing_v12_authority_table() {
-    let (_parent, root, _backups) = fixture();
-    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
-    let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
-    conn.execute("DROP TABLE local_executable_authority", [])
-        .unwrap();
-    drop(conn);
-    let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
-    assert!(
-        matches!(result, Err(BackupError::Invalid(message)) if message.contains("missing table local_executable_authority"))
-    );
-}
-
-#[test]
-fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
+fn managed_offline_backup_refuses_missing_required_tables() {
     for table in [
+        "local_executable_authority",
         "project_command_configs",
         "project_command_runs",
         "side_chats",

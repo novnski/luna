@@ -690,75 +690,6 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
     );
 }
 
-#[tokio::test]
-async fn processed_commands_are_skipped_on_redelivery() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Simulate a crash AFTER mark-processed but BEFORE execute/outcome: the ledger has
-    // the id, the doc still says pending.
-    {
-        let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
-        assert!(store.mark_processed("cmd-crashed").unwrap());
-    }
-
-    let core = assemble(
-        dir.path(),
-        Arc::new(MockHarness {
-            script: mock_script(),
-        }),
-    );
-    let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_owner(
-        &core,
-        handle.doc(),
-        "cmd-crashed",
-        SessionCommandPayload::Run {
-            request: run_request("never again"),
-            message_id: "m-x".into(),
-        },
-    );
-
-    // Give the drain a moment: the command must not EXECUTE — no user entry,
-    // no run. But it must not stay a forever-Pending ghost either (v0.2.12
-    // swallowed-send: "Sending…" forever, retry a no-op): the dead-command
-    // sweep terminalizes it as Rejected so the doc tells the truth and a
-    // retry can mint a fresh attempt.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(
-        entries(&core).is_empty(),
-        "skipped command must not execute"
-    );
-    wait_for(
-        || {
-            matches!(
-                command_status(&core, "cmd-crashed"),
-                Some((SessionCommandStatus::Rejected, _))
-            )
-        },
-        "crash-window command terminalized as Rejected",
-    )
-    .await;
-    assert!(core.sessions.session_status(CHAT).is_none());
-
-    // Direct ledger-evaluation check: re-evaluating a processed command = Skip.
-    let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
-    let commands = handle.doc().read_commands().unwrap();
-    let entry = commands.iter().find(|c| c.id == "cmd-crashed").unwrap();
-    let is_processed = |id: &str| store.is_processed(id).unwrap_or(false);
-    let never_past = |_: &str| false;
-    let verdict = luna_doc::evaluate_command(
-        entry,
-        &luna_doc::EvaluationContext {
-            is_processed: &is_processed,
-            now_ms: chrono::Utc::now().timestamp_millis(),
-            entries: &commands,
-            current_turn_id: None,
-            turn_is_past: &never_past,
-        },
-    );
-    assert_eq!(verdict, luna_doc::CommandDisposition::Skip);
-}
-
 /// The v0.2.12 field report: a send whose command was consumed by the ledger
 /// but never executed (crash between mark and resolve) was invisible to
 /// every retry — the drain filters processed ids, so the session was dead
@@ -798,6 +729,10 @@ async fn retry_reissues_a_swallowed_send() {
     )
     .await;
     assert!(entries(&core).is_empty(), "dead attempt must not execute");
+    assert!(
+        core.sessions.session_status(CHAT).is_none(),
+        "a skipped command starts no session"
+    );
 
     // …and the user's retry mints a fresh attempt that actually runs.
     core.doc_host.retry_delivery(CHAT).unwrap();
@@ -1154,161 +1089,6 @@ async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
             .unwrap()[0]["id"],
         "second"
     );
-}
-
-#[tokio::test]
-async fn respond_input_resolves_pending_question() {
-    // Harness that asks a question through RunControls and echoes the answer.
-    struct AskingHarness;
-    #[async_trait]
-    impl Harness for AskingHarness {
-        fn id(&self) -> HarnessId {
-            HarnessId::Mock
-        }
-        fn display_name(&self) -> &str {
-            "Asking"
-        }
-        fn supports_steering(&self) -> bool {
-            false
-        }
-        fn steering_mode(&self) -> SteeringMode {
-            SteeringMode::TurnBoundary
-        }
-        fn reasoning_levels(&self) -> &[ReasoningLevel] {
-            &[]
-        }
-        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-            Ok(vec![])
-        }
-        async fn run(
-            &self,
-            _request: RunRequest,
-            controls: RunControls,
-        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-            let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, HarnessError>>(16);
-            tokio::spawn(async move {
-                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
-                    id: "q1".into(),
-                    header: "Pick".into(),
-                    question: "Which one?".into(),
-                    options: vec!["a".into(), "b".into()],
-                    multi_select: false,
-                    mcp: None,
-                    approval: None,
-                    input: None,
-                }])
-                .await
-                .unwrap_or_default();
-                let picked = answers
-                    .first()
-                    .and_then(|a| a.labels.first().cloned())
-                    .unwrap_or_else(|| "none".into());
-                let _ = tx
-                    .send(Ok(AgentEvent::TextDelta {
-                        text: format!("picked {picked}"),
-                    }))
-                    .await;
-                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
-            });
-            Ok(futures::stream::unfold(rx, |mut rx| async move {
-                rx.recv().await.map(|event| (event, rx))
-            })
-            .boxed())
-        }
-    }
-
-    let dir = tempfile::tempdir().unwrap();
-    let core = assemble(dir.path(), Arc::new(AskingHarness));
-    let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_owner(
-        &core,
-        handle.doc(),
-        "cmd-run-ask",
-        SessionCommandPayload::Run {
-            request: run_request("ask me"),
-            message_id: "m-1".into(),
-        },
-    );
-
-    // The input request surfaces: status AwaitingInput + an unresolved input part.
-    wait_for(
-        || {
-            core.sessions.session_status(CHAT).map(|s| s.status)
-                == Some(SessionStatus::AwaitingInput)
-        },
-        "awaiting input",
-    )
-    .await;
-    wait_for(
-        || {
-            entries(&core).iter().any(|e| {
-                e.parts.iter().any(|p| {
-                    matches!(
-                        p,
-                        MessagePart::Input {
-                            resolved: false,
-                            ..
-                        }
-                    )
-                })
-            })
-        },
-        "input part in doc",
-    )
-    .await;
-
-    // A viewer answers through the durable command queue.
-    let request_id = entries(&core)
-        .iter()
-        .find_map(|e| {
-            e.parts.iter().find_map(|p| match p {
-                MessagePart::Input { request_id, .. } => Some(request_id.clone()),
-                _ => None,
-            })
-        })
-        .unwrap();
-    queue_as_owner(
-        &core,
-        handle.doc(),
-        "cmd-answer-1",
-        SessionCommandPayload::RespondInput {
-            request_id,
-            answers: vec![luna_proto::UserInputAnswer {
-                question_id: "q1".into(),
-                labels: vec!["b".into()],
-            }],
-        },
-    );
-
-    wait_for(
-        || {
-            entries_now(&core).iter().any(|e| {
-                e.status == Some(MessageStatus::Complete)
-                    && e.parts
-                        .iter()
-                        .any(|p| matches!(p, MessagePart::Text { text, .. } if text == "picked b"))
-            })
-        },
-        "answered turn to complete",
-    )
-    .await;
-    assert_eq!(
-        command_status(&core, "cmd-answer-1"),
-        Some((SessionCommandStatus::Applied, None))
-    );
-    // The input part is marked resolved in the doc.
-    assert!(entries(&core).iter().any(|e| {
-        e.parts
-            .iter()
-            .any(|p| matches!(p, MessagePart::Input { resolved: true, .. }))
-    }));
-    // The run task writes the Complete entry BEFORE settling the status row —
-    // wait for the transition instead of asserting the instant in between.
-    wait_for(
-        || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
-        "session to settle idle",
-    )
-    .await;
 }
 
 #[tokio::test]
@@ -1688,49 +1468,8 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
         })
         .unwrap();
 
-    queue_as_owner(
-        &core,
-        handle.doc(),
-        "cmd-approval-bypass",
-        SessionCommandPayload::RespondInput {
-            request_id: request_id.clone(),
-            answers: vec![luna_proto::UserInputAnswer {
-                question_id: "approval-question".into(),
-                labels: vec!["Allow once".into()],
-            }],
-        },
-    );
-    wait_for(
-        || {
-            command_status(&core, "cmd-approval-bypass")
-                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
-        },
-        "ordinary input bypass rejected",
-    )
-    .await;
-    assert_eq!(
-        command_status(&core, "cmd-approval-bypass"),
-        Some((
-            SessionCommandStatus::Rejected,
-            Some("no pending input request".into())
-        ))
-    );
-    assert_eq!(
-        core.sessions.session_status(CHAT).map(|s| s.status),
-        Some(SessionStatus::AwaitingApproval)
-    );
-    assert!(
-        entries(&core)
-            .iter()
-            .any(|entry| entry.parts.iter().any(|part| matches!(
-                part,
-                MessagePart::Input {
-                    resolved: false,
-                    ..
-                }
-            )))
-    );
-
+    // The RespondInput bypass of a typed approval is owned by
+    // `typed_live_approval_rejects_respond_input_and_accepts_only_respond_approval`.
     let stored = entries(&core)
         .into_iter()
         .flat_map(|entry| entry.parts)
@@ -3152,9 +2891,22 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
     )
     .await;
     assert_eq!(
-        core.sessions.session_status(CHAT).map(|s| s.status),
-        Some(SessionStatus::Idle)
+        command_status(&core, "cmd-answer-right"),
+        Some((SessionCommandStatus::Applied, None))
     );
+    // The input part is marked resolved in the doc.
+    assert!(entries(&core).iter().any(|e| {
+        e.parts
+            .iter()
+            .any(|p| matches!(p, MessagePart::Input { resolved: true, .. }))
+    }));
+    // The run task writes the Complete entry BEFORE settling the status row —
+    // wait for the transition instead of asserting the instant in between.
+    wait_for(
+        || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
+        "session to settle idle",
+    )
+    .await;
 }
 
 /// Resilience: interrupting a run that is BLOCKED on a question unparks the

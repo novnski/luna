@@ -229,8 +229,9 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
         .save_snapshot("synthetic", b"synthetic transcript")
         .unwrap();
     drop(store);
-    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
-    control
+    // Configure through the persisted control state; the engine then opens
+    // its own control because its data root is the marked owner root.
+    BackupControl::new(IsolatedRoot::open(&owner).unwrap())
         .configure(BackupConfigureRequest {
             source_root: source.display().to_string(),
             destination_dir: destination.display().to_string(),
@@ -250,8 +251,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
         None,
         accounts,
     )
-    .unwrap()
-    .with_backup_control_for_tests(control);
+    .unwrap();
     let client = memory_client(core.rpc_service());
     let status: luna_proto::BackupStatus = serde_json::from_value(
         client
