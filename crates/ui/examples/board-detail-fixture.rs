@@ -664,6 +664,15 @@ fn center(bounds: [f32; 4]) -> (f32, f32) {
     (bounds[0] + bounds[2] / 2.0, bounds[1] + bounds[3] / 2.0)
 }
 
+/// Controls that live in the detail drawer's pinned header.
+const HEADER_CONTROLS: &[&str] = &[
+    "detail-close",
+    "detail-rename",
+    "detail-title-input",
+    "detail-title-save",
+    "detail-title-cancel",
+];
+
 fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
     inner[0] >= outer[0] - 0.5
         && inner[1] >= outer[1] - 0.5
@@ -681,7 +690,12 @@ async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result
         let rb = surfaces(window, cx)?;
         let target = rect(&rb, name).ok_or_else(|| anyhow!("{name} was not painted"))?;
         let drawer = rect(&rb, "board-drawer").ok_or_else(|| anyhow!("no drawer painted"))?;
-        if rect(&rb, "detail-header").is_some_and(|header| inside(target, header)) {
+        // Only the pinned header's own controls are always visible. A body
+        // control scrolled up under the header also paints inside the
+        // header's rectangle, but is clipped: it must be scrolled back.
+        if HEADER_CONTROLS.contains(&name)
+            && rect(&rb, "detail-header").is_some_and(|header| inside(target, header))
+        {
             return Ok(target);
         }
         let (top, bottom) = match rect(&rb, "detail-scroll") {
@@ -1888,17 +1902,40 @@ async fn scenario(
     let mut visits = Vec::new();
     for key in ["claude-code", "codex", "opencode", "claude-code", "codex"] {
         for which in ["impl", "review"] {
-            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
-            let rb = surfaces(window, cx)?;
+            let profile = if which == "impl" {
+                "implementation"
+            } else {
+                "review"
+            };
+            let wanted = model_with_options(key);
+            let model_chip = format!("detail-{which}-model:{wanted}");
             let show_all = format!("detail-{which}-model-show-all");
-            if rect(&rb, &show_all).is_some() {
-                click(window, cx, &show_all).await?;
-            }
-            click(
+            // The harness chip is scrolled into the visible body first
+            // (`click` reveals it); then wait until the draft names the
+            // harness and the model row lists that harness's catalog.
+            click(window, cx, &format!("detail-{which}-harness:{key}")).await?;
+            wait_for(
                 window,
                 cx,
-                &format!("detail-{which}-model:{}", model_with_options(key)),
+                &format!("{key} in the {profile} profile"),
+                |rb| {
+                    state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["harness"]
+                        == key
+                        && (rect(rb, &model_chip).is_some() || rect(rb, &show_all).is_some())
+                },
             )
+            .await?;
+            if rect(&surfaces(window, cx)?, &model_chip).is_none() {
+                click(window, cx, &show_all).await?;
+                wait_for(window, cx, &format!("all {key} models"), |rb| {
+                    rect(rb, &model_chip).is_some()
+                })
+                .await?;
+            }
+            click(window, cx, &model_chip).await?;
+            wait_for(window, cx, &format!("{wanted} selected"), |rb| {
+                state_of(rb)["edits"]["settings"]["settings"]["draft"][profile]["model"] == wanted
+            })
             .await?;
             // Two full frames with the tree built.
             draw(window, cx)?;
