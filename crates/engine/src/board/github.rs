@@ -1802,21 +1802,23 @@ impl EngineRpc {
             "issue-start-{}",
             &board_digest(&("issue-start", &request.request_id))?[..32]
         );
-        let started = self
-            .board_start(
-                caller,
-                BoardStartRequest {
-                    request_id: start_key,
-                    work_item_id: receipt.mutation.work_item_id.clone(),
-                    expected_revision: None,
-                    destination,
-                    context: Default::default(),
-                    execution,
-                    follow_up: Default::default(),
-                    caller_task_id: None,
-                },
-            )
-            .await;
+        // The lifecycle start (worker creation, launch snapshot, send) is a
+        // deep future: box it at this boundary so the import's own state
+        // machine stays small on a 2 MiB tokio worker stack (debug builds).
+        let started = Box::pin(self.board_start(
+            caller,
+            BoardStartRequest {
+                request_id: start_key,
+                work_item_id: receipt.mutation.work_item_id.clone(),
+                expected_revision: None,
+                destination,
+                context: Default::default(),
+                execution,
+                follow_up: Default::default(),
+                caller_task_id: None,
+            },
+        ))
+        .await;
         receipt.start = Some(match started {
             Ok(start) => start,
             // The card stays saved; the failure is reported, never hidden.
