@@ -118,16 +118,23 @@ pub(crate) fn check_options(
 }
 
 impl EngineRpc {
-    /// Whether this host can execute a provider (installed and enabled in
-    /// Settings → Agents; the deterministic Mock peer is always local).
+    /// Whether the board may offer and run a provider: the same set the
+    /// composer offers (installed and enabled in Settings → Agents). The
+    /// Mock test rig is never enabled through Settings; it is offered only
+    /// when the rig opted in (`LUNA_HARNESS=mock`, which is also what makes
+    /// it the app's default) or when this engine was assembled with Mock as
+    /// its default provider (engine E2E rigs).
     pub(crate) fn board_provider_available(&self, harness: HarnessId) -> bool {
         if self.registry.resolve(harness).is_err() {
             return false;
         }
-        harness == HarnessId::Mock
-            || self.registry.descriptors().iter().any(|entry| {
-                entry.id == harness && entry.installed && crate::registry::descriptor_enabled(entry)
-            })
+        if harness == HarnessId::Mock {
+            return self.board_default_harness() == HarnessId::Mock
+                || std::env::var("LUNA_HARNESS").ok().as_deref().map(str::trim) == Some("mock");
+        }
+        self.registry.descriptors().iter().any(|entry| {
+            entry.id == harness && entry.installed && crate::registry::descriptor_enabled(entry)
+        })
     }
 
     /// The engine's configured default provider for fresh chats.

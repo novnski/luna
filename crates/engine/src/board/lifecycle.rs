@@ -1797,18 +1797,17 @@ impl EngineRpc {
             if request.harness.is_some_and(|wanted| wanted != harness) {
                 continue;
             }
-            let available = self.board_provider_available(harness);
-            if !available && harness == HarnessId::Mock {
+            // Only what the rest of the app offers: a provider hidden or
+            // disabled there cannot be chosen, saved or started here.
+            if !self.board_provider_available(harness) {
                 continue;
             }
-            let models = if available {
-                self.model_cache
-                    .list(harness, None, false)
-                    .await
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+            let available = true;
+            let models = self
+                .model_cache
+                .list(harness, None, false)
+                .await
+                .unwrap_or_default();
             let matching: Vec<_> = models
                 .into_iter()
                 .filter(|model| {
