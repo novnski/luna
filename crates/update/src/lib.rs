@@ -1298,7 +1298,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_parses_with_and_without_files() {
+    fn manifest_parses_files_and_rejects_a_manifest_without_them() {
         let full: Manifest = serde_json::from_str(
             r#"{"version":"0.1.1","files":{"luna-0.1.1-linux-x86_64.tar.gz":{"sha256":"abc"}}}"#,
         )
@@ -1310,8 +1310,10 @@ mod tests {
                 .as_deref(),
             Some("abc")
         );
-        let bare: Manifest = serde_json::from_str(r#"{"version":"0.1.1"}"#).unwrap();
-        assert!(bare.files.is_empty());
+        // Signed releases must list their artifacts (4099e720); a bare manifest
+        // is refused at parse time rather than treated as an empty release.
+        let bare = serde_json::from_str::<Manifest>(r#"{"version":"0.1.1"}"#).unwrap_err();
+        assert!(bare.to_string().contains("missing field `files`"), "{bare}");
     }
 
     #[cfg(unix)]

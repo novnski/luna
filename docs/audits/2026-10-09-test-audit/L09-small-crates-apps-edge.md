@@ -94,7 +94,7 @@
 | R | `crates/update/src/lib.rs::tests::windows_is_not_misclassified_as_linux` | Windows platform key. |
 | R | `crates/update/src/lib.rs::tests::windows_install_is_always_unmanaged` | Windows must not take the Unix managed path. |
 | R | `crates/update/src/lib.rs::tests::windows_rejects_platform_specific_updates_before_side_effects` | Windows refusal before any disk side effect. |
-| R | `crates/update/src/lib.rs::tests::manifest_parses_with_and_without_files` | Signed-manifest field names shared with `scripts/create-release-manifest.py`. Believed to fail on the baseline (see Possible product defects); retained unchanged. |
+| F | `crates/update/src/lib.rs::tests::manifest_parses_with_and_without_files` → `manifest_parses_files_and_rejects_a_manifest_without_them` | Coordinator repair: failed on the baseline (`missing field files`). 4099e720 made `files` required for signed release manifests (`verify` also refuses an empty map), so the bare half encoded the pre-signing contract. Now asserts the bare manifest is refused at parse. |
 | R | `crates/update/src/lib.rs::tests::headless_symlink_swap` | Real symlink swap and unstaged refusal. |
 | R | `crates/update/src/windows.rs::tests::portable_install_requires_explicit_configuration` | Windows managed-install marker. |
 | R | `crates/update/src/windows.rs::tests::changed_staging_file_is_rejected` | `verify` guard at the `apply` entry (sidecar digest). |
