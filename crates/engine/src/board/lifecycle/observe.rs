@@ -151,6 +151,29 @@ impl EngineRpc {
             }
             reasons.extend(rt.attention.iter().cloned());
         }
+        // The ticket's owned reviewer chats can need the user too (an
+        // approval or question in a review turn); route to their items.
+        if generation > 0 && item.column != BoardColumn::Done {
+            for reviewer in self
+                .board_review_owned_work(&item.id, generation)
+                .unwrap_or_default()
+                .iter()
+                .filter(|reviewer| Some(reviewer.as_str()) != worker_task)
+                .take(4)
+            {
+                reasons.extend(self.board_runtime(reviewer).attention.into_iter().filter(
+                    |reason| {
+                        matches!(
+                            reason.kind,
+                            BoardAttentionKind::Approval
+                                | BoardAttentionKind::Question
+                                | BoardAttentionKind::ProviderFailure
+                                | BoardAttentionKind::AuthRequired
+                        )
+                    },
+                ));
+            }
+        }
         if let Some(intent) = intent {
             if let Some(failure) = &intent.launch_failure {
                 reasons.push(failure.clone());

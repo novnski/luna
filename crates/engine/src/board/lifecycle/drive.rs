@@ -109,6 +109,9 @@ impl EngineRpc {
     /// wake Board watchers when only the observation changed.
     pub(crate) fn board_cache_phase(&self, ticket: &mut Ticket) -> BoardResult<()> {
         let observation = self.board_observation(&ticket.item, Some(&ticket.intent));
+        let attention = (!observation.attention.is_empty())
+            .then(|| board_digest(&observation.attention))
+            .transpose()?;
         let intent = &ticket.intent;
         let needs = intent.stop.as_ref().is_some_and(barrier_open)
             || matches!(
@@ -118,14 +121,22 @@ impl EngineRpc {
             || intent.queue.is_some()
             || (intent.desired == BoardColumn::Ready
                 && intent.served_intent_revision < intent.intent_revision);
-        if observation.phase == intent.observed_phase && needs == intent.needs_reconcile {
+        if observation.phase == intent.observed_phase
+            && needs == intent.needs_reconcile
+            && attention == intent.observed_attention
+        {
             return Ok(());
         }
-        if ticket.version.is_none() && observation.phase == BoardPhase::NotStarted && !needs {
+        if ticket.version.is_none()
+            && observation.phase == BoardPhase::NotStarted
+            && !needs
+            && attention.is_none()
+        {
             return Ok(());
         }
         ticket.intent.observed_phase = observation.phase;
         ticket.intent.needs_reconcile = needs;
+        ticket.intent.observed_attention = attention;
         self.board_intent_only(ticket)?;
         self.board_hub()
             .notify_observed(vec![ticket.item.id.clone()]);

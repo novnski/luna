@@ -590,6 +590,11 @@ pub struct BoardExecutionIntent {
     /// The generation that reached Done (from verified current evidence).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_generation: Option<u64>,
+    /// Fingerprint of the last published Needs-attention overlay, so a
+    /// change that leaves the phase alone (an approval appearing on a
+    /// running worker) still wakes Board watchers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_attention: Option<String>,
 }
 
 /// Delivery of one launch instruction through the ordinary task command
@@ -1100,6 +1105,7 @@ impl BoardExecutionIntent {
             launch_failure: None,
             pending_start: None,
             completed_generation: None,
+            observed_attention: None,
         }
     }
 }
