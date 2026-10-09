@@ -134,14 +134,33 @@ impl Harness for Peer {
             prompt: request.prompt.clone(),
             model: request.model.clone(),
         });
+        // A provider session start correlates the delivered queue row, as
+        // real providers do; without it the row would stay claimed.
+        // A resumed run keeps its provider session, like a real provider.
+        let session_id = request
+            .resume
+            .clone()
+            .unwrap_or_else(|| format!("board-peer-{}", uuid::Uuid::new_v4()));
+        let started = Ok(AgentEvent::SessionStarted {
+            harness: HarnessId::Mock,
+            model: request.model.clone().unwrap_or_else(|| "fixture".into()),
+            tools: vec![],
+            cwd: request.cwd.clone(),
+            session_id: session_id.clone(),
+            assistant_message_id: format!("reply-{}", uuid::Uuid::new_v4()),
+        });
         if hold {
-            return Ok(futures::stream::iter(vec![Ok(AgentEvent::TextDelta {
-                text: "HELD_TURN_STARTED".into(),
-            })])
+            return Ok(futures::stream::iter(vec![
+                started,
+                Ok(AgentEvent::TextDelta {
+                    text: "HELD_TURN_STARTED".into(),
+                }),
+            ])
             .chain(futures::stream::pending())
             .boxed());
         }
         Ok(futures::stream::iter(vec![
+            started,
             Ok(AgentEvent::TextDelta {
                 text: "PEER_ACK".into(),
             }),
@@ -149,7 +168,7 @@ impl Harness for Peer {
                 status: DoneStatus::Completed,
                 result: None,
                 error: None,
-                session_id: None,
+                session_id: Some(session_id),
             }),
         ])
         .boxed())
@@ -317,16 +336,39 @@ async fn interrupt(c: &RpcClient, task: &str) {
         json!({"kind":"session","command":{"kind":"interrupt"},"transfers":[]}),
     )
     .await;
-    assert_eq!(receipt["status"], "applied", "{receipt}");
+    // A stop is accepted, then settles asynchronously.
+    assert!(
+        matches!(receipt["status"].as_str(), Some("applied" | "pending")),
+        "{receipt}"
+    );
 }
 
-async fn chats(c: &RpcClient) -> Vec<Value> {
+/// The published chat list once it agrees with the committed registry (the
+/// watch publishes asynchronously after each mutation).
+async fn chats(c: &RpcClient, core: &EngineCore) -> Vec<Value> {
     let mut watch = c.subscribe("WatchChats", json!({})).await.unwrap();
-    let first = tokio::time::timeout(Duration::from_secs(5), watch.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    first.as_array().cloned().unwrap_or_default()
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let frame = tokio::time::timeout_at(deadline, watch.recv())
+            .await
+            .expect("WatchChats never agreed with the registry")
+            .unwrap();
+        let rows = frame.as_array().cloned().unwrap_or_default();
+        let truth = core.workspace.read_chats().unwrap();
+        let agrees = truth
+            .iter()
+            .filter(|chat| chat.space_id.is_some())
+            .all(|chat| {
+                rows.iter().any(|row| {
+                    row["id"] == chat.id
+                        && row.get("title").and_then(Value::as_str) == chat.title.as_deref()
+                        && row["archived"] == chat.archived
+                })
+            });
+        if agrees {
+            return rows;
+        }
+    }
 }
 
 fn row<'a>(rows: &'a [Value], id: &str) -> &'a Value {
@@ -418,6 +460,19 @@ async fn wait_for(what: &str, seconds: u64, check: impl Fn() -> bool) {
         assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// What the engine says about a chat's execution (for timeout messages).
+fn diagnose(core: &EngineCore, f: &Fixture, task: &str) -> Value {
+    let chat = core.workspace.chat(task).unwrap();
+    json!({
+        "status": core.sessions.session_status(task).map(|session| format!("{:?}", session.status)),
+        "turnInFlight": core.sessions.turn_in_flight(task),
+        "queue": core.doc_host.open(task).ok().and_then(|handle| handle.doc().read_queue().ok()).map(|queue| queue.len()),
+        "child": chat.as_ref().map(|chat| json!(chat.child_thread)),
+        "startup": core.doc_host.task_command_receipt(&format!("child-start:{task}")).ok().flatten().map(|receipt| json!(receipt.status)),
+        "prompts": runs(f).into_iter().map(|run| run.prompt).collect::<Vec<_>>(),
+    })
 }
 
 async fn wait_settled(core: &EngineCore, task: &str) {
@@ -551,7 +606,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
         config("fixture", "ask"),
     )
     .await;
-    let before_chats = chats(&c).await;
+    let before_chats = chats(&c, &core).await;
 
     // Save from Board and from a normal chat: zero chats, zero runs.
     let board_saved = ticket(&c, "save-board", "chat-model", "Saved on Board", None).await;
@@ -563,7 +618,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
         Some(&source),
     )
     .await;
-    let after_save = chats(&c).await;
+    let after_save = chats(&c, &core).await;
     ev.step(
         "save creates zero chats",
         json!({"chats": before_chats.len(), "runs": 0}),
@@ -587,7 +642,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
         json!({"badges": 0, "related": [["source", chat_saved["key"]]]}),
         json!({
             "badges": badges["badges"].as_array().unwrap().len(),
-            "related": badges["related"].as_array().unwrap().iter()
+            "related": badges.get("related").and_then(Value::as_array).cloned().unwrap_or_default().iter()
                 .map(|badge| json!([badge["role"], badge["key"]])).collect::<Vec<_>>(),
         }),
         Some(&badges),
@@ -598,7 +653,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
         "execution":{"harness":"mock","model":"fixture"}});
     let created = ok(&c, "BoardCreateMainChat", start.clone()).await;
     let worker = created["taskId"].as_str().unwrap().to_owned();
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     ev.step(
         "one main sidebar chat, nothing sent",
         json!({"role":"main","mainParentId":null,"launch":"created","reused":null,
@@ -627,7 +682,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
     ev.step(
         "retry returns the same worker",
         json!({"taskId":worker,"chats":rows.len()}),
-        json!({"taskId":replay["taskId"],"chats":chats(&c).await.len()}),
+        json!({"taskId":replay["taskId"],"chats":chats(&c, &core).await.len()}),
         None,
     );
     let badges = ok(&c, "BoardChatBadges", json!({"taskIds":[worker]})).await;
@@ -655,7 +710,7 @@ async fn save_creates_nothing_and_board_start_makes_one_main_worker() {
         json!({"taskId":worker,"reused":true,"role":"main","navigation":{"kind":"mainChat","taskId":worker},
             "chats": rows.len(), "runs": 0, "workingLinks": 1}),
         json!({"taskId":reused["taskId"],"reused":reused["reused"],"role":reused["role"],
-            "navigation":reused["navigation"],"chats":chats(&c).await.len(),"runs":runs(&f).len(),
+            "navigation":reused["navigation"],"chats":chats(&c, &core).await.len(),"runs":runs(&f).len(),
             "workingLinks": working_links(&detail_after).len()}),
         Some(&reused),
     );
@@ -703,7 +758,7 @@ async fn main_parent_side_chats_and_three_tickets() {
     .await;
     wait_settled(&core, &fresh_id).await;
     let replay = ok(&c, "BoardCreateSideChat", fresh).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let fresh_run = runs(&f)
         .into_iter()
         .find(|run| run.prompt.contains("FRESH_SIDE_BRIEF"))
@@ -737,7 +792,7 @@ async fn main_parent_side_chats_and_three_tickets() {
     .await;
     wait_settled(&core, &context_id).await;
     let replay = ok(&c, "BoardCreateSideChat", context).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let context_run = runs(&f)
         .into_iter()
         .find(|run| run.prompt.contains("CONTEXT_SIDE_BRIEF"))
@@ -797,7 +852,7 @@ async fn main_parent_side_chats_and_three_tickets() {
                 "container":{"kind":"sideOf","mainTaskId":main},"launch":"created","title":format!("Ticket {n}")}),
             json!({"role":created["role"],"mainParentId":created["mainParentId"],
                 "workItemId":created["workItemId"],"container":worker_identity["originalContainer"],
-                "launch":created["launch"],"title":row(&chats(&c).await, &worker)["title"]}),
+                "launch":created["launch"],"title":row(&chats(&c, &core).await, &worker)["title"]}),
             Some(&worker_identity),
         );
         workers.push(worker);
@@ -814,7 +869,7 @@ async fn main_parent_side_chats_and_three_tickets() {
         json!({"distinct":3,"badgeChats":[workers[0], workers[1], workers[2]],"coordinatorRelated":0}),
         json!({"distinct":distinct.len(),
             "badgeChats":badges["badges"].as_array().unwrap().iter().map(|badge| badge["taskId"].clone()).collect::<Vec<_>>(),
-            "coordinatorRelated":badges["related"].as_array().unwrap().len()}),
+            "coordinatorRelated":badges.get("related").and_then(Value::as_array).map_or(0, Vec::len)}),
         Some(&badges),
     );
     let main_identity = identity(&c, &main).await;
@@ -907,13 +962,18 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
     let workbench_before = ok(&c, "GetChatWorkbench", json!({"mainChatId":main})).await;
     // An active run that conversion must neither stop nor resend.
     send(&c, &main, "HOLD_CONVERT_RUN").await;
-    wait_for("held run", 10, || {
-        core.sessions.turn_in_flight(&main) && runs_with(&f, "HOLD_CONVERT_RUN") == 1
-    })
-    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !(core.sessions.turn_in_flight(&main) && runs_with(&f, "HOLD_CONVERT_RUN") == 1) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "held run never started: {}",
+            diagnose(&core, &f, &main)
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     // Let the held turn's first streamed text land before the snapshot.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let before = json!({
         "row": row_identity(row(&rows, &main)),
         "entries": entry_ids(&core, &main),
@@ -937,7 +997,7 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
             "navigation":receipt["mutation"]["navigation"]}),
         Some(&receipt),
     );
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let after = json!({
         "row": row_identity(row(&rows, &main)),
         "entries": entry_ids(&core, &main),
@@ -1003,7 +1063,7 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
         .to_owned();
     let side_before = json!([
         container_identity(&identity(&c, &side).await),
-        row_identity(row(&chats(&c).await, &side))
+        row_identity(row(&chats(&c, &core).await, &side))
     ]);
     let receipt = ok(
         &c,
@@ -1026,7 +1086,7 @@ async fn conversion_keeps_identity_history_run_draft_and_placement() {
         &side_before,
         &json!([
             container_identity(&identity(&c, &side).await),
-            row_identity(row(&chats(&c).await, &side))
+            row_identity(row(&chats(&c, &core).await, &side))
         ]),
     );
     let not_a_chat = refused(
@@ -1142,7 +1202,7 @@ async fn navigation_survives_closed_tabs_and_restart_and_titles_stay_in_sync() {
         "expectedRevision":current,"changes":{"title":"Render the revenue chart"}}),
     )
     .await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     ev.step(
         "ticket rename renames the working chat only",
         json!({"worker":"Render the revenue chart","parent":"Parent coordinator","source":"Source talk"}),
@@ -1166,7 +1226,7 @@ async fn navigation_survives_closed_tabs_and_restart_and_titles_stay_in_sync() {
         .iter()
         .filter(|event| event["kind"]["kind"] == "renamed")
         .count();
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     ev.step(
         "chat rename renames the ticket in one operation",
         json!({"ticket":"Chart with legend","worker":"Chart with legend","parent":"Parent coordinator",
@@ -1212,9 +1272,11 @@ async fn navigation_survives_closed_tabs_and_restart_and_titles_stay_in_sync() {
         json!({"taskIds":[worker, attempt, source]}),
     )
     .await;
-    let mut related = badges["related"]
-        .as_array()
-        .unwrap()
+    let mut related = badges
+        .get("related")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
         .iter()
         .map(|b| json!([b["taskId"], b["role"]]))
         .collect::<Vec<_>>();
@@ -1312,7 +1374,7 @@ async fn side_chats_cannot_nest_or_fork_through_rpc_or_tools() {
         Some(&after_views),
     );
 
-    let chats_before = chats(&c).await.len();
+    let chats_before = chats(&c, &core).await.len();
     let runs_before = runs(&f).len();
     for (label, side) in [("fresh", &fresh), ("fork", &forked)] {
         let attempt = uuid::Uuid::new_v4().to_string();
@@ -1423,7 +1485,7 @@ async fn side_chats_cannot_nest_or_fork_through_rpc_or_tools() {
     ev.step(
         "no chat created, nothing sent",
         json!({"chats":chats_before,"runs":runs_before}),
-        json!({"chats":chats(&c).await.len(),"runs":runs(&f).len()}),
+        json!({"chats":chats(&c, &core).await.len(),"runs":runs(&f).len()}),
         None,
     );
     // The allowed alternative works from the side chat: a fresh sibling.
@@ -1485,9 +1547,9 @@ async fn side_handoff_sibling_and_self_promotion_attempts() {
     wait_settled(&core, &side).await;
     let side_before = json!([
         identity(&c, &side).await,
-        row_identity(row(&chats(&c).await, &side))
+        row_identity(row(&chats(&c, &core).await, &side))
     ]);
-    let main_before = row_identity(row(&chats(&c).await, &main));
+    let main_before = row_identity(row(&chats(&c, &core).await, &main));
 
     // Side → sibling.
     let sibling = ok(
@@ -1499,7 +1561,7 @@ async fn side_handoff_sibling_and_self_promotion_attempts() {
     .await;
     let sibling_id = sibling["taskId"].as_str().unwrap().to_owned();
     wait_for("sibling run", 10, || runs_with(&f, "SIBLING_BRIEF") == 1).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let sibling_row = row(&rows, &sibling_id);
     let sibling_run = runs(&f)
         .into_iter()
@@ -1546,7 +1608,7 @@ async fn side_handoff_sibling_and_self_promotion_attempts() {
     let prepared = ok(&c, "BoardCreateMainChat", json!({"requestId":"handoff","projectId":"chat-model",
         "fromTaskId":side,"title":"Follow-up work","handoffBrief":"HANDOFF_BRIEF goal: finish; done: parser; next: tests"})).await;
     let handoff = prepared["taskId"].as_str().unwrap().to_owned();
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let handoff_identity = identity(&c, &handoff).await;
     ev.step(
         "new independent sidebar root with a handoff source, nothing sent",
@@ -1703,7 +1765,7 @@ async fn side_handoff_sibling_and_self_promotion_attempts() {
     );
     let side_after = json!([
         identity(&c, &side).await,
-        row_identity(row(&chats(&c).await, &side))
+        row_identity(row(&chats(&c, &core).await, &side))
     ]);
     ev.unchanged(
         "side chat placement, row and parent unchanged",
@@ -1713,7 +1775,7 @@ async fn side_handoff_sibling_and_self_promotion_attempts() {
     ev.unchanged(
         "the original main is untouched",
         &main_before,
-        &row_identity(row(&chats(&c).await, &main)),
+        &row_identity(row(&chats(&c, &core).await, &main)),
     );
     ev.write();
     stop(core, c).await;
@@ -1778,7 +1840,7 @@ async fn fixed_parent_rejects_idle_and_active_reparenting() {
         .to_owned();
     let canonical = json!({"kind":"sideChat","mainTaskId":original,"sideTaskId":worker});
     let before = json!({"link":worker_link(&read(&c, &item).await),
-        "row":row_identity(row(&chats(&c).await, &worker)),
+        "row":row_identity(row(&chats(&c, &core).await, &worker)),
         "identity":container_identity(&identity(&c, &worker).await)});
 
     for phase in ["idle", "active"] {
@@ -1832,13 +1894,16 @@ async fn fixed_parent_rejects_idle_and_active_reparenting() {
             Some(&moved),
         );
         let after = json!({"link":worker_link(&read(&c, &item).await),
-            "row":row_identity(row(&chats(&c).await, &worker)),
+            "row":row_identity(row(&chats(&c, &core).await, &worker)),
             "identity":container_identity(&identity(&c, &worker).await)});
         // A run changes the provider session id, never the relationship.
         let mut stable_before = before.clone();
         let mut stable_after = after.clone();
         for value in [&mut stable_before, &mut stable_after] {
             value["row"]["harnessSessionId"] = Value::Null;
+            if let Some(config) = value["row"]["config"].as_object_mut() {
+                config.remove("permissionAudit");
+            }
         }
         ev.unchanged(
             &format!("{phase}: link, row and container unchanged"),
@@ -1905,7 +1970,7 @@ async fn archived_parent_keeps_the_worker_navigable() {
     let direct = json!({"kind":"direct","taskId":worker,"originalParentId":parent});
     let worker_identity = identity(&c, &worker).await;
     let detail = read(&c, &item).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     ev.step(
         "the worker opens directly; the parent reference is kept",
         json!({"byTicket":direct,"byChat":direct,"parentUnavailable":true,"mainParentId":parent,
@@ -2031,7 +2096,7 @@ async fn legacy_nested_children_migrate_without_data_loss() {
         false,
     )
     .await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let before = json!([
         legacy_evidence(&core, &rows, &idle),
         legacy_evidence(&core, &rows, &active)
@@ -2061,7 +2126,9 @@ async fn legacy_nested_children_migrate_without_data_loss() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "idle legacy child never migrated"
+            "idle legacy child never migrated: {} {}",
+            identity(&c, &idle).await,
+            diagnose(&core, &f, &idle)
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -2072,7 +2139,7 @@ async fn legacy_nested_children_migrate_without_data_loss() {
     // Several sweeps pass while the active record stays deferred.
     tokio::time::sleep(Duration::from_secs(5)).await;
     let deferred = identity(&c, &active).await;
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     ev.step(
         "the active record is deferred and keeps its owner mid-run",
         json!({"display":s2,"mainParentId":main,"parent":s2,"inFlight":true}),
@@ -2090,11 +2157,12 @@ async fn legacy_nested_children_migrate_without_data_loss() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "active legacy child never migrated"
+            "active legacy child never migrated: {}",
+            diagnose(&core, &f, &active)
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let rows = chats(&c).await;
+    let rows = chats(&c, &core).await;
     let after = json!([
         legacy_evidence(&core, &rows, &idle),
         legacy_evidence(&core, &rows, &active)

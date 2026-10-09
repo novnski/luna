@@ -1057,27 +1057,24 @@ pub async fn board_tools_scenario(f: &Fixture) {
     let side_ctx_created = side_ctx.receipt_or_board_error().ok().flatten().cloned();
     evidence.check(
         "a main chat may create a side chat with context",
-        "a side chat under this chat, or notImplemented, or the fork's typed mid-turn refusal",
+        "a side chat under this chat from its own mid-turn tool call, with a reported context origin",
         side_ctx
             .receipt_or_board_error()
             .and_then(|receipt| match receipt {
+                // The caller is its own active turn: the engine snapshots the
+                // visible transcript so far (or forks natively when the
+                // provider can) instead of waiting for the turn to settle.
                 Some(created) => expect(
-                    created["role"] == "side" && created["mainParentId"] == json!(main),
+                    created["role"] == "side"
+                        && created["mainParentId"] == json!(main)
+                        && matches!(
+                            created["contextOrigin"].as_str(),
+                            Some("contextSnapshot" | "nativeFork")
+                        ),
                     || format!("{created:#}"),
                 )
                 .map(|_| json!({"implemented": true, "contextOrigin": created["contextOrigin"]})),
-                // The caller is mid-turn when it calls a tool, and the
-                // with-context fork refuses to copy unsettled history. Recorded
-                // as a known chat-model limitation, never as a created chat.
-                None if side_ctx.code() == Some("unavailable")
-                    && side_ctx.text.contains("settle") =>
-                {
-                    Ok(json!({"implemented": false, "limitation": side_ctx.text}))
-                }
-                None => expect(side_ctx.code() == Some("notImplemented"), || {
-                    side_ctx.text.into()
-                })
-                .map(|_| json!({"implemented": false})),
+                None => Err(format!("with-context creation was refused: {}", side_ctx.text)),
             }),
     );
     let child = reply(&run1, 25).ok().unwrap()["taskId"]

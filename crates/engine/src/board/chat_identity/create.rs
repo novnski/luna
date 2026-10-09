@@ -663,24 +663,48 @@ impl EngineRpc {
         self.board_claim_creation(&request_id, &payload_hash, &chat_id)?;
 
         if self.workspace.chat(&chat_id).map_err(storage)?.is_none() {
+            let with_context = matches!(request.context, BoardContextMode::WithContext { .. });
+            if with_context && profile.is_some() {
+                return Err(BoardError::invalid(
+                    "execution",
+                    "a with-context side chat continues its parent's provider session; create a fresh side chat to choose other settings",
+                ));
+            }
+            // How the context is obtained is decided once per chat (a retry
+            // reuses the recorded mode, so a reservation is never replayed
+            // with another one).
+            let native = with_context
+                && match self.board_provenance(&chat_id)? {
+                    Some(record) => record.context_origin == BoardContextOrigin::NativeFork,
+                    None => {
+                        let capable = main_chat.config.as_ref().is_some_and(|config| {
+                            capability_for(config.harness) != ProviderForkCapability::None
+                        });
+                        // The main chat's own agent always calls its tools
+                        // mid-turn, when its provider history cannot be forked
+                        // yet: snapshot the visible transcript so far instead.
+                        // Any other actor keeps the settle requirement.
+                        let own_turn = matches!(
+                            caller,
+                            BoardCaller::Agent { task_id, .. } if *task_id == main_id
+                        );
+                        capable
+                            && !(own_turn && self.ensure_history_operation_ready(&main_id).is_err())
+                    }
+                };
             let (source, context_origin) = match &request.context {
                 BoardContextMode::Fresh => (None, BoardContextOrigin::Fresh),
-                BoardContextMode::WithContext { .. } => {
-                    let native = main_chat.config.as_ref().is_some_and(|config| {
-                        capability_for(config.harness) != ProviderForkCapability::None
-                    });
-                    (
-                        Some(ChatProvenance {
-                            task_id: creator_id.clone(),
-                            relation: ChatProvenanceRelation::ForkedFrom,
-                        }),
-                        if native {
-                            BoardContextOrigin::NativeFork
-                        } else {
-                            BoardContextOrigin::ContextSnapshot
-                        },
-                    )
-                }
+                BoardContextMode::WithContext { .. } => (
+                    Some(ChatProvenance {
+                        task_id: creator_id.clone(),
+                        relation: ChatProvenanceRelation::ForkedFrom,
+                    }),
+                    if native {
+                        BoardContextOrigin::NativeFork
+                    } else {
+                        BoardContextOrigin::ContextSnapshot
+                    },
+                ),
             };
             self.board_record_provenance(&ChatProvenanceRecord {
                 task_id: chat_id.clone(),
@@ -720,18 +744,12 @@ impl EngineRpc {
                 BoardContextMode::WithContext {
                     checkpoint_message_id,
                 } => {
-                    if profile.is_some() {
-                        return Err(BoardError::invalid(
-                            "execution",
-                            "a with-context side chat continues its parent's provider session; create a fresh side chat to choose other settings",
-                        ));
-                    }
                     self.create_side_chat_fork(
                         &main_id,
                         &chat_id,
                         checkpoint_message_id.as_deref(),
                         None,
-                        false,
+                        !native,
                         None,
                     )
                     .await
