@@ -267,6 +267,18 @@ async fn persistent_forks_are_nested_discoverable_and_independent_of_source() {
         .unwrap();
     assert!(core.workspace.chat(id).unwrap().is_none());
     assert!(core.workspace.chat(nested_id).unwrap().is_some());
+    // An explicit delete retires the fork itself: no history read, no send.
+    assert!(client.call("ReadSideChat", json!({"id":id})).await.is_err());
+    assert!(
+        client
+            .call(
+                "SendSideChat",
+                json!({"id":id,"messageId":"after-delete","text":"must not run"})
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(recorder.0.lock().unwrap().len(), 1);
     fork_evidence(
         "source-independence.json",
         json!({"created":created,"nested":nested,"snapshot":snapshot,"page":page}),
@@ -845,60 +857,18 @@ async fn paged_history_and_restart_never_start_a_provider() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parent_deletion_preserves_fork_and_explicit_delete_retires_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let recorder = Arc::new(Recorder::default());
-    let core = setup(dir.path(), recorder.clone()).await;
-    let client = luna_rpc::memory_client(core.rpc_service());
-    let created = client
-        .call(
-            "CreateSideChat",
-            json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string()}),
-        )
-        .await
-        .unwrap();
-    let id = created["meta"]["id"].as_str().unwrap();
-    client
-        .call("Mutate", json!({"op":"deleteChat","chatId":"parent"}))
-        .await
-        .unwrap();
-    assert!(core.workspace.chat("parent").unwrap().is_none());
-    assert!(core.workspace.chat(id).unwrap().is_some());
-    assert!(client.call("ReadSideChat", json!({"id":id})).await.is_ok());
-    client
-        .call("Mutate", json!({"op":"deleteChat","chatId":id}))
-        .await
-        .unwrap();
-    assert!(core.workspace.chat(id).unwrap().is_none());
-    assert!(client.call("ReadSideChat", json!({"id":id})).await.is_err());
-    assert!(client.call("SendSideChat", json!({"id":id,"lease":created["lease"],"messageId":"after-delete","text":"must not run"})).await.is_err());
-    assert!(recorder.0.lock().unwrap().is_empty());
-    core.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn fork_permissions_follow_explicit_own_configuration() {
     use luna_proto::{PermissionMode, SandboxLevel};
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
     let client = luna_rpc::memory_client(core.rpc_service());
-    for (index, (sandbox, mode, _expected_mode)) in [
-        (
-            SandboxLevel::ReadOnly,
-            PermissionMode::Ask,
-            PermissionMode::Ask,
-        ),
-        (
-            SandboxLevel::WorkspaceWrite,
-            PermissionMode::Full,
-            PermissionMode::Auto,
-        ),
-        (
-            SandboxLevel::DangerFullAccess,
-            PermissionMode::Full,
-            PermissionMode::Full,
-        ),
+    // Whatever the source chat's access, the fork's own explicit grant decides
+    // what the fork runs with.
+    for (index, (sandbox, mode)) in [
+        (SandboxLevel::ReadOnly, PermissionMode::Ask),
+        (SandboxLevel::WorkspaceWrite, PermissionMode::Full),
+        (SandboxLevel::DangerFullAccess, PermissionMode::Full),
     ]
     .into_iter()
     .enumerate()

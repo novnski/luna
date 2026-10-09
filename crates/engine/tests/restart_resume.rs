@@ -761,116 +761,83 @@ async fn resume_is_cwd_scoped() {
     core.shutdown().await;
 }
 
+/// Rows: a transient spawn blip (one failed start) and a helper that is down
+/// hard (every start fails). The old guess logic read a startup death as "bad
+/// resume id" and tombstoned a perfectly good session — permanently, surviving
+/// restarts (user incident 2026-08-13).
 #[tokio::test]
 async fn uncertain_startup_crash_is_not_replayed_and_keeps_resume() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("data");
-    let requests: RequestLog = Arc::new(Mutex::new(Vec::new()));
+    for fail_starts in [1, u32::MAX] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        let requests: RequestLog = Arc::new(Mutex::new(Vec::new()));
 
-    run_one_turn_and_shutdown(&dir, &requests, "hs-live").await;
+        run_one_turn_and_shutdown(&dir, &requests, "hs-live").await;
 
-    // Relaunch with a harness whose child dies before SessionStarted. The
-    // provider may have received the request even though LUNA saw no
-    // acceptance event, so the safe state is Checking delivery: no replay.
-    let core = assemble(
-        &dir,
-        RecordingHarness {
-            requests: requests.clone(),
-            session_id: "hs-next".into(),
-            fail_starts: Arc::new(Mutex::new(1)),
-        },
-    );
-    queue_run(&core, "second turn", "/tmp", "msg-user-2");
-    wait_for(
-        || {
-            core.sessions
-                .session_status(CHAT)
-                .and_then(|session| session.recovery)
-                .is_some_and(|recovery| recovery.status == RecoveryStatus::CheckingDelivery)
-        },
-        "uncertain startup failure to enter delivery reconciliation",
-    )
-    .await;
+        // Relaunch with a harness whose child dies before SessionStarted. The
+        // provider may have received the request even though LUNA saw no
+        // acceptance event, so the safe state is Checking delivery: no replay.
+        let core = assemble(
+            &dir,
+            RecordingHarness {
+                requests: requests.clone(),
+                session_id: "hs-next".into(),
+                fail_starts: Arc::new(Mutex::new(fail_starts)),
+            },
+        );
+        queue_run(&core, "second turn", "/tmp", "msg-user-2");
+        // The crashed attempt is uncertain and must STOP immediately (no spawn
+        // loop, and no assumption that resending would be idempotent).
+        wait_for(
+            || {
+                core.sessions
+                    .session_status(CHAT)
+                    .and_then(|session| session.recovery)
+                    .is_some_and(|recovery| recovery.status == RecoveryStatus::CheckingDelivery)
+            },
+            "uncertain startup failure to enter delivery reconciliation",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
-    // The original attempt keeps the prior native session, but there is no
-    // second provider call without new evidence.
-    {
-        let log = requests.lock().unwrap();
-        assert_eq!(log.len(), 2, "the uncertain attempt must not be replayed");
-        assert_eq!(log[1].resume.as_deref(), Some("hs-live"));
+        // The original attempt keeps the prior native session, but there is no
+        // second provider call without new evidence.
+        {
+            let log = requests.lock().unwrap();
+            assert_eq!(
+                log.len(),
+                2,
+                "fail_starts={fail_starts}: no blind retry and no revival loop"
+            );
+            assert_eq!(log[1].resume.as_deref(), Some("hs-live"));
+        }
+        // The failed original turn remains visible once, with explicit recovery.
+        let entries = entries_now(&core);
+        let users: Vec<_> = entries
+            .iter()
+            .filter(|e| e.role == MessageRole::User)
+            .collect();
+        assert_eq!(
+            users.len(),
+            2,
+            "fail_starts={fail_starts}: reconciliation must not duplicate the user entry"
+        );
+        let recovery = core
+            .sessions
+            .session_status(CHAT)
+            .and_then(|session| session.recovery)
+            .expect("visible recovery state");
+        assert_eq!(recovery.acceptance, RecoveryAcceptance::Unknown);
+        assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
+        // The stored id survives the startup failures, so the next send (say,
+        // after the restart that heals the helper) resumes the same conversation.
+        assert_eq!(
+            stored_harness_session(&core),
+            Some(("hs-live".into(), Some("/tmp".into()))),
+            "fail_starts={fail_starts}: an uncertain failure never tombstones the confirmed session"
+        );
+        core.shutdown().await;
     }
-    // The failed original turn remains visible once, with explicit recovery.
-    let entries = entries_now(&core);
-    let users: Vec<_> = entries
-        .iter()
-        .filter(|e| e.role == MessageRole::User)
-        .collect();
-    assert_eq!(
-        users.len(),
-        2,
-        "reconciliation must not duplicate the user entry"
-    );
-    let recovery = core
-        .sessions
-        .session_status(CHAT)
-        .and_then(|session| session.recovery)
-        .expect("visible recovery state");
-    assert_eq!(recovery.acceptance, RecoveryAcceptance::Unknown);
-    assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
-    // An uncertain failure never tombstones the previously confirmed session.
-    assert_eq!(
-        stored_harness_session(&core),
-        Some(("hs-live".into(), Some("/tmp".into())))
-    );
-    core.shutdown().await;
-}
-
-#[tokio::test]
-async fn persistent_startup_crash_keeps_stored_session_id() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("data");
-    let requests: RequestLog = Arc::new(Mutex::new(Vec::new()));
-
-    run_one_turn_and_shutdown(&dir, &requests, "hs-live").await;
-
-    // A helper that is down hard: every spawn dies at startup. The old guess
-    // logic read this as "bad resume id" and tombstoned a perfectly good
-    // session — permanently, surviving restarts (user incident 2026-08-13).
-    let core = assemble(
-        &dir,
-        RecordingHarness {
-            requests: requests.clone(),
-            session_id: "hs-unused".into(),
-            fail_starts: Arc::new(Mutex::new(u32::MAX)),
-        },
-    );
-    queue_run(&core, "second turn", "/tmp", "msg-user-2");
-    // The crashed attempt is uncertain and must STOP immediately (no spawn
-    // loop, and no assumption that resending would be idempotent).
-    wait_for(
-        || {
-            core.sessions
-                .session_status(CHAT)
-                .and_then(|session| session.recovery)
-                .is_some_and(|recovery| recovery.status == RecoveryStatus::CheckingDelivery)
-        },
-        "uncertain crash to enter delivery reconciliation",
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    {
-        let log = requests.lock().unwrap();
-        assert_eq!(log.len(), 2, "no blind retry and no revival loop");
-        assert_eq!(log[1].resume.as_deref(), Some("hs-live"));
-    }
-    // THE fix: the stored id survives the startup failures — the next send
-    // (say, after the restart that heals the helper) resumes the same
-    // conversation.
-    assert_eq!(
-        stored_harness_session(&core),
-        Some(("hs-live".into(), Some("/tmp".into())))
-    );
-    core.shutdown().await;
 }
 
 /// Real-CLI proof of the whole regression fix: tell claude a codeword, restart
