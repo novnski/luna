@@ -649,6 +649,14 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardMoveRequest,
     ) -> BoardResult<BoardMoveReceipt> {
+        Box::pin(self.board_move_boxed(caller, request)).await
+    }
+
+    async fn board_move_boxed(
+        &self,
+        caller: &BoardCaller,
+        request: BoardMoveRequest,
+    ) -> BoardResult<BoardMoveReceipt> {
         let request_id = caller.normalized_request_id(&request.request_id)?;
         let hash = op_hash(BoardOperation::Move, &request, |r| r.request_id.clear())?;
         let item = self.board_item_for(caller, &request.work_item_id, BoardAccess::Write)?;
@@ -658,8 +666,7 @@ impl EngineRpc {
                 return Ok(saved);
             }
             // Accepted earlier, effect unfinished: resume from the intent.
-            let effect = self
-                .board_drive(&mutation.work_item_id, false)
+            let effect = Box::pin(self.board_drive(&mutation.work_item_id, false))
                 .await
                 .unwrap_or(BoardMoveEffect::Reconciling);
             return self.board_finish_move(&request_id, mutation, effect);
@@ -736,7 +743,7 @@ impl EngineRpc {
                 placement,
             )?
         };
-        let effect = match self.board_drive(&ticket.item.id, false).await {
+        let effect = match Box::pin(self.board_drive(&ticket.item.id, false)).await {
             Ok(effect) => effect,
             Err(error) => {
                 // The move is accepted; the failure is on the ticket as
@@ -780,6 +787,14 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardStartRequest,
     ) -> BoardResult<BoardStartReceipt> {
+        Box::pin(self.board_start_boxed(caller, request)).await
+    }
+
+    async fn board_start_boxed(
+        &self,
+        caller: &BoardCaller,
+        request: BoardStartRequest,
+    ) -> BoardResult<BoardStartReceipt> {
         let request_id = caller.normalized_request_id(&request.request_id)?;
         let hash = op_hash(BoardOperation::Start, &request, |r| r.request_id.clear())?;
         let item = self.board_item_for(caller, &request.work_item_id, BoardAccess::Write)?;
@@ -788,7 +803,7 @@ impl EngineRpc {
             if let Some(saved) = self.board_saved_reply("start", &request_id)? {
                 return Ok(saved);
             }
-            let effect = self.board_drive(&mutation.work_item_id, false).await;
+            let effect = Box::pin(self.board_drive(&mutation.work_item_id, false)).await;
             return self.board_finish_start(&request_id, mutation, effect);
         }
         if item.archived {
@@ -879,7 +894,7 @@ impl EngineRpc {
                 },
             )
             .await?;
-        let effect = self.board_drive(&ticket.item.id, false).await;
+        let effect = Box::pin(self.board_drive(&ticket.item.id, false)).await;
         self.board_finish_start(&request_id, mutation, effect)
     }
 
@@ -956,6 +971,14 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardStartBatchRequest,
     ) -> BoardResult<BoardStartBatchReceipt> {
+        Box::pin(self.board_start_batch_boxed(caller, request)).await
+    }
+
+    async fn board_start_batch_boxed(
+        &self,
+        caller: &BoardCaller,
+        request: BoardStartBatchRequest,
+    ) -> BoardResult<BoardStartBatchReceipt> {
         caller.normalized_request_id(&request.request_id)?;
         if request.work_item_ids.is_empty() || request.work_item_ids.len() > BOARD_BATCH_START_MAX {
             return Err(BoardError::invalid(
@@ -992,21 +1015,20 @@ impl EngineRpc {
             } else {
                 format!("b{}:{resolved}", &board_digest(&request.request_id)?[..24])
             };
-            let result = self
-                .board_start(
-                    caller,
-                    BoardStartRequest {
-                        request_id: key,
-                        work_item_id: resolved.clone(),
-                        expected_revision: None,
-                        destination: request.destination.clone(),
-                        context: request.context.clone(),
-                        execution: request.execution.clone(),
-                        follow_up: request.follow_up,
-                        caller_task_id: request.caller_task_id.clone(),
-                    },
-                )
-                .await;
+            let result = Box::pin(self.board_start(
+                caller,
+                BoardStartRequest {
+                    request_id: key,
+                    work_item_id: resolved.clone(),
+                    expected_revision: None,
+                    destination: request.destination.clone(),
+                    context: request.context.clone(),
+                    execution: request.execution.clone(),
+                    follow_up: request.follow_up,
+                    caller_task_id: request.caller_task_id.clone(),
+                },
+            ))
+            .await;
             results.push(match result {
                 Ok(receipt) => BoardBatchItemResult {
                     work_item_id: resolved,
@@ -1038,6 +1060,14 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardControlRequest,
     ) -> BoardResult<BoardControlReceipt> {
+        Box::pin(self.board_control_boxed(caller, request)).await
+    }
+
+    async fn board_control_boxed(
+        &self,
+        caller: &BoardCaller,
+        request: BoardControlRequest,
+    ) -> BoardResult<BoardControlReceipt> {
         let request_id = caller.normalized_request_id(&request.request_id)?;
         let hash = op_hash(BoardOperation::Control, &request, |r| r.request_id.clear())?;
         let item = self.board_item_for(caller, &request.work_item_id, BoardAccess::Write)?;
@@ -1046,8 +1076,7 @@ impl EngineRpc {
             if let Some(saved) = self.board_saved_reply("control", &request_id)? {
                 return Ok(saved);
             }
-            let effect = self
-                .board_drive(&mutation.work_item_id, false)
+            let effect = Box::pin(self.board_drive(&mutation.work_item_id, false))
                 .await
                 .unwrap_or(BoardMoveEffect::Reconciling);
             return self.board_finish_control(&request_id, request.action, mutation, effect);
@@ -1121,8 +1150,7 @@ impl EngineRpc {
                         },
                     )
                     .await?;
-                let effect = self
-                    .board_drive(&ticket.item.id, false)
+                let effect = Box::pin(self.board_drive(&ticket.item.id, false))
                     .await
                     .unwrap_or(BoardMoveEffect::None);
                 (mutation, effect)
@@ -1147,8 +1175,7 @@ impl EngineRpc {
                     BoardOperation::Control,
                     None,
                 )?;
-                let effect = self
-                    .board_drive(&ticket.item.id, false)
+                let effect = Box::pin(self.board_drive(&ticket.item.id, false))
                     .await
                     .unwrap_or(BoardMoveEffect::None);
                 (mutation, effect)
@@ -1323,6 +1350,14 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardSetStatusRequest,
     ) -> BoardResult<BoardMutationReceipt> {
+        Box::pin(self.board_set_status_boxed(caller, request)).await
+    }
+
+    async fn board_set_status_boxed(
+        &self,
+        caller: &BoardCaller,
+        request: BoardSetStatusRequest,
+    ) -> BoardResult<BoardMutationReceipt> {
         let request_id = caller.normalized_request_id(&request.request_id)?;
         let hash = op_hash(BoardOperation::SetStatus, &request, |r| {
             r.request_id.clear()
@@ -1463,6 +1498,14 @@ impl EngineRpc {
     /// revision through the ordinary queue/steer path, recorded as a
     /// `BriefUpdate` launch snapshot. Never edits earlier messages.
     pub(crate) async fn board_send_update(
+        &self,
+        caller: &BoardCaller,
+        request: BoardSendUpdateRequest,
+    ) -> BoardResult<BoardSendUpdateReceipt> {
+        Box::pin(self.board_send_update_boxed(caller, request)).await
+    }
+
+    async fn board_send_update_boxed(
         &self,
         caller: &BoardCaller,
         request: BoardSendUpdateRequest,
@@ -1646,8 +1689,7 @@ impl EngineRpc {
         command.actor_id = "luna-board".into();
         command.client_id = "luna-board-lifecycle".into();
         command.client_session_id = self.cleanup_boot_id.clone();
-        let receipt = self
-            .execute_task_command(command, true)
+        let receipt = Box::pin(self.execute_task_command(command, true))
             .await
             .map_err(|error| BoardError::Unavailable {
                 reason: format!("The update could not be queued: {error}"),
@@ -1963,7 +2005,7 @@ impl EngineRpc {
             report.examined += 1;
             let id = before.work_item_id.clone();
             let _gate = self.board_lifecycle_gate(&id).await;
-            if let Err(error) = self.board_drive(&id, true).await {
+            if let Err(error) = Box::pin(self.board_drive(&id, true)).await {
                 tracing::info!(%error, work_item_id = %id, "board reconcile deferred");
             }
             if let Err(error) = self.board_deliver_pending(&id).await {
@@ -2010,7 +2052,7 @@ impl EngineRpc {
                 .flatten()
                 .is_some_and(|item| item.column == BoardColumn::Done);
             if !(done && !intent.needs_reconcile) {
-                match self.board_drive(&id, false).await {
+                match Box::pin(self.board_drive(&id, false)).await {
                     Ok(_) => driven += 1,
                     Err(error) => {
                         tracing::debug!(%error, work_item_id = %id, "board lifecycle step deferred")

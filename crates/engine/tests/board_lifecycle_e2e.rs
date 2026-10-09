@@ -1226,6 +1226,8 @@ async fn three_ticket_batch_is_bounded_with_per_ticket_results() {
         Some(&batch),
     );
     let replay = ok(&b.c, "BoardStartBatch", request).await;
+    // Sends are durable before the provider sees them; count once it runs.
+    wait_phase(&b, &ids[0], "working").await;
     ev.step(
         "a retried batch returns the same results and starts nothing twice",
         json!({"identical":true,"firstStarts":1}),
@@ -1353,7 +1355,7 @@ async fn brief_edit_keeps_sent_snapshot_and_send_update_delivers_once() {
         .unwrap();
     ev.step(
         "the sent snapshot is immutable while the brief moves on",
-        json!({"briefRevision":2,"sentDescription":BRIEF,"sameHash":true,"prompts":1}),
+        json!({"briefRevision":2,"sentDescription":BRIEF.trim_end(),"sameHash":true,"prompts":1}),
         json!({"briefRevision":edited["item"]["briefRevision"],"sentDescription":original["sentDescription"],"sameHash":original["instructionHash"] == sent["instructionHash"],"prompts":f.peer.for_key(&key).len()}),
         Some(&original),
     );
