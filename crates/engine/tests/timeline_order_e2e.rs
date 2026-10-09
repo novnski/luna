@@ -16,11 +16,16 @@
 //! 6. A notice landing during the final answer, then a bare provider message
 //!    end, closes the last entry early: Done then has no entry for its
 //!    checkpoint, or writes an empty stub.
+//! 7. A text part that opens below a notice moves to a fresh entry with its
+//!    generated ID (`t2`) while that entry's part count restarts, so a later
+//!    paragraph mints the same ID and a streamed append (the UI's delta path)
+//!    grows the wrong paragraph.
 //!
-//! `TIMELINE_ORDER_EVIDENCE_DIR` keeps the final parent transcript as JSON.
+//! `TIMELINE_ORDER_EVIDENCE_DIR` keeps each test's final parent transcript as
+//! JSON.
 use async_trait::async_trait;
 use futures::{StreamExt, stream, stream::BoxStream};
-use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, TranscriptFrame};
 use luna_engine::{EngineCore, HarnessRegistry};
 use luna_harness::{Harness, HarnessError, RunControls};
 use luna_proto::{AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, ToolCall};
@@ -125,6 +130,7 @@ impl Harness for Timeline {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let child = request.prompt.contains("TIMELINE_CHILD");
+        let split = request.prompt.contains("TIMELINE_SPLIT");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -166,6 +172,24 @@ impl Harness for Timeline {
                     send(text("CHILD_ANSWER_42"));
                 }
                 released
+            } else if split {
+                send(tool("lookup-1", "lookup"));
+                send(tool("lookup-2", "lookup"));
+                // The card buries the reply; the next text opens a part that
+                // moves below it, then a second paragraph follows a call.
+                if !hold(created).await {
+                    false
+                } else {
+                    send(text("FIRST"));
+                    send(tool("lookup-3", "lookup"));
+                    send(text("OTHER"));
+                    if !hold(reported).await {
+                        false
+                    } else {
+                        send(text("-MORE"));
+                        hold(late).await
+                    }
+                }
             } else {
                 send(AgentEvent::ReasoningDelta {
                     text: "Planning one helper thread.".into(),
@@ -299,19 +323,27 @@ async fn until(label: &str, core: &EngineCore, parent: &str, mut ready: impl FnM
     }
 }
 
-fn evidence(value: Value) {
+fn evidence(name: &str, value: Value) {
     if let Ok(dir) = std::env::var("TIMELINE_ORDER_EVIDENCE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            std::path::Path::new(&dir).join("timeline-order.json"),
+            std::path::Path::new(&dir).join(format!("{name}.json")),
             serde_json::to_vec_pretty(&value).unwrap(),
         )
         .unwrap();
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn notices_written_mid_turn_stay_in_chronological_order() {
+/// A parent chat on the scripted provider with its first message queued.
+async fn start_parent(
+    text: &str,
+) -> (
+    tempfile::TempDir,
+    Arc<Timeline>,
+    EngineCore,
+    luna_rpc::RpcClient,
+    String,
+) {
     let root = tempfile::tempdir().unwrap();
     let harness = Arc::new(Timeline::default());
     let registry = Arc::new(HarnessRegistry::new());
@@ -331,10 +363,17 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
     rpc.call("Mutate", json!({"op":"createChat","chatId":parent,"spaceId":"timeline","cwd":root.path(),"config":{"harness":"mock","model":null,"modelOptions":{},"sandbox":"read-only","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
     rpc.call(
         "QueueMessage",
-        json!({"chatId":parent,"messageId":"timeline-ask","text":"Create one helper and report back","holdForTurnEnd":true}),
+        json!({"chatId":parent,"messageId":"timeline-ask","text":text,"holdForTurnEnd":true}),
     )
     .await
     .unwrap();
+    (root, harness, core, rpc, parent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notices_written_mid_turn_stay_in_chronological_order() {
+    let (_root, harness, core, rpc, parent) =
+        start_parent("Create one helper and report back").await;
 
     // The live reply must already be in the doc before anything lands below.
     until("parent streams its create call", &core, &parent, || {
@@ -424,7 +463,10 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
 
     let entries = messages(&core, &parent);
     let lines = outline(&entries);
-    evidence(json!({ "outline": lines, "entries": entries }));
+    evidence(
+        "timeline-order",
+        json!({ "outline": lines, "entries": entries }),
+    );
     let shape: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap())
@@ -501,6 +543,91 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
         "Case 6: the turn's checkpoint lands on its last written entry\n{}",
         lines.join("\n")
     );
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn split_reply_keeps_part_ids_unique_so_deltas_grow_the_right_paragraph() {
+    let (_root, harness, core, rpc, parent) = start_parent("TIMELINE_SPLIT look things up").await;
+    until("parent streams its two calls", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Streaming)
+                && tool_ids(entry).iter().any(|(id, _)| id == "lookup-2")
+        })
+    })
+    .await;
+    let child = core
+        .rpc_service()
+        .seed_child_for_qa(
+            parent.clone(),
+            serde_json::from_value(json!({
+                "prompt":"TIMELINE_CHILD","title":"Timeline helper","idempotencyKey":"timeline-split",
+                "reportResults":true,"continueParent":false
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .task_id;
+    let created_id = format!("child-created:{child}");
+    until("created card buries the reply", &core, &parent, || {
+        messages(&core, &parent)
+            .iter()
+            .any(|entry| entry.id == created_id)
+    })
+    .await;
+    harness.created.release();
+    until(
+        "second paragraph streams below the card",
+        &core,
+        &parent,
+        || {
+            messages(&core, &parent).iter().any(|entry| {
+                entry.status == Some(MessageStatus::Streaming) && body(entry).ends_with("OTHER")
+            })
+        },
+    )
+    .await;
+    let before = messages(&core, &parent);
+    harness.reported.release();
+    until("second paragraph grows", &core, &parent, || {
+        messages(&core, &parent)
+            .iter()
+            .any(|entry| body(entry).contains("OTHER-MORE"))
+    })
+    .await;
+    let after = messages(&core, &parent);
+
+    // The UI's live path: the watch diffs consecutive snapshots into a frame
+    // and the transcript applies it to its copy of the earlier one.
+    let frame = luna_doc::diff_transcript(&before, &after);
+    let mut projected = before.clone();
+    let applied = luna_doc::apply_transcript_frame(&mut projected, frame.clone());
+    let lines = outline(&after);
+    evidence(
+        "split-part-ids",
+        json!({ "outline": lines, "before": before, "after": after, "frame": frame }),
+    );
+    assert!(
+        matches!(&frame, TranscriptFrame::Delta { append, .. } if append.len() == 1),
+        "Case 7 precondition: the growth streams as one text append\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        applied.is_ok() && projected == after,
+        "Case 7: the append grows the paragraph that streamed it ({applied:?})\n{}",
+        lines.join("\n")
+    );
+    for entry in &after {
+        let mut ids = std::collections::HashSet::new();
+        assert!(
+            entry.parts.iter().all(|part| ids.insert(part.id())),
+            "Case 7: part IDs stay unique within entry {}\n{}",
+            entry.id,
+            lines.join("\n")
+        );
+    }
     drop(rpc);
     core.shutdown().await;
 }
