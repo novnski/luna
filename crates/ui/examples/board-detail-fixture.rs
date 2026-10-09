@@ -54,7 +54,9 @@
 //! 13. Review details does not open the archived reviewer chat (route and
 //!     selection), or opening it unarchives it.
 //! 14. Escape does not close the drawer; in a narrow window the drawer is
-//!     wider than the page or a control paints outside it.
+//!     wider than the page or a control paints outside it; the header with
+//!     the key, title and Close scrolls away with the body, or the pinned
+//!     Close does not close the drawer.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -465,7 +467,16 @@ fn center(bounds: [f32; 4]) -> (f32, f32) {
     (bounds[0] + bounds[2] / 2.0, bounds[1] + bounds[3] / 2.0)
 }
 
-/// Wheel-scroll the drawer until `name` is fully inside it.
+fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
+    inner[0] >= outer[0] - 0.5
+        && inner[1] >= outer[1] - 0.5
+        && inner[0] + inner[2] <= outer[0] + outer[2] + 0.5
+        && inner[1] + inner[3] <= outer[1] + outer[3] + 0.5
+}
+
+/// Wheel-scroll the drawer until `name` is fully inside its visible area: a
+/// control in the detail's pinned header is always visible; one in its body
+/// must be inside the body's (non-scrolling) frame.
 async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result<[f32; 4]> {
     let mut sign = 1.0_f32;
     let mut last: Option<f32> = None;
@@ -473,8 +484,13 @@ async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result
         let rb = surfaces(window, cx)?;
         let target = rect(&rb, name).ok_or_else(|| anyhow!("{name} was not painted"))?;
         let drawer = rect(&rb, "board-drawer").ok_or_else(|| anyhow!("no drawer painted"))?;
-        let top = drawer[1] + 24.0;
-        let bottom = drawer[1] + drawer[3] - 24.0;
+        if rect(&rb, "detail-header").is_some_and(|header| inside(target, header)) {
+            return Ok(target);
+        }
+        let (top, bottom) = match rect(&rb, "detail-scroll") {
+            Some(body) => (body[1] + 8.0, body[1] + body[3] - 8.0),
+            None => (drawer[1] + 24.0, drawer[1] + drawer[3] - 24.0),
+        };
         if target[1] >= top && target[1] + target[3] <= bottom {
             return Ok(target);
         }
@@ -2123,14 +2139,54 @@ async fn scenario(
             && outside.is_empty(),
     )?;
     run.capture(narrow, cx, "d13-narrow")?;
-    // Focus the drawer with a press on its status line (beside Close at the
-    // top of the drawer), then Escape.
-    let close = reveal(narrow, cx, "detail-close").await?;
+    // The header (key, status, title, Close) stays pinned while the body
+    // scrolls: scroll the body far down, then Close is still in view.
+    reveal(narrow, cx, "detail-dispatch-toggle:ls-fixture-1").await?;
+    let rb = surfaces(narrow, cx)?;
+    let header = rect(&rb, "detail-header");
+    let close = rect(&rb, "detail-close");
+    let body = rect(&rb, "detail-scroll");
+    let scrolled = rect(&rb, "detail-body")
+        .zip(body)
+        .is_some_and(|(content, frame)| content[1] < frame[1] - 1.0);
+    run.check(
+        "close-stays-pinned-while-the-body-scrolls",
+        json!({ "bodyScrolled": true, "closeInsideHeader": true, "headerAboveBody": true }),
+        json!({ "header": header, "close": close, "body": body, "bodyScrolled": scrolled }),
+        scrolled
+            && header
+                .zip(close)
+                .is_some_and(|(header, close)| inside(close, header) && inside(close, drawer))
+            && header
+                .zip(body)
+                .is_some_and(|(header, body)| header[1] + header[3] <= body[1] + 0.5),
+    )?;
+    run.capture(narrow, cx, "d14-narrow-scrolled")?;
+    // Escape: a press on the header's status line (left of Close) focuses
+    // the drawer, then Escape closes it.
+    let close = close.ok_or_else(|| anyhow!("detail-close was not painted"))?;
     click_at(narrow, cx, (drawer[0] + 30.0, close[1] + close[3] / 2.0)).await?;
     keys(narrow, cx, &["escape"]).await?;
     let rb = surfaces(narrow, cx)?;
     run.check(
         "escape-closes-the-drawer",
+        Value::Null,
+        rb["surface"].clone(),
+        rb["surface"].is_null(),
+    )?;
+    // The pinned Close, pressed without scrolling back up, closes it too.
+    open_detail(narrow, cx, &created.work_item_id)?;
+    wait_for(narrow, cx, "the drawer again", |rb| {
+        rb["surface"] == "detail" && state_of(rb)["loaded"] == "ready"
+    })
+    .await?;
+    reveal(narrow, cx, "detail-dispatch-toggle:ls-fixture-1").await?;
+    let rb = surfaces(narrow, cx)?;
+    let close = rect(&rb, "detail-close").ok_or_else(|| anyhow!("detail-close was not painted"))?;
+    click_at(narrow, cx, center(close)).await?;
+    let rb = surfaces(narrow, cx)?;
+    run.check(
+        "pinned-close-closes-the-drawer",
         Value::Null,
         rb["surface"].clone(),
         rb["surface"].is_null(),
