@@ -671,7 +671,9 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
     assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
 
-    // A normal fork and an earlier-message edit preserve hidden ancestry too.
+    // A side chat never forks its conversation again (chat-model §1): the
+    // fork is refused before any provider effect, creates no chat, and the
+    // side's native session keeps its inherited prefix untouched.
     let derived = uuid::Uuid::new_v4().to_string();
     let read = snapshot(&client, side).await;
     let derived_receipt = execute(
@@ -690,60 +692,20 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     .await;
     assert_eq!(
         derived_receipt.status,
-        CommandReceiptStatus::Applied,
+        CommandReceiptStatus::Failed,
         "{derived_receipt:?}"
     );
-    let derived_session = session(&core, &derived);
-    assert_eq!(native_turns(&workspace, &derived_session).await.len(), 5);
-    let read = snapshot(&client, &derived).await;
-    let derived_rewind = execute(
-        &client,
-        envelope(
-            "side-derived-rewind",
-            &derived,
-            Some(&read),
-            serde_json::json!({
-                "kind":"rewindConversation", "messageId":"side-u1", "keepFiles":true,
-                "review":review(&core, &read, &derived, Some("side-u1")),
-            }),
-        ),
-    )
-    .await;
-    assert_eq!(
-        derived_rewind.status,
-        CommandReceiptStatus::Applied,
-        "{derived_rewind:?}"
+    assert!(
+        derived_receipt
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.message.contains("cannot fork")),
+        "{derived_receipt:?}"
     );
-    assert_eq!(native_turns(&workspace, &derived_session).await.len(), 3);
-    send(
-        &client,
-        &core,
-        &derived,
-        &workspace,
-        "derived-u1",
-        "derived first",
-    )
-    .await;
-    let read = snapshot(&client, &derived).await;
-    let edited = execute(
-        &client,
-        envelope(
-            "side-derived-edit",
-            &derived,
-            Some(&read),
-            serde_json::json!({
-                "kind":"editEarlierMessage", "messageId":"derived-u1", "text":"derived edited",
-                "review":review(&core, &read, &derived, Some("derived-u1")),
-            }),
-        ),
-    )
-    .await;
-    assert_eq!(edited.status, CommandReceiptStatus::Applied, "{edited:?}");
-    settle(&client, &core, &workspace, &derived, 1).await;
-    let edited_session = session(&core, &derived);
-    assert_ne!(edited_session, derived_session);
-    assert_eq!(native_turns(&workspace, &edited_session).await.len(), 4);
+    assert!(core.workspace.chat(&derived).unwrap().is_none());
+    assert!(core.task_identity.view(&derived).is_none());
     assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
+    assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
 
     // An unrecorded external turn is never mistaken for the captured prefix.
     let side_path = transcript(&workspace, &side_session);
