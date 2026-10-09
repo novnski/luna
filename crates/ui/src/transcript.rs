@@ -12,7 +12,9 @@
 //!   keeps its id, so row identity is continuous and nothing flickers;
 //! - rows are cached per entry keyed by a content fingerprint — only changed
 //!   messages rebuild (the anti-"streaming stutter" trick);
-//! - row-set changes diff by (id, version) into one minimal `splice`.
+//! - row-set changes diff by (id, version): only runs that insert or remove
+//!   rows are spliced, and rows changed in place are remeasured, so a
+//!   reader's viewport-top row keeps its anchor across an update.
 //!
 //! Stick-to-bottom is a velocity spring (mugen §1e, the same shape as
 //! stackblitz's use-stick-to-bottom): while pinned, a per-frame stepper glides
@@ -2292,8 +2294,9 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
     }
 }
 
-/// Minimal splice for a row-set change: `Some((old_range, new_count))`, or
-/// `None` when the sets are identical by (id, version).
+/// The changed window of a row-set change: `Some((old_range, new_count))`,
+/// or `None` when the sets are identical by (id, version).
+/// [`RowListUpdate`] splits it into the runs the list applies.
 pub fn diff_rows(old: &[Row], new: &[Row]) -> Option<(Range<usize>, usize)> {
     let eq = |a: &Row, b: &Row| a.id == b.id && a.version == b.version;
     let mut prefix = 0usize;
@@ -2310,6 +2313,100 @@ pub fn diff_rows(old: &[Row], new: &[Row]) -> Option<(Range<usize>, usize)> {
         suffix += 1;
     }
     Some((prefix..old.len() - suffix, new.len() - suffix - prefix))
+}
+
+/// How [`Transcript::sync`] applies the window [`diff_rows`] found to the
+/// list without moving a reader whose viewport-top row survived the change.
+/// GPUI's `ListState::splice` resets a scroll anchor inside its range to the
+/// range start, so only runs that insert or remove rows are spliced. Rows that
+/// kept their id, and same-size runs, are remeasured in place, which keeps the
+/// anchor and the old height as a hint; unchanged rows are left alone.
+///
+/// Failure cases this must avoid (written before the implementation):
+/// 1. An earlier row and the tail change in one commit (a tool resolving while
+///    text appends), and the unchanged row being read between them is
+///    spliced: the viewport jumps to the first changed row.
+/// 2. The list's item count drifts from the row count.
+/// 3. A splice shifts the ranges applied after it, or a remeasure uses a
+///    pre-splice index.
+/// 4. Repeated or reordered ids pair the wrong rows and keep a stale height.
+/// 5. A window spanning the whole transcript costs quadratic work.
+#[derive(Default)]
+struct RowListUpdate {
+    /// `(old_range, new_count)` in old-row indices, ascending: apply them back
+    /// to front so every range is still valid when it is spliced.
+    splices: Vec<(Range<usize>, usize)>,
+    /// Changed rows that keep their place, in new-row indices, which are the
+    /// list's indices once every splice has been applied.
+    remeasures: Vec<Range<usize>>,
+}
+
+impl RowListUpdate {
+    fn new(old: &[Row], new: &[Row], window: Range<usize>, count: usize) -> Self {
+        let (old_end, new_end) = (window.end, window.start + count);
+        let old_ids: HashSet<&str> = old[window.clone()].iter().map(|r| r.id.as_ref()).collect();
+        let new_ids: HashSet<&str> = new[window.start..new_end]
+            .iter()
+            .map(|r| r.id.as_ref())
+            .collect();
+        let mut update = Self::default();
+        // The open run of replaced rows: its first old index and the number
+        // of new rows it inserts.
+        let mut run: Option<(usize, usize)> = None;
+        let (mut i, mut j) = (window.start, window.start);
+        while i < old_end || j < new_end {
+            let a = old[..old_end].get(i);
+            let b = new[..new_end].get(j);
+            match (a, b) {
+                (Some(a), Some(b)) if a.id == b.id => {
+                    update.close(run.take(), i, j);
+                    if a.version != b.version {
+                        update.remeasure(j..j + 1);
+                    }
+                    i += 1;
+                    j += 1;
+                }
+                // Removed: absent from the new window.
+                (Some(a), b) if b.is_none() || !new_ids.contains(a.id.as_ref()) => {
+                    run.get_or_insert((i, 0));
+                    i += 1;
+                }
+                // Inserted: absent from the old window.
+                (a, Some(b)) if a.is_none() || !old_ids.contains(b.id.as_ref()) => {
+                    run.get_or_insert((i, 0)).1 += 1;
+                    j += 1;
+                }
+                // Both rows exist elsewhere (a reorder): replace this pair.
+                _ => {
+                    run.get_or_insert((i, 0)).1 += 1;
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        update.close(run, i, j);
+        update
+    }
+
+    fn remeasure(&mut self, range: Range<usize>) {
+        match self.remeasures.last_mut() {
+            Some(last) if last.end == range.start => last.end = range.end,
+            _ => self.remeasures.push(range),
+        }
+    }
+
+    /// Close a run that replaced old rows `start..old_end` with `inserted`
+    /// new rows ending at `new_end`.
+    fn close(&mut self, run: Option<(usize, usize)>, old_end: usize, new_end: usize) {
+        let Some((start, inserted)) = run else {
+            return;
+        };
+        if old_end - start == inserted {
+            self.remeasure(new_end - inserted..new_end);
+        } else {
+            self.splices.push((start..old_end, inserted));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5858,27 +5955,13 @@ impl Transcript {
                 for row in &self.rows[old_range.clone()] {
                     self.render_cache.borrow_mut().invalidate_row(&row.id);
                 }
-                if old_range.len() == count {
-                    // In-place content change, same row count — notably the
-                    // live→complete flip, where EVERY row of the streamed
-                    // message changes version (streaming bit, tool auto_open,
-                    // timestamp bit) with identical ids. `splice` would reset
-                    // those items to hint-less Unmeasured (heights read 0
-                    // until the next paint) and, when the viewport-top item is
-                    // inside the range, clobber the scroll anchor to the range
-                    // start — the end-of-turn up/down jump the spring then has
-                    // to walk back. `remeasure_items` keeps old sizes as hints
-                    // and holds the anchor across the remeasure.
-                    if let Some(perf) = &perf {
-                        crate::perf_counters::count(
-                            "transcript.remeasure",
-                            perf.scope(),
-                            old_range.len() as u64,
-                            0,
-                        );
-                    }
-                    self.list.remeasure_items(old_range);
-                } else {
+                // The window can span unchanged rows between two edits (an
+                // earlier tool resolving while text appends at the tail).
+                // Splice only the runs that insert or remove rows, back to
+                // front, so the unchanged rows keep their heights and a
+                // viewport-top row among them keeps the scroll anchor.
+                let update = RowListUpdate::new(&self.rows, &new_rows, old_range, count);
+                for (old_range, count) in update.splices.into_iter().rev() {
                     if let Some(perf) = &perf {
                         crate::perf_counters::count(
                             "transcript.splice",
@@ -5888,6 +5971,27 @@ impl Transcript {
                         );
                     }
                     self.list.splice(old_range, count);
+                }
+                // In-place content change, same row count — notably the
+                // live→complete flip, where EVERY row of the streamed
+                // message changes version (streaming bit, tool auto_open,
+                // timestamp bit) with identical ids. `splice` would reset
+                // those items to hint-less Unmeasured (heights read 0
+                // until the next paint) and, when the viewport-top item is
+                // inside the range, clobber the scroll anchor to the range
+                // start — the end-of-turn up/down jump the spring then has
+                // to walk back. `remeasure_items` keeps old sizes as hints
+                // and holds the anchor across the remeasure.
+                for range in update.remeasures {
+                    if let Some(perf) = &perf {
+                        crate::perf_counters::count(
+                            "transcript.remeasure",
+                            perf.scope(),
+                            range.len() as u64,
+                            0,
+                        );
+                    }
+                    self.list.remeasure_items(range);
                 }
                 self.viewport_layout_revision = self.viewport_layout_revision.wrapping_add(1);
             }
@@ -15091,6 +15195,95 @@ mod tests {
         let done_rows = rows_for_entry(&done, false, &mut parse);
         // Same ids; every version flips its streaming bit → one 3-row splice.
         assert_eq!(diff_rows(&live_rows, &done_rows), Some((0..3, 3)));
+    }
+
+    #[gpui::test]
+    fn reader_keeps_its_paragraph_when_an_earlier_tool_resolves_as_text_appends(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // A reader scrolled up into a streaming reply keeps the paragraph
+        // they are reading when ONE commit resolves the tool above it and
+        // appends a paragraph at the tail. The unchanged rows in between
+        // must not be replaced: replacing the viewport-top row resets the
+        // list's scroll anchor to the first changed row, the tool, which
+        // jumps the reader back to the top of the reply.
+        with_tool_group_navigation(cx, |state, transcript, cx| {
+            let paragraphs = (0..32)
+                .map(|n| format!("Paragraph {n}."))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let mut tool = tool_part("call", "cargo test");
+            if let MessagePart::Tool { resolved, .. } = &mut tool {
+                *resolved = false;
+            }
+            let mut reply = assistant(
+                "reply",
+                MessageStatus::Streaming,
+                vec![tool, text_part("text", &paragraphs)],
+            );
+            let publish = |reply: &SessionMessageEntry, cx: &mut gpui::App| {
+                state.update(cx, |state, _| {
+                    state.transcript = vec![reply.clone()];
+                    state.transcript_revision += 1;
+                });
+                transcript.update(cx, |this, cx| this.sync(cx));
+            };
+            let version_of = |this: &Transcript, id: &str| {
+                this.rows
+                    .iter()
+                    .find(|row| row.id.as_ref() == id)
+                    .map(|row| row.version)
+            };
+            publish(&reply, cx);
+            let (anchor, tool_version, row_count) = transcript.update(cx, |this, _| {
+                let row_ix = |id: &str| this.rows.iter().position(|row| row.id.as_ref() == id);
+                let anchor_ix = row_ix("reply#text.14").expect("a paragraph mid-reply");
+                assert!(
+                    row_ix("reply#g0").is_some_and(|tool_ix| tool_ix < anchor_ix),
+                    "the tool sits above the paragraph being read"
+                );
+                // The reader scrolled up into the reply: a user-owned viewport.
+                this.pinned = false;
+                this.list.scroll_to(ListOffset {
+                    item_ix: anchor_ix,
+                    offset_in_item: px(12.0),
+                });
+                (
+                    this.rows[anchor_ix].id.clone(),
+                    version_of(this, "reply#g0"),
+                    this.rows.len(),
+                )
+            });
+
+            // One commit: the tool resolves and a paragraph lands at the tail.
+            if let MessagePart::Tool {
+                resolved, output, ..
+            } = &mut reply.parts[0]
+            {
+                *resolved = true;
+                *output = Some("ok".into());
+            }
+            if let MessagePart::Text { text, .. } = &mut reply.parts[1] {
+                text.push_str("\n\nNew paragraph.");
+            }
+            publish(&reply, cx);
+
+            transcript.update(cx, |this, _| {
+                assert_ne!(
+                    version_of(this, "reply#g0"),
+                    tool_version,
+                    "the tool row changed in this commit"
+                );
+                assert_eq!(this.rows.len(), row_count + 1, "a tail row was added");
+                let top = this.list.logical_scroll_top();
+                assert_eq!(
+                    this.rows.get(top.item_ix).map(|row| &row.id),
+                    Some(&anchor),
+                    "the viewport left the paragraph being read"
+                );
+                assert_eq!(top.offset_in_item, px(12.0));
+            });
+        });
     }
 
     #[test]
