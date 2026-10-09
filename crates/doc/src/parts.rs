@@ -528,6 +528,23 @@ impl MessagePart {
     }
 }
 
+/// A generated part ID (`t3`, `r3`, `e3`) no part in `out` already holds.
+///
+/// Starts from the part count, so an accumulator that only grows keeps its
+/// usual IDs. The engine moves a buried segment's newest parts, IDs intact,
+/// into a fresh entry whose count restarts: the count alone would reuse one
+/// of those IDs, and transcript deltas and UI rows key on them.
+fn fresh_part_id(out: &[MessagePart], prefix: char) -> String {
+    let mut n = out.len();
+    loop {
+        let id = format!("{prefix}{n}");
+        if !out.iter().any(|part| part.id() == id) {
+            return id;
+        }
+        n += 1;
+    }
+}
+
 /// Fold one agent event into a parts accumulator, in place.
 ///
 /// In place because the fold runs once per streamed event: rebuilding the
@@ -550,7 +567,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             if let Some(MessagePart::Text { text: tail, .. }) = out.last_mut() {
                 tail.push_str(text);
             } else {
-                let id = format!("t{}", out.len());
+                let id = fresh_part_id(out, 't');
                 out.push(MessagePart::Text {
                     id,
                     text: text.clone(),
@@ -631,7 +648,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             if let Some(MessagePart::Reasoning { text: tail, .. }) = out.last_mut() {
                 tail.push_str(text);
             } else {
-                let id = format!("r{}", out.len());
+                let id = fresh_part_id(out, 'r');
                 out.push(MessagePart::Reasoning {
                     id,
                     text: text.clone(),
@@ -811,7 +828,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             }
         }
         AgentEvent::Error { message } => {
-            let id = format!("e{}", out.len());
+            let id = fresh_part_id(out, 'e');
             out.push(MessagePart::Error {
                 id,
                 message: message.clone(),
@@ -837,7 +854,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 }
             }
             if let Some(message) = error {
-                let id = format!("e{}", out.len());
+                let id = fresh_part_id(out, 'e');
                 out.push(MessagePart::Error {
                     id,
                     message: message.clone(),
