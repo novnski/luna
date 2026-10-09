@@ -13199,6 +13199,106 @@ mod tests {
         assert!(!inspection.contains("Open transcript"));
     }
 
+    /// A "New thread" card hides the create-thread call that made its child.
+    /// Failure cases (written before the fix):
+    /// 1. Calls A and B run concurrently and B's card lands first: A's chip,
+    ///    still running, disappears while B's stays beside its own card.
+    /// 2. A then fails and the two swap, changing the group's contents and
+    ///    height a second time.
+    /// 3. A card for a child no call of the turn created (a user-created
+    ///    helper) hides a call anyway.
+    /// Calls come through the engine's doc privacy policy, as the doc stores
+    /// them; documents without call identity are the timeline fixture's.
+    #[gpui::test]
+    fn a_child_card_hides_the_create_call_that_made_its_child(cx: &mut gpui::TestAppContext) {
+        use luna_proto::AgentEvent;
+        // The child the engine creates for chat "parent" and key "beta"
+        // (cross_task_tools::child_task_id, the durable "luna-child-v1" id).
+        const BETA_CHILD: &str = "cb2faea6-116a-4185-bea6-d07eae37116f";
+        let create = |key: &str| AgentEvent::ToolCall {
+            id: format!("create-{key}"),
+            call: luna_doc::sanitize_tool_call(&ToolCall::Mcp {
+                server: "luna".into(),
+                tool: "create_thread".into(),
+                input: Some(serde_json::json!({
+                    "prompt": format!("Pick a random number ({key})."),
+                    "title": format!("Helper {key}"),
+                    "idempotencyKey": key,
+                })),
+            }),
+        };
+        let result = |key: &str, is_error| AgentEvent::ToolResult {
+            id: format!("create-{key}"),
+            is_error,
+            output: None,
+            diff: None,
+        };
+        let entry = |id: &str, role, parts| SessionMessageEntry {
+            role,
+            ..assistant(id, MessageStatus::Complete, parts)
+        };
+        let card = |child: &str| {
+            entry(
+                &format!("child-created:{child}"),
+                MessageRole::System,
+                vec![text_part("text", "Created child")],
+            )
+        };
+        let mut reply = Vec::new();
+        for event in [create("alpha"), create("beta"), result("beta", false)] {
+            luna_doc::fold_event_into_parts(&mut reply, &event);
+        }
+        let mut entries = vec![
+            entry(
+                "u1",
+                MessageRole::User,
+                vec![text_part("t", "Create two helpers.")],
+            ),
+            assistant("a1", MessageStatus::Streaming, reply.clone()),
+            card(BETA_CHILD),
+            card("a-user-created-helper"),
+        ];
+        let visible_creates = |transcript: &Entity<Transcript>, cx: &mut gpui::App| {
+            transcript.update(cx, |this, cx| {
+                this.sync(cx);
+                this.rows
+                    .iter()
+                    .filter_map(|row| match &row.kind {
+                        RowKind::ToolGroup { tools, .. } => Some(tools.iter()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .map(|tool| tool.part_id.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        with_tool_group_navigation(cx, |state, transcript, cx| {
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("parent".into());
+                state.transcript = entries.clone();
+                state.transcript_revision += 1;
+            });
+            assert_eq!(
+                visible_creates(&transcript, cx),
+                ["create-alpha"],
+                "1/3: the beta card hid another call than its own"
+            );
+
+            luna_doc::fold_event_into_parts(&mut reply, &result("alpha", true));
+            entries[1].parts = reply;
+            state.update(cx, |state, _| {
+                state.transcript = entries;
+                state.transcript_revision += 1;
+            });
+            assert_eq!(
+                visible_creates(&transcript, cx),
+                ["create-alpha"],
+                "2: alpha failing swapped which call its group shows"
+            );
+        });
+    }
+
     #[test]
     fn pre_spawn_agent_name_is_enough_to_split() {
         // Before the engine stamps subagent_ref the chip is already named

@@ -1333,6 +1333,28 @@ mod tests {
         );
     }
 
+    /// A LUNA create-thread call keeps only the key that, with its chat, names
+    /// the child it creates (the transcript pairs the child's card with the
+    /// call by it). The brief stays host-local; still a fixpoint.
+    #[test]
+    fn sanitize_keeps_only_a_create_threads_idempotency_key() {
+        let call = |input| ToolCall::Mcp {
+            server: "luna".into(),
+            tool: "create_thread".into(),
+            input: Some(input),
+        };
+        let clean = sanitize_tool_call(&call(serde_json::json!({
+            "prompt": "a very long private brief",
+            "title": "Helper",
+            "idempotencyKey": "helper-1",
+        })));
+        assert_eq!(
+            clean,
+            call(serde_json::json!({ "idempotencyKey": "helper-1" }))
+        );
+        assert_eq!(sanitize_tool_call(&clean), clean);
+    }
+
     /// A spawn that named no model keeps no input at all — `None`, not an
     /// empty object, so the doc gains nothing and the fixpoint is exact.
     #[test]
