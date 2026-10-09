@@ -7070,7 +7070,7 @@ impl DocHost {
     /// `…​.diff`) — the UI's lazy "Show full output" path, served over RPC
     /// because the UI crate has no HTTP client or edge bearer.
     pub async fn fetch_tool_blob(&self, blob_ref: &str) -> Result<String, EngineError> {
-        // Same shape `apply_sidecar_refs` writes; anything else is a forged ref.
+        // Same shape `apply_journal_output_refs` writes; anything else is a forged ref.
         let valid = blob_ref.split_once('/').is_some_and(|(chat, part)| {
             !chat.is_empty()
                 && chat.len() <= 128

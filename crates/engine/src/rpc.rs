@@ -12690,7 +12690,9 @@ mod tests {
         core.store
             .save_snapshot("delayed-task", b"synthetic-snapshot")
             .unwrap();
-        core.workspace.delete_space("delayed-project").unwrap();
+        core.workspace
+            .delete_space_if_chats("delayed-project", &["delayed-task".to_string()])
+            .unwrap();
         core.workspace.flush_checked().unwrap();
 
         assert_eq!(

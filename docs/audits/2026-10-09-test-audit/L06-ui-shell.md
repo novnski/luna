@@ -368,7 +368,7 @@ Paths are relative to `crates/ui/src`. A renamed keeper keeps its baseline name 
 | R | `state.rs::tests::archive_shortcut_only_targets_an_open_active_chat` | Archive shortcut target. |
 | R | `state.rs::tests::echoes_show_until_doc_frame_confirms` | Echo lifecycle. |
 | R | `state.rs::tests::transcript_replay_barrier_requires_the_opening_reset` | Replay barrier needs the opening Reset. |
-| C | `state.rs::tests::gate_phases` | Its Local, Synced+SignedOut and NeedsOrganization rows duplicated `luna_proto::view::gate_tests` (L08); trimmed to the rows proto does not cover (Connecting, Failed, Synced+SignedIn). Cross-lane request: move those three rows into proto, then delete this test. |
+| D | `state.rs::tests::gate_phases` | Coordinator: deleted after L08 folded its last three rows (Connecting, Failed, Synced+SignedIn) into `luna_proto::view::gate_tests::gate_phase_resolves_connection_scope_and_auth`; `state::gate_phase` is that function re-exported. Lane note: Its Local, Synced+SignedOut and NeedsOrganization rows duplicated `luna_proto::view::gate_tests` (L08); trimmed to the rows proto does not cover (Connecting, Failed, Synced+SignedIn). Cross-lane request: move those three rows into proto, then delete this test. |
 | R | `state.rs::tests::auth_changes_do_not_change_a_local_runtime_scope_or_watches` | Auth updates never change a Local scope or watches. |
 | R | `state.rs::tests::auth_frames_parse_both_wire_shapes` | Only owner of `parse_auth_state` wire shapes. |
 | R | `state.rs::tests::project_labels_from_cwd` | `project_label` table. |

@@ -29,6 +29,12 @@ block2 = "0.6"
 # infrastructure for this crate's tests and luna-engine's integration tests.
 mock-server = []
 
+# The registry WS client suite drives the mock server; without this, a
+# plain `cargo test -p luna-sync` fails to compile instead of skipping it.
+[[test]]
+name = "registry_client"
+required-features = ["mock-server"]
+
 [dev-dependencies]
 chrono.workspace = true
 # chat2_live example only (live checkpoint fetch against a deployed worker).

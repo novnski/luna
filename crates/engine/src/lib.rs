@@ -769,14 +769,6 @@ impl EngineCore {
         )
     }
 
-    /// Hermetic RPC fixture seam: replace the dormant default broker with an
-    /// explicitly in-memory one before exposing any backup method.
-    #[doc(hidden)]
-    pub fn with_backup_control_for_tests(mut self, control: backup_control::BackupControl) -> Self {
-        self.backup_control = Some(control);
-        self
-    }
-
     /// Attach the auth service (before building the RPC service / relays).
     pub fn set_auth(&self, auth: Auth) {
         *self

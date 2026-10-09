@@ -5794,35 +5794,6 @@ mod tests {
         assert!(state.transcript_replayed);
     }
 
-    /// The scope/auth rows live in `luna_proto::view::gate_tests`; these are
-    /// the connection phases and the signed-in synced row it does not cover.
-    #[test]
-    fn gate_phases() {
-        assert_eq!(
-            gate_phase(&ConnectionStatus::Connecting, None, None),
-            GatePhase::Loading
-        );
-        assert_eq!(
-            gate_phase(&ConnectionStatus::Failed("boom".into()), None, None),
-            GatePhase::Failed("boom".into())
-        );
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Synced),
-                Some(&AuthState::SignedIn {
-                    user: UserProfile {
-                        id: "u".into(),
-                        email: "w@example.com".into(),
-                        name: None,
-                    },
-                    org_id: None
-                })
-            ),
-            GatePhase::Ready
-        );
-    }
-
     #[test]
     fn auth_changes_do_not_change_a_local_runtime_scope_or_watches() {
         let mut state = AppState::new();

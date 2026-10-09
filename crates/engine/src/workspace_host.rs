@@ -1775,14 +1775,10 @@ impl WorkspaceHost {
         })
     }
 
-    /// Hard-delete a space and its chats (registry cascade — one atomic batch).
-    /// The caller (rpc layer) tears down live runs / doc-host handles for the
+    /// Hard-delete a space and its chats (registry cascade — one atomic batch),
+    /// refusing a stale deletion preview inside the registry commit lock. The
+    /// caller (rpc layer) tears down live runs / doc-host handles for the
     /// returned chat ids.
-    pub fn delete_space(&self, space_id: &str) -> Result<DeletedSpace, EngineError> {
-        Ok(self.mutate(|doc| doc.delete_space(space_id))?)
-    }
-
-    /// Refuse a stale deletion preview inside the registry commit lock.
     pub fn delete_space_if_chats(
         &self,
         space_id: &str,

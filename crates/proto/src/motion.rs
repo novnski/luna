@@ -145,6 +145,11 @@ mod tests {
         close(gspin_opacity(0.0, GSPIN_DIM), 1.0, "starts full");
         close(gspin_opacity(0.45, GSPIN_DIM), GSPIN_DIM, "down by 45%");
         close(gspin_opacity(0.7, GSPIN_DIM), GSPIN_DIM, "rests dim");
+        close(
+            gspin_opacity(0.9, GSPIN_DIM),
+            GSPIN_DIM,
+            "still dim at the end of the rest band",
+        );
         close(gspin_opacity(1.0, GSPIN_DIM), 1.0, "back to full");
         // The fall and the rise ease through intermediate values, not a step.
         let mid_fall = gspin_opacity(0.2, GSPIN_DIM);

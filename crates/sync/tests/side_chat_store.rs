@@ -1,4 +1,6 @@
 //! File-backed schema acceptance across v13, v14, and the current schema.
+//! The current version comes from a fresh store, so a new migration only has
+//! to be undone in `v13_profile` (a missed one fails as "already exists").
 //! Failure cases: upgrading v13 loses command config; opening twice reruns DDL;
 //! a partial migration marks v14 or leaks tables; a future version mutates bytes.
 
@@ -9,9 +11,26 @@ fn v13_profile() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    // Undo v14 through v16 physically before resetting the migration marker.
+    // Undo v14 through the current schema physically before resetting the
+    // migration marker (v17 only added a column to task_execution_lineage).
     db.execute_batch(
-        "DROP TABLE IF EXISTS side_chat_sends;
+        "DROP TABLE board_dependencies;
+        DROP TABLE board_authoring_entries;
+        DROP TABLE board_authoring_sessions;
+        DROP TABLE board_review_runs;
+        DROP TABLE board_intents;
+        DROP TABLE board_outcomes;
+        DROP TABLE board_launches;
+        DROP TABLE board_issue_refs;
+        DROP TABLE board_task_links;
+        DROP TABLE board_events;
+        DROP TABLE board_mutations;
+        DROP TABLE board_items;
+        DROP TABLE board_projects;
+        DROP TABLE automation_runs;
+        DROP TABLE automation_mutations;
+        DROP TABLE automations;
+        DROP TABLE IF EXISTS side_chat_sends;
         DROP TABLE IF EXISTS side_chat_entries;
         DROP TABLE IF EXISTS side_chats;
         DROP TABLE prompt_stash;
@@ -27,6 +46,13 @@ fn v13_profile() -> tempfile::TempDir {
     root
 }
 
+/// The schema version a fresh store migrates to.
+fn current_version() -> i64 {
+    let root = tempfile::tempdir().unwrap();
+    drop(DocsStore::open(root.path()).unwrap());
+    version(&Connection::open(root.path().join("docs.sqlite3")).unwrap())
+}
+
 fn version(db: &Connection) -> i64 {
     db.query_row("SELECT max(version) FROM schema_migrations", [], |row| {
         row.get(0)
@@ -39,12 +65,13 @@ fn v13_profile_migrates_once_and_preserves_existing_command_storage() {
     let root = v13_profile();
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 16);
+    let current = current_version();
+    assert_eq!(version(&db), current);
     assert_eq!(
         db.query_row("SELECT count(*) FROM schema_migrations", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
-        16
+        current
     );
     assert_eq!(db.query_row("SELECT config FROM project_command_configs WHERE project_id='project' AND device_id='device'", [], |row| row.get::<_, Vec<u8>>(0)).unwrap(), b"[]");
     db.execute("INSERT INTO side_chats (id,parent_id,title,created_at_ms,expires_at_ms,state,config,cwd,context,context_mode,creation_hash) VALUES ('side','parent','Saved',1,7200001,'unloaded','{}','/fixture','','contextSnapshot','hash')", []).unwrap();
@@ -63,7 +90,7 @@ fn v13_profile_migrates_once_and_preserves_existing_command_storage() {
     assert!(reopened.is_side_chat("side").unwrap());
     drop(reopened);
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 16);
+    assert_eq!(version(&db), current_version());
     assert_eq!(
         db.query_row(
             "SELECT entry FROM side_chat_entries WHERE chat_id='side'",
@@ -113,7 +140,7 @@ fn failed_v14_migration_rolls_back_all_new_tables_and_version() {
     drop(db);
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 16);
+    assert_eq!(version(&db), current_version());
     assert_eq!(
         db.query_row("SELECT count(*) FROM project_command_configs", [], |row| {
             row.get::<_, i64>(0)
@@ -129,8 +156,13 @@ fn next_schema_is_rejected_before_wal_or_migration_changes() {
     let path = root.path().join("docs.sqlite3");
     let db = Connection::open(&path).unwrap();
     db.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL) STRICT;
-        INSERT INTO schema_migrations VALUES(17,1);
         CREATE TABLE future_data(value TEXT); INSERT INTO future_data VALUES('keep');").unwrap();
+    let supported = current_version();
+    db.execute(
+        "INSERT INTO schema_migrations VALUES(?1,1)",
+        [supported + 1],
+    )
+    .unwrap();
     drop(db);
     let before = std::fs::read(&path).unwrap();
     let error = match DocsStore::open(root.path()) {
@@ -138,7 +170,8 @@ fn next_schema_is_rejected_before_wal_or_migration_changes() {
         Err(error) => error.to_string(),
     };
     assert!(
-        error.contains("17") && error.contains("newer") && error.contains("supported 16"),
+        error.contains(&format!("schema {} is newer", supported + 1))
+            && error.contains(&format!("supported {supported}")),
         "{error}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
