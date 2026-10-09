@@ -815,13 +815,12 @@ async fn freshness_backoff_and_account_scope() {
     let last_list = w
         .calls()
         .into_iter()
-        .filter(|call| {
+        .rfind(|call| {
             call["endpoint"]
                 .as_str()
                 .unwrap_or("")
                 .starts_with(list_prefix)
         })
-        .next_back()
         .unwrap();
     let args: Vec<String> = serde_json::from_value(last_list["args"].clone()).unwrap();
     ev.step(

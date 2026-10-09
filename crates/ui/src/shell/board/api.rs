@@ -128,6 +128,9 @@ impl BoardApi {
     }
 
     /// `BoardToolCatalog` diagnostics for one chat.
+    // Part of the typed surface (one method per Board* RPC, contract §9);
+    // no UI surface shows tool diagnostics yet.
+    #[allow(dead_code)]
     pub async fn tool_catalog(&self, task_id: &str) -> Result<serde_json::Value, BoardCallError> {
         self.call(
             methods::BOARD_TOOL_CATALOG,
@@ -143,6 +146,10 @@ macro_rules! board_calls {
         impl BoardApi {
             $(
                 $(#[$doc])*
+                // The typed surface covers every unary Board* RPC (contract
+                // §9); not every method has a UI caller yet (agent-only or
+                // engine-driven operations).
+                #[allow(dead_code)]
                 pub async fn $name(&self, request: $request) -> Result<$response, BoardCallError> {
                     self.call(methods::$method, &request).await
                 }
