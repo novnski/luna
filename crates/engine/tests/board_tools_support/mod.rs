@@ -373,6 +373,28 @@ impl Fixture {
         }
     }
 
+    /// The ticket's active working chat, polled until `within` elapses: a
+    /// start can be admitted or queued before the lifecycle records the
+    /// working link from runtime evidence.
+    pub async fn working_chat(&self, work_item_id: &str, within: Duration) -> Option<String> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            let read = self
+                .rpc_ok("BoardRead", json!({"workItemId": work_item_id}))
+                .await;
+            let found = read["links"].as_array().and_then(|links| {
+                links
+                    .iter()
+                    .find(|link| link["role"] == "working" && link["active"] == true)
+                    .and_then(|link| link["taskId"].as_str().map(str::to_owned))
+            });
+            if found.is_some() || tokio::time::Instant::now() >= deadline {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     pub fn chat_ids(&self) -> HashSet<String> {
         self.core
             .workspace
@@ -1635,23 +1657,35 @@ pub async fn board_tools_scenario(f: &Fixture) {
                 &cancel,
             )
             .await;
+        // A started or reused start names its worker when the link is
+        // already recorded; a queued one gets it moments later.
+        let start_worker = start
+            .as_ref()
+            .ok()
+            .and_then(|receipt| receipt["worker"]["taskId"].as_str().map(str::to_owned));
         evidence.check(
             "the main chat starts a ticket for the reviewer audience",
             "a start receipt",
             start
-                .map(|receipt| json!(receipt["mutation"]["column"]))
+                .map(|receipt| {
+                    json!({"column": receipt["mutation"]["column"],
+                        "outcome": receipt["outcome"]["kind"],
+                        "workerInReceipt": start_worker.is_some()})
+                })
                 .map_err(|error| format!("{error:?}")),
         );
-        let read = f.rpc_ok("BoardRead", json!({"workItemId": id})).await;
-        review_worker = read["links"].as_array().and_then(|links| {
-            links
-                .iter()
-                .find(|link| link["role"] == "working")
-                .and_then(|link| link["taskId"].as_str().map(str::to_owned))
-        });
-        let worker = review_worker
-            .clone()
-            .expect("the started ticket's working chat");
+        review_worker = f.working_chat(&id, Duration::from_secs(10)).await;
+        evidence.check(
+            "the started ticket gets its working chat",
+            "an active working link within 10 s, matching the receipt's worker when it names one",
+            expect(
+                review_worker.is_some()
+                    && (start_worker.is_none() || start_worker == review_worker),
+                || format!("receipt worker {start_worker:?}, working link {review_worker:?}"),
+            )
+            .map(|_| json!({"fromReceipt": start_worker.is_some()})),
+        );
+        let worker = review_worker.clone().unwrap();
         tools
             .invoke(
                 &f.authority(&worker),
@@ -1852,14 +1886,17 @@ pub async fn board_tools_scenario(f: &Fixture) {
     }
 
     // ---- no orphan chats -----------------------------------------------
-    let read = f.rpc_ok("BoardRead", json!({"workItemId": ticket})).await;
-    let worker = read["links"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|link| link["role"] == "working" && link["active"] == true)
-        .and_then(|link| link["taskId"].as_str())
-        .map(str::to_owned);
+    // A started ticket's working link may be recorded after the start.
+    let worker = f
+        .working_chat(
+            &ticket,
+            if started {
+                Duration::from_secs(10)
+            } else {
+                Duration::ZERO
+            },
+        )
+        .await;
     let mut allowed: HashSet<String> = chats_before.clone();
     allowed.insert(child.clone());
     for created in [&side_ctx_created, &sibling_created, &handoff_created]
