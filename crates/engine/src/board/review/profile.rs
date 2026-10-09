@@ -239,7 +239,9 @@ impl EngineRpc {
             resolved.harness,
             resolved.model.as_deref(),
         );
-        if !capabilities.supports(PermissionMode::Ask) || !capabilities.supports_workspace_sandbox {
+        if !capabilities.supports(PermissionMode::Ask)
+            || !crate::permissions::provider_preserves_read_only(resolved.harness)
+        {
             return Err(unavailable(format!(
                 "{} cannot run a review-constrained (read-only) session on this host, so it cannot review.",
                 harness.display_name()

@@ -99,6 +99,17 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
     }
 }
 
+/// Providers whose adapter enforces an engine-resolved read-only sandbox
+/// (Codex natively; Claude Code by launching without its edit, write and
+/// command tools). Review-constrained and legacy read-only threads refuse
+/// every other provider instead of silently running with write access.
+pub fn provider_preserves_read_only(harness: HarnessId) -> bool {
+    matches!(
+        harness,
+        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Mock
+    )
+}
+
 /// Claude's classifier-backed Auto mode is model-gated by the provider. The
 /// curated catalog uses concrete ids; the bare `opus`/`sonnet` aliases resolve
 /// to current eligible models in the installed CLI. Unknown/default models are

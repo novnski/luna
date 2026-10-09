@@ -711,6 +711,15 @@ impl ClaudeHarness {
         tracing::info!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
         let tools = if title_only {
             ToolSelection::Disabled
+        } else if request.sandbox == luna_proto::SandboxLevel::ReadOnly
+            && request
+                .permission_policy
+                .as_ref()
+                .is_some_and(|policy| policy.effective_mode != luna_proto::PermissionMode::Full)
+        {
+            // Engine-resolved read-only (a review-constrained reviewer):
+            // no edit, write or command tools at all.
+            ToolSelection::ReadOnly
         } else {
             ToolSelection::ModeDefault
         };

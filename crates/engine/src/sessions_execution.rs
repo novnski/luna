@@ -175,17 +175,27 @@ impl SessionsEngine {
                     .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
             );
         }
+        // A board reviewer runs review-constrained on every turn: engine
+        // authority from its recorded review run, never a client setting.
+        let review_constrained = self
+            .inner
+            .review_constrained_lookup
+            .get()
+            .is_some_and(|lookup| lookup(chat_id));
         // A migrated fork retains its own legacy read-only sandbox until an
         // explicit permission change. Source changes never alter this thread.
-        let side_sandbox = self
-            .inner
-            .side_chat_lookup
-            .get()
-            .filter(|lookup| lookup(chat_id))
-            .map(|_| request.sandbox)
-            .or_else(|| child.as_ref().and_then(|child| child.sandbox_ceiling));
+        let side_sandbox = if review_constrained {
+            Some(SandboxLevel::ReadOnly)
+        } else {
+            self.inner
+                .side_chat_lookup
+                .get()
+                .filter(|lookup| lookup(chat_id))
+                .map(|_| request.sandbox)
+                .or_else(|| child.as_ref().and_then(|child| child.sandbox_ceiling))
+        };
         if side_sandbox == Some(SandboxLevel::ReadOnly) {
-            if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
+            if !crate::permissions::provider_preserves_read_only(harness_id) {
                 return Err(EngineError::Other(
                     "This provider cannot preserve this thread's read-only sandbox".into(),
                 ));

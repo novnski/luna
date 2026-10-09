@@ -79,6 +79,16 @@ const FULL_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 /// Commit retries after a concurrent writer moved the ticket/intent/run.
 const MUTATE_ATTEMPTS: usize = 4;
 
+/// Whether a chat runs review-constrained (read-only sandbox on every turn):
+/// it carries an active Reviewer link to a ticket. Installed into the
+/// sessions engine at assembly; the authority is the recorded review
+/// ownership, never a client-supplied setting.
+pub(crate) fn review_constrained(store: &DocsStore, chat_id: &str) -> bool {
+    store
+        .board_task_links_for_task(chat_id, true)
+        .is_ok_and(|links| links.iter().any(|link| link.role == TaskLinkRole::Reviewer))
+}
+
 fn storage(error: impl std::fmt::Display) -> BoardError {
     BoardError::Storage {
         message: error.to_string(),

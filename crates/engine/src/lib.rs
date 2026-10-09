@@ -595,6 +595,12 @@ impl EngineCore {
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());
         sessions.set_task_identity(task_identity.clone());
+        {
+            let store = store.clone();
+            sessions.set_review_constrained_lookup(Arc::new(move |chat_id| {
+                rpc::board_engine::review::review_constrained(&store, chat_id)
+            }));
+        }
         let side_chats = side_chats::SideChats::open(
             &profile.store_root(),
             device_write.handle(),
