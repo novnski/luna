@@ -1,6 +1,17 @@
 # Project board, ticket chats, and unified Side chats
 
-**Status:** product requirements and defaults confirmed; implementation not started.
+**Status:** PB-0 through PB-3, including PB-1R, implemented on 2026-10-09. Only PB-4 (feature groups, more trackers, dependency-driven automation) remains open. The engineering contract is [pb0-contract.md](../../design/project-board/pb0-contract.md).
+
+**Verification (2026-10-09):**
+
+- **Engine E2E:** `crates/engine/tests/board_*_e2e.rs` cover store, lifecycle, chat model, Codex/Claude/OpenCode tools, review, GitHub and authoring.
+- **Headless UI fixtures:** `crates/ui/examples/board-*-fixture.rs`.
+- **Native QA:** run on a signed LUNA QA Board app with real providers.
+  - Codex implemented two tickets and Claude Code Haiku reviewed them, both in a main and in a side-ticket placement; the second ticket was stopped and then continued in the same chat.
+  - An agent created and started tickets through LUNA tools.
+  - Discuss with AI saved a ticket and kept, resumed and discarded a draft.
+  - An existing chat was converted to a ticket.
+- **Not run live:** GitHub issues (no authorized repository was chosen; covered by the fake-`gh` E2E and fixture).
 
 **Researched:** 2026-10-08, Europe/Bucharest.
 
