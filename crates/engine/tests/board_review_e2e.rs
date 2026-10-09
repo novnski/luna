@@ -1061,6 +1061,28 @@ async fn reviewer_turn(rig: &mut Rig, item: &str, what: &str) -> (Turn, Value) {
                 .contains(run["basis"]["packetHash"].as_str().unwrap()),
             "packet carries its hash"
         );
+        // `review_submit` judges the result by the model the engine observed
+        // running the reviewer. A real reviewer submits long after its session
+        // started; a scenario submits at once, so it first waits for that
+        // observation instead of racing the run loop under load.
+        let reviewer = run["reviewerTaskId"].as_str().unwrap().to_owned();
+        while rig
+            .core()
+            .sessions
+            .execution_summary(&reviewer)
+            .ok()
+            .flatten()
+            .and_then(|summary| summary.running)
+            .and_then(|running| running.model)
+            .is_none()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{}: {what}: the reviewer's running model was never observed",
+                rig.evidence.scenario
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         return (turn, run);
     }
 }
