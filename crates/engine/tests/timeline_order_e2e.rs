@@ -24,6 +24,9 @@
 //!    output's first coalesced flush, lands above it: the reply's entry is
 //!    only created at the flush, below the notice, so the create call reads
 //!    as if it happened after its own card.
+//! 9. Two provider messages with only the provider's message end between
+//!    them glue into one text or thought part (`Checking.The answer is 42.`)
+//!    when no notice has buried the reply.
 //!
 //! `TIMELINE_ORDER_EVIDENCE_DIR` keeps each test's final parent transcript as
 //! JSON.
@@ -136,6 +139,7 @@ impl Harness for Timeline {
         let child = request.prompt.contains("TIMELINE_CHILD");
         let split = request.prompt.contains("TIMELINE_SPLIT");
         let early_card = request.prompt.contains("TIMELINE_EARLY_CARD");
+        let back_to_back = request.prompt.contains("TIMELINE_MESSAGES");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -205,6 +209,21 @@ impl Harness for Timeline {
                     send(text("PARENT_AFTER_CARD"));
                 }
                 released
+            } else if back_to_back {
+                // Three provider messages, none carrying its own separator:
+                // a thought alone, a thought then text, then text alone.
+                send(AgentEvent::ReasoningDelta {
+                    text: "Reading the fixture.".into(),
+                });
+                send(message_end());
+                send(AgentEvent::ReasoningDelta {
+                    text: "Comparing the totals.".into(),
+                });
+                send(text("Checking."));
+                send(message_end());
+                send(text("The answer is 42."));
+                send(message_end());
+                true
             } else {
                 send(AgentEvent::ReasoningDelta {
                     text: "Planning one helper thread.".into(),
@@ -360,8 +379,9 @@ async fn start_parent(
     String,
 ) {
     let root = tempfile::tempdir().unwrap();
+    let harness = Arc::new(Timeline::default());
     let registry = Arc::new(HarnessRegistry::new());
-    registry.register(harness);
+    registry.register(harness.clone());
     let core = EngineCore::assemble(root.path(), registry, HarnessId::Mock, None).unwrap();
     let rpc = luna_rpc::memory_client(core.rpc_service());
     let parent = uuid::Uuid::new_v4().to_string();
@@ -730,6 +750,38 @@ async fn notice_landing_before_the_first_flush_stays_below_journaled_output() {
         body(replies[1]),
         "PARENT_AFTER_CARD",
         "Case 8: output after the card lands below it\n{}",
+        lines.join("\n")
+    );
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn back_to_back_provider_messages_stay_separate_parts() {
+    let (_root, _harness, core, rpc, parent) = start_parent("TIMELINE_MESSAGES").await;
+    until("reply settles", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Complete)
+                && body(entry).contains("The answer is 42.")
+        })
+    })
+    .await;
+
+    let entries = messages(&core, &parent);
+    let lines = outline(&entries);
+    evidence(
+        "message-boundary",
+        json!({ "outline": lines, "entries": entries }),
+    );
+    let replies: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("assistant"))
+        .collect();
+    assert_eq!(
+        replies,
+        ["assistant [thought, thought, text(Checking.), text(The answer is 42.)] Some(Complete)"],
+        "Case 9: each provider message opens its own thought or text part\n{}",
         lines.join("\n")
     );
     drop(rpc);

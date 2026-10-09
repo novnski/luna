@@ -559,12 +559,26 @@ fn fresh_part_id(out: &[MessagePart], prefix: char) -> String {
 /// - `InputRequested` appends an input part; `InputResolved` marks it resolved.
 /// - `Error` and `Done{error}` become visible error parts.
 pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
+    fold_event(out, event, true);
+}
+
+/// Fold the first event after the provider closed a message
+/// (`AssistantMessageCompleted`). A text or reasoning delta opens its own part
+/// instead of continuing the previous message's trailing text or thought, so
+/// two messages never read as one sentence ("Checking.The answer is 42.") when
+/// the provider sends no separator. Every other event folds exactly as in
+/// [`fold_event_into_parts`].
+pub fn fold_message_start_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
+    fold_event(out, event, false);
+}
+
+fn fold_event(out: &mut Vec<MessagePart>, event: &AgentEvent, continue_tail: bool) {
     match event {
         AgentEvent::SessionStarted { .. } | AgentEvent::Steered { .. } => {
             out.clear();
         }
         AgentEvent::TextDelta { text } => {
-            if let Some(MessagePart::Text { text: tail, .. }) = out.last_mut() {
+            if continue_tail && let Some(MessagePart::Text { text: tail, .. }) = out.last_mut() {
                 tail.push_str(text);
             } else {
                 let id = fresh_part_id(out, 't');
@@ -645,7 +659,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             if text.is_empty() {
                 return;
             }
-            if let Some(MessagePart::Reasoning { text: tail, .. }) = out.last_mut() {
+            if continue_tail && let Some(MessagePart::Reasoning { text: tail, .. }) = out.last_mut()
+            {
                 tail.push_str(text);
             } else {
                 let id = fresh_part_id(out, 'r');
