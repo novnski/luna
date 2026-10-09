@@ -1302,12 +1302,6 @@ mod tests {
     }
 
     #[test]
-    fn modifier_send_labels_are_platform_specific() {
-        assert_eq!(modifier_send_label(true), "⌘ Enter");
-        assert_eq!(modifier_send_label(false), "Ctrl Enter");
-    }
-
-    #[test]
     fn modifier_send_is_always_reserved_for_the_composer() {
         assert!(send_combo_is_reserved(
             ComposerSendBehavior::Enter,

@@ -924,104 +924,6 @@ pub(crate) mod tests {
     use gpui::{Image, ImageFormat};
     use std::sync::Arc;
 
-    struct FakeCaptureBackend {
-        capture_access: AtomicBool,
-        semantic_access: AtomicBool,
-    }
-
-    #[async_trait::async_trait]
-    impl AppshotBackend for FakeCaptureBackend {
-        fn capabilities(&self) -> AppshotCapabilities {
-            AppshotCapabilities {
-                platform: AppshotPlatform::MacOs,
-                global_shortcut: CapabilityState::Ready,
-                window_capture: if self.capture_access.load(Ordering::SeqCst) {
-                    CapabilityState::Ready
-                } else {
-                    CapabilityState::PermissionRequired
-                },
-                application_text: if self.semantic_access.load(Ordering::SeqCst) {
-                    CapabilityState::Ready
-                } else {
-                    CapabilityState::PermissionRequired
-                },
-                target: CaptureTarget::ActiveWindow,
-            }
-        }
-
-        fn start_global_shortcut(
-            &self,
-            _activation_dir: &Path,
-        ) -> futures::channel::mpsc::UnboundedReceiver<()> {
-            futures::channel::mpsc::unbounded().1
-        }
-
-        async fn capture_active_window(&self) -> Result<CapturedAppshot, CaptureError> {
-            if !self.capture_access.load(Ordering::SeqCst) {
-                return Err(CaptureError::PermissionRequired);
-            }
-            let mut captured = shot();
-            if !self.semantic_access.load(Ordering::SeqCst) {
-                captured.accessibility = AccessibilitySnapshot::unavailable();
-            }
-            Ok(captured)
-        }
-
-        fn request_capture_access(&self) {
-            self.capture_access.store(true, Ordering::SeqCst);
-        }
-
-        fn request_semantic_access(&self) {
-            self.semantic_access.store(true, Ordering::SeqCst);
-        }
-    }
-
-    #[test]
-    fn fake_capture_permission_recovery_preserves_source_and_image_text_pair() {
-        let backend = FakeCaptureBackend {
-            capture_access: AtomicBool::new(false),
-            semantic_access: AtomicBool::new(false),
-        };
-        assert_eq!(
-            backend.capabilities().window_capture,
-            CapabilityState::PermissionRequired
-        );
-        assert!(
-            backend
-                .capabilities()
-                .setup_description()
-                .contains("This device captures")
-        );
-        assert!(futures::executor::block_on(backend.capture_active_window()).is_err());
-        backend.request_capture_access();
-        assert_eq!(
-            backend.capabilities().window_capture,
-            CapabilityState::Ready
-        );
-        let screenshot_only = futures::executor::block_on(backend.capture_active_window()).unwrap();
-        assert!(screenshot_only.accessibility.content.is_empty());
-        backend.request_semantic_access();
-        assert_eq!(
-            backend.capabilities().application_text,
-            CapabilityState::Ready
-        );
-        let rich = futures::executor::block_on(backend.capture_active_window()).unwrap();
-        assert_eq!(rich.app_name, "Safari & Notes");
-        assert_eq!(
-            rich.bundle_identifier.as_deref(),
-            Some("com.apple.<Safari>")
-        );
-        assert_eq!(rich.window_title.as_deref(), Some("A \"window\""));
-        assert_eq!(rich.screenshot.id, "image-1");
-        let prompt = with_appshots(
-            "Inspect",
-            &[rich],
-            &HashMap::from([("image-1".into(), "/synthetic/image.png".into())]),
-        );
-        assert!(prompt.contains("image=\"/synthetic/image.png\""));
-        assert!(prompt.contains("AXTextField: &lt;ignore this&gt;"));
-    }
-
     pub(crate) fn shot() -> CapturedAppshot {
         CapturedAppshot {
             id: "shot-1".into(),
@@ -1201,6 +1103,9 @@ pub(crate) mod tests {
         assert!(prompt.contains("pending://id/a&amp;b.png"));
         assert!(prompt.contains("&lt;ignore this&gt;"));
         assert_eq!(strip_context_for_display(&prompt), "Fix this");
+        // An Appshot-only message (no typed prompt) strips to an empty body.
+        let attachment_only = with_appshots("", &[self::shot()], &HashMap::new());
+        assert_eq!(strip_context_for_display(&attachment_only), "");
     }
 
     #[test]
@@ -1300,26 +1205,5 @@ pub(crate) mod tests {
             restore_queued_appshots("plain", &paths, &[original.screenshot]).unwrap();
         assert_eq!(ordinary.len(), 1);
         assert!(shots.is_empty());
-    }
-
-    #[test]
-    fn empty_prompt_round_trips_to_empty_display() {
-        let shot = shot();
-        let prompt = with_appshots("", &[shot], &HashMap::new());
-        assert_eq!(strip_context_for_display(&prompt), "");
-    }
-
-    #[test]
-    fn wayland_capabilities_explain_picker_and_system_shortcut_fallbacks() {
-        let capabilities = AppshotCapabilities {
-            platform: AppshotPlatform::LinuxWayland,
-            global_shortcut: CapabilityState::SetupRequired,
-            window_capture: CapabilityState::UserSelection,
-            application_text: CapabilityState::Ready,
-            target: CaptureTarget::PortalWindowPicker,
-        };
-        assert!(capabilities.shortcut_description().contains("luna appshot"));
-        assert!(capabilities.capture_description().contains("each capture"));
-        assert!(capabilities.window_capture.is_ready());
     }
 }

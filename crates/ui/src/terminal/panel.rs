@@ -2177,16 +2177,6 @@ mod tests {
     }
 
     #[test]
-    fn exit_message_format() {
-        let text = String::from_utf8(exit_message(0)).unwrap();
-        assert!(text.contains("[process exited 0]"));
-        let text = String::from_utf8(exit_message(137)).unwrap();
-        assert!(text.contains("[process exited 137]"));
-        assert!(text.starts_with("\r\n"));
-        assert!(text.ends_with("\r\n"));
-    }
-
-    #[test]
     fn shell_titles() {
         assert_eq!(shell_title("/bin/zsh"), "zsh");
         assert_eq!(shell_title("/usr/local/bin/fish"), "fish");
@@ -2242,7 +2232,11 @@ mod tests {
     fn exit_message_feeds_cleanly_through_the_emulator() {
         let mut emulator = Emulator::new(40, 4);
         emulator.feed(b"$ done");
-        emulator.feed(&exit_message(1));
-        assert_eq!(emulator.row_text(1), "[process exited 1]");
+        emulator.feed(&exit_message(137));
+        // The notice takes its own row after the output, and its trailing CRLF
+        // parks the cursor at the start of the next row for later output.
+        assert_eq!(emulator.row_text(0), "$ done");
+        assert_eq!(emulator.row_text(1), "[process exited 137]");
+        assert_eq!(emulator.cursor(), Some(CursorSnapshot { row: 2, col: 0 }));
     }
 }

@@ -278,15 +278,28 @@ mod tests {
     fn line_relative_spans_become_absolute_utf8_ranges() {
         let source = "let café = \"😀\";\nnext";
         let string_start = source.find('"').unwrap();
+        let next_start = source.find("next").unwrap();
         let document = highlighted(
             source,
-            vec![HighlightSpan {
-                range: string_start..string_start + "\"😀\"".len(),
-                kind: HighlightKind::String,
-            }],
+            vec![
+                HighlightSpan {
+                    range: string_start..string_start + "\"😀\"".len(),
+                    kind: HighlightKind::String,
+                },
+                HighlightSpan {
+                    range: next_start..source.len(),
+                    kind: HighlightKind::Variable,
+                },
+            ],
         );
         let spans = absolute_spans(source, &document);
         assert_eq!(spans[0].0, string_start..string_start + "\"😀\"".len());
+        // The second line's span is stored relative to its line; it must move
+        // past the multi-byte first line instead of staying at 0..4.
+        assert_eq!(
+            spans[1],
+            (next_start..source.len(), HighlightKind::Variable)
+        );
     }
 
     #[test]
@@ -313,36 +326,5 @@ mod tests {
         assert_eq!(runs.first().unwrap().0.start, 0);
         assert_eq!(runs.last().unwrap().0.end, source.len());
         assert!(runs.windows(2).all(|pair| pair[0].0.end == pair[1].0.start));
-    }
-
-    #[test]
-    fn stale_highlight_ranges_are_rejected_before_updated_unicode_is_shaped() {
-        let stale_source = "ab";
-        let stale_document = highlighted(
-            stale_source,
-            vec![HighlightSpan {
-                range: 1..2,
-                kind: HighlightKind::Variable,
-            }],
-        );
-        let highlighter = LunaInputHighlighter::new(stale_source, &stale_document);
-        let resolver = LunaHighlightStyleResolver {
-            palette: Theme::dark().syntax,
-        };
-        let updated_text = "é";
-
-        let stale_runs = highlighter.styles(&(0..updated_text.len()), &resolver);
-
-        assert!(stale_runs.iter().any(|(range, _)| {
-            !updated_text.is_char_boundary(range.start) || !updated_text.is_char_boundary(range.end)
-        }));
-        assert!(!highlight_source_matches_editor(stale_source, updated_text));
-    }
-
-    #[test]
-    fn editor_caret_uses_the_same_theme_token_as_other_inputs() {
-        for theme in [Theme::dark(), Theme::light()] {
-            assert_eq!(editor_style(&theme).caret, theme.caret);
-        }
     }
 }

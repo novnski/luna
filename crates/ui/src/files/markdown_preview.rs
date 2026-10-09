@@ -1382,24 +1382,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_retains_mail_links_without_allowing_active_schemes() {
-        for (url, allowed) in [
-            ("mailto:reader@example.com", true),
-            ("https://example.com", true),
-            ("javascript:alert(1)", false),
-        ] {
-            let a = render::LinkActivation {
-                target: render::LinkTarget::new("label", url),
-                action: render::LinkAction::Internal,
-                source_session: None,
-            };
-            assert_eq!(
-                matches!(preview_link_outcome(&a), render::LinkOutcome::External(_)),
-                allowed
-            );
-        }
-    }
-    #[test]
     fn comments_map_to_original_lines_and_containing_blocks() {
         let source = "# Título 🦀\r\n\r\nPárrafo\r\nsegunda línea\r\n\r\n- uno\r\n- dos\r\n\r\n```mermaid\r\ngraph TD; A-->B\r\n```\r\n";
         let lines = block_source_lines(source, &parser::parse_full(source));

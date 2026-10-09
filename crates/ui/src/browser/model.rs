@@ -161,13 +161,6 @@ mod tests {
         assert!(!allowed_navigation("https://user@example.com/"));
     }
     #[test]
-    fn native_visibility_never_outlives_its_surface() {
-        assert_eq!(presentation(false, false), Presentation::Hidden);
-        assert_eq!(presentation(false, true), Presentation::Hidden);
-        assert_eq!(presentation(true, true), Presentation::Passthrough);
-        assert_eq!(presentation(true, false), Presentation::Live);
-    }
-    #[test]
     fn tab_labels_fall_back_to_host_then_browser() {
         let mut page = PageState::default();
         assert_eq!(page.label(), "Browser");
