@@ -3854,6 +3854,8 @@ impl Shell {
             "settle" => self.execute_task_action(id, TaskConfirmation::Settle, cx),
             "unsettle" => self.set_chat_settled(id, false, cx),
             "delete" => self.execute_task_action(id, TaskConfirmation::Delete, cx),
+            // The chat menu's context fork ("… with context from here…").
+            "fork" => self.open_history_fork(id, ConversationForkBoundaryKind::Tip, None, cx),
             _ => {}
         }
     }

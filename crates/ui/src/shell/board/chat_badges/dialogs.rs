@@ -95,6 +95,8 @@ pub(crate) struct BoardChatDialog {
 
 /// The side chat's creation card (its `+`): New side chat or Hand off.
 pub(crate) struct SideOriginCard {
+    /// The workbench group whose `+` opened it (the keyboard returns there).
+    pub(crate) pane_id: Option<String>,
     pub(crate) side_id: String,
     pub(crate) main_id: Option<String>,
     pub(crate) anchor: Point<Pixels>,
@@ -575,6 +577,7 @@ impl Shell {
     /// ordinary chooser opens).
     pub(in crate::shell) fn board_side_origin_card(
         &mut self,
+        pane_id: Option<&str>,
         source: &str,
         anchor: Point<Pixels>,
         cx: &mut Context<Self>,
@@ -586,6 +589,7 @@ impl Shell {
         }
         self.board_chat.status_menu = None;
         self.board_chat.side_card = Some(SideOriginCard {
+            pane_id: pane_id.map(str::to_string),
             side_id: source.to_string(),
             main_id: role.main_parent_id,
             anchor,
@@ -596,8 +600,14 @@ impl Shell {
         true
     }
 
-    fn board_close_side_card(&mut self, cx: &mut Context<Self>) {
-        if self.board_chat.side_card.take().is_some() {
+    /// Close the card without creating anything. Escape returns the
+    /// keyboard to the side chat in the group it was opened from (as the
+    /// chooser's Escape does); a press elsewhere leaves focus where it went.
+    fn board_close_side_card(&mut self, restore_focus: bool, cx: &mut Context<Self>) {
+        if let Some(card) = self.board_chat.side_card.take() {
+            if restore_focus && let Some(pane_id) = card.pane_id.as_deref() {
+                self.workbench_focus_group(pane_id, Some(&card.side_id), cx);
+            }
             cx.notify();
         }
     }
@@ -616,7 +626,7 @@ impl Shell {
             return false;
         };
         match event.keystroke.key.as_str() {
-            "escape" => self.board_close_side_card(cx),
+            "escape" => self.board_close_side_card(true, cx),
             "enter" | "n" => self.board_create_sibling(side, cx),
             "h" => {
                 self.board_chat.side_card = None;
@@ -779,7 +789,7 @@ impl Shell {
             .flex_col()
             .gap(crate::typography::ui_rems(8.0))
             .text_size(crate::typography::ui_rems(12.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.board_close_side_card(cx)))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.board_close_side_card(false, cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if this.board_side_card_key(event, cx) {
                     cx.stop_propagation();
