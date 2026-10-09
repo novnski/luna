@@ -199,12 +199,11 @@ impl EngineRpc {
                     );
                     command.command_id = format!("{delivery_id}-continue");
                     command.actor_id = "luna-board:result".into();
-                    let receipt =
-                        self.execute_task_command(command, true)
-                            .await
-                            .map_err(|error| BoardError::Unavailable {
-                                reason: error.to_string(),
-                            })?;
+                    let receipt = Box::pin(self.execute_task_command(command, true))
+                        .await
+                        .map_err(|error| BoardError::Unavailable {
+                            reason: error.to_string(),
+                        })?;
                     if receipt.status != CommandReceiptStatus::Applied {
                         // Retried with the same command id later; never a
                         // second wake.

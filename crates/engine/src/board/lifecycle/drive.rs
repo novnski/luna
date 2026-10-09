@@ -6,7 +6,7 @@
 use super::*;
 use luna_proto::{
     BoardAttentionKind, BoardChatCreated, BoardCreateMainChatRequest, BoardCreateSideChatRequest,
-    BoardTicketBinding, ReviewRun,
+    BoardTicketBinding,
 };
 
 /// A board execution that currently holds admission capacity.
@@ -33,6 +33,19 @@ pub(crate) fn reviewer_stop_command(command_id: &str, reviewer: &str) -> String 
         <Sha256 as sha2::Digest>::digest(format!("{command_id}\0{reviewer}").as_bytes())
     );
     format!("board-stop-rv-{}", &digest[..32])
+}
+
+/// One checkout regardless of how its path is spelled (child chats store
+/// the canonical path, e.g. `/private/var/…` for `/var/…`).
+fn checkout_key(cwd: &str) -> Option<String> {
+    if cwd.is_empty() {
+        return None;
+    }
+    Some(
+        std::fs::canonicalize(cwd)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| cwd.to_owned()),
+    )
 }
 
 fn attention_kind_for(error: &BoardError) -> BoardAttentionKind {
@@ -79,14 +92,14 @@ impl EngineRpc {
         self.board_settle_launch(&mut ticket).await?;
         let effect = match (ticket.intent.desired, ticket.item.column) {
             (_, BoardColumn::Done) => BoardMoveEffect::None,
-            (BoardColumn::Ready, _) => match self.board_drive_ready(&mut ticket).await {
+            (BoardColumn::Ready, _) => match Box::pin(self.board_drive_ready(&mut ticket)).await {
                 Ok(effect) => effect,
                 Err(error) => {
                     self.board_cache_phase(&mut ticket)?;
                     return Err(error);
                 }
             },
-            _ => self.board_drive_hold(&mut ticket).await?,
+            _ => Box::pin(self.board_drive_hold(&mut ticket)).await?,
         };
         self.board_cache_phase(&mut ticket)?;
         Ok(effect)
@@ -148,8 +161,7 @@ impl EngineRpc {
     // ---- shared Stop ----
 
     /// The exact workflow-owned reviewer chats of a ticket (never unrelated
-    /// siblings): the review slice's owned work, plus every recorded review
-    /// run that has not reached a terminal state.
+    /// siblings), as the review slice records them for this generation.
     pub(crate) fn board_stop_scope(
         &self,
         work_item_id: &str,
@@ -158,21 +170,11 @@ impl EngineRpc {
     ) -> Vec<String> {
         let mut ids = match self.board_review_owned_work(work_item_id, generation) {
             Ok(ids) => ids,
-            Err(BoardError::NotImplemented { .. }) => Vec::new(),
             Err(error) => {
                 tracing::warn!(%error, work_item_id, "review owned-work lookup failed");
                 Vec::new()
             }
         };
-        let runs: Vec<ReviewRun> = self
-            .store
-            .board_review_runs(work_item_id, 50)
-            .unwrap_or_default();
-        ids.extend(runs.into_iter().filter_map(|run| {
-            (run.execution_generation <= generation && !run.state.terminal())
-                .then_some(run.reviewer_task_id)
-                .flatten()
-        }));
         let mut seen = HashSet::new();
         ids.retain(|id| id != worker && seen.insert(id.clone()));
         ids
@@ -196,7 +198,7 @@ impl EngineRpc {
         command.actor_id = "luna-board".into();
         command.client_id = "luna-board-lifecycle".into();
         command.client_session_id = self.cleanup_boot_id.clone();
-        self.execute_task_command(command, true).await
+        Box::pin(self.execute_task_command(command, true)).await
     }
 
     /// Stop the ticket-owned reviewers that belong to one chat-level Stop.
@@ -517,7 +519,7 @@ impl EngineRpc {
                 }
                 // Persisted but never issued (crash between commit and send):
                 // no receipt exists, so issuing the same command id is safe.
-                self.board_issue_launch(ticket).await
+                Box::pin(self.board_issue_launch(ticket)).await
             }
             BoardLaunchState::Pending => {
                 let (Some(command_id), Some(message_id)) = (
@@ -535,7 +537,7 @@ impl EngineRpc {
                 // No receipt: the command never reached admission (the
                 // process stopped before it), so the same id is safe to issue.
                 let Some(receipt) = receipt else {
-                    return self.board_issue_launch(ticket).await;
+                    return Box::pin(self.board_issue_launch(ticket)).await;
                 };
                 // Acceptance pending from an earlier boot can no longer be
                 // proven; one from this boot may still arrive.
@@ -572,9 +574,14 @@ impl EngineRpc {
                 ))
             }
             CommandReceiptStatus::Pending => {
-                let unknown_reason = receipt.reason.as_ref().is_some_and(|reason| {
-                    reason.code == CommandReasonCode::ProviderAcceptanceUnknown
-                });
+                // An admitted send carries `ProviderAcceptanceUnknown` while it
+                // waits for provider correlation; only a receipt the engine
+                // closed as ambiguous (committed without acceptance, e.g. a
+                // restart sweep) proves the outcome is unknown.
+                let unknown_reason = receipt.committed_at_ms.is_some()
+                    && receipt.reason.as_ref().is_some_and(|reason| {
+                        reason.code == CommandReasonCode::ProviderAcceptanceUnknown
+                    });
                 let worker = ticket.intent.working_task_id.as_deref().unwrap_or_default();
                 let live = self.board_chat_live(worker).1;
                 if unknown_reason {
@@ -748,7 +755,7 @@ impl EngineRpc {
         command.actor_id = "luna-board".into();
         command.client_id = "luna-board-lifecycle".into();
         command.client_session_id = self.cleanup_boot_id.clone();
-        self.execute_task_command(command, true).await
+        Box::pin(self.execute_task_command(command, true)).await
     }
 
     // ---- hold (Backlog) ----
@@ -1023,7 +1030,7 @@ impl EngineRpc {
             }
             return Ok(BoardMoveEffect::Queued { reason });
         }
-        match self.board_dispatch(ticket, worker, pending).await {
+        match Box::pin(self.board_dispatch(ticket, worker, pending)).await {
             Ok(effect) => Ok(effect),
             Err(error) => {
                 if ticket.intent.launch_failure.is_none() {
@@ -1114,7 +1121,7 @@ impl EngineRpc {
                 limit: BOARD_PROVIDER_CAPACITY,
             }));
         }
-        if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty())
+        if let Some(cwd) = cwd.as_deref().and_then(checkout_key)
             && let Some(other) = active
                 .iter()
                 .find(|execution| execution.cwd.as_deref() == Some(cwd.as_str()))
@@ -1166,7 +1173,10 @@ impl EngineRpc {
                     .as_ref()
                     .and_then(|chat| chat.config.as_ref())
                     .map(|config| config.harness),
-                cwd: chat.and_then(|chat| chat.cwd),
+                cwd: chat
+                    .and_then(|chat| chat.cwd)
+                    .as_deref()
+                    .and_then(checkout_key),
                 task_id: task,
             });
         }
@@ -1245,7 +1255,7 @@ impl EngineRpc {
             });
             let created = match &pending.resolved_destination {
                 BoardDestination::SideOf { main_task_id } => {
-                    self.board_create_side_chat(
+                    Box::pin(self.board_create_side_chat(
                         &caller,
                         BoardCreateSideChatRequest {
                             request_id: request_id.clone(),
@@ -1261,11 +1271,11 @@ impl EngineRpc {
                             ticket: binding,
                             execution: Some(execution.clone()),
                         },
-                    )
+                    ))
                     .await
                 }
                 BoardDestination::SiblingOf { side_task_id } => {
-                    self.board_create_side_chat(
+                    Box::pin(self.board_create_side_chat(
                         &caller,
                         BoardCreateSideChatRequest {
                             request_id: request_id.clone(),
@@ -1277,11 +1287,11 @@ impl EngineRpc {
                             ticket: binding,
                             execution: Some(execution.clone()),
                         },
-                    )
+                    ))
                     .await
                 }
                 BoardDestination::NewMain | BoardDestination::Auto => {
-                    self.board_create_main_chat(
+                    Box::pin(self.board_create_main_chat(
                         &caller,
                         BoardCreateMainChatRequest {
                             request_id: request_id.clone(),
@@ -1298,7 +1308,7 @@ impl EngineRpc {
                             ticket: binding,
                             execution: Some(execution.clone()),
                         },
-                    )
+                    ))
                     .await
                 }
             };
@@ -1393,7 +1403,7 @@ impl EngineRpc {
                 (link.task_id, main, resolved, destination)
             }
             None => {
-                let created = self.board_create_worker(ticket, &pending).await?;
+                let created = Box::pin(self.board_create_worker(ticket, &pending)).await?;
                 let mut resolved = created.settings.clone();
                 if let Some(frozen) = &pending.resolved {
                     resolved.sources = frozen.sources.clone();
@@ -1553,7 +1563,7 @@ impl EngineRpc {
                 task_id: Some(task_id),
             },
         )?;
-        self.board_issue_launch(ticket).await?;
+        Box::pin(self.board_issue_launch(ticket)).await?;
         Ok(if kind == BoardInstructionKind::FirstStart {
             BoardMoveEffect::FirstStart {
                 launch_snapshot_id: launch_id,
