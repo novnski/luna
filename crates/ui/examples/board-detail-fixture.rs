@@ -599,6 +599,45 @@ async fn project_tickets(env: &Env) -> anyhow::Result<BoardListPage> {
     .await
 }
 
+/// Archive a chat through the ordinary task-command path, as the app's
+/// archive action does: read a fresh task snapshot immediately before the
+/// command, fence it with that revision (and binding generation), and retry
+/// once with a re-read snapshot and a new command id when another update
+/// moved the revision in between.
+async fn archive_chat(env: &Env, task_id: &str) -> anyhow::Result<luna_proto::CommandReceipt> {
+    let mut receipt = None;
+    for attempt in 0..2 {
+        let read: luna_proto::TaskCommandRead = rpc(
+            env,
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            json!({ "taskId": task_id }),
+        )
+        .await?;
+        let mut params = json!({
+            "commandId": format!("fixture-archive-{task_id}-{attempt}"),
+            "actorId": env.device,
+            "clientId": env.device,
+            "clientSessionId": "board-detail-fixture",
+            "taskId": task_id,
+            "intent": { "kind": "setArchived", "archived": true },
+            "expectedTaskRevision": read.snapshot.task_revision,
+        });
+        if let Some(generation) = read.snapshot.binding_generation {
+            params["expectedBindingGeneration"] = generation.into();
+        }
+        let answer: luna_proto::CommandReceipt =
+            rpc(env, methods::EXECUTE_TASK_COMMAND, params).await?;
+        let stale = answer.status == luna_proto::CommandReceiptStatus::Conflict
+            && answer.reason.as_ref().map(|reason| reason.code)
+                == Some(luna_proto::CommandReasonCode::StaleTaskRevision);
+        receipt = Some(answer);
+        if !stale {
+            break;
+        }
+    }
+    receipt.ok_or_else(|| anyhow!("no archive receipt"))
+}
+
 fn chat_count(env: &Env) -> anyhow::Result<usize> {
     Ok(env.workspace.read_chats()?.len())
 }
@@ -1832,18 +1871,10 @@ async fn scenario(
         )
         .await?;
     }
-    // The reviewer is archived the way the review cleanup archives it: the
-    // ordinary setArchived task command, then an independent readback.
-    let archive: luna_proto::CommandReceipt = rpc(
-        env,
-        methods::EXECUTE_TASK_COMMAND,
-        json!({
-            "commandId": "fixture-archive-reviewer",
-            "taskId": EV_REVIEW,
-            "intent": { "kind": "setArchived", "archived": true },
-        }),
-    )
-    .await?;
+    // The reviewer is archived the way the app archives a chat: the
+    // ordinary setArchived task command fenced by a fresh task snapshot,
+    // then an independent readback.
+    let archive = archive_chat(env, EV_REVIEW).await?;
     let reviewer_archived = env
         .workspace
         .chat(EV_REVIEW)?
@@ -1851,7 +1882,11 @@ async fn scenario(
     run.check(
         "reviewer-archived-through-the-engine",
         json!({ "status": "applied", "archived": true }),
-        json!({ "status": archive.status, "archived": reviewer_archived }),
+        json!({
+            "status": archive.status,
+            "reason": archive.reason,
+            "archived": reviewer_archived,
+        }),
         archive.status == luna_proto::CommandReceiptStatus::Applied && reviewer_archived,
     )?;
     let chats = env.workspace.read_chats()?;
