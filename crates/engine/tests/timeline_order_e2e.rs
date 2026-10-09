@@ -20,6 +20,10 @@
 //!    generated ID (`t2`) while that entry's part count restarts, so a later
 //!    paragraph mints the same ID and a streamed append (the UI's delta path)
 //!    grows the wrong paragraph.
+//! 8. A notice written after the run journaled output, but before that
+//!    output's first coalesced flush, lands above it: the reply's entry is
+//!    only created at the flush, below the notice, so the create call reads
+//!    as if it happened after its own card.
 //!
 //! `TIMELINE_ORDER_EVIDENCE_DIR` keeps each test's final parent transcript as
 //! JSON.
@@ -131,6 +135,7 @@ impl Harness for Timeline {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let child = request.prompt.contains("TIMELINE_CHILD");
         let split = request.prompt.contains("TIMELINE_SPLIT");
+        let early_card = request.prompt.contains("TIMELINE_EARLY_CARD");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -190,6 +195,16 @@ impl Harness for Timeline {
                         hold(late).await
                     }
                 }
+            } else if early_card {
+                // The create call opens the reply and returns at once; the
+                // card lands before the reply's first coalesced flush.
+                send(tool("spawn-1", "create_thread"));
+                send(result("spawn-1", "created"));
+                let released = hold(created).await;
+                if released {
+                    send(text("PARENT_AFTER_CARD"));
+                }
+                released
             } else {
                 send(AgentEvent::ReasoningDelta {
                     text: "Planning one helper thread.".into(),
@@ -345,9 +360,8 @@ async fn start_parent(
     String,
 ) {
     let root = tempfile::tempdir().unwrap();
-    let harness = Arc::new(Timeline::default());
     let registry = Arc::new(HarnessRegistry::new());
-    registry.register(harness.clone());
+    registry.register(harness);
     let core = EngineCore::assemble(root.path(), registry, HarnessId::Mock, None).unwrap();
     let rpc = luna_rpc::memory_client(core.rpc_service());
     let parent = uuid::Uuid::new_v4().to_string();
@@ -628,6 +642,96 @@ async fn split_reply_keeps_part_ids_unique_so_deltas_grow_the_right_paragraph() 
             lines.join("\n")
         );
     }
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notice_landing_before_the_first_flush_stays_below_journaled_output() {
+    let (_root, harness, core, rpc, parent) = start_parent("TIMELINE_EARLY_CARD").await;
+
+    // The create call and its result are journaled (subscribers have seen
+    // them) well inside the reply's first STREAM_COMMIT_MS window.
+    let (replay, mut live) = core.sessions.subscribe(&parent, 0).unwrap();
+    let create_returned =
+        |event: &AgentEvent| matches!(event, AgentEvent::ToolResult { id, .. } if id == "spawn-1");
+    if !replay
+        .iter()
+        .any(|journaled| create_returned(&journaled.event))
+    {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !create_returned(&live.recv().await.unwrap().event) {}
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Timed out: create call journaled\n{}",
+                outline(&messages(&core, &parent)).join("\n")
+            )
+        });
+    }
+    // The created card, written the way the child sweeper appends it: a
+    // finished System entry pushed below whatever the doc holds now. The
+    // sweeper itself runs on a 2 s tick and cannot be aimed inside this
+    // window on demand.
+    core.doc_host
+        .open(&parent)
+        .unwrap()
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "child-created:early-helper".into(),
+            role: MessageRole::System,
+            parts: vec![MessagePart::Text {
+                id: "text".into(),
+                text: "Created child Early helper. Fresh context.".into(),
+            }],
+            created_at: 0,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    harness.created.release();
+    until("parent turn completes", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Complete)
+                && body(entry).contains("PARENT_AFTER_CARD")
+        })
+    })
+    .await;
+
+    let entries = messages(&core, &parent);
+    let lines = outline(&entries);
+    evidence(
+        "notice-before-first-flush",
+        json!({ "outline": lines, "entries": entries }),
+    );
+    let shape: Vec<&str> = lines
+        .iter()
+        .map(|line| line.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(
+        shape,
+        ["user", "assistant", "child-created", "assistant"],
+        "Case 8: output journaled before the card stays above it\n{}",
+        lines.join("\n")
+    );
+    let replies: Vec<&SessionMessageEntry> = entries
+        .iter()
+        .filter(|entry| entry.role == MessageRole::Assistant)
+        .collect();
+    assert_eq!(
+        tool_ids(replies[0]),
+        [("spawn-1".to_string(), true)],
+        "Case 8: the create call sits above its card, resolved in place\n{}",
+        lines.join("\n")
+    );
+    assert_eq!(
+        body(replies[1]),
+        "PARENT_AFTER_CARD",
+        "Case 8: output after the card lands below it\n{}",
+        lines.join("\n")
+    );
     drop(rpc);
     core.shutdown().await;
 }
