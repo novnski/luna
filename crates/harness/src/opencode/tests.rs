@@ -1540,7 +1540,7 @@ fn variants_only_ride_models_that_advertise_them() {
 
 fn feed_with_assistant(message: &str) -> SessionFeed {
     let mut feed = SessionFeed::default();
-    feed.assistant_messages.insert(message.into(), true);
+    feed.assistant_messages.insert(message.into());
     feed
 }
 
@@ -1554,8 +1554,7 @@ fn reasoning_parts_stream_as_reasoning_deltas() {
     });
     assert!(part_snapshot_events(&mut feed, &open, true).is_empty());
     // Deltas append as ReasoningDelta, not text.
-    let props = json!({"sessionID": "ses_1", "messageID": "msg_a", "partID": "prt_r"});
-    let events = part_delta_events(&mut feed, &props, "prt_r", "thinking hard");
+    let events = part_delta_events(&mut feed, "prt_r", "thinking hard");
     assert!(matches!(
         events.as_slice(),
         [AgentEvent::ReasoningDelta { text }] if text == "thinking hard"
@@ -1576,47 +1575,6 @@ fn reasoning_parts_stream_as_reasoning_deltas() {
         events.as_slice(),
         [AgentEvent::ReasoningDelta { text }] if text == " about it"
     ));
-}
-
-#[test]
-fn reasoning_ahead_of_its_message_role_is_held_and_replayed() {
-    let mut feed = SessionFeed::default();
-    let part = json!({
-        "id": "prt_r", "messageID": "msg_a", "sessionID": "ses_1",
-        "type": "reasoning", "text": "early thought",
-    });
-    assert!(part_snapshot_events(&mut feed, &part, true).is_empty());
-    assert_eq!(feed.pending_parts.len(), 1);
-    // The role lands; replay drains the held part.
-    feed.assistant_messages.insert("msg_a".into(), true);
-    let mut turn = TurnState::begin(None);
-    let events = replay_pending(&mut feed, "msg_a", true, &mut turn);
-    assert!(matches!(
-        events.as_slice(),
-        [AgentEvent::ReasoningDelta { text }] if text == "early thought"
-    ));
-    assert!(turn.saw_content);
-}
-
-#[test]
-fn main_feed_user_text_is_the_prompt_echo_and_never_renders() {
-    let mut feed = SessionFeed::default();
-    feed.assistant_messages.insert("msg_u".into(), false);
-    let part = json!({
-        "id": "prt_u", "messageID": "msg_u", "sessionID": "ses_1",
-        "type": "text", "text": "the prompt",
-    });
-    assert!(part_snapshot_events(&mut feed, &part, true).is_empty());
-    // On a CHILD feed the same shape is the message INTO the child.
-    let mut child = SessionFeed::default();
-    child.assistant_messages.insert("msg_u".into(), false);
-    let events = part_snapshot_events(&mut child, &part, false);
-    assert!(matches!(
-        events.as_slice(),
-        [AgentEvent::UserMessage { text }] if text == "the prompt"
-    ));
-    // Re-delivered snapshots don't double the entry.
-    assert!(part_snapshot_events(&mut child, &part, false).is_empty());
 }
 
 /// The `native` payload of an OpenCode tool-result envelope.

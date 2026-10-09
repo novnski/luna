@@ -252,28 +252,13 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 return BusOutcome::Continue;
             };
             if session == session_id {
-                main_feed
-                    .assistant_messages
-                    .entry(message.to_owned())
-                    .or_insert(role == "assistant");
+                main_feed.assistant_messages.insert(message.to_owned());
                 // Only a real v2 message id (`msg_`, from step.started) anchors
                 // the turn-end checkpoint readback: usage no longer rides a
                 // synthetic message, and never becomes a checkpoint.
                 if role == "assistant" && message.starts_with("msg_") {
                     turn.provider_checkpoint_id = Some(message.to_owned());
                 }
-                let events = replay_pending(main_feed, message, true, turn);
-                return forward(event_tx, events).await;
-            }
-            if let Some(child) = children.runs.get_mut(session) {
-                child
-                    .feed
-                    .assistant_messages
-                    .entry(message.to_owned())
-                    .or_insert(role == "assistant");
-                let events = replay_pending(&mut child.feed, message, false, turn);
-                let tagged = children.tagged(session, events);
-                return forward(event_tx, tagged).await;
             }
             BusOutcome::Continue
         }
@@ -353,7 +338,7 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 return BusOutcome::Continue;
             }
             if session == session_id {
-                let events = part_delta_events(main_feed, props, part_id, delta);
+                let events = part_delta_events(main_feed, part_id, delta);
                 mark_content(turn, &events);
                 return forward(event_tx, events).await;
             }
@@ -361,7 +346,7 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 if child.done {
                     return BusOutcome::Continue;
                 }
-                let events = part_delta_events(&mut child.feed, props, part_id, delta);
+                let events = part_delta_events(&mut child.feed, part_id, delta);
                 let tagged = children.tagged(session, events);
                 return forward(event_tx, tagged).await;
             }
