@@ -10,7 +10,8 @@ mkdir -p "$ROOT/target/qa"
 evidence="$(mktemp -d "$ROOT/target/qa/startup.XXXXXX")"
 echo "Startup acceptance evidence: $evidence"
 checks=0
-for case in settled archived mixed-finished auto-settled empty active mixed-active manual-new manual-archived; do
+for case in settled archived mixed-finished auto-settled empty active mixed-active manual-new manual-archived \
+  archived-parent-child active-parent-child no-project ready-empty; do
   mkdir "$evidence/$case"
   for label in first-launch restart; do
     if "$binary" "$evidence/$case" "$case" "$label" >"$evidence/$case/$label.log" 2>&1 \

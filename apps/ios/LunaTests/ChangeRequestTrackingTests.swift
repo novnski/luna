@@ -34,10 +34,19 @@ final class ChangeRequestTrackingTests: XCTestCase {
     }
 
     func testContractDecodesEveryState() throws {
-        for state in [ChangeRequestState.open, .merged, .closed] {
-            let encoded = try JSONEncoder().encode(status(changeRequest: summary(state: state)))
-            let decoded = try JSONDecoder().decode(CheckoutChangeRequestStatus.self, from: encoded)
-            XCTAssertEqual(decoded.changeRequest?.state, state)
+        // The host's camelCase wire shape, as pinned by crates/proto entities.rs
+        // checkout_change_request_status_round_trips_all_states_as_camel_case.
+        let states: [(String, ChangeRequestState)] = [("open", .open), ("merged", .merged), ("closed", .closed)]
+        for (wire, state) in states {
+            let json = #"""
+            {"checkoutId":"checkout","deviceId":"local","cwd":"/repo","branch":"feature/pr",
+             "changeRequest":{"provider":"github","number":90,"title":"Show host pull requests",
+              "url":"https://github.com/acme/luna/pull/90","state":"\#(wire)",
+              "baseRef":"main","headRef":"feature/pr"},
+             "updatedAt":"2026-08-15T12:30:00Z"}
+            """#
+            let decoded = try JSONDecoder().decode(CheckoutChangeRequestStatus.self, from: Data(json.utf8))
+            XCTAssertEqual(decoded, status(changeRequest: summary(state: state)))
         }
     }
 

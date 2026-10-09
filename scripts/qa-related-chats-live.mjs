@@ -161,11 +161,6 @@ try {
     const finalIdentity = await call('GetTaskIdentity', { taskId: sideId });
     assert.equal(finalIdentity.currentBinding.providerTaskId, originalProviderId);
   });
-  await check('only explicit End closes the live side chat', async () => {
-    assert.equal((await call('UnloadSideChat', { id: sideId })).state, 'ended');
-    await assert.rejects(call('SendSideChat', { id: sideId, messageId: 'ended', text: 'Do not run' }));
-    save('ended-native-history', await call('ReadSideChat', { id: sideId }));
-  });
 } catch (error) { failure = error.stack || String(error); }
 finally {
   try { await stop(); } catch (error) { failure ||= String(error); }

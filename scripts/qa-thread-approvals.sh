@@ -45,6 +45,6 @@ run claude-adapter scripts/cargo.sh test --locked -p luna-harness --test claude_
 run claude-engine scripts/cargo.sh test --locked -p luna-engine --test claude_permissions -- --test-threads=1
 run child-lifecycle scripts/cargo.sh test --locked -p luna-engine --test claude_child_chats -- --test-threads=1
 run permission-transitions scripts/cargo.sh test --locked -p luna-engine --test e2e permission -- --test-threads=1
-run side-ceilings scripts/cargo.sh test --locked -p luna-engine --test side_chats side_chat_permission_ceiling -- --test-threads=1
+run fork-permissions scripts/cargo.sh test --locked -p luna-engine --test side_chats fork_permissions_follow_explicit_own_configuration -- --test-threads=1
 run policy-regressions scripts/cargo.sh test --locked -p luna-engine --lib permissions::tests -- --test-threads=1
 run picker scripts/cargo.sh test --locked -p luna-ui --lib permission_ -- --test-threads=1

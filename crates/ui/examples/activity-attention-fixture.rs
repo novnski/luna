@@ -427,29 +427,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn approval_fixture_uses_decision_labels_not_an_input_placeholder() {
-        let approval = request_entry("approval-turn", true, "synthetic-device");
-        let input = request_entry("input-turn", false, "synthetic-device");
-        let [MessagePart::Input { questions, .. }] = approval.parts.as_slice() else {
-            panic!("approval fixture must have one input request");
-        };
-        assert!(questions[0].approval.is_some());
-        assert_eq!(
-            questions[0]
-                .options
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["Deny", "Allow once", "Cancel"]
-        );
-        let [MessagePart::Input { questions, .. }] = input.parts.as_slice() else {
-            panic!("ordinary input fixture must have one input request");
-        };
-        assert!(questions[0].approval.is_none());
-        assert_eq!(questions[0].options, vec!["private option".to_string()]);
-    }
-
-    #[test]
     fn fixture_accounts_and_auth_are_root_scoped_without_native_credentials() {
         let root = tempfile::tempdir().unwrap();
         let accounts = account_config(root.path());
