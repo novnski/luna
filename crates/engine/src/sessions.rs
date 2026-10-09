@@ -10509,7 +10509,13 @@ async fn drive_run(
                 dirty = false;
             }
             let parts_before = folded.len();
-            fold_event_into_parts(&mut folded, &event);
+            // A new provider message opens its own part even when nothing
+            // buried the segment, whether or not the provider sent a separator.
+            if next_message {
+                luna_doc::fold_message_start_into_parts(&mut folded, &event);
+            } else {
+                fold_event_into_parts(&mut folded, &event);
+            }
             if let Some(request_id) = auto_selected_card.take() {
                 mark_auto_select_fired(&mut folded, &request_id);
             }
