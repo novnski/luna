@@ -50,6 +50,8 @@ impl Tone {
         }
     }
 
+    /// The tone's name for QA readbacks.
+    #[cfg(feature = "appshots-fixture")]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Tone::Quiet => "quiet",

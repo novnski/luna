@@ -69,34 +69,12 @@ pub enum BoardPageEvent {
 
 impl EventEmitter<BoardPageEvent> for BoardPage {}
 
-/// Requests any Board surface holding the [`BoardModel`] can make of the
-/// page that hosts it (the detail drawer, the New issue form, the GitHub
-/// picker, the authoring pane): `model.update(cx, |_, cx|
-/// cx.emit(BoardPageRequest::CloseOverlay))`.
+/// Requests a Board surface outside the page can make of it through the
+/// shared [`BoardModel`] (A7's Shell-hosted picker opens an imported card):
+/// `model.update(cx, |_, cx| cx.emit(BoardPageRequest::OpenDetail { .. }))`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BoardPageRequest {
-    OpenDetail {
-        work_item_id: String,
-    },
-    /// The New issue chooser (Write manually / Discuss with AI / From
-    /// GitHub issue).
-    OpenNewIssue,
-    OpenGitHubIssue {
-        project_id: Option<String>,
-    },
-    DiscussWithAi {
-        project_id: Option<String>,
-        resume_session_id: Option<String>,
-    },
-    AddExistingChat,
-    CloseOverlay,
-    /// Select (and focus) a ticket, e.g. one just saved.
-    Select {
-        work_item_id: String,
-    },
-    OpenChat {
-        work_item_id: String,
-    },
+    OpenDetail { work_item_id: String },
 }
 
 impl EventEmitter<BoardPageRequest> for BoardModel {}
@@ -389,7 +367,7 @@ impl BoardPage {
         );
         let restore_scroll = (prefs.scroll_y > 0.0).then_some(prefs.scroll_y);
         let selected = prefs.selected_item.clone();
-        let page = Self {
+        Self {
             state,
             model,
             persisted: saved,
@@ -440,8 +418,7 @@ impl BoardPage {
                 requests,
                 search_events,
             ],
-        };
-        page
+        }
     }
 
     /// Hand the current preferences to a newly subscribed Shell (the scope
@@ -863,25 +840,6 @@ impl BoardPage {
             BoardPageRequest::OpenDetail { work_item_id } => {
                 self.request_surface(SurfaceRequest::Detail(work_item_id), cx)
             }
-            BoardPageRequest::OpenNewIssue => {
-                let project_id = self.scope(cx).project_id().map(str::to_owned);
-                self.request_surface(SurfaceRequest::NewTicket(project_id), cx)
-            }
-            BoardPageRequest::OpenGitHubIssue { project_id } => self.open_github(project_id, cx),
-            BoardPageRequest::DiscussWithAi {
-                project_id,
-                resume_session_id,
-            } => self.request_authoring(project_id, resume_session_id, cx),
-            BoardPageRequest::AddExistingChat => self.open_add_chat(cx),
-            BoardPageRequest::CloseOverlay => self.request_surface(SurfaceRequest::Close, cx),
-            BoardPageRequest::Select { work_item_id } => {
-                self.selected = Some(work_item_id.clone());
-                self.prefs.selected_item = Some(work_item_id.clone());
-                self.pending_focus = Some((work_item_id, FOCUS_PATIENCE));
-                self.persist(cx);
-                cx.notify();
-            }
-            BoardPageRequest::OpenChat { work_item_id } => self.open_chat(&work_item_id, cx),
         }
     }
 
@@ -1097,33 +1055,6 @@ impl BoardPage {
             return;
         };
         cx.emit(BoardPageEvent::OpenGitHubPicker { project_id });
-    }
-
-    /// Discuss with AI (or resume a Board draft) from a model request: A6's
-    /// conversation for a known project, else the chooser asks for one.
-    fn request_authoring(
-        &mut self,
-        project_id: Option<String>,
-        resume_session_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let draft_project = resume_session_id.as_ref().and_then(|session| {
-            self.drafts
-                .read(cx)
-                .sessions()
-                .iter()
-                .find(|draft| &draft.id == session)
-                .map(|draft| draft.project_id.clone())
-        });
-        match project_id
-            .or(draft_project)
-            .or_else(|| self.scope(cx).project_id().map(str::to_owned))
-        {
-            Some(project_id) => {
-                self.open_authoring(project_id, resume_session_id, cx);
-            }
-            None => self.request_surface(SurfaceRequest::NewTicket(None), cx),
-        }
     }
 
     /// A6's conversation closed (draft kept, discarded or ended): focus

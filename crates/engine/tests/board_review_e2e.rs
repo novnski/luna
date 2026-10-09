@@ -1706,13 +1706,14 @@ async fn exhausted_repair_rounds_need_attention() {
         .await
         .expect("findings");
         review.finish();
-        if pass < 2 {
+        // Two repairs (one per variant), then the cap.
+        if let Some(variant) = variants.get(pass) {
             let repair = rig
                 .turn("repair", |turn| {
                     turn.harness == HarnessId::Codex && turn.is_repair()
                 })
                 .await;
-            rig.write("src/lib.rs", variants[pass]);
+            rig.write("src/lib.rs", variant);
             rig.tool(
                 &worker,
                 "review_start",
