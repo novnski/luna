@@ -191,6 +191,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
                     ..Default::default()
                 }],
                 resolved: false,
+                answers: Vec::new(),
             }],
             created_at: chrono::Utc::now().timestamp_millis(),
             device_id: core.device_id.clone(),

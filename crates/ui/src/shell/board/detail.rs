@@ -1419,6 +1419,9 @@ impl BoardDetail {
                 work_item_id: work_item_id.clone(),
                 execution_generation: None,
                 profile: None,
+                checks: Vec::new(),
+                summary: None,
+                evidence: Vec::new(),
             }),
             DetailAction::Archive | DetailAction::Unarchive => Call::Archive(BoardArchiveRequest {
                 request_id: request_id.clone(),

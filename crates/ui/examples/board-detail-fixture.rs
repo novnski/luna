@@ -863,6 +863,17 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
         },
         created_at_ms: now - (25 - round as i64 * 10) * minute,
         updated_at_ms: now - (20 - round as i64 * 10) * minute,
+        detail: None,
+        attention: None,
+        requested_by: None,
+        result_request_id: None,
+        late_result: false,
+        outcome: None,
+        implementer_summary: None,
+        evidence: vec![],
+        reported_check_ids: vec![],
+        supersedes: None,
+        relaunches: 0,
     };
     let rows = vec![
         luna_sync::BoardRowWrite::TaskLink(Box::new(WorkItemTaskLink {
