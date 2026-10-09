@@ -266,8 +266,9 @@ pub struct ApprovedChildFence {
     pub(crate) access_granted: bool,
 }
 
-/// Stable child identity across provider retries and engine restarts.
-pub(crate) fn child_task_id(parent: &str, key: &str) -> String {
+/// Stable child identity across provider retries and engine restarts. The
+/// transcript pairs a child's card with the create call that named its key.
+pub fn child_task_id(parent: &str, key: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(format!("luna-child-v1\0{parent}\0{key}"));
     let mut bytes = [0u8; 16];
