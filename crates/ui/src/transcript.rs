@@ -15093,6 +15093,95 @@ mod tests {
         assert_eq!(diff_rows(&live_rows, &done_rows), Some((0..3, 3)));
     }
 
+    #[gpui::test]
+    fn reader_keeps_its_paragraph_when_an_earlier_tool_resolves_as_text_appends(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // A reader scrolled up into a streaming reply keeps the paragraph
+        // they are reading when ONE commit resolves the tool above it and
+        // appends a paragraph at the tail. The unchanged rows in between
+        // must not be replaced: replacing the viewport-top row resets the
+        // list's scroll anchor to the first changed row, the tool, which
+        // jumps the reader back to the top of the reply.
+        with_tool_group_navigation(cx, |state, transcript, cx| {
+            let paragraphs = (0..32)
+                .map(|n| format!("Paragraph {n}."))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let mut tool = tool_part("call", "cargo test");
+            if let MessagePart::Tool { resolved, .. } = &mut tool {
+                *resolved = false;
+            }
+            let mut reply = assistant(
+                "reply",
+                MessageStatus::Streaming,
+                vec![tool, text_part("text", &paragraphs)],
+            );
+            let publish = |reply: &SessionMessageEntry, cx: &mut gpui::App| {
+                state.update(cx, |state, _| {
+                    state.transcript = vec![reply.clone()];
+                    state.transcript_revision += 1;
+                });
+                transcript.update(cx, |this, cx| this.sync(cx));
+            };
+            let version_of = |this: &Transcript, id: &str| {
+                this.rows
+                    .iter()
+                    .find(|row| row.id.as_ref() == id)
+                    .map(|row| row.version)
+            };
+            publish(&reply, cx);
+            let (anchor, tool_version, row_count) = transcript.update(cx, |this, _| {
+                let row_ix = |id: &str| this.rows.iter().position(|row| row.id.as_ref() == id);
+                let anchor_ix = row_ix("reply#text.14").expect("a paragraph mid-reply");
+                assert!(
+                    row_ix("reply#g0").is_some_and(|tool_ix| tool_ix < anchor_ix),
+                    "the tool sits above the paragraph being read"
+                );
+                // The reader scrolled up into the reply: a user-owned viewport.
+                this.pinned = false;
+                this.list.scroll_to(ListOffset {
+                    item_ix: anchor_ix,
+                    offset_in_item: px(12.0),
+                });
+                (
+                    this.rows[anchor_ix].id.clone(),
+                    version_of(this, "reply#g0"),
+                    this.rows.len(),
+                )
+            });
+
+            // One commit: the tool resolves and a paragraph lands at the tail.
+            if let MessagePart::Tool {
+                resolved, output, ..
+            } = &mut reply.parts[0]
+            {
+                *resolved = true;
+                *output = Some("ok".into());
+            }
+            if let MessagePart::Text { text, .. } = &mut reply.parts[1] {
+                text.push_str("\n\nNew paragraph.");
+            }
+            publish(&reply, cx);
+
+            transcript.update(cx, |this, _| {
+                assert_ne!(
+                    version_of(this, "reply#g0"),
+                    tool_version,
+                    "the tool row changed in this commit"
+                );
+                assert_eq!(this.rows.len(), row_count + 1, "a tail row was added");
+                let top = this.list.logical_scroll_top();
+                assert_eq!(
+                    this.rows.get(top.item_ix).map(|row| &row.id),
+                    Some(&anchor),
+                    "the viewport left the paragraph being read"
+                );
+                assert_eq!(top.offset_in_item, px(12.0));
+            });
+        });
+    }
+
     #[test]
     fn tool_diff_builds_real_hunks_with_context_and_numbers() {
         use crate::changes::LineKind;
