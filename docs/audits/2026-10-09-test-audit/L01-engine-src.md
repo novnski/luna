@@ -3,7 +3,8 @@
 - **Lane:** L01-engine-src (campaign 2026-10-09, branch `test-audit/L01-engine-src`, base `e4a0f534`).
 - **Scope:** the inline `#[cfg(test)]` tests in the 43 `crates/engine/src` files of the lane manifest, plus test-only seams in those files' production code. `crates/engine/tests/**` (lanes L02/L03) was read as keeper evidence only and not edited.
 - **Baseline (`e4a0f534`):** 449 test declarations; 20,947 lines inside inline test modules (brace-matched `#[cfg(test)] mod` blocks).
-- **After:** 417 declarations; 20,587 test-module lines. Marks: **R 413, F 0, C 17, D 19**. Test-only production seams removed: 8 functions (≈100 lines).
+- **After:** 417 declarations; 20,587 test-module lines. Marks: **R 413, F 0, C 17, D 19**. Test-only production seams removed: 8 `#[cfg(test)]` functions.
+- **Diff vs `e4a0f534` (code only):** test modules +171 / −531; production +1 / −109 (the removed `#[cfg(test)]` seams and one doc-comment line).
 - **CI routing context:** `luna-engine --lib` runs in `ui-tests.yml` (Linux) and `windows.yml` (Windows). Most `crates/engine/tests` suites run only locally; `session_publication`, `restart_resume`, `codex_subagents`, `local_profiles` (Linux) and `codex_catalog`, `codex_login_resolution`, `auth` (Windows) are the CI-routed ones. Every D below names a keeper that exists today; see Cross-lane requests for routing.
 - **Method:** every declaration was read in full with its production owner, callers, overlapping suites (`rg` across `crates/*/tests`, `crates/ui`, examples) and, where the reason was unclear, `git log -S`. No build or test was run in this lane (coordinator compiles and tests); edited files were formatted with `rustfmt --edition 2024`.
 
