@@ -20,7 +20,9 @@ async fn codex_login_resolves_override_and_adds_its_directory_to_child_path() {
     let runtime = bin.join("codex-test-runtime");
     std::fs::write(
         &runtime,
-        "#!/bin/sh\n[ \"$2\" = login ] || exit 1\n[ -d \"$CODEX_HOME\" ] || exit 2\nprintf '%s\\n' 'https://auth.openai.com/authorize?test=resolver'\n",
+        // Named logins pass the file-auth override before the subcommand; that
+        // argv is what keeps the account's token in its private auth.json.
+        "#!/bin/sh\n[ \"$2 $3 $4\" = '-c cli_auth_credentials_store=\"file\" login' ] || exit 1\n[ -d \"$CODEX_HOME\" ] || exit 2\nprintf '%s\\n' 'https://auth.openai.com/authorize?test=resolver'\n",
     )
     .unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
