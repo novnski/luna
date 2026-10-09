@@ -75,14 +75,14 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn default_and_legacy_override_stay_luna_owned() {
+    fn default_is_home_luna_and_explicit_data_dir_wins() {
         assert_eq!(
             resolve(&[("HOME", "/Users/test")]),
             PathBuf::from("/Users/test/.luna")
         );
         assert_eq!(
             resolve(&[("HOME", "/Users/test"), ("LUNA_DATA_DIR", "/tmp/luna")]),
-            PathBuf::from("/Users/test/.luna")
+            PathBuf::from("/tmp/luna")
         );
     }
 

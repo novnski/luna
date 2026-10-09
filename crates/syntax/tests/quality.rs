@@ -258,8 +258,12 @@ EOF
 }
 
 #[test]
-fn affected_languages_keep_utf8_boundaries_for_incomplete_code() {
+fn incomplete_unicode_code_keeps_spans_valid_and_non_overlapping() {
     for (path, source) in [
+        (
+            "broken.rs",
+            "fn café(value: &str) {\n let text = r#\"héllo\nworld\"#;\n if value {",
+        ),
         (
             "src/broken.ts",
             "export function café(name: string) {\n const label = `héllo ${name\n if (name ===",
@@ -270,28 +274,6 @@ fn affected_languages_keep_utf8_boundaries_for_incomplete_code() {
         ),
     ] {
         assert_valid_document(source, path);
-    }
-}
-
-#[test]
-fn every_span_is_valid_and_non_overlapping_for_incomplete_unicode() {
-    let source = "fn café(value: &str) {\n let text = r#\"héllo\nworld\"#;\n if value {";
-    let document = highlight(HighlightRequest {
-        source,
-        path: Some("broken.rs"),
-        fence_tag: None,
-    })
-    .unwrap();
-    for (line, spans) in source.lines().zip(document.lines) {
-        assert!(
-            spans
-                .windows(2)
-                .all(|pair| pair[0].range.end <= pair[1].range.start)
-        );
-        for span in spans {
-            assert!(line.is_char_boundary(span.range.start));
-            assert!(line.is_char_boundary(span.range.end));
-        }
     }
 }
 
@@ -320,17 +302,5 @@ fn benchmark_small_medium_large_and_incomplete_documents() {
             document.lines.iter().map(Vec::len).sum::<usize>(),
             started.elapsed().as_micros()
         );
-    }
-}
-
-#[test]
-fn reference_contains_expected_visual_roles() {
-    let spans = fragments("fn call() { let value = 42; }", "main.rs");
-    for kind in [
-        HighlightKind::Keyword,
-        HighlightKind::Function,
-        HighlightKind::Number,
-    ] {
-        assert!(spans.iter().any(|(_, actual)| *actual == kind));
     }
 }

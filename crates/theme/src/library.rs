@@ -665,13 +665,22 @@ mod tests {
 
         library.reload(&id).unwrap();
         let entry = library.entry(&id).unwrap();
-        let variant = &entry.family.variants[0];
-        assert!(variant.colors.text.contrast(variant.colors.background) >= 4.5);
+        // Only the dark source was edited; the reloaded dark variant must be
+        // the hardened new palette, not the previous family kept in place.
+        let dark = entry
+            .family
+            .variants
+            .iter()
+            .find(|variant| variant.id == "test-family-test-dark")
+            .unwrap();
+        assert!(dark.colors.text.contrast(dark.colors.background) >= 4.5);
         assert!(
-            entry
-                .reports
-                .values()
-                .any(|report| !report.adjustments.is_empty())
+            entry.reports["test-family-test-dark"]
+                .adjustments
+                .iter()
+                .any(
+                    |adjustment| adjustment.luna_role == "text" && adjustment.original == "#111111"
+                )
         );
         assert_eq!(entry.status, CustomThemeStatus::Ready);
     }

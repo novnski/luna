@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 import { CHUNK_BYTES } from "../../src/blobs";
 import { appendUpdateRow, ensureUpdateLog, readUpdateRows } from "../../src/update-log";
 
-/** Real-runtime twin of src/update-log.test.ts: same seams, but against an
- * actual SQLite-backed DO so the ~2MB value cap is the platform's, not a
- * FakeSql constant. A cap change or a chunking regression fails here first. */
+/** The update log's storage owner: chunking, ordering and migration against an
+ * actual SQLite-backed DO, so the ~2MB value cap is the platform's, not a
+ * FakeSql constant. src/update-log.test.ts keeps only the Loro fold path,
+ * which cannot load in this pool. */
 
 // Each test gets its own DO (fresh storage) keyed by test name.
 const inRoom = <T>(name: string, fn: (sql: SqlStorage) => T): Promise<T> => {
@@ -48,6 +49,18 @@ describe("update log on real DO SQLite", () => {
       const back = [...readUpdateRows(sql)];
       expect(back.length).toBe(1);
       expect(sameBytes(back[0], whale)).toBe(true);
+    });
+  });
+
+  it("respects a subarray view's offset when slicing chunks", async () => {
+    await inRoom("subarray-view", (sql) => {
+      ensureUpdateLog(sql);
+      const backing = bytesOf(CHUNK_BYTES + 200, 9);
+      const view = backing.subarray(100, CHUNK_BYTES + 150);
+      appendUpdateRow(sql, view, 42);
+      const back = [...readUpdateRows(sql)];
+      expect(back.length).toBe(1);
+      expect(sameBytes(back[0], view)).toBe(true);
     });
   });
 

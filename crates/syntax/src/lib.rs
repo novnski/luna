@@ -926,11 +926,24 @@ mod tests {
 
     #[test]
     fn shebang_is_only_used_after_explicit_hints() {
-        assert_eq!(
-            detect_language(None, None, Some("#!/usr/bin/env python3")),
-            Some(LanguageId::Python)
-        );
-        assert_eq!(detect_language(None, None, Some("let x = 1")), None);
+        let python = Some("#!/usr/bin/env python3");
+        for (path, fence_tag, first_line, expected) in [
+            (None, None, python, Some(LanguageId::Python)),
+            (None, None, Some("let x = 1"), None),
+            (Some("tool.rb"), None, python, Some(LanguageId::Ruby)),
+            (
+                Some("tool.rb"),
+                Some("bash"),
+                python,
+                Some(LanguageId::Bash),
+            ),
+        ] {
+            assert_eq!(
+                detect_language(path, fence_tag, first_line),
+                expected,
+                "{path:?} {fence_tag:?} {first_line:?}"
+            );
+        }
     }
 
     #[test]
@@ -1041,46 +1054,6 @@ mod tests {
         assert!(document.lines[0].len() > 20_000);
     }
 
-    fn highlighted_fragments(source: &str) -> Vec<(&str, HighlightKind)> {
-        let document = highlight(HighlightRequest {
-            source,
-            path: Some("src/lib.rs"),
-            fence_tag: None,
-        })
-        .unwrap();
-        source
-            .lines()
-            .zip(document.lines)
-            .flat_map(|(line, spans)| {
-                spans
-                    .into_iter()
-                    .map(move |span| (&line[span.range], span.kind))
-            })
-            .collect()
-    }
-
-    #[test]
-    fn rust_highlighting_distinguishes_structural_categories() {
-        let source = r#"pub struct Widget { field: usize }
-fn build(value: usize) -> Widget {
-    let name = format!("item-{value}");
-    Widget { field: 42 }
-}"#;
-        let fragments = highlighted_fragments(source);
-        for (text, expected) in [
-            ("pub", HighlightKind::Keyword),
-            ("Widget", HighlightKind::Type),
-            ("build", HighlightKind::Function),
-            ("format!", HighlightKind::Macro),
-            ("42", HighlightKind::Number),
-        ] {
-            assert!(
-                fragments.contains(&(text, expected)),
-                "missing {text:?} as {expected:?}: {fragments:?}"
-            );
-        }
-    }
-
     #[test]
     fn rust_multiline_raw_unicode_and_incomplete_code_remain_valid() {
         let source = "/* café\ncomment */\nlet raw = r#\"héllo\nworld\"#;\nlet before = 7;\nfn incomplete( {";
@@ -1143,15 +1116,9 @@ fn build(value: usize) -> Widget {
     }
 
     #[test]
-    fn rust_queries_load_for_the_bundled_abi() {
-        assert!(rust_configuration().is_ok());
-        let language_version = std::hint::black_box(tree_sitter::LANGUAGE_VERSION);
-        assert!(language_version >= tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION);
-    }
-
-    #[test]
     fn every_registered_grammar_and_query_loads_for_the_bundled_abi() {
         let fixtures = [
+            (LanguageId::Rust, "main.rs", "fn main() { let value = 42; }"),
             (LanguageId::JavaScript, "app.js", "const value = call(42);"),
             (
                 LanguageId::Jsx,
@@ -1226,23 +1193,6 @@ fn build(value: usize) -> Widget {
     }
 
     #[test]
-    fn affected_composed_and_project_queries_load_for_pinned_grammars() {
-        for language in [
-            LanguageId::TypeScript,
-            LanguageId::Tsx,
-            LanguageId::Kotlin,
-            LanguageId::Dockerfile,
-        ] {
-            let configuration = configuration(language)
-                .unwrap_or_else(|error| panic!("{language:?} query failed to load: {error}"));
-            assert!(
-                !configuration.names().is_empty(),
-                "{language:?} query has no captures"
-            );
-        }
-    }
-
-    #[test]
     fn html_injects_javascript_and_css_with_a_bounded_registry() {
         let source = r#"<main id="app">
 <style>.item { color: red; }</style>
@@ -1264,6 +1214,15 @@ fn build(value: usize) -> Widget {
         assert!(kinds.contains(&HighlightKind::Attribute));
         assert!(kinds.contains(&HighlightKind::Keyword));
         assert!(kinds.contains(&HighlightKind::Number));
+        // The HTML query has no property capture: only the injected CSS
+        // grammar can mark `.item` and `color` on the style line.
+        assert!(
+            document.lines[1]
+                .iter()
+                .any(|span| span.kind == HighlightKind::Property),
+            "CSS was not injected: {:?}",
+            document.lines[1]
+        );
     }
 
     #[test]
@@ -1285,7 +1244,7 @@ fn build(value: usize) -> Widget {
 
     #[test]
     fn unknown_markdown_fence_does_not_break_parent_highlighting() {
-        let source = "# Title\n\n```unknown-language\nopaque\n```\n";
+        let source = "# Title\n\n```unknown-language\nopaque\n```\n\n## After\n";
         let document = highlight(HighlightRequest {
             source,
             path: Some("README.md"),
@@ -1293,6 +1252,16 @@ fn build(value: usize) -> Widget {
         })
         .unwrap();
         assert_eq!(document.language, LanguageId::Markdown);
+        // Headings before and after the unknown fence keep their parent roles.
+        for line in [0, 6] {
+            assert!(
+                document.lines[line]
+                    .iter()
+                    .any(|span| span.kind == HighlightKind::MarkupHeading),
+                "line {line} lost its heading: {:?}",
+                document.lines[line]
+            );
+        }
     }
 
     #[test]

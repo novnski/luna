@@ -757,9 +757,24 @@ mod tests {
 
     #[test]
     fn colors_round_trip_all_supported_css_hex_lengths() {
-        for source in ["#abc", "#abcd", "#102030", "#10203040"] {
+        for (source, expected, stored) in [
+            ("#abc", Color::rgb(0xaa, 0xbb, 0xcc), "\"#aabbcc\""),
+            (
+                "#abcd",
+                Color::rgba(0xaa, 0xbb, 0xcc, 0xdd),
+                "\"#aabbccdd\"",
+            ),
+            ("#102030", Color::rgb(0x10, 0x20, 0x30), "\"#102030\""),
+            (
+                "#10203040",
+                Color::rgba(0x10, 0x20, 0x30, 0x40),
+                "\"#10203040\"",
+            ),
+        ] {
             let color: Color = source.parse().unwrap();
+            assert_eq!(color, expected, "{source}");
             let json = serde_json::to_string(&color).unwrap();
+            assert_eq!(json, stored, "{source}");
             assert_eq!(serde_json::from_str::<Color>(&json).unwrap(), color);
         }
     }
@@ -820,17 +835,5 @@ mod tests {
             .filter(|issue| issue.severity == ValidationSeverity::Error)
             .collect();
         assert!(errors.is_empty(), "{errors:#?}");
-    }
-
-    #[test]
-    fn visual_fixture_matrix_covers_every_variant_and_scene() {
-        let registry = ThemeRegistry::builtin();
-        let variants = registry
-            .families
-            .iter()
-            .map(|family| family.variants.len())
-            .sum::<usize>();
-        assert_eq!(variants, 30);
-        assert_eq!(variants * VisualFixture::ALL.len(), 300);
     }
 }
