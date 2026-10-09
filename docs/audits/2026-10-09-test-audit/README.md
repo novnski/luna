@@ -48,9 +48,8 @@ npm run typecheck --prefix edge && npm test --prefix edge
 | Final, before the Codex fake repair | 2,373 | 6 tests | Nothing newly failing; no new compiler warnings; edge 48/48 |
 | Codex login suites after repair | 4 | 0 | |
 
-Remaining failures: the three `workspace_identity_repair` tests listed under
-follow-ups. They fail identically on the baseline, and no deletion relies on
-them.
+The three `workspace_identity_repair` tests that also failed on the baseline
+were repaired afterwards (below); the suite passes 17/17.
 
 Preservation review: a keeper-existence check over every D and C row found one
 apparent gap: L06 and L07 each retired a `resize_drag_sample` replay and cited
@@ -80,16 +79,11 @@ production mutation, all caught and restored byte for byte:
 | `luna-preview` peer ×2, `leak` | WebRTC/STUN reachability | Passed on later runs; environment |
 | `usage_refresh` | Timing | Passed on later runs |
 | `luna-sync` `registry_client` | Needed `mock-server` but did not declare it | `required-features` |
+| `workspace_identity_repair` `repair_contract` ×2 | The legacy seed kept project `sourceSpaceId`s on rows it downgraded to `projectless:`, so the repair guard refused contradictory provenance | Seed nulls the legacy row's source space; mutation keeping the task on the shared row is caught |
+| `workspace_identity_repair` `canonical_aliases_…` | `CreateSpace` restores the existing project for a folder (26f4b096), so the second project never existed | Second scope owns the fixture parent; mutation dropping project provenance is caught |
 
 ## Follow-ups
 
-- `workspace_identity_repair`: `canonical_aliases_share_only_the_same_environment_and_source_scope`
-  creates a second project for an existing folder, which `CreateSpace` now
-  restores to the first one (26f4b096), so the new id never exists. Both
-  `repair_contract` tests receive "Workspace repair cannot change origin
-  environment or source-space provenance" for a legacy seed after projectless
-  sessions were removed (666d8cf0). Decide whether the guard or the tests
-  encode the intended contract.
 - An engine-side auxiliary Claude `--print` call runs in the process cwd; under
   test it writes `.cc09-fake.log` into `crates/engine`, and in production it
   inherits the daemon's cwd, where a stray `CLAUDE.md` or `.claude/` could apply.

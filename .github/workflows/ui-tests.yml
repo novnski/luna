@@ -58,7 +58,8 @@ jobs:
         run: |
           cargo test --locked -p luna-engine --test message_queue --test m5_repos_diffs_terminals \
             --test m5c_accounts_uploads_titles --test workspace_sync --test task_identity \
-            --test device_routing --test no_keychain --test local_import
+            --test device_routing --test no_keychain --test local_import \
+            --test workspace_identity_repair --test codex_login_resolution --test codex_login_resolver
 
   ui-tests:
     runs-on: ubuntu-24.04

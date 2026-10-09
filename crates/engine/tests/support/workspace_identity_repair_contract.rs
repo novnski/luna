@@ -82,6 +82,11 @@ async fn seed_legacy(seed: Seed) -> Legacy {
         };
         event[field]["schemaVersion"] = json!(1);
         event[field]["workspaceId"] = json!(legacy_id);
+        if field == "workspace" {
+            // Fixture tasks need projects since 666d8cf0, but a legacy
+            // `projectless:` row never carried project provenance.
+            event[field]["sourceSpaceId"] = Value::Null;
+        }
         if field == "binding" && event[field]["taskId"] == task_a {
             if matches!(seed, Seed::ForeignStore) {
                 event[field]["providerInstanceId"] = json!("foreign-synthetic-store");

@@ -393,12 +393,15 @@ async fn canonical_aliases_share_only_the_same_environment_and_source_scope() {
     create(&client, &b, &core.device_id, None, &alias).await;
     let first = identity(&client, &a).await;
     let second = identity(&client, &b).await;
+    // A second source scope over the same root: CreateSpace restores the
+    // existing project for an identical folder (26f4b096), so this project
+    // owns the fixture parent and the task runs in root_a beneath it.
     let space = uuid::Uuid::new_v4().to_string();
     client
         .call(
             methods::MUTATE,
             json!({"op":"createSpace", "spaceId":space,
-        "deviceId":core.device_id, "path":fixture.root_a}),
+        "deviceId":core.device_id, "path":fixture.root_a.parent().unwrap()}),
         )
         .await
         .unwrap();
@@ -424,6 +427,7 @@ async fn canonical_aliases_share_only_the_same_environment_and_source_scope() {
     assert_eq!(second.workspace.current_path, first.workspace.current_path);
     assert_eq!(second.workspace.workspace_id, first.workspace.workspace_id);
     assert!(first.workspace.workspace_id.starts_with("workspace:v2:"));
+    assert_eq!(project.workspace.current_path, first.workspace.current_path);
     assert_ne!(project.workspace.workspace_id, first.workspace.workspace_id);
     assert_eq!(
         project.workspace.source_space_id.as_deref(),
