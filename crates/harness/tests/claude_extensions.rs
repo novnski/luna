@@ -837,14 +837,6 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
         text.starts_with("/cc12-project-only summarize the parser"),
         "{text}"
     );
-    // B9: an existing identical prefix is not doubled.
-    assert_eq!(
-        luna_harness::claude::extensions::skill_invocation_text(
-            "cc12-project-only",
-            "/cc12-project-only  x"
-        ),
-        "/cc12-project-only  x"
-    );
 }
 
 #[tokio::test]

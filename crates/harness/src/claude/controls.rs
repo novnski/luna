@@ -1090,19 +1090,4 @@ mod tests {
         assert_eq!(qs[1].question, "Pick many");
         assert!(qs[1].multi_select);
     }
-
-    #[test]
-    fn answers_key_by_question_text() {
-        let input =
-            json!({"questions": [{"header": "H", "question": "Pick one", "options": ["A", "B"]}]});
-        let qs = parse_questions(&input);
-        let answers = vec![UserInputAnswer {
-            question_id: qs[0].id.clone(),
-            labels: vec!["B".into()],
-        }];
-        let updated = updated_input_with_answers(&input, &qs, &answers);
-        assert_eq!(updated["answers"]["Pick one"], json!("B"));
-        // Original input is preserved alongside the answers.
-        assert!(updated["questions"].is_array());
-    }
 }

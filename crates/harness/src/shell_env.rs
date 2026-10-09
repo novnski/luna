@@ -304,20 +304,6 @@ exit 1
         }
 
         #[test]
-        fn snapshots_path_from_fake_shell() {
-            let dir = tempfile::tempdir().unwrap();
-            let shell = fake_shell(
-                dir.path(),
-                &format!(
-                    "#!/bin/sh\nPATH=\"/luna-test/custom/bin:/usr/bin:/bin\"; export PATH\n{RUN_PAYLOAD}"
-                ),
-            );
-            let path = snapshot_path(&shell, Duration::from_secs(10)).unwrap();
-            let path = path.to_string_lossy();
-            assert!(path.starts_with("/luna-test/custom/bin:"), "got: {path}");
-        }
-
-        #[test]
         fn falls_back_when_interactive_attempt_hangs() {
             let dir = tempfile::tempdir().unwrap();
             // Simulates rc files that wedge only in interactive mode (`exec

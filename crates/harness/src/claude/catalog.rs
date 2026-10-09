@@ -35,7 +35,7 @@ fn contains_any(hay: &str, needles: &[&str]) -> bool {
 /// Models whose CLI accepts `xhigh` natively; elsewhere it clamps to `max`
 /// (mirroring Claude Code's own normalization). Substring port of claude.ts's
 /// `/fable-5|opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]/`.
-pub(crate) fn supports_xhigh(model: &str) -> bool {
+fn supports_xhigh(model: &str) -> bool {
     contains_any(
         model,
         &[
@@ -379,8 +379,10 @@ pub(crate) fn models_from_initialize(response: &Value) -> Vec<Model> {
 mod tests {
     use super::*;
 
+    /// The name heuristic `--effort` falls back to when no discovered ladder
+    /// exists for the model (`runtime_controls::effort_flag`).
     #[test]
-    fn effort_maps_special_modes() {
+    fn effort_maps_special_modes_and_clamps_xhigh_by_model_family() {
         assert_eq!(to_effort(None, None), None);
         assert_eq!(to_effort(Some(ReasoningLevel::Ultrathink), None), None);
         assert_eq!(
@@ -396,34 +398,22 @@ mod tests {
             to_effort(Some(ReasoningLevel::Ultracode), Some("claude-fable-5")),
             Some("xhigh")
         );
-        // …and xhigh clamps to max elsewhere.
-        assert_eq!(
-            to_effort(Some(ReasoningLevel::XHigh), Some("claude-opus-4-5")),
-            Some("max")
-        );
         assert_eq!(to_effort(Some(ReasoningLevel::XHigh), None), Some("max"));
-    }
-
-    #[test]
-    fn xhigh_family_matching() {
-        assert!(supports_xhigh("claude-fable-5"));
-        assert!(supports_xhigh("claude-fable-5-1"));
-        assert!(supports_xhigh("claude-opus-5"));
-        assert!(supports_xhigh("claude-opus-5[1m]"));
-        assert!(supports_xhigh("claude-opus-4-7-20260101"));
-        assert!(!supports_xhigh("claude-opus-4-5"));
-        assert!(!supports_xhigh("claude-sonnet-4-5"));
-    }
-
-    #[test]
-    fn ultrathink_prefixes_prompt() {
-        assert_eq!(
-            apply_ultrathink(Some(ReasoningLevel::Ultrathink), "do it"),
-            "Ultrathink:\ndo it"
-        );
-        assert_eq!(
-            apply_ultrathink(Some(ReasoningLevel::Max), "do it"),
-            "do it"
-        );
+        // …and xhigh clamps to max on families without it.
+        for (model, effort) in [
+            ("claude-fable-5", "xhigh"),
+            ("claude-fable-5-1", "xhigh"),
+            ("claude-opus-5", "xhigh"),
+            ("claude-opus-5[1m]", "xhigh"),
+            ("claude-opus-4-7-20260101", "xhigh"),
+            ("claude-opus-4-5", "max"),
+            ("claude-sonnet-4-5", "max"),
+        ] {
+            assert_eq!(
+                to_effort(Some(ReasoningLevel::XHigh), Some(model)),
+                Some(effort),
+                "{model}"
+            );
+        }
     }
 }

@@ -1270,24 +1270,6 @@ pub fn typed_skill(selections: &[ComposerInput]) -> Result<Option<String>, Harne
     Ok(Some(name.to_owned()))
 }
 
-/// Native invocation text: Claude expands a slash command only when the
-/// message's (last) text block begins with it, so the selection leads and the
-/// prose follows as its arguments. An existing identical prefix is kept.
-pub fn skill_invocation_text(name: &str, text: &str) -> String {
-    let command = format!("/{name}");
-    let trimmed = text.trim_start();
-    if let Some(rest) = trimmed.strip_prefix(&command)
-        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
-    {
-        return trimmed.to_owned();
-    }
-    if trimmed.is_empty() {
-        command
-    } else {
-        format!("{command} {trimmed}")
-    }
-}
-
 /// Reject a typed skill that the effective catalog (`body`, the launch's own
 /// initialize answer) does not list. Callers skip this check when the
 /// readback itself failed: an unverifiable catalog never blocks dispatch.

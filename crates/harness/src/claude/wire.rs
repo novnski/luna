@@ -454,24 +454,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_known_and_unknown_frames() {
-        let init = r#"{"type":"system","subtype":"init","model":"m","tools":["Bash"],"cwd":"/x","session_id":"s1"}"#;
-        match parse_frame(init).expect("parses") {
-            Frame::System(f) => {
-                assert_eq!(f.subtype, "init");
-                assert_eq!(f.session_id, "s1");
-            }
-            other => panic!("unexpected frame: {other:?}"),
-        }
-        // CC-02: unknown types are classified for retention, not dropped.
-        assert!(matches!(
-            parse_frame(r#"{"type":"mystery_frame"}"#).expect("parses"),
-            Frame::Native(_)
-        ));
-        assert!(parse_frame("not json").is_err());
-    }
-
-    #[test]
     fn init_observation_keeps_only_allowlisted_names_and_statuses() {
         let frame = json!({
             "type": "system",

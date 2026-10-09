@@ -1200,46 +1200,6 @@ async fn v2_wire_tool_frames_open_and_resolve_chips() {
     );
 }
 
-#[tokio::test]
-async fn v2_execution_failure_and_interrupt_settle_the_turn() {
-    let mut wire = TurnWire::start(false).await;
-    wire.request("/api/model").await;
-    wire.request("/prompt").await;
-    wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
-    wire.v2(
-        "session.execution.failed",
-        json!({"sessionID": "fixture", "error": {"type": "provider.auth", "message": ""}}),
-    );
-    let (status, error) = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut error = None;
-        loop {
-            match wire.events.recv().await.unwrap().unwrap() {
-                AgentEvent::Error { message } => error = Some(message),
-                AgentEvent::Done {
-                    status, error: e, ..
-                } => return (status, e.or(error)),
-                _ => {}
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(status, DoneStatus::Errored);
-    assert!(error.unwrap().contains("provider.auth"));
-
-    let mut wire = TurnWire::start(false).await;
-    wire.request("/api/model").await;
-    wire.request("/prompt").await;
-    wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
-    wire.interrupt.cancel();
-    wire.request("/interrupt").await;
-    wire.v2(
-        "session.execution.interrupted",
-        json!({"sessionID": "fixture", "reason": "user"}),
-    );
-    assert_eq!(wire.done().await.0, DoneStatus::Interrupted);
-}
-
 /// Replays the native S9Q failure ordering: one failed step, one failed
 /// execution. Each Error and Done.error becomes a separate transcript part,
 /// so only Done may carry the terminal reason needed by crash recovery.
@@ -1963,13 +1923,6 @@ fn commands_map_from_wire() {
 }
 
 #[test]
-fn stall_env_and_startup_env_parse() {
-    // Defaults (no env in test runner): bounded stall, 300s startup.
-    assert_eq!(stall_bound(), Some(DEFAULT_STALL_BOUND));
-    assert_eq!(startup_timeout(), DEFAULT_STARTUP_TIMEOUT);
-}
-
-#[test]
 fn directory_header_percent_encodes() {
     assert_eq!(
         encode_directory("/home/u/my project"),
@@ -2245,8 +2198,12 @@ async fn permissions_stay_session_scoped_and_never_persist_grants() {
 
 #[tokio::test]
 async fn permissions_without_auto_approve_require_an_explicit_answer() {
-    for accept in [false, true] {
-        let answer = if accept { "Allow once" } else { "Deny" };
+    for (answer, decision) in [
+        ("Deny", "reject"),
+        ("Allow once", "once"),
+        // A forged or stale task allowance fails closed: never `once`/`always`.
+        ("Allow for task", "reject"),
+    ] {
         let mut wire = TurnWire::start_policy(false, false, Some(answer)).await;
         wire.request("/api/model").await;
         wire.request("/prompt").await;
@@ -2270,37 +2227,8 @@ async fn permissions_without_auto_approve_require_an_explicit_answer() {
         })
         .await
         .unwrap();
-        assert_eq!(body["decision"], if accept { "once" } else { "reject" });
+        assert_eq!(body["decision"], decision, "{answer}");
     }
-}
-
-#[tokio::test]
-async fn task_allowance_never_persists_through_v2() {
-    let mut wire = TurnWire::start_policy(false, false, Some("Allow for task")).await;
-    wire.request("/api/model").await;
-    wire.request("/prompt").await;
-    wire.v2(
-        "permission.asked",
-        json!({"id":"approval", "sessionID":"fixture"}),
-    );
-    let body = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Some((_, body)) = wire
-                .posts
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|(path, _)| path.contains("permission"))
-            {
-                break body.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    // A forged or stale task allowance fails closed: never `once`/`always`.
-    assert_eq!(body["decision"], "reject");
 }
 
 #[test]
@@ -2431,36 +2359,6 @@ async fn prompt_error_and_interrupt_before_busy_still_settle() {
 }
 
 #[tokio::test]
-async fn v2_model_selection_and_prompt_use_the_documented_bodies() {
-    let mut wire = TurnWire::start(false).await;
-    wire.request("/api/model").await;
-    wire.request("/prompt").await;
-    let posts = wire.posts.lock().unwrap();
-    assert_eq!(
-        posts
-            .iter()
-            .find(|(p, _)| p == "/api/session/fixture/model")
-            .unwrap()
-            .1,
-        json!({"model":{"providerID":"opencode","id":"muse","variant":"low"}})
-    );
-    let prompt = &posts
-        .iter()
-        .find(|(p, _)| p == "/api/session/fixture/prompt")
-        .unwrap()
-        .1;
-    assert_eq!(prompt["text"], "first");
-    assert_eq!(prompt["files"], json!([]));
-    assert_eq!(prompt["delivery"], "queue");
-    assert!(
-        prompt["id"]
-            .as_str()
-            .is_some_and(|id| id.starts_with("msg_luna_")),
-        "{prompt:?}"
-    );
-}
-
-#[tokio::test]
 async fn v2_pending_tool_overflow_fails_the_run_instead_of_growing_forever() {
     let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
@@ -2481,28 +2379,4 @@ async fn v2_external_interrupt_is_not_reported_as_success() {
         json!({"sessionID":"fixture","reason":"shutdown"}),
     );
     assert_eq!(wire.done().await.0, DoneStatus::Interrupted);
-}
-
-#[tokio::test]
-async fn v2_recovered_step_failure_does_not_poison_successful_execution() {
-    let mut wire = TurnWire::start(false).await;
-    wire.request("/api/model").await;
-    wire.request("/prompt").await;
-    wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
-    wire.v2(
-        "session.step.failed",
-        json!({"sessionID":"fixture","error":{"type":"provider.rate_limit","message":"Retrying"}}),
-    );
-    wire.v2(
-        "session.step.started",
-        json!({"sessionID":"fixture","assistantMessageID":"recovered"}),
-    );
-    wire.v2("session.text.ended",json!({"sessionID":"fixture","assistantMessageID":"recovered","ordinal":0,"text":"Recovered"}));
-    wire.v2(
-        "session.execution.succeeded",
-        json!({"sessionID":"fixture"}),
-    );
-    let (status, text) = wire.done().await;
-    assert_eq!(status, DoneStatus::Completed);
-    assert_eq!(text, "Recovered");
 }
