@@ -7868,9 +7868,50 @@ struct SubagentSink {
     written: Vec<MessagePart>,
     folded: Vec<MessagePart>,
     dirty: bool,
+    /// Tool id → the entry its chip was folded into. A steer resets the
+    /// fold; this keeps late activity and results at the original call site,
+    /// like the root chat's `tool_entry_by_id`.
+    tool_entry_by_id: HashMap<String, String>,
 }
 
 impl SubagentSink {
+    /// Fold one tagged event into the open segment. A tool event for a call
+    /// an earlier segment owns updates that chip in its own entry instead, as
+    /// the root chat does: the open segment never held the call, so folding
+    /// would drop a late result or mint a second chip below the steer.
+    fn fold(&mut self, event: &AgentEvent) {
+        if let AgentEvent::ToolCall { id, .. }
+        | AgentEvent::ToolActivity { id, .. }
+        | AgentEvent::ToolResult { id, .. } = event
+            && id != luna_proto::LIVE_PLAN_TOOL_ID
+        {
+            let in_segment = self
+                .folded
+                .iter()
+                .any(|p| matches!(p, MessagePart::Tool { id: pid, .. } if pid == id));
+            match self.tool_entry_by_id.get(id) {
+                Some(owner) if !in_segment && *owner != self.entry_id => {
+                    match self.doc.apply_tool_event_in_entry(owner, id, event) {
+                        Ok(true) => {}
+                        Ok(false) => tracing::warn!(doc = %self.doc_id, tool = %id,
+                            "prior subagent tool chip missing after steer"),
+                        Err(err) => tracing::warn!(doc = %self.doc_id, tool = %id, error = %err,
+                            "prior subagent tool chip could not be updated"),
+                    }
+                    return;
+                }
+                None if matches!(event, AgentEvent::ToolCall { .. }) => {
+                    self.tool_entry_by_id
+                        .insert(id.clone(), self.entry_id.clone());
+                }
+                _ => {}
+            }
+        }
+        luna_doc::fold_event_into_parts(&mut self.folded, event);
+        luna_doc::apply_journal_output_refs(&self.doc_id, &mut self.folded);
+        self.dirty = true;
+    }
+
     fn flush(&mut self, device_id: &str) {
         if !self.dirty || self.folded.is_empty() {
             return;
@@ -9239,6 +9280,7 @@ async fn drive_run(
                             written: Vec::new(),
                             folded: Vec::new(),
                             dirty: false,
+                            tool_entry_by_id: HashMap::new(),
                         },
                     );
                     if !chip_streaming {
@@ -9294,9 +9336,7 @@ async fn drive_run(
                     continue;
                 }
                 if !metadata_only {
-                    luna_doc::fold_event_into_parts(&mut sink.folded, sub_event);
-                    luna_doc::apply_journal_output_refs(&sub_id, &mut sink.folded);
-                    sink.dirty = true;
+                    sink.fold(sub_event);
                 }
                 if !chip_streaming
                     && (subagent_chip_update(sub_event).is_some()
