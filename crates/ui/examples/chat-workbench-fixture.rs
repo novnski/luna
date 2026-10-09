@@ -3861,10 +3861,24 @@ fn main() -> anyhow::Result<()> {
                     "a fork's tab menu offers New side chat and Hand off and says why there is no fork: {rows:?}"
                 );
                 shot(window, cx, output.join("w20b-side-chat-menu.png")).await?;
-                // A press elsewhere closes the menu (focusing the same tab).
-                let fork_tab = tab_center(&wb(window, cx)?, &fork_two)?;
-                click(window, cx, fork_tab, MouseButton::Left).await?;
-                settle(cx, 300).await;
+                // A press outside the menu closes it. The menu opens at the
+                // right-click point, so a press on that same tab would land
+                // inside the menu and leave it open (its first outside press
+                // later would only close it): press the pane body instead,
+                // left of the menu, and wait until it is gone.
+                let at_menu = wb(window, cx)?;
+                let (px0, py0, _, ph) = pane_rect(&at_menu, &fork_group)?;
+                click(window, cx, (px0 + 12.0, py0 + ph * 0.6), MouseButton::Left).await?;
+                let mut menu_open = true;
+                for _ in 0..40 {
+                    settle(cx, 100).await;
+                    draw(window, cx)?;
+                    if window.update(cx, |shell, _, _| shell.fixture_workbench_menu())?["open"] == false {
+                        menu_open = false;
+                        break;
+                    }
+                }
+                anyhow::ensure!(!menu_open, "a press outside the tab menu closes it");
                 // Orphans: a fork of a disposable main chat, placed in the
                 // sidebar, then its source deleted.
                 const FORK_SOURCE: &str = "e0e0e0e0-0000-4000-8000-0000000000d1";

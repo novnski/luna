@@ -1222,6 +1222,95 @@ async fn scenario(
     .await?;
 
     // f10. A reviewer for the side ticket: a distinct `Reviewer · KEY`.
+    // Reviews belong to a started ticket: the converted side ticket (in
+    // Backlog) moves to Ready through its status control, as the app does
+    // (BoardMove continues the same chat; no first-start replay), and the
+    // run waits for its working phase before asking for the review.
+    let chats_before_ready: Vec<String> = core
+        .workspace
+        .read_chats()
+        .map(|chats| chats.into_iter().map(|chat| chat.id).collect())
+        .unwrap_or_default();
+    click_board(
+        window,
+        cx,
+        &format!("header-status:{side}"),
+        MouseButton::Left,
+    )
+    .await?;
+    wait_for(window, cx, 40, "the side ticket's status menu", |rb| {
+        !rb["board"]["statusMenu"].is_null()
+    })
+    .await?;
+    click_board(window, cx, "status-menu:ready", MouseButton::Left).await?;
+    let started_phases = [
+        "working",
+        "checking",
+        "reviewing",
+        "fixing",
+        "idle",
+        "complete",
+    ];
+    let mut side_detail = Value::Null;
+    for _ in 0..200 {
+        side_detail = rpc(
+            runtime,
+            engine,
+            methods::BOARD_READ,
+            json!({ "workItemId": ticket_side }),
+        )
+        .await
+        .unwrap_or(Value::Null);
+        if side_detail["view"]["item"]["column"] == "ready"
+            && side_detail["view"]["phase"]
+                .as_str()
+                .is_some_and(|phase| started_phases.contains(&phase))
+        {
+            break;
+        }
+        frames(window, cx, 150).await?;
+    }
+    let side_started = readback(window, cx)?;
+    // Only a reviewer the workflow itself started may have appeared.
+    let reviewers: Vec<String> = rpc(
+        runtime,
+        engine,
+        methods::BOARD_REVIEW_STATUS,
+        json!({ "workItemId": ticket_side }),
+    )
+    .await
+    .ok()
+    .and_then(|status| status["runs"].as_array().cloned())
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|run| run["reviewerTaskId"].as_str().map(str::to_string))
+    .collect();
+    let new_chats: Vec<String> = core
+        .workspace
+        .read_chats()
+        .map(|chats| chats.into_iter().map(|chat| chat.id).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|id| !chats_before_ready.contains(id) && !reviewers.contains(id))
+        .collect();
+    run.check(
+        "side-ticket-started",
+        "the side ticket moves to Ready from its status control and continues the same chat (no new chat), reaching its working phase",
+        json!({
+            "column": side_detail["view"]["item"]["column"],
+            "phase": side_detail["view"]["phase"],
+            "workingChat": side_detail["view"]["workingChat"]["taskId"],
+            "newChats": new_chats,
+            "reviewers": reviewers,
+            "badge": badge(&side_started, &side),
+        }),
+        side_detail["view"]["item"]["column"] == "ready"
+            && side_detail["view"]["phase"]
+                .as_str()
+                .is_some_and(|phase| started_phases.contains(&phase))
+            && side_detail["view"]["workingChat"]["taskId"] == side.as_str()
+            && new_chats.is_empty(),
+    );
     let review = rpc(
         runtime,
         engine,
@@ -1277,11 +1366,18 @@ async fn scenario(
                 Ok(shown) => {
                     run.capture(window, cx, "f10-reviewer-badge")?;
                     let tab = marks(&shown, &format!("tab-badge:{reviewer}"));
+                    // A side ticket's reviewer is a fresh sibling under the
+                    // same main chat, shown in that main chat's workbench.
+                    let reviewer_parent = ui_chat(state, cx, &reviewer)
+                        .and_then(|chat| chat.child_thread)
+                        .map(|child| child.parent_task_id);
                     run.check(
                         "reviewer-badge",
-                        "a reviewer side chat shows `Reviewer · KEY` (its own glyph and words), never the working badge",
-                        json!({ "tab": tab, "header": board_bounds(&shown, &format!("header-reviewer:{reviewer}")), "working": board_bounds(&shown, &format!("header-ticket:{reviewer}")) }),
+                        "a reviewer side chat (a sibling under the same main chat) shows `Reviewer · KEY` (its own glyph and words), never the working badge",
+                        json!({ "tab": tab, "parent": reviewer_parent, "main": shown["workbench"]["main"], "header": board_bounds(&shown, &format!("header-reviewer:{reviewer}")), "working": board_bounds(&shown, &format!("header-ticket:{reviewer}")) }),
                         tab.first() == Some(&format!("Reviewer · {key_side}"))
+                            && reviewer_parent.as_deref() == Some(MAIN)
+                            && shown["workbench"]["main"] == MAIN
                             && board_bounds(&shown, &format!("header-reviewer:{reviewer}")).is_some()
                             && board_bounds(&shown, &format!("header-ticket:{reviewer}")).is_none(),
                     );
