@@ -104,7 +104,10 @@ fn config() -> ChatConfig {
     ChatConfig {
         harness: HarnessId::Mock,
         provider_account_id: None,
-        model: Some("mock-fixture".into()),
+        // A model in the Mock harness catalog: with no reviewer configured
+        // the review runs on the implementation model, which the engine
+        // validates against the catalog (it never substitutes one).
+        model: Some("mock-1".into()),
         reasoning: None,
         model_options: Default::default(),
         sandbox: SandboxLevel::ReadOnly,
