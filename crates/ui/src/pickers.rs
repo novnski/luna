@@ -10818,32 +10818,6 @@ mod tests {
     }
 }
 
-/// Catalog for the isolated native screenshot fixture; never used by the app.
-#[cfg(feature = "project-palette-fixture")]
-impl Pickers {
-    pub(crate) fn fixture_model_catalog(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.models.get(&HarnessId::Codex), Some(Loadable::Ready(_))) {
-            return;
-        }
-        self.config.harness = Some(HarnessId::Codex);
-        self.config.model = Some("gpt-5.4".into());
-        self.harnesses = Loadable::Ready(serde_json::from_value(serde_json::json!([
-            {"id":"codex","name":"Codex","supportsSteering":true,"steeringMode":"step-boundary","reasoningLevels":[]}
-        ])).unwrap());
-        self.models.insert(HarnessId::Codex, Loadable::Ready(serde_json::from_value(serde_json::json!([
-            {"id":"gpt-5.4","label":"GPT-5.4","description":"For complex coding and reasoning", "reasoningLevels":["low","medium","high","xhigh"], "options":[
-                {"id":"context-window","label":"Context window","defaultChoice":"standard","choices":[{"id":"standard","label":"Standard"},{"id":"1m","label":"1M tokens"}]},
-                {"id":"service-tier","label":"Service tier","defaultChoice":"auto","choices":[{"id":"auto","label":"Standard"},{"id":"fast","label":"Fast"}]}
-            ]},
-            {"id":"gpt-5.3-codex","label":"GPT-5.3 Codex","description":"Optimized for agentic coding"},
-            {"id":"gpt-5.2","label":"GPT-5.2","description":"General purpose reasoning"},
-            {"id":"gpt-5.1-codex-mini","label":"GPT-5.1 Codex Mini","description":"Fast, efficient coding"}
-        ])).unwrap()));
-        self.catalog_rev += 1;
-        cx.notify();
-    }
-}
-
 #[cfg(test)]
 #[path = "pickers_project_defaults_tests.rs"]
 mod project_defaults_tests;

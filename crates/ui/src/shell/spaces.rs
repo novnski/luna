@@ -4945,57 +4945,6 @@ impl Shell {
     }
 }
 
-/// Synthetic responses for the isolated native screenshot fixture only.
-#[cfg(feature = "project-palette-fixture")]
-impl Shell {
-    pub fn fixture_project_responses(&mut self, cx: &mut Context<Self>) {
-        if std::env::var_os("LUNA_FIXTURE_BACKGROUND").is_some() {
-            self.composer
-                .read(cx)
-                .pickers()
-                .clone()
-                .update(cx, |pickers, cx| pickers.fixture_model_catalog(cx));
-        }
-        let Some(flow) = self.add_space.as_mut() else {
-            return;
-        };
-        if flow.device.is_some() && !matches!(flow.drives, Loadable::Ready(_)) {
-            flow.drives = Loadable::Ready(
-                serde_json::from_value(serde_json::json!([
-                    {"name":"Projects", "path":"/projects"},
-                    {"name":"System", "path":"/"}
-                ]))
-                .unwrap(),
-            );
-            cx.notify();
-        }
-        if flow.step == ProjectStep::Folders && !matches!(flow.browser, Loadable::Ready(_)) {
-            let path = flow
-                .browser_path
-                .clone()
-                .unwrap_or_else(|| "/home/alex".into());
-            if flow.browser_path.is_none() {
-                flow.home = Some(path.clone());
-            }
-            let names = match path.as_str() {
-                "/home/alex" => vec!["Desktop", "Documents", "Downloads", "Projects"],
-                "/projects" | "/home/alex/Projects" => vec!["fieldnotes", "mobile-app", "website"],
-                _ => vec!["assets", "docs", "src", "tests"],
-            };
-            flow.browser = Loadable::Ready(
-                serde_json::from_value(serde_json::json!({
-                    "path":path,
-                    "entries":names.into_iter().map(|name| serde_json::json!({
-                        "name":name,"isDir":true,"isRepo":name=="fieldnotes"
-                    })).collect::<Vec<_>>()
-                }))
-                .unwrap(),
-            );
-            cx.notify();
-        }
-    }
-}
-
 #[cfg(test)]
 mod project_flow_tests {
     use super::*;
