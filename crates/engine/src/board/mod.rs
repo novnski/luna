@@ -252,6 +252,27 @@ impl EngineRpc {
             .transpose()
     }
 
+    /// Save one board-owned keyed blob (reply caches, review packets and
+    /// profiles, chat-model records) under device write admission.
+    ///
+    /// The permit fences retired writers; the store decides whether it needs
+    /// it. An engine's store is unguarded, so `save_snapshot` writes directly
+    /// and an admitted save on it would always be `AdmissionMismatch`; a
+    /// guarded store answers `AdmissionRequired` without writing, and the
+    /// admitted save follows. (`board_commit` needs no such step: the store's
+    /// command writer ignores the permit when unguarded and checks it when
+    /// guarded.)
+    pub(crate) fn board_save_snapshot(&self, key: &str, bytes: &[u8]) -> BoardResult<()> {
+        let permit = self.board_write_permit()?;
+        match (self.store.save_snapshot(key, bytes), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => self
+                .store
+                .save_snapshot_admitted(permit.ticket(), key, bytes),
+            (result, _) => result,
+        }
+        .map_err(board_store_error)
+    }
+
     /// Commit one mutation through the store's atomic primitive.
     pub(crate) fn board_commit(
         &self,
