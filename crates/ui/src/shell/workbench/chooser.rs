@@ -112,7 +112,7 @@ impl Shell {
             .map(|bounds| gpui::point(bounds.left(), bounds.bottom() + px(4.0)))
             .unwrap_or_else(|| gpui::point(px(240.0), px(80.0)));
         // A side chat's `+`: New side chat or Hand off, never this chooser.
-        if self.board_side_origin_card(&source, anchor, cx) {
+        if self.board_side_origin_card(Some(&pane_id), &source, anchor, cx) {
             return;
         }
         let provider = self.chooser_default_provider(&source, cx);

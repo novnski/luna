@@ -129,15 +129,22 @@
 //!     through), loses its readable text/icon contrast in any theme or
 //!     surface preference, or its opaque fill is defeated by parent opacity.
 //! 38. UI copy calls context-carrying conversations forks (or "Child chat")
-//!     instead of Side chat / New thread; a tab's help names the wrong
-//!     source (placement instead of lineage), promises future sync, hides a
-//!     deleted source, or says a new thread carries its parent's context.
+//!     instead of Side chat (Fresh or With context); a tab's help names the
+//!     wrong source (placement instead of lineage), promises future sync,
+//!     hides a deleted source, or says a fresh side chat carries its main
+//!     chat's context.
 //! 39. `+` creates a conversation (or opens anything but its chooser);
 //!     opening, choosing a kind or browsing providers creates something; the
 //!     chooser does not name the actual source (the active chat of the group
 //!     it was opened from) before Create; a double click or retry creates
 //!     two; a chooser left open across a source/main/profile/engine change
-//!     still creates (for the stale source).
+//!     still creates (for the stale source). One level of side chats: a side
+//!     chat's `+` opens the main chooser or offers With context, Fork or a
+//!     nested side chat instead of only New side chat and Hand off; a fresh
+//!     side chat asked of a side chat lands under it instead of beside it
+//!     under the same main chat; the engine creates a fork of a side chat;
+//!     or a context fork asked of a side chat in the UI is neither refused
+//!     nor explained.
 //! 40. A New thread ignores the chosen provider, reuses another provider's
 //!     account, is created under Main instead of the chooser's source, or
 //!     starts a provider; a Side chat leaves its source's provider/account,
@@ -1847,9 +1854,15 @@ fn main() -> anyhow::Result<()> {
             chat.created_at = at - TimeDelta::minutes(2);
             chat.last_message_at = Some(at);
             chat.last_seen_at = Some(at + TimeDelta::seconds(1));
+            // The engine row carries the same lineage, inert (no initial
+            // prompt to start, no results to report): the chat model's
+            // canonical roles see Child A and Child B as side chats of Main,
+            // while the engine never starts or sweeps these seeded children.
+            chat.child_thread = child_thread(spec, at_ms).map(|mut child| {
+                child.initial_prompt.clear();
+                child
+            });
             core.workspace.import_chat_row(&chat)?;
-            // Lineage lives on the UI copy only: the engine never starts or
-            // sweeps these seeded children.
             chat.child_thread = child_thread(spec, at_ms);
             ui_chats.push(chat);
         }
@@ -2519,31 +2532,45 @@ fn main() -> anyhow::Result<()> {
                 let equal = wait_for(window, cx, "equal panes", |rb| (rb["root"]["ratio"].as_f64().unwrap_or(0.0) - 0.5).abs() < 0.001).await?;
                 progress(&output, &mut record, "equalized".into(), equal.clone());
 
-                // w07 (failure cases 39-40). `+` in Child A's group opens the
-                // creation chooser naming Child A as the source; opening and
-                // Escape create nothing. An explicit Create makes exactly one
-                // fresh New thread from Child A (the group's active chat; Main
-                // only hosts the layout) in that group, composer focused; a
-                // repeated Create is a no-op.
+                // w07 (failure cases 39-40; one level of side chats). Child
+                // A is a side chat of Main, so `+` in its group opens the
+                // side chat's own card naming Child A, never the main
+                // chooser: New side chat and Hand off only. Opening and
+                // Escape create nothing and return the keyboard to Child A.
+                // New side chat makes exactly one fresh sibling under Main
+                // (the same main chat, never a child of Child A), opened in
+                // that group with its composer focused.
                 let a_pane = pane_of(&equal, CHILD_A).unwrap()["id"].as_str().unwrap().to_string();
+                window.update(cx, |shell, _, cx| shell.fixture_board_chat_probe(true, cx))?;
                 click_tab(window, cx, CHILD_A).await?;
                 let before_rows = merge_engine_chats(&reader, &state, cx).await?;
                 let plus = plus_center(&wb(window, cx)?, &a_pane)?;
                 click(window, cx, plus, MouseButton::Left).await?;
                 settle(cx, 300).await;
+                draw(window, cx)?;
+                let card = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?;
                 let chooser = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
-                anyhow::ensure!(chooser["open"] == true && chooser["source"] == CHILD_A && chooser["kind"] == "NewThread", "`+` opens the chooser for Child A, New thread first: {chooser}");
-                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_overlay_owns_keyboard(cx))?, "the chooser owns the keyboard");
-                shot(window, cx, output.join("w07a-chooser.png")).await?;
+                anyhow::ensure!(
+                    card["sideCard"]["sideId"] == CHILD_A && card["sideCard"]["mainId"] == MAIN && chooser["open"] == false,
+                    "`+` in a side chat's group opens that side chat's own card (Child A, main Main), never the main chooser: {} {chooser}",
+                    card["sideCard"]
+                );
+                anyhow::ensure!(
+                    card["marks"]["side-card"] == serde_json::json!(["New side chat", "Hand off to a new main chat…"]),
+                    "a side chat offers only a fresh sibling and a handoff: {}",
+                    card["marks"]
+                );
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_overlay_owns_keyboard(cx))?, "the card owns the keyboard");
+                shot(window, cx, output.join("w07a-side-card.png")).await?;
                 key(window, cx, "escape")?;
                 settle(cx, 300).await;
-                let cancelled = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                let cancelled = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?;
                 let cancelled_rows = merge_engine_chats(&reader, &state, cx).await?;
-                anyhow::ensure!(cancelled["open"] == false && cancelled_rows.len() == before_rows.len() && wb(window, cx)?["creatingChild"] == false, "Escape closes the chooser and creates nothing: {cancelled}");
+                anyhow::ensure!(cancelled["sideCard"].is_null() && cancelled_rows.len() == before_rows.len() && wb(window, cx)?["creatingChild"] == false, "Escape closes the card and creates nothing: {}", cancelled["sideCard"]);
                 // Failure case 45: the keyboard returns to the source group's
                 // chat (Child A), not Main; a typed key lands in Child A.
                 let owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
-                anyhow::ensure!(owner.as_deref() == Some(CHILD_A), "closing the chooser returns the keyboard to Child A: {owner:?}");
+                anyhow::ensure!(owner.as_deref() == Some(CHILD_A), "closing the card returns the keyboard to Child A: {owner:?}");
                 let main_draft_before = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
                 key(window, cx, "q")?;
                 settle(cx, 150).await;
@@ -2552,28 +2579,44 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_type(CHILD_A, "", false, cx))?;
                 click(window, cx, plus, MouseButton::Left).await?;
                 settle(cx, 300).await;
-                window.update(cx, |shell, _, cx| {
-                    shell.fixture_chooser_create(cx);
-                    shell.fixture_chooser_create(cx);
-                })?;
-                let created = wait_for(window, cx, "a new child tab", |rb| {
-                    rb["creatingChild"] == false
-                        && pane_of(rb, CHILD_A).is_some_and(|pane| tabs_of(&pane).len() == 2)
-                })
-                .await?;
-                let new_child = tabs_of(&pane_of(&created, CHILD_A).unwrap())
+                draw(window, cx)?;
+                let card = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?;
+                let new_side = {
+                    let b = &card["bounds"]["side-card:new"];
+                    let num = |key: &str| b[key].as_f64().unwrap_or(f64::NAN) as f32;
+                    anyhow::ensure!(b.is_object(), "the card's New side chat painted: {}", card["bounds"]);
+                    (num("x") + num("w") / 2.0, num("y") + num("h") / 2.0)
+                };
+                click(window, cx, new_side, MouseButton::Left).await?;
+                // The fixture merges registry rows itself (the chats watch is
+                // off), so the new sibling's row is merged while it opens.
+                let mut created = Value::Null;
+                for _ in 0..120 {
+                    merge_engine_chats(&reader, &state, cx).await?;
+                    settle(cx, 150).await;
+                    created = wb(window, cx)?;
+                    if created["creatingChild"] == false
+                        && created["pendingMutations"] == 0
+                        && pane_of(&created, CHILD_A).is_some_and(|pane| tabs_of(&pane).len() == 2)
+                    {
+                        break;
+                    }
+                }
+                let new_child = pane_of(&created, CHILD_A)
+                    .map(|pane| tabs_of(&pane))
+                    .unwrap_or_default()
                     .into_iter()
                     .find(|id| id != CHILD_A)
-                    .unwrap();
+                    .ok_or_else(|| anyhow::anyhow!("New side chat from Child A opened no tab in its group: {created} {}", window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx)).unwrap_or_default()["notice"]))?;
                 let after_rows = merge_engine_chats(&reader, &state, cx).await?;
-                anyhow::ensure!(after_rows.len() == before_rows.len() + 1, "exactly one child per gesture: {} -> {}", before_rows.len(), after_rows.len());
+                anyhow::ensure!(after_rows.len() == before_rows.len() + 1, "exactly one side chat per gesture: {} -> {}", before_rows.len(), after_rows.len());
                 let row = after_rows.iter().find(|chat| chat.id == new_child).cloned().unwrap();
-                anyhow::ensure!(row.child_thread.as_ref().is_some_and(|child| child.parent_task_id == CHILD_A), "the new thread's source is the group's active chat (Child A), not Main: {row:?}");
+                anyhow::ensure!(row.child_thread.as_ref().is_some_and(|child| child.parent_task_id == MAIN), "a fresh side chat requested from a side chat is a sibling under the same main (Main), never Child A's child: {row:?}");
                 settle(cx, 400).await;
                 let created = wb(window, cx)?;
-                anyhow::ensure!(created["focusedChat"] == new_child.as_str() && role_of(&created, &new_child).as_deref() == Some("Child"), "new child focused, as Child: {created}");
+                anyhow::ensure!(created["focusedChat"] == new_child.as_str() && role_of(&created, &new_child).as_deref() == Some("Child"), "new sibling focused, as a (fresh) side chat: {created}");
                 let texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(&new_child, cx))?;
-                anyhow::ensure!(texts.is_empty(), "a new child starts empty: {texts:?}");
+                anyhow::ensure!(texts.is_empty(), "a new side chat starts empty: {texts:?}");
                 let focused = window.update(cx, |shell, window, cx| shell.fixture_workbench_has_focus(window, cx))?;
                 anyhow::ensure!(focused, "its composer takes keyboard focus");
                 shot(window, cx, output.join("w07-new-child.png")).await?;
@@ -3695,11 +3738,15 @@ fn main() -> anyhow::Result<()> {
                 shot(window, cx, output.join("w20-independent-forks.png")).await?;
                 progress(&output, &mut record, "independentForks".into(), serde_json::json!({"one": fork_one, "two": fork_two, "stop": stop, "escapes": format!("{escapes:?}")}));
 
-                // w20b. Nested lineage and orphans: a fork of a fork and a
-                // fork of Child A list in Main's library under their actual
-                // sources; deleting a fork's source leaves it a thread (a
-                // sidebar row, openable, with its source named but not
-                // linked).
+                // w20b. One level of side chats, and orphans. A side chat
+                // neither forks nor carries its context: the engine refuses a
+                // fork of a fork and a fork of Child A (creating nothing);
+                // asking a side chat for a context fork in the UI shows why
+                // instead of a dialog; its `+` and its tab menu offer only New
+                // side chat (a fresh sibling) and Hand off, with the reason
+                // for the missing fork. A fork of a main chat survives that
+                // main chat's deletion as a thread (a sidebar row, openable,
+                // its source named but not linked).
                 let fork_via_rpc = |parent: String| {
                     let reader = reader.clone();
                     async move {
@@ -3712,39 +3759,153 @@ fn main() -> anyhow::Result<()> {
                         anyhow::Ok(created["meta"]["id"].as_str().unwrap_or_default().to_string())
                     }
                 };
-                let fork_of_fork = fork_via_rpc(fork_two.clone()).await?;
-                let child_fork = fork_via_rpc(CHILD_A.to_string()).await?;
-                anyhow::ensure!(!fork_of_fork.is_empty() && !child_fork.is_empty(), "a fork of a fork and a fork of Child A");
+                // A disposable main chat with history, made through the
+                // engine (the UI list is fixture-managed: merged explicitly).
+                let seed_main = |id: &'static str, title: &'static str| {
+                    let reader = reader.clone();
+                    let workspace = &automation_workspace;
+                    let docs = &queue_doc_host;
+                    let device = queue_device.clone();
+                    let cwd = automation_cwd.to_string_lossy().into_owned();
+                    async move {
+                        reader
+                            .call(
+                                "Mutate",
+                                serde_json::json!({
+                                    "op": "createChat",
+                                    "chatId": id,
+                                    "spaceId": PROJECT,
+                                    "cwd": cwd,
+                                    "config": serde_json::to_value(config())?,
+                                }),
+                            )
+                            .await?;
+                        workspace.rename_chat(id, title)?;
+                        let at = Utc::now().timestamp_millis();
+                        let doc = docs.open(id)?;
+                        doc.doc().push_message(&text_entry(&format!("{id}-prompt"), MessageRole::User, &format!("{title} (fixture)"), &device, at - 60_000))?;
+                        doc.doc().push_message(&text_entry(&format!("{id}-answer"), MessageRole::Assistant, "Noted.", &device, at))?;
+                        anyhow::Ok(())
+                    }
+                };
+                let rows_before_refusals = merge_engine_chats(&reader, &state, cx).await?.len();
+                let fork_of_fork = fork_via_rpc(fork_two.clone()).await;
+                let fork_of_child = fork_via_rpc(CHILD_A.to_string()).await;
+                let rows_after_refusals = merge_engine_chats(&reader, &state, cx).await?.len();
+                let refusals = serde_json::json!({
+                    "forkOfFork": fork_of_fork.as_ref().map(|id| id.clone()).unwrap_or_else(|error| format!("refused: {error:#}")),
+                    "forkOfChild": fork_of_child.as_ref().map(|id| id.clone()).unwrap_or_else(|error| format!("refused: {error:#}")),
+                });
+                anyhow::ensure!(
+                    fork_of_fork.is_err() && fork_of_child.is_err() && rows_after_refusals == rows_before_refusals,
+                    "the engine refuses a fork of a side chat (a fork, Child A) and creates nothing: {refusals} ({rows_before_refusals} -> {rows_after_refusals} chats)"
+                );
+                // The UI path (chat menu / message Fork) explains instead.
+                window.update(cx, |shell, _, cx| shell.fixture_board_chat_probe(true, cx))?;
+                let mut fork_notices = Vec::new();
+                for side in [fork_two.as_str(), CHILD_A] {
+                    window.update(cx, |shell, _, cx| shell.fixture_chat_action(side, "fork", cx))?;
+                    settle(cx, 300).await;
+                    draw(window, cx)?;
+                    let notice = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?["notice"].clone();
+                    anyhow::ensure!(
+                        notice.as_str().is_some_and(|notice| notice.starts_with("Side chats can't fork or carry their context")),
+                        "a context fork asked of a side chat ({side}) shows the refusal: {notice}"
+                    );
+                    fork_notices.push(notice);
+                }
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_refusals, "a refused fork creates nothing");
+                // The side chat's `+`: its own card, never the chooser.
+                click_tab(window, cx, &fork_two).await?;
+                let at_fork = wb(window, cx)?;
+                let fork_group = pane_of(&at_fork, &fork_two).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the second fork's group: {at_fork}"))?;
+                click(window, cx, plus_center(&at_fork, &fork_group)?, MouseButton::Left).await?;
+                settle(cx, 300).await;
+                draw(window, cx)?;
+                let card = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?;
+                let chooser = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(
+                    card["sideCard"]["sideId"] == fork_two.as_str()
+                        && card["sideCard"]["mainId"] == MAIN
+                        && card["marks"]["side-card"] == serde_json::json!(["New side chat", "Hand off to a new main chat…"])
+                        && chooser["open"] == false,
+                    "a fork's `+` offers only New side chat and Hand off (no With context): {} {} {chooser}",
+                    card["sideCard"],
+                    card["marks"]["side-card"]
+                );
+                shot(window, cx, output.join("w20b-side-chat-card.png")).await?;
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?["sideCard"].is_null(), "Escape closes the card");
+                // The tab menu: the same two creations, the reason for the
+                // missing fork, and no reattach.
+                let at_fork = wb(window, cx)?;
+                click(window, cx, tab_center(&at_fork, &fork_two)?, MouseButton::Right).await?;
+                settle(cx, 300).await;
+                draw(window, cx)?;
+                let tab_menu = window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx))?;
+                let rows: Vec<String> = tab_menu["marks"][format!("menu:tab:{fork_two}").as_str()]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row.as_str().map(str::to_string))
+                    .collect();
+                anyhow::ensure!(
+                    rows.iter().any(|row| row == "New side chat")
+                        && rows.iter().any(|row| row == "Hand off to a new main chat…")
+                        && rows.iter().any(|row| row == "No context forks from a side chat")
+                        && !rows.iter().any(|row| {
+                            let row = row.to_lowercase();
+                            row.contains("with context") || row.contains("reattach") || row.contains("move here")
+                        }),
+                    "a fork's tab menu offers New side chat and Hand off and says why there is no fork: {rows:?}"
+                );
+                shot(window, cx, output.join("w20b-side-chat-menu.png")).await?;
+                // A press elsewhere closes the menu (focusing the same tab).
+                let fork_tab = tab_center(&wb(window, cx)?, &fork_two)?;
+                click(window, cx, fork_tab, MouseButton::Left).await?;
+                settle(cx, 300).await;
+                // Orphans: a fork of a disposable main chat, placed in the
+                // sidebar, then its source deleted.
+                const FORK_SOURCE: &str = "e0e0e0e0-0000-4000-8000-0000000000d1";
+                seed_main(FORK_SOURCE, "Disposable fork source").await?;
+                merge_engine_chats(&reader, &state, cx).await?;
+                let orphan = fork_via_rpc(FORK_SOURCE.to_string()).await?;
+                anyhow::ensure!(!orphan.is_empty(), "a fork of a main chat");
+                merge_engine_chats(&reader, &state, cx).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&orphan, cx))?;
+                {
+                    let id = orphan.clone();
+                    wait_for(window, cx, "the fork opens as a tab in Main's workbench", move |rb| occurrences(rb, &id) == 1).await?;
+                }
                 let mut nested = Value::Null;
                 for _ in 0..60 {
                     merge_engine_chats(&reader, &state, cx).await?;
                     settle(cx, 150).await;
                     nested = related(window, cx)?;
-                    if tree_has(&nested, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())) && tree_has(&nested, MAIN, &child_fork, "Side chat", Some(CHILD_A)) {
+                    if tree_has(&nested, MAIN, &orphan, "Side chat", Some(FORK_SOURCE)) {
                         break;
                     }
                 }
-                anyhow::ensure!(tree_has(&nested, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())), "a fork of a fork lists in Main's library under its source: {nested}");
-                anyhow::ensure!(tree_has(&nested, MAIN, &child_fork, "Side chat", Some(CHILD_A)), "a fork of a child lists in Main's library under the child: {nested}");
-                anyhow::ensure!(tree_has(&nested, &fork_two, &fork_of_fork, "Side chat", None), "the fork's own library lists its fork: {nested}");
+                anyhow::ensure!(tree_has(&nested, MAIN, &orphan, "Side chat", Some(FORK_SOURCE)), "a fork in Main's workbench lists in Main's library under its actual source: {nested}");
                 // Placed explicitly (forks start in Related only), so its
                 // sidebar row can be checked across its source's deletion.
-                anyhow::ensure!(!has(&nested["sidebarOrder"], &fork_of_fork), "an unplaced fork of a fork is not a sidebar row: {nested}");
-                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&fork_of_fork, "side", cx))?;
+                anyhow::ensure!(!has(&nested["sidebarOrder"], &orphan), "an unplaced fork is not a sidebar row: {nested}");
+                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&orphan, "side", cx))?;
                 let mut placed_nested = related(window, cx)?;
                 for _ in 0..40 {
-                    if has(&placed_nested["sidebarOrder"], &fork_of_fork) {
+                    if has(&placed_nested["sidebarOrder"], &orphan) {
                         break;
                     }
                     settle(cx, 100).await;
                     placed_nested = related(window, cx)?;
                 }
-                anyhow::ensure!(has(&placed_nested["sidebarOrder"], &fork_of_fork), "the fork of a fork is placed in the sidebar: {placed_nested}");
-                window.update(cx, |shell, _, cx| shell.fixture_chat_action(&fork_two, "delete", cx))?;
+                anyhow::ensure!(has(&placed_nested["sidebarOrder"], &orphan), "the fork is placed in the sidebar: {placed_nested}");
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(FORK_SOURCE, "delete", cx))?;
                 let mut source_gone = false;
                 for _ in 0..80 {
                     settle(cx, 150).await;
-                    if !engine_has(&reader, &fork_two).await? {
+                    if !engine_has(&reader, FORK_SOURCE).await? {
                         source_gone = true;
                         break;
                     }
@@ -3753,34 +3914,30 @@ fn main() -> anyhow::Result<()> {
                 // chats watch does.
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
-                        state.chats.retain(|chat| chat.id != fork_two);
+                        state.chats.retain(|chat| chat.id != FORK_SOURCE);
                         cx.notify();
                     })
                 });
-                anyhow::ensure!(source_gone, "the second fork (a source) is deleted");
+                anyhow::ensure!(source_gone, "the fork's source (a main chat) is deleted");
                 settle(cx, 300).await;
                 let orphaned = related(window, cx)?;
-                anyhow::ensure!(has(&orphaned["sidebarOrder"], &fork_of_fork), "the placed orphan fork is still a sidebar row: {orphaned}");
-                anyhow::ensure!(orphaned["forkSources"][fork_of_fork.as_str()] == fork_two.as_str(), "its source stays a link to the deleted chat: {orphaned}");
-                window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&fork_of_fork, cx))?;
-                {
-                    let id = fork_of_fork.clone();
-                    wait_for(window, cx, "the orphan fork opens as a tab", move |rb| occurrences(rb, &id) == 1).await?;
-                }
+                anyhow::ensure!(has(&orphaned["sidebarOrder"], &orphan), "the placed orphan fork is still a sidebar row: {orphaned}");
+                anyhow::ensure!(orphaned["forkSources"][orphan.as_str()] == FORK_SOURCE, "its source stays a link to the deleted chat: {orphaned}");
                 draw(window, cx)?;
                 settle(cx, 300).await;
-                let orphan_strip = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(&fork_of_fork, cx))?;
+                let orphan_strip = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(&orphan, cx))?;
                 anyhow::ensure!(orphan_strip["parentLinked"] == false && orphan_strip["parentTitle"] == "a deleted chat", "an orphan names its deleted source without a link: {orphan_strip}");
-                assert_ordinary_fork(window, cx, &fork_of_fork, false, "the orphan fork").await?;
-                anyhow::ensure!(tree_has(&related(window, cx)?, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())), "Main's library still lists the orphan (it is in Main's workbench)");
+                assert_ordinary_fork(window, cx, &orphan, false, "the orphan fork").await?;
+                anyhow::ensure!(tree_has(&related(window, cx)?, MAIN, &orphan, "Side chat", Some(FORK_SOURCE)), "Main's library still lists the orphan (it is in Main's workbench)");
                 shot(window, cx, output.join("w20b-nested-and-orphan.png")).await?;
-                progress(&output, &mut record, "nestedAndOrphan".into(), serde_json::json!({"nested": nested, "orphaned": orphaned, "orphanStrip": orphan_strip}));
+                progress(&output, &mut record, "sideChatLimitsAndOrphan".into(), serde_json::json!({"refusals": refusals, "forkNotices": fork_notices, "card": card["sideCard"], "tabMenu": rows, "library": nested, "orphaned": orphaned, "orphanStrip": orphan_strip}));
 
                 // w20c. Ordinary chat operations on forks: archive (then
                 // the model shortcut cannot fall back to Main), the fork as
-                // its own workbench Main with a child of its own, sidebar
-                // placement, and legacy device-local marks migrated to the
-                // fork's synced flags before they are cleared.
+                // its own workbench Main (a fresh side chat asked of it is a
+                // sibling under Main, never its child), sidebar placement,
+                // and legacy device-local marks migrated to the fork's
+                // synced flags before they are cleared.
                 click_tab(window, cx, &fork_one).await?;
                 {
                     let id = fork_one.clone();
@@ -3807,96 +3964,107 @@ fn main() -> anyhow::Result<()> {
                 wait_row(cx, &reader, &state, &fork_one, "the fork unarchived", |row| !row.archived).await?;
                 // Placement: a fork's Related row dropped on the sidebar is
                 // placed there like any chat (no refusal).
-                anyhow::ensure!(!has(&related(window, cx)?["sidebarOrder"], &child_fork), "an unplaced fork of a child is not a sidebar row");
-                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&child_fork, "side", cx))?;
+                anyhow::ensure!(!has(&related(window, cx)?["sidebarOrder"], &fork_two), "an unplaced fork is not a sidebar row");
+                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&fork_two, "side", cx))?;
                 settle(cx, 300).await;
                 let placed = related(window, cx)?;
                 anyhow::ensure!(!placed["notice"].as_str().is_some_and(|notice| notice.contains("stay with")), "a fork is not refused the sidebar: {placed}");
-                anyhow::ensure!(has(&placed["sidebarOrder"], &child_fork), "the fork is a sidebar row: {placed}");
+                anyhow::ensure!(has(&placed["sidebarOrder"], &fork_two), "the fork is a sidebar row: {placed}");
                 // Legacy marks: archive intent on one fork, a pin on another.
                 window.update(cx, |shell, _, cx| {
-                    shell.fixture_seed_side_marks(&child_fork, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(1), settled: false, archived: true }, cx);
+                    shell.fixture_seed_side_marks(&fork_two, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(1), settled: false, archived: true }, cx);
                 })?;
-                wait_row(cx, &reader, &state, &child_fork, "the legacy archive mark is applied", |row| row.archived).await?;
+                wait_row(cx, &reader, &state, &fork_two, "the legacy archive mark is applied", |row| row.archived).await?;
                 window.update(cx, |shell, _, cx| {
-                    shell.fixture_seed_side_marks(&fork_of_fork, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(2), settled: false, archived: false }, cx);
+                    shell.fixture_seed_side_marks(&orphan, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(2), settled: false, archived: false }, cx);
                 })?;
-                wait_row(cx, &reader, &state, &fork_of_fork, "the legacy pin mark is applied", |row| row.pinned_order.is_some()).await?;
+                wait_row(cx, &reader, &state, &orphan, "the legacy pin mark is applied", |row| row.pinned_order.is_some()).await?;
                 let mut marks = Value::Null;
                 for _ in 0..60 {
                     settle(cx, 150).await;
                     marks = related(window, cx)?["sideMarks"].clone();
-                    if marks.get(child_fork.as_str()).is_none() && marks.get(fork_of_fork.as_str()).is_none() {
+                    if marks.get(fork_two.as_str()).is_none() && marks.get(orphan.as_str()).is_none() {
                         break;
                     }
                 }
-                anyhow::ensure!(marks.get(child_fork.as_str()).is_none() && marks.get(fork_of_fork.as_str()).is_none(), "legacy marks clear only after the rows read back their flags: {marks}");
-                // The fork as its own workbench Main, with a child of its own.
+                anyhow::ensure!(marks.get(fork_two.as_str()).is_none() && marks.get(orphan.as_str()).is_none(), "legacy marks clear only after the rows read back their flags: {marks}");
+                // The fork as its own workbench Main: its help keeps its
+                // lineage (only a parentless Main reads as plain Main).
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_one, cx))?;
-                {
+                let fork_main = {
                     let id = fork_one.clone();
-                    wait_for(window, cx, "the fork is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?;
-                }
-                let fork_main = wb(window, cx)?;
-                let fork_pane = pane_of(&fork_main, &fork_one).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the fork's group: {fork_main}"))?;
-                click(window, cx, plus_center(&fork_main, &fork_pane)?, MouseButton::Left).await?;
-                settle(cx, 300).await;
-                window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
-                let created_in_fork = {
-                    let id = fork_one.clone();
-                    wait_for(window, cx, "a new tab created under the fork", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?
+                    wait_for(window, cx, "the fork is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
                 };
-                // This fixture deliberately merges registry rows explicitly,
-                // as w07 does. A layout can name the new ID before that merge;
-                // its Child label comes from the actual registry lineage.
-                let fork_child = all_panes(&created_in_fork).iter().flat_map(tabs_of).find(|tab| *tab != fork_one).unwrap();
-                let rows = merge_engine_chats(&reader, &state, cx).await?;
-                anyhow::ensure!(rows.iter().find(|chat| chat.id == fork_child).is_some_and(|chat| chat.child_thread.as_ref().is_some_and(|child| child.parent_task_id == fork_one)), "the child's parent is the fork");
-                let with_child = {
-                    let id = fork_child.clone();
-                    wait_for(window, cx, "the fork child's published lineage", move |rb| role_of(rb, &id).as_deref() == Some("Child")).await?
-                };
-                // Its help keeps its lineage as Main (only a parentless Main
-                // reads as plain Main): a Side chat of Main, and the New
-                // thread created from it, each opened as its own Main.
                 const MAIN_NOTE: &str = "It is this workbench's Main and stays open.";
-                let fork_main_help = tab_json(&with_child, &fork_one).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                let fork_main_help = tab_json(&fork_main, &fork_one).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
                 anyhow::ensure!(
                     fork_main_help["title"].as_str().is_some_and(|title| title.starts_with("Side chat of ") && title != "Side chat of a deleted chat")
                         && fork_main_help["details"].as_str().is_some_and(|details| details.starts_with("Side chats carry the context of the parent thread.") && details.ends_with(MAIN_NOTE)),
                     "a Side chat as its own Main keeps its Side chat help: {fork_main_help}"
                 );
                 shot(window, cx, output.join("w20c-fork-as-main.png")).await?;
+                // Even as its own workbench Main, the fork is a side chat: a
+                // fresh side chat asked of it (the palette's New side chat,
+                // the same path as a split or an empty group's button) is a
+                // sibling under Main, revealed in Main's workbench.
+                let known_before: std::collections::HashSet<String> = merge_engine_chats(&reader, &state, cx).await?.into_iter().map(|row| row.id).collect();
+                let rows_before_sibling = known_before.len();
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_action("New side chat (fresh)", cx))?, "the palette offers New side chat");
+                let mut sibling = None;
+                let mut with_sibling = Value::Null;
+                for _ in 0..120 {
+                    let rows = merge_engine_chats(&reader, &state, cx).await?;
+                    settle(cx, 150).await;
+                    with_sibling = wb(window, cx)?;
+                    if let Some(row) = rows.iter().find(|row| {
+                        !known_before.contains(&row.id) && with_sibling["focusedChat"] == row.id.as_str() && with_sibling["pendingMutations"] == 0
+                    }) {
+                        sibling = Some(row.clone());
+                        break;
+                    }
+                }
+                let sibling = sibling.ok_or_else(|| anyhow::anyhow!("New side chat from a fork revealed no sibling: {with_sibling} {}", window.update(cx, |shell, _, cx| shell.fixture_board_chat_readback(cx)).unwrap_or_default()["notice"]))?;
+                let fork_child = sibling.id.clone();
+                anyhow::ensure!(
+                    merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_sibling + 1
+                        && sibling.child_thread.as_ref().is_some_and(|child| child.parent_task_id == MAIN),
+                    "a fresh side chat asked of a side chat is one sibling under the same main (Main), never the fork's child: {sibling:?}"
+                );
+                anyhow::ensure!(with_sibling["main"] == MAIN && role_of(&with_sibling, &fork_child).as_deref() == Some("Child"), "the sibling opens in Main's workbench, as a fresh side chat: {with_sibling}");
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_child, cx))?;
                 let child_main = {
                     let id = fork_child.clone();
-                    wait_for(window, cx, "the fork's New thread is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
+                    wait_for(window, cx, "the sibling is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
                 };
                 let child_main_help = tab_json(&child_main, &fork_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
                 anyhow::ensure!(
                     child_main_help["title"].as_str().is_some_and(|title| title.starts_with("Side chat of ") && title != "Side chat of a deleted chat")
                         && child_main_help["details"] == format!("Started fresh: it does not carry the main chat's conversation. {MAIN_NOTE}").as_str(),
-                    "a New thread as its own Main keeps its New thread help: {child_main_help}"
+                    "a fresh side chat as its own Main keeps its fresh side chat help: {child_main_help}"
                 );
                 // Deleted sources: the orphan Side chat (its source was
-                // deleted in w20b) and a New thread whose parent is deleted.
-                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_of_fork, cx))?;
+                // deleted in w20b) and a fresh side chat whose main chat is
+                // deleted.
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&orphan, cx))?;
                 let orphan_main = {
-                    let id = fork_of_fork.clone();
+                    let id = orphan.clone();
                     wait_for(window, cx, "the orphan Side chat is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
                 };
-                let orphan_main_help = tab_json(&orphan_main, &fork_of_fork).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                let orphan_main_help = tab_json(&orphan_main, &orphan).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
                 anyhow::ensure!(
                     orphan_main_help["title"] == "Side chat of a deleted chat" && orphan_main_help["details"].as_str().is_some_and(|details| details.ends_with(MAIN_NOTE)),
                     "an orphan Side chat as Main names its deleted source: {orphan_main_help}"
                 );
-                let disposable = fork_via_rpc(MAIN.to_string()).await?;
-                anyhow::ensure!(!disposable.is_empty(), "a disposable source");
+                // A disposable main chat (one level: only a main chat has
+                // side chats), its fresh side chat, then the main deleted.
+                const DISPOSABLE: &str = "e0e0e0e0-0000-4000-8000-0000000000d2";
+                seed_main(DISPOSABLE, "Disposable parent").await?;
+                let disposable = DISPOSABLE.to_string();
                 merge_engine_chats(&reader, &state, cx).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&disposable, cx))?;
                 let disposable_main = {
                     let id = disposable.clone();
-                    wait_for(window, cx, "the disposable source is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
+                    wait_for(window, cx, "the disposable main chat is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
                 };
                 let disposable_pane = pane_of(&disposable_main, &disposable).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("its group: {disposable_main}"))?;
                 window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&disposable_pane), false, cx))?;
@@ -3904,14 +4072,14 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
                 let orphan_child = {
                     let id = disposable.clone();
-                    let created = wait_for(window, cx, "a New thread of the disposable source", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?;
+                    let created = wait_for(window, cx, "a fresh side chat of the disposable main chat", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?;
                     all_panes(&created).iter().flat_map(tabs_of).find(|tab| *tab != disposable).unwrap()
                 };
                 merge_engine_chats(&reader, &state, cx).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&orphan_child, cx))?;
                 {
                     let id = orphan_child.clone();
-                    wait_for(window, cx, "the New thread is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?;
+                    wait_for(window, cx, "the fresh side chat is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?;
                 }
                 window.update(cx, |shell, _, cx| shell.fixture_chat_action(&disposable, "delete", cx))?;
                 let mut parent_gone = false;
@@ -3922,28 +4090,35 @@ fn main() -> anyhow::Result<()> {
                         break;
                     }
                 }
-                anyhow::ensure!(parent_gone, "the New thread's parent is deleted");
+                anyhow::ensure!(parent_gone, "the side chat's main chat is deleted");
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         state.chats.retain(|chat| chat.id != disposable);
                         cx.notify();
                     })
                 });
-                anyhow::ensure!(engine_has(&reader, &orphan_child).await?, "deleting a parent keeps its New thread");
+                anyhow::ensure!(engine_has(&reader, &orphan_child).await?, "deleting a main chat keeps its side chat");
                 let orphan_child_help = {
                     let id = orphan_child.clone();
-                    let rb = wait_for(window, cx, "the New thread names its deleted parent", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["help"]["title"] == "Side chat of a deleted chat")).await?;
+                    let rb = wait_for(window, cx, "the side chat names its deleted main chat", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["help"]["title"] == "Side chat of a deleted chat")).await?;
                     tab_json(&rb, &orphan_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null)
                 };
-                anyhow::ensure!(orphan_child_help["details"] == format!("Started fresh: it does not carry the main chat's conversation. {MAIN_NOTE}").as_str(), "a New thread as Main with a deleted parent: {orphan_child_help}");
+                anyhow::ensure!(orphan_child_help["details"] == format!("Started fresh: it does not carry the main chat's conversation. {MAIN_NOTE}").as_str(), "a fresh side chat as Main with a deleted main chat: {orphan_child_help}");
                 shot(window, cx, output.join("w20c-lineage-as-main.png")).await?;
                 progress(&output, &mut record, "lineageAsMain".into(), serde_json::json!({"sideMain": fork_main_help, "childMain": child_main_help, "orphanSideMain": orphan_main_help, "orphanChildMain": orphan_child_help}));
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(MAIN, cx))?;
                 wait_for(window, cx, "back to Main's workbench", |rb| rb["main"] == MAIN && rb["loaded"] == true).await?;
                 settle(cx, 300).await;
                 let back = related(window, cx)?;
-                anyhow::ensure!(tree_has(&back, MAIN, &fork_child, "Child chat", Some(fork_one.as_str())), "a child of a fork lists in Main's library under the fork: {back}");
-                progress(&output, &mut record, "forkOperations".into(), serde_json::json!({"archive": after_shortcut, "placed": placed["sidebarOrder"], "marks": marks, "forkMain": with_child, "library": back["relatedTrees"][MAIN]}));
+                anyhow::ensure!(tree_has(&back, MAIN, &fork_child, "Child chat", None), "the sibling lists directly in Main's library, not under the fork: {back}");
+                // Its tab leaves Main's workbench as it found it for the
+                // steps that follow (closing never ends a chat).
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close(&fork_child, cx))?;
+                {
+                    let id = fork_child.clone();
+                    wait_for(window, cx, "the sibling's tab closed", move |rb| occurrences(rb, &id) == 0).await?;
+                }
+                progress(&output, &mut record, "forkOperations".into(), serde_json::json!({"archive": after_shortcut, "placed": placed["sidebarOrder"], "marks": marks, "sibling": fork_child, "library": back["relatedTrees"][MAIN]}));
 
                 // w20d. Failure case 31: a new Main before the engine's
                 // registry has it. The layout read is refused ("Main chat is
@@ -3995,7 +4170,9 @@ fn main() -> anyhow::Result<()> {
 
                 // w20e. Failure case 32: a group's split control makes one
                 // blank child of Main in a new group to its right (no empty
-                // group, no choice, nothing started).
+                // group, no choice, nothing started). Main is its group's
+                // active chat (a side chat's split would be a sibling).
+                click_tab(window, cx, MAIN).await?;
                 let before_split = wb(window, cx)?;
                 let main_group = pane_of(&before_split, MAIN).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("Main's group: {before_split}"))?;
                 let groups_before = all_panes(&before_split).len();
@@ -4083,7 +4260,7 @@ fn main() -> anyhow::Result<()> {
                 );
                 let started = switch_path(cx, MAIN)?;
                 anyhow::ensure!(started == Some("confirm"), "a started chat confirms a provider switch: {started:?}");
-                let fork_path = switch_path(cx, &fork_of_fork)?;
+                let fork_path = switch_path(cx, &orphan)?;
                 anyhow::ensure!(fork_path.is_none_or(|path| path == "confirm"), "a fork never switches without confirming: {fork_path:?}");
                 progress(&output, &mut record, "splitChild".into(), serde_json::json!({"layout": split_child, "child": new_child, "source":split_source,"blankPath": blank_path, "startedPath": started}));
 
@@ -4125,13 +4302,35 @@ fn main() -> anyhow::Result<()> {
                 progress(&output, &mut record, "tabStatus".into(), serde_json::json!({"dotted": tab_json(&dotted, &hidden), "seen": tab_json(&seen, &hidden)}));
 
                 // w20g2. Failure case 42: Enter runs only the action the
-                // chooser visibly offers. A Side chat from the blank split
-                // child (nothing to carry; Mock has no native history) offers
-                // nothing: hold both catalog and capability loading states
-                // deterministically; real Enter must never create while
-                // either result is unavailable.
+                // chooser visibly offers. The split child is a side chat (its
+                // group's `+` opens the side chat's card), so the chooser's
+                // guards run on a blank main chat opened in that group: a
+                // Side chat with context from it (nothing to carry; Mock has
+                // no native history) offers nothing. Hold both catalog and
+                // capability loading states deterministically; real Enter
+                // must never create while either result is unavailable.
                 let blank_group = new_group["id"].as_str().unwrap_or_default().to_string();
                 click_tab(window, cx, &new_child).await?;
+                const BLANK: &str = "e0e0e0e0-0000-4000-8000-0000000000b1";
+                reader
+                    .call(
+                        "Mutate",
+                        serde_json::json!({
+                            "op": "createChat",
+                            "chatId": BLANK,
+                            "spaceId": PROJECT,
+                            "cwd": automation_cwd.to_string_lossy(),
+                            "config": serde_json::to_value(config())?,
+                        }),
+                    )
+                    .await?;
+                automation_workspace.rename_chat(BLANK, "Blank main chat")?;
+                merge_engine_chats(&reader, &state, cx).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open(BLANK, cx))?;
+                wait_for(window, cx, "the blank main chat active in the split group", |rb| {
+                    pane_of(rb, BLANK).is_some_and(|pane| pane["id"] == blank_group.as_str() && pane["active"] == BLANK)
+                })
+                .await?;
                 let rows_before_blank = merge_engine_chats(&reader, &state, cx).await?.len();
                 let held_providers = window.update(cx, |shell, _, cx| shell.fixture_chooser_hold_providers(cx))?
                     .ok_or_else(|| anyhow::anyhow!("the warm engine provider catalog to hold"))?;
@@ -4178,7 +4377,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     settle(cx, 100).await;
                 }
-                anyhow::ensure!(cold["source"] == new_child.as_str() && cold["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "a blank source offers no Side chat: {cold}");
+                anyhow::ensure!(cold["source"] == BLANK && cold["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "a blank source offers no Side chat with context: {cold}");
                 shot(window, cx, output.join("w20g2-blank-side-chooser.png")).await?;
                 key(window, cx, "enter")?;
                 settle(cx, 400).await;
@@ -4188,7 +4387,7 @@ fn main() -> anyhow::Result<()> {
                 key(window, cx, "escape")?;
                 settle(cx, 300).await;
                 let blank_owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
-                anyhow::ensure!(blank_owner.as_deref() == Some(new_child.as_str()), "Escape returns the keyboard to the source's composer: {blank_owner:?}");
+                anyhow::ensure!(blank_owner.as_deref() == Some(BLANK), "Escape returns the keyboard to the source's composer: {blank_owner:?}");
                 progress(&output, &mut record, "chooserDisabledEnter".into(), serde_json::json!({"providerLoading":provider_loading,"providerReady":provider_ready,"providerRemoved":provider_removed,"loading": loading, "afterLoading": after_loading, "cold": cold}));
 
                 // w20g3. Failure case 43: a New thread whose outcome is
@@ -4241,6 +4440,20 @@ fn main() -> anyhow::Result<()> {
                 let new_group_id = new_group["id"].as_str().unwrap_or_default().to_string();
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_close_pane(&new_group_id, cx))?;
                 wait_for(window, cx, "the split child's group closed", move |rb| all_panes(rb).len() == groups_before).await?;
+                // The blank main chat was only a chooser source: remove it.
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(BLANK, "delete", cx))?;
+                for _ in 0..80 {
+                    settle(cx, 150).await;
+                    if !engine_has(&reader, BLANK).await? {
+                        break;
+                    }
+                }
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.retain(|chat| chat.id != BLANK);
+                        cx.notify();
+                    })
+                });
                 set_right_sidebar(window, cx, true).await?;
 
                 // w20h. Failure cases 39-40: the chooser's Side chat path.
