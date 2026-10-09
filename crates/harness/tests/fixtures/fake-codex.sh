@@ -889,6 +889,26 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
   ;;
 
+*scenario:child-late-result*)
+  # The parent steers a child while the child's read still runs: the read
+  # completes (re-announced, then its result) after the child already
+  # answered the steer.
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"item/started","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"spawn-late","kind":"started","agentThreadId":"child-late","agentPath":"/root/late"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"spawn-late","kind":"started","agentThreadId":"child-late","agentPath":"/root/late"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"child-late","item":{"type":"userMessage","id":"late-input","text":"Read the slow file"}}}'
+  emit '{"method":"item/started","params":{"threadId":"child-late","item":{"type":"commandExecution","id":"slow-read","command":"cat slow.txt","commandActions":[{"type":"read","path":"slow.txt"}]}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"message-late","kind":"interacted","agentThreadId":"child-late","agentPath":"/root/late"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"child-late","item":{"type":"userMessage","id":"late-steer","text":"Also summarize it"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"threadId":"child-late","itemId":"late-reply","delta":"CHILD_FOLLOW_UP"}}'
+  emit '{"method":"item/completed","params":{"threadId":"child-late","item":{"type":"commandExecution","id":"slow-read","command":"cat slow.txt","commandActions":[{"type":"read","path":"slow.txt"}],"status":"completed","exitCode":0,"aggregatedOutput":"SLOW_READ_OUTPUT"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"child-late","item":{"type":"agentMessage","id":"late-reply","text":"CHILD_FOLLOW_UP"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"child-late","turn":{"id":"late-turn","status":"completed"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"late-completed","kind":"completed","agentThreadId":"child-late","agentPath":"/root/late"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","item":{"type":"agentMessage","id":"parent-answer","text":"parent answer"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  ;;
+
 *scenario:subagent*)
   # Multi-agent v2 child-thread routing: registration via subAgentActivity,
   # tagged child items, consumed child turn bookkeeping (must never settle
