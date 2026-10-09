@@ -192,6 +192,10 @@ async fn probe(
     if include_usage {
         cmd.arg("--no-session-persistence");
     }
+    // A probe without a workspace runs in a neutral directory, never the host
+    // process's own, whose project settings and commands are not the user's.
+    // A scoped probe's launch profile sets the scope's cwd over this.
+    cmd.current_dir(std::env::temp_dir());
     configure(&mut cmd);
     crate::mcp_isolation::claude_strict_empty(&mut cmd);
     cmd.stdin(Stdio::piped())

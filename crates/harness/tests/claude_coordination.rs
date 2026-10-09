@@ -367,7 +367,8 @@ async fn resume_held_by_an_external_background_session_is_refused() {
 }
 
 /// The configured provider home must govern both Settings readback and the
-/// pre-launch writer check, rather than whichever home the engine inherited.
+/// pre-launch writer check, rather than whichever home the engine inherited,
+/// and the listing runs from a neutral cwd rather than the engine's own.
 #[tokio::test]
 async fn external_sessions_and_resume_use_the_configured_provider_home() {
     let _env = ENV_LOCK.lock().await;
@@ -382,8 +383,10 @@ async fn external_sessions_and_resume_use_the_configured_provider_home() {
     std::fs::write(&rows_path, &rows).unwrap();
     let exe = wrapper(dir.path(), "[]", 0);
     let source = std::fs::read_to_string(&exe).unwrap();
+    let listing_cwd = dir.path().join("listing-cwd");
     let listing = format!(
-        "if [ \"$CLAUDE_CONFIG_DIR\" = '{config}' ]; then cat '{rows_path}'; else printf '%s\\n' '{rows}'; fi",
+        "pwd -P > '{cwd}'\nif [ \"$CLAUDE_CONFIG_DIR\" = '{config}' ]; then cat '{rows_path}'; else printf '%s\\n' '{rows}'; fi",
+        cwd = listing_cwd.display(),
         config = config.display(),
         rows_path = rows_path.display(),
     );
@@ -403,6 +406,15 @@ async fn external_sessions_and_resume_use_the_configured_provider_home() {
     kill(external);
     assert!(view.unavailable_reason.is_none());
     assert_eq!(view.sessions.len(), 1);
+    // The machine-wide listing has no workspace: it runs in a neutral cwd,
+    // never the host process's own directory.
+    let cwd = std::fs::read_to_string(&listing_cwd).unwrap();
+    let host = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_ne!(Path::new(cwd.trim()), host, "listing ran in the host cwd");
+    assert_eq!(
+        Path::new(cwd.trim()),
+        std::env::temp_dir().canonicalize().unwrap()
+    );
     assert!(matches!(
         blocked,
         Err(HarnessError::RejectedBeforeAcceptance(_))

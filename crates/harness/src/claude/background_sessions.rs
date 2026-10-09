@@ -186,6 +186,9 @@ async fn list_sessions_in_home(
     if let Some(home) = config_home {
         cmd.env("CLAUDE_CONFIG_DIR", home);
     }
+    // The listing is machine-wide: run it from a neutral directory, never the
+    // host process's own.
+    cmd.current_dir(std::env::temp_dir());
     cmd.args(["agents", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

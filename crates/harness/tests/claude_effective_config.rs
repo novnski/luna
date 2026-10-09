@@ -522,8 +522,9 @@ async fn discovery_cache_tracks_project_policy_account_and_config_changes() {
     assert!(names(&added).contains(&"luna-user-canary".to_owned()));
 }
 
-/// G-7, C-3, G-15: a failed probe surfaces the native error and is retried;
-/// the legacy unscoped call still answers (Ask profile, no workspace).
+/// G-7, C-3, G-15, G-16: a failed probe surfaces the native error and is
+/// retried; the legacy unscoped call still answers (Ask profile, no workspace)
+/// from a neutral directory.
 #[tokio::test]
 async fn failed_discovery_is_not_cached_and_legacy_call_answers() {
     let root = tempfile::tempdir().unwrap();
@@ -555,6 +556,18 @@ async fn failed_discovery_is_not_cached_and_legacy_call_answers() {
     assert!(!names(&legacy).contains(&"luna-user-canary".to_owned()));
     let entry = log_entries(&home).pop().unwrap();
     assert_eq!(entry["restricted"], true, "unscoped = default Ask profile");
+    // G-16: no workspace is a neutral cwd, never the host process's own
+    // directory, whose project settings and commands are not the user's.
+    let host = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_ne!(
+        entry["cwd"],
+        json!(host),
+        "unscoped probe ran in the host cwd"
+    );
+    assert_eq!(
+        entry["cwd"],
+        json!(std::env::temp_dir().canonicalize().unwrap())
+    );
 }
 
 /// G-13: a title run keeps exactly one `--tools ""` and never gets the grant.
