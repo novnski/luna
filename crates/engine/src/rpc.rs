@@ -11300,6 +11300,7 @@ impl EngineRpc {
                 Ok(RpcReply::Stream(Box::pin(stream)))
             }
             methods::WATCH_CHATS => {
+                let doc_host = self.doc_host.clone();
                 let side_chats = self.side_chats.clone();
                 let workspace = self.workspace.clone();
                 let task_identity = self.task_identity.clone();
@@ -11355,6 +11356,11 @@ impl EngineRpc {
                                 }
                                 true
                             } else {
+                                // Side history stays in its owning profile; a
+                                // peer lists only the forks it can open.
+                                if doc_host.side_history_elsewhere(&id).unwrap_or(true) {
+                                    return false;
+                                }
                                 if let Some(parent) = workspace.side_chat_parent(&id)
                                     && let Some(object) = chat.as_object_mut() {
                                     object.insert("sideChatParentId".into(), parent.into());

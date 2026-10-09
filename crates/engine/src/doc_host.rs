@@ -2235,6 +2235,19 @@ impl DocHost {
                 .is_some_and(|workspace| workspace.is_side_chat(owner))
     }
 
+    /// A side chat whose history lives in another profile: the replicated
+    /// marker names it, but this profile holds no side record. Such a chat is
+    /// neither opened nor listed here (fails closed on a store error).
+    pub(crate) fn side_history_elsewhere(&self, chat_id: &str) -> Result<bool, EngineError> {
+        let owner = chat_id
+            .split_once("--sub--")
+            .map_or(chat_id, |(owner, _)| owner);
+        Ok(self
+            .workspace()
+            .is_some_and(|workspace| workspace.is_side_chat(owner))
+            && !self.inner.store.is_side_chat(owner)?)
+    }
+
     pub fn open(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
         // A temporary Board discussion keeps its transcript in the board
         // store only: it never gets a session document, snapshot or sync room.
@@ -2246,14 +2259,7 @@ impl DocHost {
             ));
         }
         let local_only = self.is_side_document(chat_id);
-        let side_owner = chat_id
-            .split_once("--sub--")
-            .map_or(chat_id, |(owner, _)| owner);
-        if self
-            .workspace()
-            .is_some_and(|workspace| workspace.is_side_chat(side_owner))
-            && !self.inner.store.is_side_chat(side_owner)?
-        {
+        if self.side_history_elsewhere(chat_id)? {
             return Err(EngineError::Other(
                 "Side chat history is available only in its owning profile".into(),
             ));
