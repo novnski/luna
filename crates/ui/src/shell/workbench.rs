@@ -548,6 +548,16 @@ impl WorkbenchState {
         self.authoritative.is_some()
     }
 
+    /// The engine's committed layout (never the optimistic one).
+    pub(super) fn committed(&self) -> Option<&Layout> {
+        self.authoritative.as_ref()
+    }
+
+    /// No layout mutation is queued or in flight: what shows is committed.
+    pub(super) fn settled(&self) -> bool {
+        self.pending.is_empty() && self.in_flight.is_none()
+    }
+
     fn revision(&self) -> u64 {
         self.authoritative
             .as_ref()

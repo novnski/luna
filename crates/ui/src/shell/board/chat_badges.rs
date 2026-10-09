@@ -58,6 +58,11 @@ const BADGE_CHUNK: usize = 200;
 const REVEAL_TIMEOUT: Duration = Duration::from_secs(12);
 /// A reveal re-asks the workbench at most this often while it waits.
 const REVEAL_RETRY: Duration = Duration::from_millis(1500);
+/// How long a reveal waits for the engine's own placement of a chat it has
+/// just created before opening the tab itself.
+const PLACEMENT_WAIT: Duration = Duration::from_millis(1500);
+/// How often a waiting reveal checks again.
+const REVEAL_POLL: Duration = Duration::from_millis(250);
 /// Recent board activity kept for the Activity view.
 const ACTIVITY_KEPT: usize = 40;
 
@@ -241,6 +246,8 @@ pub(crate) struct ChatBoardUi {
     awaiting: Option<(BoardNavigationTarget, Instant)>,
     /// A reveal check is queued for after the current frame.
     reveal_deferred: bool,
+    /// The next check of a reveal that is waiting on the engine.
+    reveal_timer: Option<Task<()>>,
     nav: Option<Task<()>>,
     op: Option<Task<()>>,
     pub(crate) dialog: Option<dialogs::BoardChatDialog>,
@@ -934,31 +941,73 @@ impl Shell {
             self.open_side_chat_in_pane(reveal.side, cx);
             return;
         }
-        let layout = self.workbench.layout();
-        let ready = self.workbench.main() == reveal.main && self.workbench.loaded();
-        if ready && layout.focused_chat_id() == Some(reveal.side.as_str()) {
+        // Decide on the engine's committed layout only: an optimistic open
+        // the engine then refuses (its layout changed meanwhile) must not
+        // count as revealed.
+        let ready = self.workbench.main() == reveal.main
+            && self.workbench.loaded()
+            && self.workbench.settled();
+        let (focused, placed) = self
+            .workbench
+            .committed()
+            .map(|layout| {
+                (
+                    layout.focused_chat_id() == Some(reveal.side.as_str()),
+                    layout.contains_chat(&reveal.side)
+                        || layout
+                            .closed_tabs
+                            .iter()
+                            .any(|closed| closed.tab.chat_id == reveal.side),
+                )
+            })
+            .unwrap_or((false, false));
+        if ready && focused {
             self.board_chat.reveal = None;
+            self.board_chat.reveal_timer = None;
             return;
         }
         if reveal.started.elapsed() > REVEAL_TIMEOUT {
             self.board_chat.reveal = None;
+            self.board_chat.reveal_timer = None;
             self.board_chat_notice_error(
                 "The main chat's workbench did not load. Open the side chat from its Related chats.",
                 cx,
             );
             return;
         }
+        // A chat the engine has just created is placed in its main chat's
+        // workbench by the engine itself: wait briefly for that placement
+        // rather than racing it with a second open of the same tab.
+        let awaiting_placement = !placed && reveal.started.elapsed() < PLACEMENT_WAIT;
         if !ready
+            || awaiting_placement
             || reveal
                 .asked
                 .is_some_and(|asked| asked.elapsed() < REVEAL_RETRY)
         {
+            self.board_chat_schedule_reveal(cx);
             return;
         }
         if let Some(pending) = self.board_chat.reveal.as_mut() {
             pending.asked = Some(Instant::now());
         }
         self.open_side_chat_in_pane(reveal.side, cx);
+    }
+
+    /// Check a pending reveal again shortly: nothing else may redraw while
+    /// the workbench waits for the engine.
+    fn board_chat_schedule_reveal(&mut self, cx: &mut Context<Self>) {
+        if self.board_chat.reveal_timer.is_some() {
+            return;
+        }
+        self.board_chat.reveal_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REVEAL_POLL).await;
+            this.update(cx, |shell, cx| {
+                shell.board_chat.reveal_timer = None;
+                shell.board_chat_settle_reveal(cx);
+            })
+            .ok();
+        }));
     }
 
     /// Open a ticket's detail: the Board page with the ticket selected and
