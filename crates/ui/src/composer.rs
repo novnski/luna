@@ -2283,6 +2283,9 @@ pub struct ComposerInput {
     text_size: f32,
     configured_line_height: f32,
     single_line: bool,
+    /// Enter breaks the line instead of submitting (a form's multi-line
+    /// field: a ticket's brief). An open completion still takes Enter.
+    enter_breaks_line: bool,
     scroll_left: f32,
     // -- measured state (written during layout/paint) --
     last_lines: Vec<WrappedLine>,
@@ -2384,6 +2387,7 @@ impl ComposerInput {
             text_size: INPUT_TEXT_SIZE,
             configured_line_height: INPUT_LINE_HEIGHT,
             single_line: false,
+            enter_breaks_line: false,
             scroll_left: 0.0,
             last_lines: Vec::new(),
             line_starts: vec![0],
@@ -2429,6 +2433,11 @@ impl ComposerInput {
     pub fn with_single_line(mut self) -> Self {
         self.single_line = true;
         self
+    }
+
+    /// Enter breaks the line instead of submitting.
+    pub fn set_enter_breaks_line(&mut self, on: bool) {
+        self.enter_breaks_line = on;
     }
 
     fn set_key_context(&mut self, key_context: &'static str, cx: &mut Context<Self>) {
@@ -3334,9 +3343,12 @@ impl ComposerInput {
         }
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
             EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
+            EnterOutcome::Submit if self.enter_breaks_line => {
+                self.replace_text_in_range(None, "\n", window, cx)
+            }
             EnterOutcome::Submit => cx.emit(ComposerInputEvent::Submitted),
             EnterOutcome::Newline => unreachable!("submit action cannot insert a newline"),
         }
@@ -5040,6 +5052,9 @@ pub struct Composer {
     detached_running: bool,
     /// A detached composer's Send/Stop disc as last painted (QA).
     detached_send_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// A detached composer inside a form (a ticket's brief): no Send disc,
+    /// Enter breaks the line; the form reads the message on save.
+    detached_form: bool,
     sending: bool,
     /// Armed immediately before a blank-canvas send selects its minted chat.
     /// The state observer consumes it to distinguish that handoff from normal
@@ -5341,8 +5356,73 @@ impl Composer {
             })),
             "attachments": self.staged().iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
             "inputItems": self.input_items.get(&self.current_key).cloned().unwrap_or_default(),
+            "form": self.detached_form,
+            "input": self.input.read(cx).last_bounds.map(|bounds| serde_json::json!({
+                "x": f32::from(bounds.origin.x),
+                "y": f32::from(bounds.origin.y),
+                "w": f32::from(bounds.size.width),
+                "h": f32::from(bounds.size.height),
+            })),
+            "mention": {
+                "query": self.mention.token.as_ref().map(|token| token.query.clone()),
+                "results": self.mention.results.iter().map(|m| m.path.clone()).collect::<Vec<_>>(),
+                "active": self.mention.active,
+                "loading": self.mention.loading,
+                "error": self.mention.error.as_ref().map(|e| e.to_string()),
+            },
             "pickers": self.pickers.read(cx).fixture_detached_readback(cx),
         })
+    }
+
+    /// A detached composer inside a form (a ticket's brief): no Send disc
+    /// and Enter breaks the line; the owner reads the message on save
+    /// ([`Self::take_detached`]).
+    pub fn set_detached_form(&mut self, cx: &mut Context<Self>) {
+        if !self.binding.is_detached() {
+            return;
+        }
+        self.detached_form = true;
+        // The form decides focus (it opens on its first field).
+        self.focus_pending = false;
+        self.input
+            .update(cx, |input, _| input.set_enter_breaks_line(true));
+        cx.notify();
+    }
+
+    /// The detached composer's current text.
+    pub fn detached_text(&self, cx: &App) -> String {
+        self.input.read(cx).text().to_owned()
+    }
+
+    /// Replace the detached composer's text (the owner edits it).
+    pub fn set_detached_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.set_input_text_without_draft_edit(text, cx);
+        cx.notify();
+    }
+
+    /// Take the message as it stands (text with skills in the provider's
+    /// syntax, `@`/`$` selections, staged images) and clear the composer.
+    /// A failed save hands it back with [`Self::restore_detached`].
+    pub fn take_detached(&mut self, cx: &mut Context<Self>) -> DetachedMessage {
+        let text = self.input.read(cx).text().trim_end().to_owned();
+        let text = self.skill_wire_text(text, cx);
+        let key = self.current_key.clone();
+        let input_items = self.input_items.remove(&key).unwrap_or_default();
+        let mut attachments = self.attachments.remove(&key).unwrap_or_default();
+        attachments.extend(
+            self.appshots
+                .remove(&key)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|appshot| appshot.screenshot),
+        );
+        self.set_input_text_without_draft_edit(String::new(), cx);
+        cx.notify();
+        DetachedMessage {
+            text,
+            input_items,
+            attachments,
+        }
     }
 
     /// Hand the message to the detached owner and clear the composer.
@@ -5586,6 +5666,7 @@ impl Composer {
             current_key,
             detached_running: false,
             detached_send_bounds: Default::default(),
+            detached_form: false,
             sending: false,
             launching_new_chat: false,
             failure: None,
@@ -9059,7 +9140,8 @@ impl Composer {
             let target = if let Some(chat) = self.binding.chat_row(state) {
                 params.insert("chatId".into(), chat.id.clone().into());
                 Some(chat.device_id.clone())
-            } else if let Some(space) = state.selected_space_row() {
+            } else if let Some(space) = self.binding.space_row(state) {
+                // The new chat's project, or a detached owner's own.
                 params.insert("spaceId".into(), space.id.clone().into());
                 if let Some(path) = selected_worktree {
                     params.insert("path".into(), path.into());
@@ -9562,7 +9644,7 @@ impl Composer {
         let (scope_params, scope) = {
             let state = self.state.read(cx);
             let mode = resolved.effective_permission_mode;
-            match (self.binding.chat_row(state), state.selected_space_row()) {
+            match (self.binding.chat_row(state), self.binding.space_row(state)) {
                 (Some(chat), _) => (
                     serde_json::json!({ "chatId": chat.id, "permissionMode": mode }),
                     format!("chat:{}:{mode:?}", chat.id),
@@ -9624,7 +9706,7 @@ impl Composer {
             self.binding
                 .chat_row(state)
                 .map(|chat| chat.device_id.clone())
-                .or_else(|| state.selected_space_row().map(|s| s.device_id.clone()))
+                .or_else(|| self.binding.space_row(state).map(|s| s.device_id.clone()))
         };
         let request = self.slash.request;
         self.slash_task = Some(cx.spawn(async move |this, cx| {
@@ -13865,12 +13947,17 @@ impl Render for Composer {
             .then(|| format!("composer:{}", self.perf_scope(cx)));
         let ui_scale = theme.ui_scale();
         let input_focused = self.input.focus_handle(cx).is_focused(window);
-        let send_button = self.render_send_button(
-            mode,
-            if compact { COMPACT_BUTTON } else { ROW_BUTTON },
-            input_focused,
-            cx,
-        );
+        // A form's brief has no Send: the form saves it.
+        let send_button = if self.detached_form {
+            div().into_any_element()
+        } else {
+            self.render_send_button(
+                mode,
+                if compact { COMPACT_BUTTON } else { ROW_BUTTON },
+                input_focused,
+                cx,
+            )
+        };
         let send_button = match &probe_scope {
             Some(scope) => div()
                 .flex_none()

@@ -112,6 +112,7 @@ impl EngineRpc {
                 board_async!(this, params, board_execution_options)
             }
             methods::BOARD_RESOLVE_SETTINGS => board_async!(this, params, board_resolve_settings),
+            methods::BOARD_GENERATE_TITLE => board_async!(this, params, board_generate_title),
             // ---- chat model (A3) ----
             methods::BOARD_CHAT_IDENTITY => board_sync!(this, params, board_chat_identity),
             methods::BOARD_CHAT_BADGES => board_sync!(this, params, board_chat_badges),

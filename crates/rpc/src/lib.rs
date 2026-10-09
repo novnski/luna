@@ -60,6 +60,8 @@ pub mod methods {
     pub const BOARD_SET_STATUS: &str = "BoardSetStatus";
     pub const BOARD_SEND_UPDATE: &str = "BoardSendUpdate";
     pub const BOARD_EXECUTION_OPTIONS: &str = "BoardExecutionOptions";
+    /// One ticket title drafted from a brief by the device's title model.
+    pub const BOARD_GENERATE_TITLE: &str = "BoardGenerateTitle";
     pub const BOARD_RESOLVE_SETTINGS: &str = "BoardResolveSettings";
     pub const BOARD_CHAT_IDENTITY: &str = "BoardChatIdentity";
     pub const BOARD_CHAT_BADGES: &str = "BoardChatBadges";
@@ -424,6 +426,7 @@ pub mod methods {
         BOARD_SET_STATUS,
         BOARD_SEND_UPDATE,
         BOARD_EXECUTION_OPTIONS,
+        BOARD_GENERATE_TITLE,
         BOARD_RESOLVE_SETTINGS,
         BOARD_CHAT_IDENTITY,
         BOARD_CHAT_BADGES,
@@ -476,6 +479,7 @@ pub mod methods {
         BOARD_SET_STATUS,
         BOARD_SEND_UPDATE,
         BOARD_EXECUTION_OPTIONS,
+        BOARD_GENERATE_TITLE,
         BOARD_RESOLVE_SETTINGS,
         BOARD_CHAT_IDENTITY,
         BOARD_CHAT_BADGES,

@@ -393,6 +393,9 @@ pub struct ExecutionSettingsEditor {
     review_pickers: Entity<Pickers>,
     /// The open mode menu.
     mode_menu: popover::Popup<Which>,
+    /// The agent's pickers live in the host's composer (a ticket's brief):
+    /// the implementation row shows only its mode menu and caption.
+    external_impl: bool,
     _pickers: [gpui::Subscription; 2],
 }
 
@@ -406,10 +409,18 @@ impl ExecutionSettingsEditor {
         initial: ExecutionSettingsDraft,
         prefix: &'static str,
         probe: BoardProbe,
+        impl_pickers: Option<Entity<Pickers>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let impl_pickers =
-            cx.new(|cx| Pickers::new_detached(state.clone(), project_id.clone(), true, true, cx));
+        let external_impl = impl_pickers.is_some();
+        let impl_pickers = match impl_pickers {
+            Some(pickers) => {
+                pickers.update(cx, |pickers, cx| pickers.set_detached_chips(true, true, cx));
+                pickers
+            }
+            None => cx
+                .new(|cx| Pickers::new_detached(state.clone(), project_id.clone(), true, true, cx)),
+        };
         let review_pickers =
             cx.new(|cx| Pickers::new_detached(state.clone(), project_id.clone(), false, false, cx));
         let watch = |which: Which| {
@@ -437,6 +448,7 @@ impl ExecutionSettingsEditor {
             impl_pickers,
             review_pickers,
             mode_menu: popover::Popup::default(),
+            external_impl,
             _pickers: subscriptions,
         };
         editor.sync_pickers(Which::Implementation, cx);
@@ -1185,8 +1197,9 @@ impl ExecutionSettingsEditor {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Deferred has nothing to pick; a host composer carries the agent's.
         let deferred = which == Which::Implementation
-            && self.implementation_mode == ImplementationMode::Deferred;
+            && (self.implementation_mode == ImplementationMode::Deferred || self.external_impl);
         let caption = self.caption(which, cx);
         if let Some(caption) = &caption {
             self.probe.text(self.id(which, "caption"), caption.clone());

@@ -327,6 +327,8 @@ impl Shell {
                         labels: Vec::new(),
                         priority: None,
                         context_refs: Vec::new(),
+                        attachments: Vec::new(),
+                        input_items: Vec::new(),
                         origin: Some(BoardItemOrigin::Chat {
                             task_id: chat_id.clone(),
                             message_id: None,

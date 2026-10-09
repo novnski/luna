@@ -1668,6 +1668,8 @@ impl EngineRpc {
             completion: None,
             labels: Vec::new(),
             priority: None,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: vec![BoardContextRef::Issue {
                 issue_ref_id: issue_ref_id.clone(),
             }],

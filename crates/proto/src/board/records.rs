@@ -352,6 +352,12 @@ pub struct LaunchSnapshot {
     pub instruction_hash: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_refs: Vec<BoardContextRef>,
+    /// The brief's images and `@`/`$` selections the launch delivers (a
+    /// first start), frozen with the brief.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue_context: Option<IssueContextSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

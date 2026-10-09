@@ -1618,6 +1618,8 @@ impl EngineRpc {
             sent_description: item.description.clone(),
             instruction_hash: instruction_hash(&text),
             instruction_text: text,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: item.context_refs.clone(),
             issue_context: self.board_issue_launch_context(&item.id)?,
             review_base: self
@@ -1765,6 +1767,8 @@ impl EngineRpc {
             labels: Vec::new(),
             priority: None,
             origin: BoardItemOrigin::Manual,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: Vec::new(),
             last_report: None,
             created_at_ms: 0,
@@ -1777,6 +1781,34 @@ impl EngineRpc {
     /// Real account/host-visible harnesses, models, efforts, access modes and
     /// effective project defaults (read only, bounded). Reuses the model
     /// cache and provider defaults; never invents ids.
+    /// One short title for a brief, from the device's title model (the one
+    /// that names chats), run restricted outside the repository. Saves
+    /// nothing; the user keeps or edits it.
+    pub(crate) async fn board_generate_title(
+        &self,
+        caller: &BoardCaller,
+        request: luna_proto::BoardGenerateTitleRequest,
+    ) -> BoardResult<luna_proto::BoardGeneratedTitle> {
+        self.board_project(caller, &request.project_id, BoardAccess::Read)?;
+        let description = request.description.trim();
+        if description.chars().count() < 20 {
+            return Err(BoardError::invalid(
+                "description",
+                "describe the issue a little more first",
+            ));
+        }
+        let titles = crate::titles::TitleGenerator::new(
+            self.workspace.clone(),
+            self.registry.clone(),
+            self.repos.clone(),
+        );
+        let title = titles
+            .generate_ticket_title(description, request.harness)
+            .await
+            .map_err(|reason| BoardError::Unavailable { reason })?;
+        Ok(luna_proto::BoardGeneratedTitle { title })
+    }
+
     pub(crate) async fn board_execution_options(
         &self,
         caller: &BoardCaller,

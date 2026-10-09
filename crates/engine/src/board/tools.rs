@@ -1815,6 +1815,8 @@ impl EngineRpc {
                         completion: args.completion,
                         labels: args.labels,
                         priority: args.priority,
+                        attachments: Vec::new(),
+                        input_items: Vec::new(),
                         context_refs: args.context_refs,
                         origin,
                         placement: args.placement,

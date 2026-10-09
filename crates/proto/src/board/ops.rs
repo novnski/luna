@@ -131,6 +131,13 @@ pub struct BoardCreateRequest {
     pub priority: Option<BoardPriority>,
     #[serde(default)]
     pub context_refs: Vec<BoardContextRef>,
+    /// Images uploaded to the project's host (UploadChunk/UploadCommit
+    /// paths) that belong to the brief.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+    /// `@` file mentions and `$` skills written in the brief.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
     /// UI-declared provenance ("Create ticket from this chat" names the
     /// chat). Agent and authoring callers have their origin bound by the
     /// engine; a mismatching claim is rejected.
@@ -713,6 +720,24 @@ pub struct BoardAuthoringStartRequest {
     pub resume_session_id: Option<String>,
     #[serde(default)]
     pub discussion: Option<super::AuthoringDiscussionProfile>,
+}
+
+/// `board_generate_title`: one short ticket title from a brief, drafted by
+/// the device's title model (the one that names chats). Nothing is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoardGenerateTitleRequest {
+    pub project_id: String,
+    pub description: String,
+    /// The ticket's agent harness, used when no title model is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardGeneratedTitle {
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

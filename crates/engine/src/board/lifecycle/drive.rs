@@ -79,6 +79,20 @@ fn admission_label(reason: &BoardAdmissionReason) -> &'static str {
     }
 }
 
+/// Name a message's images the way a chat message does (the composer's
+/// `with_attachments` transport, which the transcript parses back into
+/// thumbnails): a blank line, the `Attached images` heading, one path a line.
+fn with_attachment_trailer(text: &str, paths: &[String]) -> String {
+    if paths.is_empty() {
+        return text.to_owned();
+    }
+    let refs: Vec<String> = paths.iter().map(|path| format!("- {path}")).collect();
+    format!(
+        "{text}\n\nAttached images (local files — open them to view):\n{}",
+        refs.join("\n")
+    )
+}
+
 impl EngineRpc {
     /// Advance one ticket from its persisted intent. The caller holds
     /// `board_lifecycle_gate(work_item_id)`.
@@ -775,6 +789,8 @@ impl EngineRpc {
                 &launch.command_id,
                 &launch.message_id,
                 &launch.instruction_text,
+                &launch.attachments,
+                &launch.input_items,
             )
             .await;
         ticket.intent.launch_boot_id = Some(self.cleanup_boot_id.clone());
@@ -809,13 +825,18 @@ impl EngineRpc {
         command_id: &str,
         message_id: &str,
         text: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
     ) -> Result<CommandReceipt, RpcError> {
-        let request = self
+        let mut request = self
             .doc_host
             .request_from_chat_row(task_id, text)
             .ok_or_else(|| {
                 RpcError::Failed("The working chat has no execution configuration.".into())
             })?;
+        // The brief's images and selections, as a chat message carries them.
+        request.attachments = attachments.to_vec();
+        request.input_items = input_items.to_vec();
         let mut command = legacy_task_command(
             task_id.into(),
             TaskCommandIntent::Session {
@@ -1578,6 +1599,22 @@ impl EngineRpc {
             context_refs: &item.context_refs,
             continuation,
         });
+        // The brief's images and `@`/`$` selections go with the first prompt
+        // the working chat receives (a first start, or its retry), named in
+        // the text like a chat message's attachments.
+        let first_prompt = !matches!(
+            ticket.intent.first_prompt,
+            FirstPromptDelivery::Delivered { .. } | FirstPromptDelivery::NotApplicable
+        );
+        let (attachments, input_items) = if first_prompt {
+            match previous.filter(|_| pending.retry && !pending.adopt_latest_brief) {
+                Some(previous) => (previous.attachments.clone(), previous.input_items.clone()),
+                None => (item.attachments.clone(), item.input_items.clone()),
+            }
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let text = with_attachment_trailer(&text, &attachments);
         let digest = board_digest(&(
             "launch",
             &item.id,
@@ -1600,6 +1637,8 @@ impl EngineRpc {
             instruction_hash: instruction_hash(&text),
             instruction_text: text,
             context_refs: item.context_refs.clone(),
+            attachments,
+            input_items,
             issue_context: self.board_issue_launch_context(&item.id)?,
             review_base,
             requested: pending

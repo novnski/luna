@@ -622,6 +622,8 @@ impl EngineRpc {
             sent_description: String::new(),
             instruction_hash: crate::repos::hex(&Sha256::digest(text.as_bytes())),
             instruction_text: text,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: Vec::new(),
             issue_context: self.board_issue_launch_context(&item.id)?,
             review_base,

@@ -177,6 +177,8 @@ impl EngineRpc {
             completion: request.completion.clone(),
             labels: Vec::new(),
             priority: None,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: Vec::new(),
             origin: None,
             placement: Default::default(),

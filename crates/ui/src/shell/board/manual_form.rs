@@ -30,6 +30,9 @@ use crate::state::AppState;
 use crate::theme::{FillTier, Theme};
 use crate::typography::ui_rems;
 
+/// Generate title is offered once the brief has this many characters.
+const TITLE_FROM_BRIEF_CHARS: usize = 100;
+
 /// The section "Add acceptance criteria" appends to the description.
 const CRITERIA_SECTION: &str = "## Acceptance criteria\n- ";
 
@@ -345,7 +348,17 @@ pub struct ManualTicketForm {
     state: Entity<AppState>,
     probe: BoardProbe,
     title: Entity<ComposerInput>,
-    description: Entity<ComposerInput>,
+    /// The brief: the chat composer in form mode (attachments and dropped
+    /// images, `@` files, `$` skills, `/` commands; Enter breaks the line),
+    /// whose pickers are the ticket's agent pickers.
+    description: Entity<crate::composer::Composer>,
+    /// Images already uploaded for this form (attachment id → upload path),
+    /// so a retried save sends the same paths and never duplicates.
+    uploaded: std::collections::HashMap<String, String>,
+    /// The brief composer's measured width (it lays out like a pane's).
+    composer_width: std::rc::Rc<std::cell::Cell<f32>>,
+    /// Drafting a title from the brief (the model that names chats).
+    title_task: Option<Task<()>>,
     settings: Option<Entity<ExecutionSettingsEditor>>,
     /// The editor's rows: the agent inside the brief's card, the reviewer
     /// below it.
@@ -377,36 +390,35 @@ impl ManualTicketForm {
                 .with_text_metrics(15.0, 21.0)
                 .with_accessibility_role(gpui::Role::TextInput)
         });
+        let binding = crate::chat_binding::ChatBinding::Detached {
+            space_id: project_id.clone().unwrap_or_default(),
+        };
         let description = cx.new(|cx| {
-            ComposerInput::new(
+            let mut composer = crate::composer::Composer::new_bound(state.clone(), binding, cx);
+            composer.set_placeholder(
                 "Describe the outcome, the context and how to verify it…",
                 cx,
-            )
-            .with_accessibility_role(gpui::Role::MultilineTextInput)
+            );
+            composer.set_detached_form(cx);
+            composer
         });
         let mut subscriptions = vec![
             cx.subscribe_in(&title, window, |this, _, event, window, cx| match event {
                 // Enter in the title moves on to the brief.
                 ComposerInputEvent::Submitted => {
-                    let focus = this.description.read(cx).focus_handle(cx);
+                    let focus = gpui::Focusable::focus_handle(this.description.read(cx), cx);
                     window.focus(&focus, cx);
                 }
                 ComposerInputEvent::Edited if this.errors.title.take().is_some() => cx.notify(),
                 _ => {}
             }),
-            cx.subscribe_in(&description, window, |this, input, event, window, cx| {
-                match event {
-                    // The brief is multi-line: Enter inserts a line break.
-                    ComposerInputEvent::Submitted => input.update(cx, |input, cx| {
-                        input.replace_text_in_range(None, "\n", window, cx)
-                    }),
-                    ComposerInputEvent::Edited if this.errors.description.take().is_some() => {
-                        cx.notify()
-                    }
-                    _ => {}
-                }
+            // An edit clears the brief's error and may enable Generate title.
+            cx.observe(&description, |this, _, cx| {
+                this.errors.description = None;
+                cx.notify();
             }),
         ];
+        let agent_pickers = description.read(cx).pickers().clone();
         let settings = project_id.clone().map(|project| {
             let editor = cx.new(|cx| {
                 ExecutionSettingsEditor::new(
@@ -416,6 +428,7 @@ impl ManualTicketForm {
                     ExecutionSettingsDraft::default(),
                     "manual",
                     probe.clone(),
+                    Some(agent_pickers.clone()),
                     cx,
                 )
             });
@@ -430,7 +443,7 @@ impl ManualTicketForm {
         });
         let settings_rows = settings.as_ref().map(|editor| {
             (
-                cx.new(|cx| SettingsRow::new(editor.clone(), Which::Implementation, false, cx)),
+                cx.new(|cx| SettingsRow::new(editor.clone(), Which::Implementation, true, cx)),
                 cx.new(|cx| SettingsRow::new(editor.clone(), Which::Review, true, cx)),
             )
         });
@@ -441,6 +454,9 @@ impl ManualTicketForm {
             probe,
             title,
             description,
+            uploaded: Default::default(),
+            composer_width: Default::default(),
+            title_task: None,
             settings,
             settings_rows,
             phase: SavePhase::Editing,
@@ -493,8 +509,8 @@ impl ManualTicketForm {
             return;
         }
         let title = self.title.read(cx).text().trim().to_owned();
-        let description = self.description.read(cx).text().trim_end().to_owned();
-        if !self.validate(&title, &description) {
+        let typed = self.description.read(cx).detached_text(cx);
+        if !self.validate(&title, typed.trim_end()) {
             cx.notify();
             return;
         }
@@ -503,6 +519,27 @@ impl ManualTicketForm {
             cx.notify();
             return;
         };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.errors.general = Some("Engine not connected. Nothing was saved.".into());
+            cx.notify();
+            return;
+        };
+        // The brief as the composer holds it: text (skills in the agent's own
+        // syntax, `@` files as links), `$` selections and staged images.
+        let message = self
+            .description
+            .update(cx, |composer, cx| composer.take_detached(cx));
+        let description = message.text.clone();
+        // Images upload to the project's host, like a chat message's there.
+        let host = {
+            let state = self.state.read(cx);
+            self.project_id
+                .as_ref()
+                .and_then(|id| state.space_row(id))
+                .map(|space| space.device_id.clone())
+                .filter(|device| state.local_device_id.as_deref() != Some(device.as_str()))
+        };
+        let uploaded = self.uploaded.clone();
         let draft = self
             .settings
             .as_ref()
@@ -523,12 +560,59 @@ impl ManualTicketForm {
             labels: Vec::new(),
             priority: None,
             context_refs: Vec::new(),
+            attachments: Vec::new(),
+            input_items: message.input_items.clone(),
             origin: Some(BoardItemOrigin::Manual),
             placement: BoardPlacement::Top,
         };
         self.phase = SavePhase::Saving;
         cx.notify();
         self.save_task = Some(cx.spawn(async move |this, cx| {
+            let mut request = request;
+            let mut paths = Vec::new();
+            for attachment in &message.attachments {
+                if let Some(path) = uploaded.get(&attachment.id) {
+                    paths.push(path.clone());
+                    continue;
+                }
+                let upload_id = uuid::Uuid::new_v4().to_string();
+                match crate::attachments::upload_attachment(
+                    &engine,
+                    cx.background_executor(),
+                    host.as_deref(),
+                    &upload_id,
+                    attachment,
+                    None,
+                )
+                .await
+                {
+                    Ok(path) => {
+                        let id = attachment.id.clone();
+                        let kept = path.clone();
+                        this.update(cx, |form, _| {
+                            form.uploaded.insert(id, kept);
+                        })
+                        .ok();
+                        paths.push(path);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "ticket attachment upload failed");
+                        let name = attachment.name.clone();
+                        this.update(cx, |form, cx| {
+                            form.phase = SavePhase::Editing;
+                            form.errors.description =
+                                Some(format!("{name} couldn't upload; nothing was saved."));
+                            form.description.update(cx, |composer, cx| {
+                                composer.restore_detached(message.clone(), cx)
+                            });
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                }
+            }
+            request.attachments = paths;
             let result = match api.create(request).await {
                 Err(BoardCallError::Lost) => {
                     this.update(cx, |form, cx| {
@@ -548,8 +632,16 @@ impl ManualTicketForm {
                 }
                 other => other,
             };
-            this.update(cx, |form, cx| form.finish_save(result, cx))
-                .ok();
+            this.update(cx, |form, cx| {
+                // Not saved: the brief, its selections and images go back.
+                if result.is_err() {
+                    form.description.update(cx, |composer, cx| {
+                        composer.restore_detached(message.clone(), cx)
+                    });
+                }
+                form.finish_save(result, cx)
+            })
+            .ok();
         }));
     }
 
@@ -655,14 +747,16 @@ impl ManualTicketForm {
         self.phase = SavePhase::Editing;
         self.errors = FieldErrors::default();
         self.title.update(cx, |input, cx| input.set_text("", cx));
-        self.description
-            .update(cx, |input, cx| input.set_text("", cx));
+        self.description.update(cx, |composer, cx| {
+            composer.set_detached_text(String::new(), cx)
+        });
+        self.uploaded.clear();
         self.focus_title(window, cx);
         cx.notify();
     }
 
     fn add_criteria(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.description.read(cx).text().to_owned();
+        let current = self.description.read(cx).detached_text(cx);
         if current.contains("## Acceptance criteria") {
             return;
         }
@@ -672,9 +766,70 @@ impl ManualTicketForm {
             format!("{}\n\n{CRITERIA_SECTION}", current.trim_end())
         };
         self.description
-            .update(cx, |input, cx| input.set_text(text, cx));
-        let focus = self.description.read(cx).focus_handle(cx);
+            .update(cx, |composer, cx| composer.set_detached_text(text, cx));
+        let focus = gpui::Focusable::focus_handle(self.description.read(cx), cx);
         window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Generate title is offered once the brief says enough to name.
+    fn can_generate_title(&self, cx: &App) -> bool {
+        self.title_task.is_none()
+            && self.project_id.is_some()
+            && self
+                .description
+                .read(cx)
+                .detached_text(cx)
+                .trim()
+                .chars()
+                .count()
+                >= TITLE_FROM_BRIEF_CHARS
+    }
+
+    /// Draft the title from the brief with the device's title model (the
+    /// one that names chats). It replaces the title field; nothing is saved.
+    fn generate_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_generate_title(cx) {
+            return;
+        }
+        let (Some(project_id), Some(api)) = (self.project_id.clone(), self.model.read(cx).api(cx))
+        else {
+            return;
+        };
+        let description = self.description.read(cx).detached_text(cx);
+        // The ticket's agent harness, when no title model is configured.
+        let harness = self
+            .description
+            .read(cx)
+            .pickers()
+            .read(cx)
+            .resolved(cx)
+            .harness;
+        let request = luna_proto::BoardGenerateTitleRequest {
+            project_id,
+            description,
+            harness,
+        };
+        self.errors.title = None;
+        let focus = self.title_focus(cx);
+        window.focus(&focus, cx);
+        self.title_task = Some(cx.spawn(async move |this, cx| {
+            let result = api.generate_title(request).await;
+            this.update(cx, |form, cx| {
+                form.title_task = None;
+                match result {
+                    Ok(generated) => form
+                        .title
+                        .update(cx, |input, cx| input.set_text(generated.title, cx)),
+                    Err(error) => {
+                        form.errors.title =
+                            Some(format!("Couldn't draft a title: {}", error.message()))
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
         cx.notify();
     }
 
@@ -820,12 +975,7 @@ impl ManualTicketForm {
     pub fn fixture_state(&self, window: &Window, cx: &App) -> serde_json::Value {
         let focused = if self.title.read(cx).focus_handle(cx).is_focused(window) {
             Some("title")
-        } else if self
-            .description
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
-        {
+        } else if gpui::Focusable::focus_handle(self.description.read(cx), cx).is_focused(window) {
             Some("description")
         } else {
             None
@@ -834,7 +984,15 @@ impl ManualTicketForm {
             "projectId": self.project_id,
             "phase": self.phase.key(),
             "title": self.title.read(cx).text(),
-            "description": self.description.read(cx).text(),
+            "description": self.description.read(cx).detached_text(cx),
+            "descriptionComposer": self.description.read(cx).fixture_detached_readback(window, cx),
+            "generateTitle": if self.title_task.is_some() {
+                "generating"
+            } else if self.can_generate_title(cx) {
+                "ready"
+            } else {
+                "waiting"
+            },
             "focused": focused,
             "pendingRequest": self.pending_request,
             "errors": {
@@ -934,42 +1092,123 @@ impl Render for ManualTicketForm {
             body = body.child(self.render_receipt(&receipt, &theme, cx));
         } else {
             let saving = matches!(self.phase, SavePhase::Saving | SavePhase::Reconciling);
-            // The brief's card: the chat composer's surface with the title,
-            // the description and, along its bottom edge, the agent's pickers.
+            // The title in a composer-style field; the brief is the chat
+            // composer itself (its controls row carries the agent's pickers).
+            let gutter = ui_rems(16.0);
             let title_field = self.card_field("manual-title", &self.title.clone(), None, cx);
-            let description_field = self.card_field(
-                "manual-description",
-                &self.description.clone(),
-                Some(96.0),
-                cx,
+            let can_generate = self.can_generate_title(cx);
+            let generating = self.title_task.is_some();
+            self.probe.text(
+                "manual-generate-title-state",
+                if generating {
+                    "generating"
+                } else if can_generate {
+                    "ready"
+                } else {
+                    "waiting"
+                },
             );
-            let card = crate::composer::pane_composer_surface(&theme)
-                .id("manual-brief")
+            let generate = button::button(
+                "manual-generate-title",
+                ButtonKind::Ghost,
+                ControlSize::Sm,
+                can_generate,
+                &theme,
+            )
+            .aria_label("Generate a title from the description")
+            .tooltip(crate::popover::text_tooltip(
+                if can_generate || generating {
+                    "Draft a title from the description, with the model that names your chats."
+                } else {
+                    "Write a little more description first (about 100 characters)."
+                },
+            ))
+            .child(button::glyph(crate::icons::MAGIC_WAND_3, ControlSize::Sm))
+            .child(if generating {
+                "Generating…"
+            } else {
+                "Generate"
+            })
+            .children(self.probe.bounds_el("manual-generate-title"))
+            .when(can_generate, |button| {
+                button.on_click(cx.listener(|this, _, window, cx| this.generate_title(window, cx)))
+            });
+            let title_card = div().w_full().px(gutter).child(
+                crate::composer::pane_composer_surface(&theme)
+                    .id("manual-title-card")
+                    .w_full()
+                    .py(ui_rems(8.0))
+                    .pr(ui_rems(8.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(ui_rems(6.0))
+                    .child(div().flex_1().min_w_0().py(ui_rems(4.0)).child(title_field))
+                    .child(div().flex_none().child(generate)),
+            );
+            let width = self.composer_width.get();
+            if width > 0.0 {
+                self.description.update(cx, |composer, cx| {
+                    composer.set_available_width(width.min(crate::composer::COMPOSER_MAX_WIDTH), cx)
+                });
+            }
+            let measured = self.composer_width.clone();
+            let brief = div()
+                .id("manual-description")
+                .relative()
+                .w_full()
+                .child(
+                    gpui::canvas(
+                        move |bounds, window, _| {
+                            let next = f32::from(bounds.size.width);
+                            if (measured.get() - next).abs() > 0.5 {
+                                measured.set(next);
+                                window.request_animation_frame();
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+                // After the composer focused its input (bubbling), the
+                // focusable drawer and Shell must not take focus back.
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                    window.prevent_default()
+                })
+                // Files dropped on the brief are staged in it, like a chat's.
+                .on_drop(cx.listener(|form, paths: &gpui::ExternalPaths, _, cx| {
+                    let paths = paths.paths().to_vec();
+                    form.description
+                        .update(cx, |composer, cx| composer.add_paths(paths, cx));
+                    cx.stop_propagation();
+                }))
+                .child(self.description.clone())
+                .children(self.probe.bounds_el("manual-description"));
+            let title_error = self
+                .field_error("title", &self.errors.title, &theme)
+                .map(|error| div().px(gutter).child(error));
+            let brief_error = self
+                .field_error("description", &self.errors.description, &theme)
+                .map(|error| div().px(gutter).child(error));
+            let card = div()
                 .w_full()
                 .flex()
                 .flex_col()
-                .pt(ui_rems(14.0))
-                .pb(ui_rems(8.0))
                 .gap(ui_rems(8.0))
-                .child(title_field)
-                .child(
-                    div()
-                        .mx(ui_rems(16.0))
-                        .h(px(1.0))
-                        .bg(theme.separator(false)),
-                )
-                .child(description_field)
+                .child(title_card)
+                .children(title_error)
+                .child(brief)
+                .children(brief_error)
                 .when_some(
                     self.settings_rows.as_ref().map(|(row, _)| row.clone()),
-                    |card, row| card.child(div().px(ui_rems(6.0)).child(row)),
+                    |card, row| card.child(div().px(ui_rems(22.0)).child(row)),
                 );
             body = body
                 .child(card)
-                .children(self.field_error("title", &self.errors.title, &theme))
-                .children(self.field_error("description", &self.errors.description, &theme))
                 .when_some(
                     self.settings_rows.as_ref().map(|(_, row)| row.clone()),
-                    |body, row| body.child(div().px(ui_rems(6.0)).child(row)),
+                    |body, row| body.child(div().px(ui_rems(22.0)).child(row)),
                 )
                 .children(self.field_error("settings", &self.errors.settings, &theme))
                 .children(self.field_error("general", &self.errors.general, &theme));

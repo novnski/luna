@@ -63,6 +63,14 @@ pub struct WorkItem {
     /// Selected durable references carried into the first launch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_refs: Vec<BoardContextRef>,
+    /// Images attached to the brief: upload paths on the owning host. The
+    /// first launch delivers them like a chat message's attachments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+    /// `@` file mentions and `$` skills written in the brief, delivered with
+    /// the first launch exactly as a chat sends them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
     /// Latest agent-reported progress/blocker (never engine-observed state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_report: Option<BoardStatusReportRecord>,

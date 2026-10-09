@@ -1327,6 +1327,23 @@ impl Pickers {
         {
             config.checkout = CheckoutKind::NewWorktree;
         }
+        // A detached instance (a ticket's or a discussion's settings) starts
+        // from nothing of the composer's: no sticky picks and no project row;
+        // its owner says what unset fields inherit. Starred models and known
+        // labels stay (read-only conveniences).
+        let (defaults, project_defaults, config) = if binding.is_detached() {
+            (
+                ComposerDefaults {
+                    favorites: defaults.favorites,
+                    model_labels: defaults.model_labels,
+                    ..ComposerDefaults::default()
+                },
+                luna_proto::ProjectExecutionDefaults::default(),
+                DraftConfig::default(),
+            )
+        } else {
+            (defaults, project_defaults, config)
+        };
         Self {
             state,
             binding,
@@ -1550,15 +1567,17 @@ impl Pickers {
         );
         pickers.show_access = access;
         pickers.show_checkout = checkout;
-        pickers.project_defaults = Default::default();
-        pickers.defaults = ComposerDefaults {
-            // Read-only conveniences: starred models and known labels.
-            favorites: std::mem::take(&mut pickers.defaults.favorites),
-            model_labels: std::mem::take(&mut pickers.defaults.model_labels),
-            ..ComposerDefaults::default()
-        };
-        pickers.config = DraftConfig::default();
         pickers
+    }
+
+    /// Which chips a detached instance shows beside the model (a composer's
+    /// own pickers become a ticket's agent pickers).
+    pub fn set_detached_chips(&mut self, access: bool, checkout: bool, cx: &mut Context<Self>) {
+        if self.binding.is_detached() {
+            self.show_access = access;
+            self.show_checkout = checkout;
+            cx.notify();
+        }
     }
 
     /// What an unset field shows: the owner's inherited values (for a

@@ -178,6 +178,7 @@ board_calls! {
     set_status(BoardSetStatusRequest) -> BoardMutationReceipt = BOARD_SET_STATUS;
     send_update(BoardSendUpdateRequest) -> BoardSendUpdateReceipt = BOARD_SEND_UPDATE;
     execution_options(BoardExecutionOptionsRequest) -> BoardExecutionOptions = BOARD_EXECUTION_OPTIONS;
+    generate_title(luna_proto::BoardGenerateTitleRequest) -> luna_proto::BoardGeneratedTitle = BOARD_GENERATE_TITLE;
     resolve_settings(BoardResolveSettingsRequest) -> BoardResolvedSettings = BOARD_RESOLVE_SETTINGS;
     // ---- chat model ----
     chat_identity(BoardChatIdentityRequest) -> CanonicalChatIdentity = BOARD_CHAT_IDENTITY;

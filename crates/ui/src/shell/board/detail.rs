@@ -1081,7 +1081,7 @@ impl BoardDetail {
         let state = self.state.clone();
         let probe = self.probe.clone();
         let editor = cx.new(|cx| {
-            ExecutionSettingsEditor::new(model, state, project, draft, "detail", probe, cx)
+            ExecutionSettingsEditor::new(model, state, project, draft, "detail", probe, None, cx)
         });
         self.settings_edit = Some(Edit {
             base_revision,

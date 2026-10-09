@@ -68,6 +68,18 @@
 //!     drawer, or a harness switch (Claude Code, Codex, OpenCode and back)
 //!     through each profile's model picker. The run builds the tree every
 //!     frame and fails on any panic.
+//! 16. The Write manually description is not the chat composer: it has no
+//!     attach control, `@` offers no project file, or Enter submits the
+//!     form (or sends) instead of breaking the line.
+//! 17. An image dropped on the description is not saved with the ticket
+//!     (BoardRead lacks its upload path), or an `@` file picked there is not
+//!     in the saved brief as the composer's file link.
+//! 19. Generate title is offered before the brief says enough (about 100
+//!     characters), or once offered it does not fill the title from the
+//!     device's title model, or it saves anything.
+//! 18. The ticket's first start does not deliver the brief's image: the
+//!     launch snapshot lacks it, or the working chat's first message has no
+//!     `Attached images` block naming it.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -121,6 +133,9 @@ const MOCK_DELAY_MS: &str = "1200";
 /// The drawer's cleanup lines for the engine's Archived and Closed states.
 const CLEANUP_ARCHIVED: &str = "Cleanup: Archived; the review history is kept.";
 const CLEANUP_CLOSED: &str = "Cleanup: Archived and closed; the review history is kept.";
+/// What the scripted title model answers for a ticket title.
+const GENERATED_TITLE: &str = "Retry failed uploads three times";
+
 const REVIEW_FALLBACK: &str =
     "No reviewer is configured: the implementation model reviews in a separate reviewer chat.";
 
@@ -335,6 +350,35 @@ impl luna_harness::Harness for ScriptedPeer {
     async fn models(&self) -> Result<Vec<Model>, luna_harness::HarnessError> {
         Ok(self.models.clone())
     }
+    /// The device's title model: a ticket title prompt gets a title.
+    async fn run_title(
+        &self,
+        request: luna_proto::RunRequest,
+        controls: luna_harness::RunControls,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<AgentEvent, luna_harness::HarnessError>>,
+        luna_harness::HarnessError,
+    > {
+        let text = if request
+            .prompt
+            .starts_with("Write one short, specific ticket title")
+        {
+            GENERATED_TITLE
+        } else {
+            "Fixture title"
+        };
+        let script = vec![
+            AgentEvent::TextDelta { text: text.into() },
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: None,
+            },
+        ];
+        MockHarness { script }.run(request, controls).await
+    }
+
     async fn run(
         &self,
         request: luna_proto::RunRequest,
@@ -756,6 +800,14 @@ async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result
 /// box (not the input element) receives the press.
 async fn press_box_bottom(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result<()> {
     let bounds = reveal(window, cx, name).await?;
+    // The brief is the chat composer: press its text area's last line, far
+    // right (past the text, clear of the attach button and the pickers).
+    let rb = surfaces(window, cx)?;
+    let input = &state_of(&rb)["descriptionComposer"]["input"];
+    if name == "manual-description" && !input.is_null() {
+        let n = |key: &str| input[key].as_f64().unwrap_or(0.0) as f32;
+        return click_at(window, cx, (n("x") + n("w") - 6.0, n("y") + n("h") - 4.0)).await;
+    }
     click_at(window, cx, (bounds[0] + 40.0, bounds[1] + bounds[3] - 4.0)).await
 }
 
@@ -1073,6 +1125,8 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
             sent_description: item.description.clone(),
             instruction_hash: sha(&text),
             instruction_text: text,
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             context_refs: vec![],
             issue_context: None,
             review_base: None,
@@ -2040,6 +2094,8 @@ async fn scenario(
         composer_defaults_snapshot(env) == composer_defaults,
     )?;
     // Title and brief by keyboard; Enter in the title moves to the brief.
+    let rb = surfaces(window, cx)?;
+    let waiting = state_of(&rb)["generateTitle"].clone();
     click(window, cx, "manual-title").await?;
     type_text(window, cx, "retry failed uploads").await?;
     keys(window, cx, &["enter"]).await?;
@@ -2091,6 +2147,116 @@ async fn scenario(
         json!({ "title": "retry failed uploads", "description": expected_description }),
         json!({ "title": state_of(&rb)["title"], "description": description }),
         state_of(&rb)["title"] == "retry failed uploads" && description == expected_description,
+    )?;
+    // 19. With the brief written, Generate title drafts the title with the
+    //     title model; nothing is saved.
+    let tickets_before = project_tickets(env).await?.items.len();
+    let rb = surfaces(window, cx)?;
+    let ready = state_of(&rb)["generateTitle"].clone();
+    click(window, cx, "manual-generate-title").await?;
+    let rb = wait_for(window, cx, "the generated title", |rb| {
+        state_of(rb)["title"] == GENERATED_TITLE && state_of(rb)["generateTitle"] == "ready"
+    })
+    .await?;
+    run.check(
+        "generate-title-from-the-brief",
+        json!({ "before": "waiting", "ready": "ready", "title": GENERATED_TITLE, "saved": 0 }),
+        json!({
+            "before": waiting,
+            "ready": ready,
+            "title": state_of(&rb)["title"],
+            "saved": project_tickets(env).await?.items.len() - tickets_before,
+        }),
+        waiting == "waiting"
+            && ready == "ready"
+            && state_of(&rb)["title"] == GENERATED_TITLE
+            && project_tickets(env).await?.items.len() == tickets_before,
+    )?;
+    // 16. The brief is the chat composer in form mode: the attach control,
+    //     the agent's pickers in its controls row, no Send of its own; `@`
+    //     offers the project's files and Enter accepts one.
+    let rb = surfaces(window, cx)?;
+    let brief = state_of(&rb)["descriptionComposer"].clone();
+    run.check(
+        "brief-is-the-chat-composer",
+        json!({ "form": true, "send": null, "chips": ["access", "checkout", "model"] }),
+        json!({ "form": brief["form"], "send": brief["send"], "chips": brief["pickers"]["chips"] }),
+        brief["form"] == true
+            && brief["send"].is_null()
+            && ["model", "access", "checkout"]
+                .iter()
+                .all(|chip| !brief["pickers"]["chips"][*chip].is_null()),
+    )?;
+    click(window, cx, "manual-title").await?;
+    press_box_bottom(window, cx, "manual-description").await?;
+    type_text(window, cx, "\n@uplo").await.ok();
+    let rb = wait_for(window, cx, "the @ file completion", |rb| {
+        state_of(rb)["descriptionComposer"]["mention"]["results"]
+            .as_array()
+            .is_some_and(|paths| paths.iter().any(|path| path == "src/upload.rs"))
+    })
+    .await?;
+    let offered = state_of(&rb)["descriptionComposer"]["mention"]["results"].clone();
+    // Put the cursor on the file, then Enter accepts it (no line break).
+    let index = offered
+        .as_array()
+        .and_then(|paths| paths.iter().position(|path| path == "src/upload.rs"))
+        .unwrap_or(0);
+    for _ in 0..index {
+        keys(window, cx, &["down"]).await?;
+    }
+    keys(window, cx, &["enter"]).await?;
+    let rb = wait_for(window, cx, "the mentioned file in the brief", |rb| {
+        state_of(rb)["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("src/upload.rs"))
+            && state_of(rb)["descriptionComposer"]["mention"]["query"].is_null()
+    })
+    .await?;
+    let with_mention = state_of(&rb)["description"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    // 17. An image dropped on the brief is staged in its composer.
+    let screenshot = run.dir.join("brief-screenshot.png");
+    let mut image = image::RgbaImage::new(24, 16);
+    for (x, _, pixel) in image.enumerate_pixels_mut() {
+        *pixel = image::Rgba([200, 60 + (x as u8) * 6, 40, 255]);
+    }
+    image.save(&screenshot)?;
+    let target = rect(&surfaces(window, cx)?, "manual-description")
+        .ok_or_else(|| anyhow!("the brief was not painted"))?;
+    let at = point(px(target[0] + target[2] / 2.0), px(target[1] + 30.0));
+    for event in [
+        gpui::FileDropEvent::Entered {
+            position: at,
+            paths: gpui::ExternalPaths(vec![screenshot.clone()].into()),
+        },
+        gpui::FileDropEvent::Pending { position: at },
+        gpui::FileDropEvent::Submit { position: at },
+    ] {
+        input(window, cx, PlatformInput::FileDrop(event))?;
+        draw(window, cx)?;
+        settle(cx, 80).await;
+    }
+    let rb = wait_for(window, cx, "the staged brief image", |rb| {
+        state_of(rb)["descriptionComposer"]["attachments"]
+            .as_array()
+            .is_some_and(|names| names.len() == 1)
+    })
+    .await?;
+    run.check(
+        "brief-takes-files-and-images",
+        json!({ "offered": "src/upload.rs", "mention": "in the brief", "staged": 1 }),
+        json!({
+            "offered": offered,
+            "brief": with_mention,
+            "staged": state_of(&rb)["descriptionComposer"]["attachments"],
+        }),
+        with_mention.contains("src/upload.rs")
+            && state_of(&rb)["descriptionComposer"]["attachments"]
+                .as_array()
+                .is_some_and(|names| names.len() == 1),
     )?;
     // A double click saves once.
     let save = reveal(window, cx, "manual-save").await?;
@@ -2167,6 +2333,19 @@ async fn scenario(
             && saved.launches.is_empty()
             && saved.view.working_chat.is_none(),
     )?;
+    let item = &saved.view.item;
+    run.check(
+        "engine-saved-the-brief-image-and-mention",
+        json!({ "attachments": 1, "underUploads": true, "mention": true, "composerCleared": true }),
+        json!({
+            "attachments": item.attachments,
+            "description": item.description,
+        }),
+        item.attachments.len() == 1
+            && item.attachments[0].contains("uploads")
+            && item.description.contains("src/upload.rs"),
+    )?;
+    let saved_attachments = item.attachments.clone();
     run.capture(window, cx, "d04-receipt")?;
     let manual_id = receipt.work_item_id.clone();
     let manual_key = receipt.key.clone();
@@ -2413,6 +2592,28 @@ async fn scenario(
         firsts == 1
             && detail_of(&rb)["dispatch"]["starts"] == 1
             && text(&rb, "detail-dispatch-summary") == "1 start · 0 continuations",
+    )?;
+    let first = started
+        .launches
+        .iter()
+        .find(|launch| launch.kind == BoardInstructionKind::FirstStart)
+        .cloned();
+    run.check(
+        "first-start-delivers-the-brief-image",
+        json!({ "attachments": saved_attachments, "trailer": true }),
+        json!({
+            "attachments": first.as_ref().map(|launch| launch.attachments.clone()),
+            "trailer": first.as_ref().map(|launch| launch.instruction_text.contains("Attached images (local files")),
+        }),
+        first.as_ref().is_some_and(|launch| {
+            launch.attachments == saved_attachments
+                && saved_attachments
+                    .iter()
+                    .all(|path| launch.instruction_text.contains(path.as_str()))
+                && launch
+                    .instruction_text
+                    .contains("Attached images (local files")
+        }),
     )?;
     run.check(
         "send-update-not-offered-without-an-unsent-revision",
@@ -2868,7 +3069,11 @@ fn main() -> anyhow::Result<()> {
     let project = root.path().join("project");
     let codex_home = root.path().join("providers/codex");
     std::fs::create_dir_all(&ui_data)?;
-    std::fs::create_dir_all(&project)?;
+    std::fs::create_dir_all(project.join("src"))?;
+    std::fs::write(
+        project.join("src/upload.rs"),
+        "pub fn upload() -> Result<(), RetryError> {\n    todo!()\n}\n",
+    )?;
     std::fs::create_dir_all(&codex_home)?;
     std::fs::write(
         codex_home.join("auth.json"),

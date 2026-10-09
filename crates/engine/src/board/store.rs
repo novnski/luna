@@ -800,6 +800,8 @@ impl EngineRpc {
         self.board_check_settings(&space, &implementation, &review)?;
         let labels = clean_labels(&request.labels)?;
         let context_refs = clean_context_refs(&request.context_refs)?;
+        let (attachments, input_items) =
+            self.board_clean_brief_inputs(&request.attachments, &request.input_items)?;
         let now = crate::now_ms();
         let actor = caller.actor();
         let item = WorkItem {
@@ -833,6 +835,8 @@ impl EngineRpc {
             priority: request.priority,
             origin,
             context_refs,
+            attachments,
+            input_items,
             last_report: None,
             created_at_ms: now,
             updated_at_ms: now,
@@ -874,6 +878,38 @@ impl EngineRpc {
     }
 
     // ---- RPC/tool operations ----
+
+    /// A brief's images and `@`/`$` selections: only this host's own
+    /// uploads (never an arbitrary path), bounded like a chat message's.
+    pub(crate) fn board_clean_brief_inputs(
+        &self,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
+    ) -> BoardResult<(Vec<String>, Vec<luna_proto::ComposerInput>)> {
+        const ATTACHMENTS_MAX: usize = 10;
+        const INPUT_ITEMS_MAX: usize = 32;
+        if attachments.len() > ATTACHMENTS_MAX {
+            return Err(BoardError::invalid(
+                "attachments",
+                format!("attach at most {ATTACHMENTS_MAX} images to a ticket"),
+            ));
+        }
+        if input_items.len() > INPUT_ITEMS_MAX {
+            return Err(BoardError::invalid(
+                "inputItems",
+                format!("use at most {INPUT_ITEMS_MAX} mentions and skills in a ticket"),
+            ));
+        }
+        let attachments = attachments
+            .iter()
+            .map(|path| {
+                self.uploads.owned_blob_path(path).ok_or_else(|| {
+                    BoardError::invalid("attachments", "attach images uploaded to this host")
+                })
+            })
+            .collect::<BoardResult<Vec<String>>>()?;
+        Ok((attachments, input_items.to_vec()))
+    }
 
     /// `board_create`: save only. No chat, no launch, no provider usage.
     pub(crate) async fn board_create(

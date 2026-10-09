@@ -239,6 +239,8 @@ impl Engine {
             labels: Vec::new(),
             priority: None,
             context_refs: Vec::new(),
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             origin: None,
             placement,
         };
