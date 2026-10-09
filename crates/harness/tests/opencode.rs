@@ -2,11 +2,13 @@
 //!
 //! The fake speaks just enough of the OpenCode 2 surface (`/api/session`,
 //! `/api/session/{id}/prompt`, `/api/session/{id}/interrupt`,
-//! `/api/session/{id}/command`, `/api/model`, `/api/command`, `/api/event`)
-//! and hands the TEST full control of bus timing via `emit()` — the
-//! premature-done class is exactly about what happens between events, so the
-//! fixtures must own the clock.
+//! `/api/session/{id}/command`, `/api/model`, `/api/command`, `/api/event`,
+//! `/api/experimental/session/{id}/log`) and hands the TEST full control of
+//! bus timing via `emit()` and `drop_bus()` — the premature-done class is
+//! exactly about what happens between events, so the fixtures must own the
+//! clock.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,6 +47,15 @@ struct FakeOpencode {
     /// Session id -> the `permissions` it was created or updated with (read
     /// back by `GET /api/session/{id}`).
     session_rules: Arc<Mutex<std::collections::HashMap<String, Value>>>,
+    /// While set, the bus is down: open subscriptions were cut and new ones
+    /// are refused, so frames emitted meanwhile reach no subscriber.
+    bus_down: Arc<Mutex<bool>>,
+    /// The first backlog seq a new subscription replays. OpenCode's bus has
+    /// no replay: a subscription restored after a drop starts live.
+    replay_from: Arc<Mutex<u64>>,
+    /// `GET` answers a test sets (path -> JSON body), ahead of the built-in
+    /// routes.
+    get_answers: Arc<Mutex<HashMap<String, Value>>>,
 }
 
 impl FakeOpencode {
@@ -61,6 +72,9 @@ impl FakeOpencode {
             first_prompt_had_subscriber: Arc::new(Mutex::new(None)),
             fail_session_creates: Arc::new(Mutex::new(0)),
             session_rules: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            bus_down: Arc::new(Mutex::new(false)),
+            replay_from: Arc::new(Mutex::new(0)),
+            get_answers: Arc::new(Mutex::new(HashMap::new())),
         };
         let accept = fake.clone();
         tokio::spawn(async move {
@@ -85,6 +99,27 @@ impl FakeOpencode {
         );
         backlog.push((seq, framed.clone()));
         let _ = self.events.send((seq, framed));
+    }
+
+    /// Cut every open `/api/event` subscription and refuse new ones until
+    /// [`Self::restore_bus`]: frames emitted in between are never delivered.
+    fn drop_bus(&self) {
+        *self.bus_down.lock().unwrap() = true;
+        // An empty frame tells each open subscription to close.
+        let _ = self.events.send((u64::MAX, String::new()));
+    }
+
+    /// Accept subscriptions again; they start live from this point.
+    fn restore_bus(&self) {
+        *self.replay_from.lock().unwrap() = self.backlog.lock().unwrap().len() as u64;
+        *self.bus_down.lock().unwrap() = false;
+    }
+
+    fn answer_get(&self, path: &str, body: Value) {
+        self.get_answers
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), body);
     }
 
     fn set_models(&self, models: Value) {
@@ -142,10 +177,17 @@ impl FakeOpencode {
             let target = parts.next().unwrap_or_default().to_owned();
             let path = target.split('?').next().unwrap_or_default().to_owned();
 
+            if method == "GET" && path == "/api/event" && *self.bus_down.lock().unwrap() {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
+                    .await;
+                continue;
+            }
             if method == "GET" && path == "/api/event" {
                 // Subscribe FIRST, then snapshot the backlog: frames landing
                 // in between arrive on both channels and dedupe by sequence.
                 let mut rx = self.events.subscribe();
+                let replay_from = *self.replay_from.lock().unwrap();
                 let replay = self.backlog.lock().unwrap().clone();
                 let mut next_seq = replay.len() as u64;
                 let _ = stream
@@ -157,13 +199,17 @@ impl FakeOpencode {
                 let _ = stream
                     .write_all(b"data: {\"id\":\"evt_connected\",\"type\":\"server.connected\",\"data\":{}}\n\n")
                     .await;
-                for (_, frame) in &replay {
+                for (_, frame) in replay.iter().skip(replay_from as usize) {
                     if stream.write_all(frame.as_bytes()).await.is_err() {
                         return;
                     }
                 }
                 let _ = stream.flush().await;
                 while let Ok((seq, frame)) = rx.recv().await {
+                    if frame.is_empty() {
+                        // `drop_bus`: the connection is cut.
+                        return;
+                    }
                     if seq < next_seq {
                         continue;
                     }
@@ -174,6 +220,26 @@ impl FakeOpencode {
                     let _ = stream.flush().await;
                 }
                 return;
+            }
+            if method == "GET"
+                && path.starts_with("/api/experimental/session/")
+                && path.ends_with("/log")
+            {
+                // The durable log keeps only its watermark (2.0.22): a
+                // reconnect learns that frames were missed, never which.
+                let body = format!(
+                    "data: {}\n\n",
+                    json!({ "type": "log.synced", "seq": self.backlog.lock().unwrap().len() })
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                     content-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                if stream.write_all(resp.as_bytes()).await.is_err() {
+                    return;
+                }
+                continue;
             }
 
             if method == "POST" || method == "PATCH" {
@@ -206,6 +272,11 @@ impl FakeOpencode {
 
     fn route(&self, method: &str, path: &str, body: &Value) -> (&'static str, Option<Value>) {
         let rules = |session: &str| self.session_rules.lock().unwrap().get(session).cloned();
+        if method == "GET"
+            && let Some(answer) = self.get_answers.lock().unwrap().get(path).cloned()
+        {
+            return ("200 OK", Some(answer));
+        }
         match (method, path) {
             ("GET", "/api/info") => (
                 "200 OK",
@@ -884,4 +955,182 @@ async fn session_create_failure_is_not_retried() {
             ..
         }) if e.contains("UnknownError: Unexpected server error")
     ));
+}
+
+/// Failure case: a child session's `session.step.started` falls into a
+/// dropped bus connection. The reconnect readback covers only the root
+/// session, so that step's role frame never arrives. OpenCode streams text
+/// and reasoning only inside assistant messages, so the step's items must
+/// still render in the child transcript, in order, instead of being held
+/// for a role forever.
+#[tokio::test]
+async fn child_items_render_when_their_step_start_was_lost_in_a_bus_drop() {
+    let fake = FakeOpencode::start().await;
+    let (controls, _steer, _token) = controls();
+    let mut stream = harness(&fake)
+        .run(request("hi"), controls)
+        .await
+        .expect("run starts");
+    let _ = next_event(&mut stream).await; // SessionStarted
+    let _ = next_event(&mut stream).await; // AvailableCommands
+    // The first prompt waits for the live subscription the drop will cut.
+    wait_posts(&fake, "/api/session/ses_test/prompt", 1).await;
+
+    let call = |extra: Value| {
+        let mut data =
+            json!({ "sessionID": "ses_test", "assistantMessageID": "msg_1", "id": "call_task" });
+        data.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        data
+    };
+    let spawn = json!({ "agent": "general", "description": "Survey the repo", "prompt": "survey" });
+    assistant_message(&fake, "ses_test", "msg_1");
+    fake.emit(
+        "session.tool.input.started",
+        call(json!({ "name": "subagent" })),
+    );
+    fake.emit("session.tool.called", call(json!({ "input": spawn })));
+    fake.emit(
+        "session.created",
+        json!({ "sessionID": "ses_child", "parentID": "ses_test", "title": "Survey the repo" }),
+    );
+    fake.emit(
+        "session.tool.progress",
+        call(json!({ "metadata": { "sessionID": "ses_child", "status": "running" } })),
+    );
+    fake.emit(
+        "session.execution.started",
+        json!({ "sessionID": "ses_child" }),
+    );
+
+    // The reconnect reads the ROOT back: its spawn call is still running.
+    fake.answer_get("/api/session/active", json!({ "data": { "ses_test": {} } }));
+    fake.answer_get(
+        "/api/session/ses_test/message",
+        json!({ "data": [
+            { "id": "msg_1", "type": "assistant", "content": [{
+                "type": "tool", "id": "call_task", "name": "subagent",
+                "state": { "status": "running", "input": spawn },
+            }] },
+            { "id": "msg_inbox", "type": "user", "text": "hi" },
+        ] }),
+    );
+    fake.drop_bus();
+    fake.emit(
+        "session.step.started",
+        json!({ "sessionID": "ses_child", "assistantMessageID": "msg_c1" }),
+    );
+    fake.restore_bus();
+
+    // The child's step streams on the reconnected bus.
+    let item = |extra: Value| {
+        let mut data =
+            json!({ "sessionID": "ses_child", "assistantMessageID": "msg_c1", "ordinal": 0 });
+        data.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        data
+    };
+    fake.emit("session.reasoning.started", item(json!({})));
+    fake.emit(
+        "session.reasoning.delta",
+        item(json!({ "delta": "weighing " })),
+    );
+    fake.emit(
+        "session.reasoning.delta",
+        item(json!({ "delta": "the options" })),
+    );
+    fake.emit(
+        "session.reasoning.ended",
+        item(json!({ "text": "weighing the options" })),
+    );
+    fake.emit("session.text.started", item(json!({})));
+    fake.emit("session.text.delta", item(json!({ "delta": "child " })));
+    fake.emit(
+        "session.text.ended",
+        item(json!({ "text": "child answer" })),
+    );
+    idle(&fake, "ses_child");
+    fake.emit(
+        "session.tool.success",
+        call(json!({
+            "content": [{ "type": "text", "text": "child answer" }],
+            "metadata": { "sessionID": "ses_child", "status": "completed" },
+        })),
+    );
+    text(&fake, "ses_test", "msg_1", 0, "done");
+    idle(&fake, "ses_test");
+
+    // Everything to Done, host-only receipt evidence included.
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("event within budget")
+            .expect("stream open")
+            .expect("ok event");
+        let done = matches!(event, AgentEvent::Done { .. });
+        events.push(event);
+        if done {
+            break;
+        }
+    }
+    let reconnected = events.iter().any(|event| {
+        matches!(event, AgentEvent::ProviderEvidence { kind, .. } if kind == "native:bus.reconnected")
+    });
+    let read_back = events.iter().any(|event| {
+        matches!(
+            event,
+            AgentEvent::ProviderEvidence { kind, payload, .. }
+                if kind == "native:readback.messages"
+                    && payload["frames"].as_u64().is_some_and(|frames| frames > 0)
+        )
+    });
+    assert!(
+        reconnected && read_back,
+        "the child's step start must fall into a real bus gap: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+
+    // The child transcript: its streamed items, coalesced per kind.
+    let mut child: Vec<(&str, String)> = Vec::new();
+    for event in &events {
+        let AgentEvent::Subagent {
+            parent_tool_use_id,
+            event,
+        } = event
+        else {
+            continue;
+        };
+        let (kind, delta) = match event.as_ref() {
+            AgentEvent::ReasoningDelta { text } => ("reasoning", text),
+            AgentEvent::TextDelta { text } => ("text", text),
+            _ => continue,
+        };
+        if parent_tool_use_id != "ses_test:msg_1:call_task" || delta.is_empty() {
+            continue;
+        }
+        match child.last_mut() {
+            Some((last, body)) if *last == kind => body.push_str(delta),
+            _ => child.push((kind, delta.clone())),
+        }
+    }
+    assert_eq!(
+        child,
+        [
+            ("reasoning", "weighing the options".to_owned()),
+            ("text", "child answer".to_owned()),
+        ],
+        "{events:?}"
+    );
 }
