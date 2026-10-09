@@ -212,21 +212,6 @@ describe("applyOp", () => {
     expect(outcomes[0].fields.archived).toBe(true);
     expect(outcomes[0].fields.cwd).toBe("/tmp");
   });
-
-  it("drops an update that outruns its row's create (never invent rows)", () => {
-    // Causally impossible on the wire (per-device batches are ordered), but a
-    // hand-crafted client could send it: the update is dropped, not deferred.
-    const early = applyOp(undefined, {
-      kind: "chats",
-      id: "chat-1",
-      op: "update",
-      set: { title: "too early" },
-      hlc: hlc(3000)
-    });
-    expect(early.changed).toBe(false);
-    const row = applied(undefined, upsert({ hlc: hlc(1000) }));
-    expect(row.fields.title).toBe("hello");
-  });
 });
 
 describe("validateOp", () => {

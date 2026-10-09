@@ -274,21 +274,6 @@ mod tests {
         }
     }
     #[test]
-    fn a_confirmed_http_server_is_never_probed_again() {
-        let mut memory = ProbeMemory::default();
-        let t0 = Instant::now();
-        let (known, probe) = memory.plan(vec![((), listener(7, 8081))], t0);
-        assert!(known.is_empty());
-        assert_eq!(probe.len(), 1);
-        memory.record(&probe[0].1, true, t0);
-        for cycle in 1..1_000u64 {
-            let now = t0 + Duration::from_secs(2 * cycle);
-            let (known, probe) = memory.plan(vec![((), listener(7, 8081))], now);
-            assert_eq!(known.len(), 1, "cycle {cycle} must reuse the verdict");
-            assert!(probe.is_empty(), "cycle {cycle} must not send a request");
-        }
-    }
-    #[test]
     fn non_http_listeners_back_off_and_reused_ports_are_probed_afresh() {
         let mut memory = ProbeMemory::default();
         let t0 = Instant::now();

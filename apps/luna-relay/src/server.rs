@@ -23,9 +23,6 @@ use crate::protocol::{
 
 type Socket = WebSocketStream<TcpStream>;
 
-#[cfg(test)]
-const CONTROL_WRITE_TIMEOUT: Duration = Duration::from_millis(75);
-#[cfg(not(test))]
 const CONTROL_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const DATA_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1075,8 +1072,9 @@ mod tests {
         let mut ws =
             WebSocketStream::from_raw_socket(transport, WsRole::Server, Some(socket_config()))
                 .await;
+        // The production deadline itself, with no test-only shortening.
         let outcome = tokio::time::timeout(
-            Duration::from_millis(250),
+            CONTROL_WRITE_TIMEOUT + Duration::from_secs(1),
             send_control(
                 &mut ws,
                 &Control::Rejected {
@@ -1086,7 +1084,7 @@ mod tests {
         )
         .await;
         assert!(
-            outcome.is_ok(),
+            outcome.is_ok_and(|sent| sent.is_err()),
             "control output waited indefinitely behind stalled transport"
         );
     }

@@ -400,14 +400,10 @@ mod tests {
     }
 
     #[test]
-    fn captured_app_identity_is_luna_owned() {
-        assert!(CAPTURED_ENV.contains(&"LUNA_DATA_DIR"));
-        assert!(CAPTURED_ENV.contains(&"LUNA_IPC_PORT"));
-        assert!(!CAPTURED_ENV.contains(&"LUNA_DATA_DIR"));
-        assert!(!CAPTURED_ENV.contains(&"LUNA_IPC_PORT"));
-        assert!(!CAPTURED_ENV.contains(&"LUNA_EDGE_URL"));
-        assert!(CAPTURED_ENV.contains(&"LUNA_EDGE_URL"));
-        assert!(!CAPTURED_ENV.contains(&"LUNA_EDGE_TOKEN"));
+    fn service_env_keeps_the_data_root_and_never_the_bearer() {
+        for key in ["LUNA_DATA_DIR", "LUNA_IPC_PORT", "LUNA_EDGE_URL"] {
+            assert!(CAPTURED_ENV.contains(&key), "{key}");
+        }
         assert!(
             !CAPTURED_ENV.contains(&"LUNA_EDGE_TOKEN"),
             "daemon installation must never copy a bearer into plist/unit metadata"

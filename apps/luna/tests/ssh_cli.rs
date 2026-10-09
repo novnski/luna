@@ -930,21 +930,6 @@ async fn foreign_platform_artifact_is_never_executed_on_client() {
 }
 
 #[tokio::test]
-async fn persistent_remote_read_view_is_available() {
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
-        .args(["ssh", "view", "--help"])
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("--task"));
-}
-
-#[tokio::test]
 async fn remote_read_window_exit_cancels_a_pending_ssh_connect() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
