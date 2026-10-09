@@ -998,24 +998,3 @@ pub(super) fn v2_observe_frame(
         }
     })]
 }
-
-/// Replay parts that raced ahead of their message's role fact.
-pub(super) fn replay_pending(
-    feed: &mut SessionFeed,
-    message: &str,
-    is_main: bool,
-    turn: &mut TurnState,
-) -> Vec<AgentEvent> {
-    let held: Vec<Value> = std::mem::take(&mut feed.pending_parts)
-        .into_iter()
-        .filter(|part| part.get("messageID").and_then(Value::as_str) == Some(message))
-        .collect();
-    let events: Vec<AgentEvent> = held
-        .iter()
-        .flat_map(|part| part_snapshot_events(feed, part, is_main))
-        .collect();
-    if is_main {
-        mark_content(turn, &events);
-    }
-    events
-}

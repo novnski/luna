@@ -38,10 +38,9 @@ pub(super) struct PartState {
 /// Streaming state for one opencode session's feed (ours or a child's).
 #[derive(Default)]
 pub(super) struct SessionFeed {
-    /// messageID → is-assistant (user prompt echoes must not render).
-    pub(super) assistant_messages: HashMap<String, bool>,
-    /// Parts whose message ROLE isn't known yet, replayed when it lands.
-    pub(super) pending_parts: Vec<Value>,
+    /// Messages whose step this run saw start (root feed only): a tool
+    /// settled under any other message belongs to a turn that already ended.
+    pub(super) assistant_messages: HashSet<String>,
     pub(super) parts: HashMap<String, PartState>,
     /// Configured MCP server names (`GET /api/mcp`), for typing
     /// `<server>_<tool>` calls, and how often they were looked up.
@@ -85,58 +84,9 @@ pub(super) fn part_snapshot_events(
     let kind = part.get("type").and_then(Value::as_str).unwrap_or_default();
     match kind {
         "text" | "reasoning" => {
-            if kind == "text" && feed.assistant_messages.get(message_id).is_none() {
-                // Role unknown: hold the part instead of guessing (dedup by
-                // part id — snapshots re-deliver).
-                if !feed
-                    .pending_parts
-                    .iter()
-                    .any(|p| p.get("id").and_then(Value::as_str) == Some(part_id))
-                {
-                    feed.pending_parts.push(part.clone());
-                }
-                return Vec::new();
-            }
-            if kind == "text" && feed.assistant_messages.get(message_id) == Some(&false) {
-                // A user-role text part. On the MAIN feed it is our own
-                // prompt echo (the engine already wrote the user entry);
-                // on a child feed it is the message INTO the child — its
-                // spawn prompt or a steer, rendered as a user entry.
-                if is_main {
-                    return Vec::new();
-                }
-                let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-                if text.trim().is_empty() {
-                    return Vec::new();
-                }
-                let entry = feed
-                    .parts
-                    .entry(part_id.to_owned())
-                    .or_insert_with(|| PartState {
-                        kind: kind.to_owned(),
-                        ..PartState::default()
-                    });
-                if entry.emitted > 0 {
-                    return Vec::new();
-                }
-                entry.emitted = text.len();
-                return vec![AgentEvent::UserMessage {
-                    text: text.to_owned(),
-                }];
-            }
-            if feed.assistant_messages.get(message_id) != Some(&true) {
-                // Reasoning ahead of its message.updated: hold it too.
-                if kind == "reasoning" {
-                    if !feed
-                        .pending_parts
-                        .iter()
-                        .any(|p| p.get("id").and_then(Value::as_str) == Some(part_id))
-                    {
-                        feed.pending_parts.push(part.clone());
-                    }
-                }
-                return Vec::new();
-            }
+            // OpenCode 2 streams text and reasoning only inside assistant
+            // messages (`assistantMessageID`): they render on arrival, even
+            // when the message's step start was lost in a bus drop.
             let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
             let entry = feed
                 .parts
@@ -206,7 +156,7 @@ pub(super) fn part_snapshot_events(
             if is_main
                 && matches!(status, "completed" | "error")
                 && !feed.parts.contains_key(part_id)
-                && !feed.assistant_messages.contains_key(message_id)
+                && !feed.assistant_messages.contains(message_id)
             {
                 let state = part.get("state").unwrap_or(&Value::Null);
                 return vec![receipt_evidence(
@@ -265,21 +215,13 @@ pub(super) fn part_snapshot_events(
 
 /// A text delta appends to its part. Deltas follow the part's opening
 /// `message.part.updated` (which fixes the kind); an unknown part defaults
-/// to assistant text only when its message is known assistant.
+/// to assistant text.
 pub(super) fn part_delta_events(
     feed: &mut SessionFeed,
-    props: &Value,
     part_id: &str,
     delta: &str,
 ) -> Vec<AgentEvent> {
     if delta.is_empty() {
-        return Vec::new();
-    }
-    let message_id = props
-        .get("messageID")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if feed.assistant_messages.get(message_id) != Some(&true) {
         return Vec::new();
     }
     let entry = feed
