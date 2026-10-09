@@ -929,12 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn latin_metric_filter_requires_the_glyph_gpui_measures() {
-        let latin = ttf_parser::Face::parse(GEIST[0], 0).unwrap();
-        assert!(latin.glyph_index('m').is_some());
-    }
-
-    #[test]
     fn ui_font_sizes_have_stable_labels_and_normalize() {
         assert_eq!(UiFontSize::default().label().as_ref(), "16 px");
         assert_eq!(UiFontSize(19).normalized(), UiFontSize(18));

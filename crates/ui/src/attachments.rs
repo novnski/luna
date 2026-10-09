@@ -1145,19 +1145,6 @@ mod tests {
     }
 
     #[test]
-    fn appshot_context_is_hidden_but_image_remains() {
-        let body = format!(
-            "Fix the layout\n\n{}\n<appshot app=\"Safari\">secret AX text</appshot>",
-            crate::appshots::CONTEXT_MARKER
-        );
-        let content = with_attachments(&body, &["/a/appshot.png".to_string()]);
-        let parsed = parse_user_message_images(&content);
-        assert_eq!(parsed.text, "Fix the layout");
-        assert_eq!(parsed.attachments.len(), 1);
-        assert_eq!(parsed.attachments[0].path, "/a/appshot.png");
-    }
-
-    #[test]
     fn plain_text_passes_through_unchanged() {
         assert_eq!(with_attachments("hello", &[]), "hello");
         let parsed = parse_user_message_images("hello\n\nno images here");

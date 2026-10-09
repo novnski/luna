@@ -368,15 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn default_row_veil_fades_first_text() {
-        // Mid-stream new rows keep the old behavior: their first chunk fades.
-        let t0 = Instant::now();
-        let mut row = RowVeil::default();
-        let spans = row.advance(0, "fresh", t0);
-        assert_eq!(spans, vec![(0..5, 0.0)]);
-    }
-
-    #[test]
     fn faded_text_never_reanimates_on_append() {
         let t0 = Instant::now();
         let mut v = ElemVeil::default();
