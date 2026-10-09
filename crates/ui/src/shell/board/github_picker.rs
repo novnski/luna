@@ -906,6 +906,15 @@ fn action_button(
     }
 }
 
+/// A click anywhere in a field's frame (padding, the empty lines below the
+/// text) puts the caret in its input. Preventing the default stops the
+/// picker's own focus tracking (an ancestor) from taking focus back in the
+/// same mouse-down, which left typing with nowhere to go.
+fn focus_field(input: &Entity<ComposerInput>, window: &mut Window, cx: &mut App) {
+    window.focus(&input.focus_handle(cx), cx);
+    window.prevent_default();
+}
+
 fn meta_text(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
     div()
         .text_size(ui_rems(12.0))
@@ -1411,7 +1420,7 @@ impl GitHubIssuePicker {
                         .on_mouse_down(
                             gpui::MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
-                                window.focus(&this.prompt.focus_handle(cx), cx)
+                                focus_field(&this.prompt, window, cx)
                             }),
                         )
                         .child(self.prompt.clone())
@@ -1571,7 +1580,7 @@ impl Render for GitHubIssuePicker {
                             .on_mouse_down(
                                 gpui::MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
-                                    window.focus(&this.search.focus_handle(cx), cx)
+                                    focus_field(&this.search, window, cx)
                                 }),
                             )
                             .child(
