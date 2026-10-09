@@ -64,6 +64,9 @@
 //!     allowed (even when the discussion recorded Full access), a command
 //!     approval is refused or granted for the whole session, a refusal is
 //!     not shown, or its first message lacks the briefing.
+//! 20. Two provider messages in one turn, each closed by the provider's
+//!     message end, glue into one text part of the discussion's reply
+//!     (`Checking.The answer is 42.`).
 //!
 //! Every scenario writes a JSON manifest (steps, expected/observed, SHA-256
 //! of snapshots) under `target/qa/board/authoring/`.
@@ -1482,6 +1485,41 @@ async fn codex_discussion_refuses_file_changes_and_runs_commands() {
             "transcript": user_texts(&page),
         }),
         Some(&results),
+    );
+    stop(core, c).await;
+    evidence.write();
+}
+
+/// Case 20: the peer says two things in one turn, each its own assistant
+/// message as the CLI streams it (text deltas, then the message snapshot
+/// that ends it). The discussion's reply keeps them as two text parts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn back_to_back_provider_messages_stay_separate_discussion_parts() {
+    let f = fixture();
+    let (core, c) = boot(&f);
+    let mut evidence = Evidence::new("discussion-message-boundary");
+    let dir = project(&c, &core, &f, "project-m", &[]).await;
+    plan(
+        &dir,
+        json!([[
+            {"say": "Checking."},
+            {"say": "The answer is 42."}
+        ]]),
+    );
+    let session = start(
+        &c,
+        "project-m",
+        "messages-1",
+        json!({"harness": "claude-code"}),
+    )
+    .await;
+    let id = session["id"].as_str().unwrap().to_owned();
+    let done = turn(&c, &id, "n-1", "What is the answer?").await;
+    evidence.step(
+        "two provider messages in one turn stay two text parts of the reply",
+        json!(["Checking.", "The answer is 42."]),
+        json!(assistant_parts(&done)),
+        Some(&done),
     );
     stop(core, c).await;
     evidence.write();
