@@ -269,6 +269,15 @@ for index, action in enumerate(ACTIONS):
         tool_result(tool_use_id, outcome["text"], outcome.get("isError"))
     elif "say" in action:
         final = action["say"]
+        # As the CLI streams it (--include-partial-messages): the text
+        # arrives as content_block_delta frames, then the message snapshot.
+        # LUNA builds assistant text from the deltas only.
+        emit({
+            "type": "stream_event", "parent_tool_use_id": None, "session_id": SESSION,
+            "uuid": str(uuid.uuid4()),
+            "event": {"type": "content_block_delta", "index": 0,
+                      "delta": {"type": "text_delta", "text": final}},
+        })
         assistant([{"type": "text", "text": final}])
     elif "sleep" in action:
         time.sleep(action["sleep"])

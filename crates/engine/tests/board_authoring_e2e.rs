@@ -273,6 +273,23 @@ fn entry_ids(page: &Value, role: &str) -> Vec<String> {
         .collect()
 }
 
+/// The assistant entries' parts in order: `tool` for a tool use, the text
+/// itself for a text part (what the pane renders, top to bottom).
+fn assistant_parts(page: &Value) -> Vec<String> {
+    page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == "assistant")
+        .flat_map(|entry| entry["parts"].as_array().cloned().unwrap_or_default())
+        .filter_map(|part| match part["kind"].as_str() {
+            Some("tool") => Some("tool".to_owned()),
+            Some("text") => part["text"].as_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect()
+}
+
 async fn drafts(c: &RpcClient, project: &str) -> Vec<String> {
     ok(c, "BoardAuthoringList", json!({"projectId": project})).await["sessions"]
         .as_array()
@@ -625,12 +642,19 @@ async fn discussion_reads_the_project_collects_settings_and_saves_one_ticket() {
         .as_str()
         .unwrap()
         .to_owned();
+    // The streamed reply that follows the tool uses is stored after them in
+    // the same assistant entry (what the pane renders below the tool rows).
+    let parts = assistant_parts(&first);
+    let tools_then_question = parts.len() == 4
+        && parts[..3].iter().all(|part| part == "tool")
+        && parts[3].contains("Which implementation model");
     evidence.step(
         "turn 1 recorded the transcript, the read-only proposal and the private provider binding",
-        json!({"users": ["m-1"], "assistants": 1, "proposal": TITLE, "binding": t0["session"], "ticket": 0}),
+        json!({"users": ["m-1"], "assistants": 1, "toolsThenQuestion": true, "proposal": TITLE, "binding": t0["session"], "ticket": 0}),
         json!({
             "users": entry_ids(&first, "user"),
             "assistants": entry_ids(&first, "assistant").len(),
+            "toolsThenQuestion": tools_then_question,
             "proposal": first["session"]["proposal"]["title"],
             "binding": binding,
             "ticket": tickets(&c, "project-a").await.len(),
