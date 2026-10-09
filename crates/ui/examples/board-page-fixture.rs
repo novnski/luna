@@ -15,11 +15,12 @@
 //! 1. Placement: Board is missing from the sidebar's navigation, or is not
 //!    directly below Automations (New thread → Automations → Board), or
 //!    activating it does not open `Page(Board)` beside the thread list.
-//! 2. Scope: opening from a sidebar project filter does not prefilter to that
-//!    project; All projects omits a project's tickets, shows a ticket without
-//!    naming its project, or mixes another project's tickets into a single
-//!    project; an explicit All projects choice is overridden by switching
-//!    pages when the sidebar filter did not change.
+//! 2. Scope: the Board does not show exactly the sidebar's project filter
+//!    (chosen in the sidebar's project picker with real clicks and keys): a
+//!    project filter does not prefilter to that project; All projects omits a
+//!    project's tickets, shows a ticket without naming its project, or mixes
+//!    another project's tickets into a single project; a page switch changes
+//!    the scope; or the toolbar still offers its own project menu.
 //! 3. Columns: not exactly Backlog, Ready, Done left to right; a count that
 //!    disagrees with the engine's list; the help ("Held or stopped", "Runs
 //!    automatically") missing; the column order disagreeing with the engine's
@@ -81,6 +82,23 @@
 //!     the search does not return to the first page; switching to All
 //!     projects and back shows another scope's ticket, keeps the old pages,
 //!     or disagrees with the engine.
+//! 19. Bound creation: with a project selected in the sidebar, New issue
+//!     offers a project choice (a dropdown or chips) instead of naming that
+//!     project, or Write manually saves the ticket in any other project.
+//! 20. All projects creation: New issue does not ask for the project in the
+//!     sidebar's searchable project picker; the picker lists another
+//!     machine's project or misses one of this host's; Write manually
+//!     without a choice opens a form (guessing a project); search does not
+//!     narrow the rows; the saved ticket's engine project differs from the
+//!     picked one; or From GitHub issue does not open the same picker or
+//!     opens the import for another project.
+//! 21. Sidebar changes with surfaces open: moving the sidebar to another
+//!     project leaves a drawer or a new ticket form of the old project open
+//!     (so a ticket could be saved outside the scope), saves anything, or
+//!     moving it to All projects closes a surface that stays in scope.
+//! 22. Another machine's project in the sidebar: the Board shows an engine
+//!     error instead of saying which machine holds its board, or New issue
+//!     or From GitHub issue still open anything.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-page-fixture
@@ -116,6 +134,9 @@ use sha2::{Digest, Sha256};
 const P_LUNA: &str = "proj-luna";
 const P_SITE: &str = "proj-site";
 const P_NOTES: &str = "proj-notes";
+/// A project on another machine (its Board lives there).
+const P_REMOTE: &str = "proj-remote";
+const REMOTE_DEVICE: &str = "dev-laptop";
 const WIDTH: f32 = 1440.0;
 const HEIGHT: f32 = 900.0;
 /// A second window narrow enough for the automatic List view.
@@ -261,6 +282,20 @@ impl Engine {
         };
         self.call(methods::BOARD_LIST, serde_json::to_value(request)?)
             .await
+    }
+
+    /// Every ticket (any project) whose key, title or brief matches.
+    async fn matching(&self, text: &str) -> anyhow::Result<Vec<Value>> {
+        let request = BoardListRequest {
+            scope: BoardScope::AllProjects,
+            text: Some(text.into()),
+            limit: Some(500),
+            ..Default::default()
+        };
+        let page = self
+            .call(methods::BOARD_LIST, serde_json::to_value(request)?)
+            .await?;
+        Ok(page["items"].as_array().cloned().unwrap_or_default())
     }
 
     async fn read(&self, id: &str) -> anyhow::Result<Value> {
@@ -593,6 +628,156 @@ fn sidebar(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
     Ok(value)
 }
 
+/// The overlay host's readback (chooser, form or drawer state, probe).
+fn surfaces(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    draw(window, cx)?;
+    window.update(cx, |shell, window, cx| {
+        let page = shell
+            .fixture_board_page()
+            .ok_or_else(|| anyhow::anyhow!("the Board page is not mounted"))?;
+        let surfaces = page.read(cx).surfaces().clone();
+        anyhow::Ok(surfaces.read(cx).fixture_readback(window, cx))
+    })?
+}
+
+/// Poll the overlay host until `done` holds.
+async fn wait_surfaces(
+    window: Window,
+    cx: &mut AsyncApp,
+    what: &str,
+    done: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Value> {
+    let mut last = Value::Null;
+    for _ in 0..150 {
+        if let Ok(rb) = surfaces(window, cx) {
+            if done(&rb) {
+                return Ok(rb);
+            }
+            last = rb;
+        }
+        settle(cx, 100).await;
+    }
+    anyhow::bail!("timed out waiting for {what}; last overlay readback: {last}")
+}
+
+/// A surface probe's painted bounds (`[x, y, w, h]`).
+fn probe_rect(rb: &Value, name: &str) -> anyhow::Result<(f32, f32, f32, f32)> {
+    let value = rb["probe"]["bounds"][name]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("probe {name} not painted: {}", rb["probe"]["bounds"]))?;
+    let at = |ix: usize| value.get(ix).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    Ok((at(0), at(1), at(2), at(3)))
+}
+
+/// The ids a project picker readback lists, in order (`None`: All projects).
+fn picker_ids(picker: &Value) -> Vec<Option<String>> {
+    picker["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| row["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Whether a picker readback lists painted rows.
+fn picker_painted(picker: &Value) -> bool {
+    picker["rows"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty() && rows.iter().all(|row| row["bounds"].is_object()))
+}
+
+/// Open the sidebar's project picker with a real click on its trigger.
+async fn open_sidebar_picker(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    let rb = sidebar(window, cx)?;
+    click(window, cx, center(sidebar_rect(&rb, "header-trigger")?)).await?;
+    let mut last = Value::Null;
+    for _ in 0..60 {
+        let rb = sidebar(window, cx)?;
+        if picker_painted(&rb["projectPicker"]) {
+            return Ok(rb["projectPicker"].clone());
+        }
+        last = rb["projectPicker"].clone();
+        settle(cx, 50).await;
+    }
+    anyhow::bail!("the sidebar's project picker did not open: {last}")
+}
+
+/// Wait for the sidebar filter to read `project` with the picker closed.
+async fn sidebar_filter_is(
+    window: Window,
+    cx: &mut AsyncApp,
+    project: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut last = Value::Null;
+    for _ in 0..60 {
+        let rb = sidebar(window, cx)?;
+        if rb["filter"].as_str() == project && rb["projectPicker"].is_null() {
+            return Ok(rb);
+        }
+        last = rb["filter"].clone();
+        settle(cx, 50).await;
+    }
+    anyhow::bail!("the sidebar filter stayed {last}, not {project:?}")
+}
+
+/// Choose `project` (`None`: All projects) in the sidebar's project picker
+/// by clicking its row. A project is searched for first (typing its name),
+/// so its row is in view whatever the list's length; All projects is always
+/// the first row of the empty search.
+async fn sidebar_pick(
+    window: Window,
+    cx: &mut AsyncApp,
+    project: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut picker = open_sidebar_picker(window, cx).await?;
+    if let Some(id) = project {
+        let name = picker["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|row| row["id"] == id)
+            .and_then(|row| row["label"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("no {id} row in the sidebar picker: {picker}"))?;
+        type_text(window, cx, &name.to_lowercase()).await?;
+        picker = sidebar(window, cx)?["projectPicker"].clone();
+    }
+    let row = picker["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"].as_str() == project)
+        .ok_or_else(|| anyhow::anyhow!("no {project:?} row in the sidebar picker: {picker}"))?;
+    click(window, cx, center(rect_of(&row["bounds"])?)).await?;
+    sidebar_filter_is(window, cx, project).await
+}
+
+/// Choose a project in the sidebar's picker by keyboard: type a search,
+/// then Enter on the first ranked row.
+async fn sidebar_search_pick(
+    window: Window,
+    cx: &mut AsyncApp,
+    query: &str,
+    project: &str,
+) -> anyhow::Result<Value> {
+    open_sidebar_picker(window, cx).await?;
+    type_text(window, cx, query).await?;
+    let rb = sidebar(window, cx)?;
+    let ids = picker_ids(&rb["projectPicker"]);
+    anyhow::ensure!(
+        ids.first().cloned().flatten().as_deref() == Some(project),
+        "searching {query:?} must rank {project} first: {ids:?}"
+    );
+    press(window, cx, "enter").await?;
+    sidebar_filter_is(window, cx, Some(project)).await
+}
+
+/// The Shell's GitHub overlay readback (the import picker, writeback).
+fn github(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    draw(window, cx)?;
+    window.update(cx, |shell, _, cx| shell.fixture_board_github_readback(cx))
+}
+
 /// Poll the Board readback until `done` holds with no mutation in flight.
 async fn wait(
     window: Window,
@@ -890,15 +1075,33 @@ async fn behaviour_pass(
         "item 2: another project's ticket in the Luna scope"
     );
 
-    // Item 2: All projects through the selector, by keyboard in its menu.
-    let project = control(&rb, "board-project")?;
-    click(window, cx, center(project)).await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "enter").await?;
+    // Item 2: the toolbar only names the scope; it opens no menu of its own.
+    anyhow::ensure!(
+        rb["scopeLabel"] == "Luna",
+        "item 2: the toolbar must name the sidebar's project: {}",
+        rb["scopeLabel"]
+    );
+    click(window, cx, center(control(&rb, "board-project")?)).await?;
+    let label = board(window, cx)?;
+    anyhow::ensure!(
+        label["menu"].is_null() && label["projectPicker"].is_null(),
+        "item 2: the Board's project label must not open a menu: {} {}",
+        label["menu"],
+        label["projectPicker"]
+    );
+
+    // Item 2: All projects through the sidebar's project picker (a click on
+    // its row).
+    sidebar_pick(window, cx, None).await?;
     let all = wait(window, cx, "All projects", |rb| {
-        rb["scope"]["kind"] == "allProjects"
+        rb["scope"]["kind"] == "allProjects" && rb["status"] == "Live"
     })
     .await?;
+    anyhow::ensure!(
+        all["scopeLabel"] == "All projects",
+        "item 2: the toolbar must name All projects: {}",
+        all["scopeLabel"]
+    );
     let engine_all = engine.list(BoardScope::AllProjects).await?;
     let mut engine_ids: Vec<String> = engine_all["items"]
         .as_array()
@@ -932,7 +1135,7 @@ async fn behaviour_pass(
         );
     }
     capture(window, cx, manifest, "b-all-projects")?;
-    // Switching pages without a sidebar change keeps the explicit choice.
+    // Switching pages keeps the sidebar's scope.
     let rb = sidebar(window, cx)?;
     click(window, cx, center(sidebar_rect(&rb, "nav-automations")?)).await?;
     let rb = sidebar(window, cx)?;
@@ -940,21 +1143,18 @@ async fn behaviour_pass(
     let kept = wait(window, cx, "the kept scope", |rb| rb["status"] == "Live").await?;
     anyhow::ensure!(
         kept["scope"]["kind"] == "allProjects",
-        "item 2: a page switch must not change the Board's explicit scope: {}",
+        "item 2: a page switch must not change the Board's scope: {}",
         kept["scope"]
     );
-    // Back to Luna (menu rows: All projects, Luna, Notes, Website).
-    click(window, cx, center(control(&kept, "board-project")?)).await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "enter").await?;
+    // Back to Luna by keyboard in the sidebar's picker: search, then Enter.
+    sidebar_search_pick(window, cx, "lun", P_LUNA).await?;
     let rb = wait(window, cx, "the Luna scope again", |rb| {
-        rb["scope"]["projectId"] == P_LUNA
+        rb["scope"]["projectId"] == P_LUNA && rb["status"] == "Live"
     })
     .await?;
     manifest.step(
         "scope",
-        "sidebar filter prefilters; All projects aggregates and names each project; explicit scope survives a page switch",
+        "the Board shows the sidebar's project filter: a project prefilters; All projects (picked in the sidebar) aggregates and names each project; a page switch keeps it; the toolbar names the scope and has no project menu",
         json!({"luna": luna_cards, "all": ui_ids.len(), "kept": kept["scope"]}),
     );
 
@@ -1437,12 +1637,7 @@ async fn behaviour_pass(
     );
 
     // Item 12: the empty state (Notes has no tickets).
-    let rb = board(window, cx)?;
-    click(window, cx, center(control(&rb, "board-project")?)).await?;
-    for _ in 0..3 {
-        press(window, cx, "down").await?;
-    }
-    press(window, cx, "enter").await?;
+    sidebar_pick(window, cx, Some(P_NOTES)).await?;
     let rb = wait(window, cx, "the empty Notes board", |rb| {
         rb["emptyState"] == true
     })
@@ -1462,7 +1657,7 @@ async fn behaviour_pass(
     let manual = wait(window, cx, "Write manually", |rb| rb["overlay"] == "manual").await?;
     let form_png = capture(window, cx, manifest, "b-empty-write-manually")?;
     press(window, cx, "escape").await?;
-    let rb = wait(window, cx, "the drawer closed", |rb| {
+    wait(window, cx, "the drawer closed", |rb| {
         rb["overlay"].is_null()
     })
     .await?;
@@ -1471,10 +1666,7 @@ async fn behaviour_pass(
         "Write manually, Discuss with AI, From GitHub issue and Add existing chat offered; Write manually opens A9's form in the overlay host without GitHub; Escape closes it",
         json!({"png": png, "form": form_png, "surface": manual["overlay"]}),
     );
-    click(window, cx, center(control(&rb, "board-project")?)).await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "enter").await?;
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
     wait(window, cx, "Luna again", |rb| {
         rb["scope"]["projectId"] == P_LUNA
     })
@@ -1560,6 +1752,14 @@ async fn prefs_pass(
         on_disk == saved,
         "item 13: ui-settings.json must hold the Board prefs: {on_disk} vs {saved}"
     );
+    // The scope is the sidebar's saved project filter, not a Board pref.
+    let saved_settings = settings::UiSettings::load(data);
+    anyhow::ensure!(
+        saved_settings.space_filter.as_deref() == Some(P_LUNA)
+            && on_disk.get("projectId").is_none(),
+        "item 13: the scope must be saved as the sidebar filter only: {:?} {on_disk}",
+        saved_settings.space_filter
+    );
     capture(window, cx, manifest, "p-before")?;
 
     // Re-create the Shell (same app state, same settings store).
@@ -1605,7 +1805,7 @@ async fn prefs_pass(
     let snapshot = manifest.json_snapshot("p-restored-readback", &rb)?;
     manifest.step(
         "prefs-restore",
-        "scope, view, search, source filter, selected card and scroll restored after re-creating the Shell and saved in ui-settings.json",
+        "scope (the sidebar's saved project filter), view, search, source filter, selected card and scroll restored after re-creating the Shell and saved in ui-settings.json",
         json!({"saved": saved, "restored": restored, "offset": offset, "png": png, "readback": snapshot}),
     );
     Ok(window)
@@ -1901,12 +2101,8 @@ async fn pagination_pass(
     let seed_ms = seeded.elapsed().as_millis();
 
     // Item 16: Website opens on its first page per column.
-    let rb = scroll_top(window, cx).await?;
-    click(window, cx, center(control(&rb, "board-project")?)).await?;
-    for _ in 0..4 {
-        press(window, cx, "down").await?;
-    }
-    press(window, cx, "enter").await?;
+    scroll_top(window, cx).await?;
+    sidebar_pick(window, cx, Some(P_SITE)).await?;
     let rb = wait(window, cx, "the paged Website board", |rb| {
         rb["scope"]["projectId"] == P_SITE
             && rb["status"] == "Live"
@@ -2090,10 +2286,8 @@ async fn pagination_pass(
     );
 
     // Item 18: All projects resets to each column's first page.
-    let rb = scroll_top(window, cx).await?;
-    click(window, cx, center(control(&rb, "board-project")?)).await?;
-    press(window, cx, "down").await?;
-    press(window, cx, "enter").await?;
+    scroll_top(window, cx).await?;
+    sidebar_pick(window, cx, None).await?;
     let all = BoardScope::AllProjects;
     let all_backlog = engine
         .all_ids(all.clone(), BoardColumn::Backlog, None)
@@ -2223,12 +2417,8 @@ async fn pagination_pass(
         "item 18: clearing the search must return to Backlog's first page: hasMore {more}, pages {pages}"
     );
     // Back to Website: its first page, nothing from another project.
-    let rb = scroll_top(window, cx).await?;
-    click(window, cx, center(control(&rb, "board-project")?)).await?;
-    for _ in 0..4 {
-        press(window, cx, "down").await?;
-    }
-    press(window, cx, "enter").await?;
+    scroll_top(window, cx).await?;
+    sidebar_pick(window, cx, Some(P_SITE)).await?;
     let rb = wait(window, cx, "Website's first page again", |rb| {
         rb["scope"]["projectId"] == P_SITE
             && rb["status"] == "Live"
@@ -2281,6 +2471,423 @@ async fn pagination_pass(
 /// process on quit with status 0, so a failure (whose failure.txt,
 /// failure.png and manifest are already written) never reaches it. The
 /// fixture's temporary data root goes with it, as on a normal exit.
+/// Fill Write manually's title and brief by keyboard and save; the receipt's
+/// ticket id.
+async fn save_manual(
+    window: Window,
+    cx: &mut AsyncApp,
+    title: &str,
+    brief: &str,
+) -> anyhow::Result<String> {
+    let rb = wait_surfaces(window, cx, "the Write manually form", |rb| {
+        rb["surface"] == "manual" && rb["probe"]["bounds"]["manual-title"].is_array()
+    })
+    .await?;
+    click(window, cx, center(probe_rect(&rb, "manual-title")?)).await?;
+    type_text(window, cx, title).await?;
+    press(window, cx, "enter").await?;
+    type_text(window, cx, brief).await?;
+    let rb = surfaces(window, cx)?;
+    click(window, cx, center(probe_rect(&rb, "manual-save")?)).await?;
+    let saved = wait_surfaces(window, cx, "the saved receipt", |rb| {
+        rb["state"]["phase"] == "saved"
+    })
+    .await?;
+    saved["state"]["receipt"]["workItemId"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("the receipt names no ticket: {}", saved["state"]))
+}
+
+/// Close Write manually with its header's Close button.
+async fn close_form(window: Window, cx: &mut AsyncApp) -> anyhow::Result<()> {
+    let rb = surfaces(window, cx)?;
+    click(window, cx, center(probe_rect(&rb, "manual-close")?)).await?;
+    wait(window, cx, "the form closed", |rb| rb["overlay"].is_null()).await?;
+    Ok(())
+}
+
+/// Items 19–22: creation follows the sidebar's project filter.
+async fn scope_creation_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    engine: &Engine,
+    calls: &Calls,
+    manifest: &mut Manifest,
+) -> anyhow::Result<()> {
+    scroll_top(window, cx).await?;
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
+    let rb = wait(window, cx, "Luna for item 19", |rb| {
+        rb["scope"]["projectId"] == P_LUNA && rb["status"] == "Live"
+    })
+    .await?;
+
+    // Item 19: under Luna, New issue names Luna and offers no choice.
+    click(window, cx, center(control(&rb, "board-new-issue")?)).await?;
+    let chooser = wait_surfaces(window, cx, "the bound chooser", |rb| {
+        rb["surface"] == "chooser" && rb["probe"]["bounds"]["board-chooser-project"].is_array()
+    })
+    .await?;
+    anyhow::ensure!(
+        chooser["state"]["bound"] == P_LUNA
+            && chooser["state"]["projectId"] == P_LUNA
+            && chooser["probe"]["texts"]["board-chooser-project"] == "Luna",
+        "item 19: the chooser must be bound to the sidebar's Luna: {}",
+        chooser["state"]
+    );
+    let chips: Vec<&String> = chooser["probe"]["chips"]
+        .as_object()
+        .map(|chips| {
+            chips
+                .keys()
+                .filter(|id| id.starts_with("board-chooser-project"))
+                .collect()
+        })
+        .unwrap_or_default();
+    anyhow::ensure!(
+        chips.is_empty(),
+        "item 19: project chips offered: {chips:?}"
+    );
+    // The project is a label: pressing it opens no picker.
+    click(
+        window,
+        cx,
+        center(probe_rect(&chooser, "board-chooser-project")?),
+    )
+    .await?;
+    let pressed = surfaces(window, cx)?;
+    anyhow::ensure!(
+        pressed["state"]["picker"].is_null(),
+        "item 19: a bound chooser must not open a project picker: {}",
+        pressed["state"]["picker"]
+    );
+    let png_bound = capture(window, cx, manifest, "s-bound-chooser")?;
+    click(
+        window,
+        cx,
+        center(probe_rect(&pressed, "board-chooser-manual")?),
+    )
+    .await?;
+    let form = wait_surfaces(window, cx, "Luna's form", |rb| rb["surface"] == "manual").await?;
+    anyhow::ensure!(
+        form["state"]["projectId"] == P_LUNA,
+        "item 19: Write manually must be for Luna: {}",
+        form["state"]["projectId"]
+    );
+    let bound_id = save_manual(window, cx, "Bound ticket", "made from the Luna board").await?;
+    let bound = engine.read(&bound_id).await?;
+    anyhow::ensure!(
+        bound["view"]["item"]["projectId"] == P_LUNA,
+        "item 19: the ticket must be saved in Luna: {}",
+        bound["view"]["item"]["projectId"]
+    );
+    close_form(window, cx).await?;
+    manifest.step(
+        "create-bound-to-sidebar-project",
+        "with Luna selected in the sidebar, New issue names Luna (no chips, no picker) and Write manually saves the ticket in Luna",
+        json!({"chooser": chooser["state"], "ticket": bound_id, "png": png_bound}),
+    );
+
+    // Item 20: under All projects the chooser asks in the shared picker.
+    sidebar_pick(window, cx, None).await?;
+    let rb = wait(window, cx, "All projects for item 20", |rb| {
+        rb["scope"]["kind"] == "allProjects" && rb["status"] == "Live" && rb["overlay"].is_null()
+    })
+    .await?;
+    click(window, cx, center(control(&rb, "board-new-issue")?)).await?;
+    let chooser = wait_surfaces(window, cx, "the All projects chooser", |rb| {
+        rb["surface"] == "chooser" && rb["probe"]["bounds"]["board-chooser-manual"].is_array()
+    })
+    .await?;
+    anyhow::ensure!(
+        chooser["state"]["bound"].is_null()
+            && chooser["state"]["projectId"].is_null()
+            && chooser["probe"]["texts"]["board-chooser-project"] == "Choose a project",
+        "item 20: under All projects nothing may be chosen yet: {}",
+        chooser["state"]
+    );
+    // Write manually without a project opens the picker, not a form.
+    click(
+        window,
+        cx,
+        center(probe_rect(&chooser, "board-chooser-manual")?),
+    )
+    .await?;
+    let asked = wait_surfaces(window, cx, "the project picker", |rb| {
+        picker_painted(&rb["state"]["picker"])
+    })
+    .await?;
+    let error = asked["state"]["error"].as_str().unwrap_or("");
+    anyhow::ensure!(
+        asked["surface"] == "chooser" && error.contains("Choose a project"),
+        "item 20: a choice is required first: {} {error}",
+        asked["surface"]
+    );
+    let ids = picker_ids(&asked["state"]["picker"]);
+    let mut listed: Vec<String> = ids.iter().flatten().cloned().collect();
+    listed.sort();
+    let mut local = vec![P_LUNA.to_owned(), P_NOTES.to_owned(), P_SITE.to_owned()];
+    local.sort();
+    anyhow::ensure!(
+        listed == local && ids.iter().all(Option::is_some),
+        "item 20: the picker must list exactly this Mac's projects: {ids:?}"
+    );
+    let luna_hint = asked["state"]["picker"]["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"] == P_LUNA)
+        .map(|row| row["hint"].clone())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        luna_hint
+            .as_str()
+            .is_some_and(|hint| hint.ends_with("tickets")),
+        "item 20: each project shows its ticket total: {luna_hint}"
+    );
+    let png_picker = capture(window, cx, manifest, "s-all-projects-picker")?;
+    // Search narrows the rows; Enter picks the first.
+    type_text(window, cx, "web").await?;
+    let narrowed = surfaces(window, cx)?;
+    anyhow::ensure!(
+        picker_ids(&narrowed["state"]["picker"]) == vec![Some(P_SITE.to_owned())],
+        "item 20: searching \"web\" must leave Website: {:?}",
+        picker_ids(&narrowed["state"]["picker"])
+    );
+    press(window, cx, "enter").await?;
+    let picked = wait_surfaces(window, cx, "Website picked", |rb| {
+        rb["state"]["projectId"] == P_SITE && rb["state"]["picker"].is_null()
+    })
+    .await?;
+    anyhow::ensure!(
+        picked["probe"]["texts"]["board-chooser-project"] == "Website"
+            && picked["state"]["error"].is_null(),
+        "item 20: the dropdown must show the picked Website: {}",
+        picked["state"]
+    );
+    let png_picked = capture(window, cx, manifest, "s-all-projects-picked")?;
+    click(
+        window,
+        cx,
+        center(probe_rect(&picked, "board-chooser-manual")?),
+    )
+    .await?;
+    let form = wait_surfaces(window, cx, "Website's form", |rb| rb["surface"] == "manual").await?;
+    anyhow::ensure!(
+        form["state"]["projectId"] == P_SITE,
+        "item 20: Write manually must be for the picked Website: {}",
+        form["state"]["projectId"]
+    );
+    let picked_id = save_manual(window, cx, "Picked ticket", "made under All projects").await?;
+    let ticket = engine.read(&picked_id).await?;
+    anyhow::ensure!(
+        ticket["view"]["item"]["projectId"] == P_SITE,
+        "item 20: the ticket must be saved in Website: {}",
+        ticket["view"]["item"]["projectId"]
+    );
+    close_form(window, cx).await?;
+    manifest.step(
+        "create-under-all-projects",
+        "under All projects New issue asks in the sidebar's searchable project picker (this Mac's three projects with ticket totals, not Laptop's), Write manually waits for a choice, search narrows, Enter picks, and the ticket is saved in the picked project",
+        json!({"rows": ids, "hint": luna_hint, "ticket": picked_id, "png": [png_picker, png_picked]}),
+    );
+
+    // Item 20: From GitHub issue under All projects uses the same picker.
+    let rb = wait(window, cx, "the form closed", |rb| rb["overlay"].is_null()).await?;
+    click(window, cx, center(control(&rb, "board-github")?)).await?;
+    let mut opened = Value::Null;
+    for _ in 0..60 {
+        let rb = board(window, cx)?;
+        if picker_painted(&rb["projectPicker"]) {
+            opened = rb;
+            break;
+        }
+        settle(cx, 50).await;
+    }
+    anyhow::ensure!(
+        picker_painted(&opened["projectPicker"]),
+        "item 20: From GitHub issue must open the project picker"
+    );
+    let gh_ids = picker_ids(&opened["projectPicker"]);
+    anyhow::ensure!(
+        !gh_ids.contains(&Some(P_REMOTE.to_owned())) && gh_ids.contains(&Some(P_LUNA.to_owned())),
+        "item 20: the import picker must list this Mac's projects: {gh_ids:?}"
+    );
+    let luna_row = opened["projectPicker"]["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"] == P_LUNA)
+        .cloned()
+        .unwrap_or_default();
+    let png_github = capture(window, cx, manifest, "s-github-picker")?;
+    click(window, cx, center(rect_of(&luna_row["bounds"])?)).await?;
+    let mut import = Value::Null;
+    for _ in 0..60 {
+        import = github(window, cx)?;
+        if !import["picker"].is_null() {
+            break;
+        }
+        settle(cx, 50).await;
+    }
+    anyhow::ensure!(
+        import["picker"]["projectId"] == P_LUNA,
+        "item 20: the import must open for the picked Luna: {}",
+        import["picker"]
+    );
+    press(window, cx, "escape").await?;
+    let mut dismissed = false;
+    for _ in 0..40 {
+        if github(window, cx)?["picker"].is_null() {
+            dismissed = true;
+            break;
+        }
+        settle(cx, 50).await;
+    }
+    anyhow::ensure!(dismissed, "item 20: Escape must close the import picker");
+    manifest.step(
+        "github-under-all-projects",
+        "From GitHub issue under All projects opens the same project picker under its button and imports into the picked project",
+        json!({"rows": gh_ids, "picker": import["picker"]["projectId"], "png": png_github}),
+    );
+
+    // Item 21: a Luna ticket's drawer stays for All projects and closes for
+    // Website.
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
+    let rb = wait(window, cx, "Luna for item 21", |rb| {
+        rb["scope"]["projectId"] == P_LUNA && rb["status"] == "Live"
+    })
+    .await?;
+    let l1 = rb["cards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|card| card["project"] == P_LUNA && rect_of(&card["bounds"]).is_ok())
+        .and_then(|card| card["id"].as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("item 21: no Luna card to open"))?;
+    click(window, cx, center(card_rect(&rb, &l1)?)).await?;
+    wait(window, cx, "Luna's drawer", |rb| {
+        rb["overlayItem"] == l1.as_str()
+    })
+    .await?;
+    let mark_before = mark(calls);
+    sidebar_pick(window, cx, None).await?;
+    let kept = wait(window, cx, "All projects with the drawer", |rb| {
+        rb["scope"]["kind"] == "allProjects" && rb["status"] == "Live"
+    })
+    .await?;
+    anyhow::ensure!(
+        kept["overlay"] == "detail" && kept["overlayItem"] == l1.as_str(),
+        "item 21: All projects includes Luna, so its drawer must stay: {} {}",
+        kept["overlay"],
+        kept["overlayItem"]
+    );
+    sidebar_pick(window, cx, Some(P_SITE)).await?;
+    let closed = wait(window, cx, "Website without Luna's drawer", |rb| {
+        rb["scope"]["projectId"] == P_SITE && rb["status"] == "Live"
+    })
+    .await?;
+    anyhow::ensure!(
+        closed["overlay"].is_null(),
+        "item 21: Luna's drawer must close when the sidebar moves to Website: {}",
+        closed["overlay"]
+    );
+    // A Luna form, half written, closes for Website and saves nothing.
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
+    let rb = wait(window, cx, "Luna for the form", |rb| {
+        rb["scope"]["projectId"] == P_LUNA && rb["status"] == "Live"
+    })
+    .await?;
+    click(window, cx, center(control(&rb, "board-new-issue")?)).await?;
+    let chooser = wait_surfaces(window, cx, "Luna's chooser", |rb| {
+        rb["surface"] == "chooser" && rb["probe"]["bounds"]["board-chooser-manual"].is_array()
+    })
+    .await?;
+    click(
+        window,
+        cx,
+        center(probe_rect(&chooser, "board-chooser-manual")?),
+    )
+    .await?;
+    let form = wait_surfaces(window, cx, "Luna's form", |rb| {
+        rb["surface"] == "manual" && rb["probe"]["bounds"]["manual-title"].is_array()
+    })
+    .await?;
+    click(window, cx, center(probe_rect(&form, "manual-title")?)).await?;
+    type_text(window, cx, "Never saved").await?;
+    sidebar_pick(window, cx, None).await?;
+    let all = wait(window, cx, "All projects with the form", |rb| {
+        rb["scope"]["kind"] == "allProjects" && rb["status"] == "Live"
+    })
+    .await?;
+    let still = surfaces(window, cx)?;
+    anyhow::ensure!(
+        all["overlay"] == "manual" && still["state"]["title"] == "Never saved",
+        "item 21: All projects includes Luna, so the form and its text must stay: {} {}",
+        all["overlay"],
+        still["state"]["title"]
+    );
+    sidebar_pick(window, cx, Some(P_SITE)).await?;
+    let gone = wait(window, cx, "Website without Luna's form", |rb| {
+        rb["scope"]["projectId"] == P_SITE && rb["status"] == "Live"
+    })
+    .await?;
+    anyhow::ensure!(
+        gone["overlay"].is_null(),
+        "item 21: Luna's form must close when the sidebar moves to Website: {}",
+        gone["overlay"]
+    );
+    let unsaved = engine.matching("Never saved").await?;
+    let since = calls_since(calls, mark_before);
+    anyhow::ensure!(
+        unsaved.is_empty() && count(&since, methods::BOARD_CREATE) == 0,
+        "item 21: closing the form must save nothing: {} matches, {} creates",
+        unsaved.len(),
+        count(&since, methods::BOARD_CREATE)
+    );
+    let png_closed = capture(window, cx, manifest, "s-sidebar-closed-form")?;
+    manifest.step(
+        "sidebar-change-follows-scope",
+        "moving the sidebar from Luna to All projects keeps Luna's drawer and half-written form; moving it to Website closes them and nothing is created",
+        json!({"drawer": l1, "creates": count(&since, methods::BOARD_CREATE), "png": png_closed}),
+    );
+
+    // Item 22: another machine's project.
+    let mark_remote = mark(calls);
+    sidebar_pick(window, cx, Some(P_REMOTE)).await?;
+    let remote = wait(window, cx, "Laptop's project", |rb| !rb["remote"].is_null()).await?;
+    anyhow::ensure!(
+        remote["remote"] == json!({"project": "Laptop app", "device": "Laptop"})
+            && remote["scopeLabel"] == "Laptop app",
+        "item 22: the Board must say Laptop holds this Board: {}",
+        remote["remote"]
+    );
+    let png_remote = capture(window, cx, manifest, "s-remote-project")?;
+    click(window, cx, center(control(&remote, "board-new-issue")?)).await?;
+    click(window, cx, center(control(&remote, "board-github")?)).await?;
+    let after = board(window, cx)?;
+    let gh = github(window, cx)?;
+    let since = calls_since(calls, mark_remote);
+    anyhow::ensure!(
+        after["overlay"].is_null()
+            && after["projectPicker"].is_null()
+            && gh["picker"].is_null()
+            && count(&since, methods::BOARD_CREATE) == 0,
+        "item 22: nothing may open or be created for Laptop's project: overlay {}, picker {}, import {}",
+        after["overlay"],
+        after["projectPicker"],
+        gh["picker"]
+    );
+    manifest.step(
+        "other-machines-project",
+        "with Laptop's project in the sidebar the Board says its Board is on Laptop; New issue and From GitHub issue open nothing",
+        json!({"remote": remote["remote"], "png": png_remote}),
+    );
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
+    Ok(())
+}
+
 fn exit_failed(temp_root: &Path) -> ! {
     if let Err(error) = std::fs::remove_dir_all(temp_root) {
         eprintln!(
@@ -2383,6 +2990,16 @@ fn main() -> anyhow::Result<()> {
             false,
         )?;
     }
+    // Item 22: a project another machine (Laptop) holds; its Board is there.
+    let remote_path = root.path().join("laptop-app");
+    std::fs::create_dir_all(&remote_path)?;
+    core.workspace.create_space(
+        P_REMOTE,
+        REMOTE_DEVICE,
+        remote_path.to_str().unwrap(),
+        Some("Laptop app".into()),
+        false,
+    )?;
     let engine = Engine {
         rt: runtime.handle().clone(),
         client: Arc::new(luna_rpc::memory_client(core.rpc_service())),
@@ -2471,6 +3088,10 @@ fn main() -> anyhow::Result<()> {
                 state.devices = vec![
                     serde_json::from_value(json!({
                         "id": device, "name": "Studio Mac", "platform": "macos", "lastSeenAt": null
+                    }))
+                    .unwrap(),
+                    serde_json::from_value(json!({
+                        "id": REMOTE_DEVICE, "name": "Laptop", "platform": "macos", "lastSeenAt": null
                     }))
                     .unwrap(),
                 ];
@@ -2562,6 +3183,7 @@ fn main() -> anyhow::Result<()> {
                         &mut manifest,
                     )
                     .await?;
+                    scope_creation_pass(current, cx, &engine, &calls, &mut manifest).await?;
                     Ok(())
                 }
                 .await;
@@ -2570,7 +3192,7 @@ fn main() -> anyhow::Result<()> {
                         let written = manifest.write("pass").and_then(|_| {
                             std::fs::write(
                                 out.join("board-page.pass"),
-                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell; past one engine page every column stays reachable: Load more is one bounded cursor read per column, live re-reads keep every loaded page without duplicates and keep the selection, and scope or search changes return to the first page\n",
+                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell; past one engine page every column stays reachable: Load more is one bounded cursor read per column, live re-reads keep every loaded page without duplicates and keep the selection, and scope or search changes return to the first page; the Board always shows the sidebar's project filter: under a project New issue is bound to it and saves there, under All projects it asks in the sidebar's searchable project picker (this Mac's projects only) and saves in the picked project, From GitHub issue uses the same picker, a sidebar change closes another project's drawer or form without saving and All projects keeps them, and another machine's project says where its Board is and creates nothing\n",
                             )
                             .map_err(anyhow::Error::from)
                         });

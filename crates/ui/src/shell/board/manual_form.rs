@@ -7,17 +7,24 @@
 //! temporary authoring pane (A6), which has no title/description fields.
 use gpui::{
     AnyElement, App, Context, Entity, EntityInputHandler as _, EventEmitter, FocusHandle,
-    Focusable as _, IntoElement, ParentElement, Render, ScrollHandle, Styled, Subscription, Task,
-    Window, div, prelude::*, px,
+    Focusable as _, IntoElement, ParentElement, Render, ScrollHandle, SharedString, Styled,
+    Subscription, Task, Window, div, prelude::*, px,
 };
 use luna_proto::{
     BOARD_DESCRIPTION_MAX_BYTES, BOARD_TITLE_MAX_CHARS, BoardCreateRequest, BoardError,
     BoardItemOrigin, BoardMutationReceipt, BoardPlacement, BoardReceiptRequest, BoardReviewProfile,
+    BoardScope,
 };
 
+use super::super::project_picker::{
+    ProjectPicker, ProjectPickerEvent, ProjectPickerIds, ProjectPickerOptions, ProjectPickerRow,
+    ProjectSource,
+};
+use super::super::sidebar_projects::{project_tile, project_tint};
 use super::api::BoardCallError;
 use super::detail::{BoardProbe, new_request_id};
 use super::model::BoardModel;
+use super::page::ticket_hints;
 use super::settings_controls::{
     ExecutionSettingsDraft, ExecutionSettingsEditor, SettingsEditorEvent, SettingsRow, Which,
     describe_implementation, describe_review,
@@ -25,6 +32,7 @@ use super::settings_controls::{
 use crate::AccessibleButton as _;
 use crate::button::{self, ButtonKind, ControlSize};
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::{FillTier, Theme};
@@ -57,13 +65,26 @@ enum ChooserKind {
 }
 
 /// New ticket: two distinct experiences (and the GitHub import), never a
-/// form beside a conversation.
+/// form beside a conversation. The ticket's project is the Board's: the
+/// sidebar's project when it names one (shown, never changeable here), and
+/// only under All projects a choice in the shared project picker, which
+/// never guesses one.
 pub struct NewTicketChooser {
     state: Entity<AppState>,
+    model: Entity<BoardModel>,
     probe: BoardProbe,
+    /// The choice under All projects (kept, as a preselection, when the
+    /// scope narrows and widens again).
     project_id: Option<String>,
+    picker: popover::Popup<ChooserPicker>,
     error: Option<String>,
     focus: FocusHandle,
+}
+
+/// The open project picker and its subscription.
+struct ChooserPicker {
+    picker: Entity<ProjectPicker>,
+    _events: Subscription,
 }
 
 impl EventEmitter<ChooserEvent> for NewTicketChooser {}
@@ -71,14 +92,18 @@ impl EventEmitter<ChooserEvent> for NewTicketChooser {}
 impl NewTicketChooser {
     pub fn new(
         state: Entity<AppState>,
-        project_id: Option<String>,
+        model: Entity<BoardModel>,
+        preselect: Option<String>,
         probe: BoardProbe,
         cx: &mut Context<Self>,
     ) -> Self {
+        let bound = model.read(cx).scope().project_id().map(str::to_owned);
         Self {
             state,
+            model,
             probe,
-            project_id,
+            project_id: bound.or(preselect),
+            picker: Default::default(),
             error: None,
             focus: cx.focus_handle(),
         }
@@ -88,25 +113,31 @@ impl NewTicketChooser {
         self.focus.clone()
     }
 
-    /// Projects this host owns (the Board is owner-local), by name.
-    fn projects(&self, cx: &App) -> Vec<(String, String)> {
-        let state = self.state.read(cx);
-        let local = state.local_device_id.clone();
-        state
-            .spaces_sorted()
-            .into_iter()
-            .filter(|space| {
-                local
-                    .as_deref()
-                    .is_none_or(|device| space.device_id == device)
-            })
-            .map(|space| (space.id.clone(), space.display_name().to_owned()))
-            .collect()
+    /// The Board's project, when it shows one: every new ticket goes there.
+    fn bound(&self, cx: &App) -> Option<String> {
+        self.model.read(cx).scope().project_id().map(str::to_owned)
     }
 
-    fn choose(&mut self, kind: ChooserKind, cx: &mut Context<Self>) {
-        let Some(project_id) = self.project_id.clone() else {
+    /// The project the ticket will belong to.
+    fn chosen(&self, cx: &App) -> Option<String> {
+        self.bound(cx).or_else(|| self.project_id.clone())
+    }
+
+    /// The Board's scope changed under the open chooser: a project scope
+    /// takes over the choice (and closes the picker).
+    pub fn follow_scope(&mut self, scope: &BoardScope, cx: &mut Context<Self>) {
+        if let Some(project_id) = scope.project_id() {
+            self.project_id = Some(project_id.to_owned());
+            self.error = None;
+            self.close_picker(cx);
+        }
+        cx.notify();
+    }
+
+    fn choose(&mut self, kind: ChooserKind, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project_id) = self.chosen(cx) else {
             self.error = Some("Choose a project for this ticket first.".into());
+            self.open_picker(window, cx);
             cx.notify();
             return;
         };
@@ -115,6 +146,118 @@ impl NewTicketChooser {
             ChooserKind::Ai => ChooserEvent::DiscussWithAi { project_id },
             ChooserKind::GitHub => ChooserEvent::FromGitHub { project_id },
         });
+    }
+
+    fn open_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.bound(cx).is_some() || self.picker.is_open() {
+            return;
+        }
+        let state = self.state.clone();
+        let hints = ticket_hints(self.state.read(cx), self.model.read(cx));
+        let options = ProjectPickerOptions {
+            source: ProjectSource::ThisHost,
+            selected: self.project_id.clone(),
+            all_row: false,
+            footer: false,
+            context_menu: false,
+            ids: ProjectPickerIds::BOARD,
+            width: px(popover::MENU_W_L),
+        };
+        let picker = cx.new(|cx| {
+            let mut picker = ProjectPicker::new(state, options, cx);
+            picker.set_hints(hints);
+            picker
+        });
+        let events = cx.subscribe(&picker, |this: &mut Self, _, event, cx| match event {
+            ProjectPickerEvent::Chose(ProjectPickerRow::Space(project_id)) => {
+                this.project_id = Some(project_id.clone());
+                this.error = None;
+                this.close_picker(cx);
+            }
+            ProjectPickerEvent::Chose(_) | ProjectPickerEvent::Dismissed => this.close_picker(cx),
+            ProjectPickerEvent::ContextMenu { .. } => {}
+        });
+        let focus = picker.read(cx).search_focus(cx);
+        self.picker.open(ChooserPicker {
+            picker,
+            _events: events,
+        });
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn close_picker(&mut self, cx: &mut Context<Self>) {
+        if self.picker.begin_close() {
+            popover::reap_popup(cx, |chooser: &mut Self| &mut chooser.picker);
+            cx.notify();
+        }
+    }
+
+    /// The project's tile and name (`None`: nothing chosen yet).
+    fn project_identity(&self, project_id: &str, theme: &Theme, cx: &App) -> (AnyElement, String) {
+        let state = self.state.read(cx);
+        let name = state
+            .space_row(project_id)
+            .map(|space| space.display_name().to_owned())
+            .unwrap_or_else(|| "Unknown project".into());
+        let tile = project_tile(project_tint(state, project_id), &name, 20.0, theme);
+        (tile.into_any_element(), name)
+    }
+
+    /// Under All projects: the dropdown that opens the project picker.
+    fn render_project_select(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.picker.is_open();
+        let chosen = self.project_id.clone();
+        let label = chosen
+            .as_deref()
+            .map(|id| self.project_identity(id, theme, cx));
+        let text = label
+            .as_ref()
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| "Choose a project".into());
+        self.probe.text("board-chooser-project", text.clone());
+        let mut trigger =
+            button::select_frame("board-chooser-project", ControlSize::Md, open, true, theme)
+                .aria_label(SharedString::from(format!("Project: {text}")))
+                .relative()
+                .min_w(ui_rems(200.0))
+                .max_w(ui_rems(280.0))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.picker.note_trigger_press()),
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.picker.take_press_was_open() {
+                        return;
+                    }
+                    this.open_picker(window, cx);
+                }));
+        trigger = match label {
+            Some((tile, _)) => trigger.child(tile),
+            None => trigger.child(button::glyph(crate::icons::FOLDER, ControlSize::Md)),
+        };
+        trigger = trigger
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .when(chosen.is_none(), |el| {
+                        el.text_color(theme.readable_muted(0.85))
+                    })
+                    .child(SharedString::from(text)),
+            )
+            .child(button::select_chevron(theme))
+            .children(self.probe.bounds_el("board-chooser-project"));
+        if let Some(open) = self.picker.get() {
+            let closing = self.picker.closing_since();
+            trigger = trigger.child(popover::anchored_menu_below(
+                "board-chooser-project-menu",
+                open.picker.clone().into_any_element(),
+                closing,
+            ));
+        }
+        trigger.into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -146,7 +289,7 @@ impl NewTicketChooser {
             .flex_row()
             .items_start()
             .gap(ui_rems(12.0))
-            .on_click(cx.listener(move |this, _, _, cx| this.choose(kind, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.choose(kind, window, cx)))
             .child(widgets::row_tile(theme, icon))
             .child(
                 div()
@@ -163,8 +306,13 @@ impl NewTicketChooser {
     }
 
     #[cfg(feature = "appshots-fixture")]
-    pub fn fixture_state(&self) -> serde_json::Value {
-        serde_json::json!({ "projectId": self.project_id, "error": self.error })
+    pub fn fixture_state(&self, cx: &App) -> serde_json::Value {
+        serde_json::json!({
+            "projectId": self.chosen(cx),
+            "bound": self.bound(cx),
+            "error": self.error,
+            "picker": self.picker.as_open().map(|open| open.picker.read(cx).fixture_readback(cx)),
+        })
     }
 }
 
@@ -207,51 +355,41 @@ impl Render for NewTicketChooser {
                 "A ticket describes what should be achieved. Saving one starts nothing; moving \
                  it to Ready starts the work.",
             ));
-        let projects = self.projects(cx);
-        let current = self.project_id.clone();
-        let named = current
-            .as_ref()
-            .and_then(|id| projects.iter().find(|(project, _)| project == id))
-            .map(|(_, name)| name.clone());
-        if current.is_none() || named.is_none() {
-            // All projects: the project is chosen explicitly, never guessed.
-            let mut chips = Vec::new();
-            for (id, name) in projects {
-                let selected = current.as_deref() == Some(id.as_str());
-                let chip_id = format!("board-chooser-project:{id}");
-                self.probe.chip(&chip_id, &name, selected);
-                let probe = self.probe.bounds_el(chip_id.clone());
-                let mut chip = button::chip(chip_id, selected, ControlSize::Sm, true, &theme)
-                    .role(gpui::Role::RadioButton)
-                    .aria_label(name.clone());
-                if selected {
-                    chip = chip.child(button::glyph(crate::icons::CHECK, ControlSize::Sm));
-                }
-                chips.push(
-                    chip.child(name)
-                        .children(probe)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.project_id = Some(id.clone());
-                            this.error = None;
-                            cx.notify();
-                        }))
-                        .into_any_element(),
-                );
+        let project = match self.bound(cx) {
+            // The sidebar names the project: every ticket made here is its.
+            Some(project_id) => {
+                let (tile, name) = self.project_identity(&project_id, &theme, cx);
+                self.probe.text("board-chooser-project", name.clone());
+                div()
+                    .id("board-chooser-project")
+                    .aria_label(SharedString::from(format!("Project: {name}")))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(ui_rems(8.0))
+                    .text_size(ui_rems(13.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(tile)
+                    .child(div().min_w_0().truncate().child(SharedString::from(name)))
+                    .children(self.probe.bounds_el("board-chooser-project"))
+                    .into_any_element()
             }
-            root = root.child(
-                widgets::section_card(&theme).mt_0().child(
-                    widgets::card_row(&theme, true)
-                        .child(widgets::row_text(
-                            &theme,
-                            "Project",
-                            Some("Each ticket belongs to one project on this host.".into()),
-                        ))
-                        .child(widgets::row_block().children(chips)),
-                ),
-            );
-        } else if let Some(name) = named {
-            root = root.child(widgets::row_description(&theme, format!("Project: {name}")));
-        }
+            None => self.render_project_select(&theme, cx),
+        };
+        let hint = if self.bound(cx).is_some() {
+            "The project selected in the sidebar. Choose All projects there to make a ticket \
+             for another project."
+        } else {
+            "Each ticket belongs to one project on this Mac."
+        };
+        root = root.child(
+            widgets::section_card(&theme).mt_0().child(
+                widgets::card_row(&theme, true)
+                    .child(widgets::row_text(&theme, "Project", Some(hint.into())))
+                    .child(project),
+            ),
+        );
         if let Some(error) = &self.error {
             self.probe.text("board-chooser-error", error.clone());
             root = root.child(widgets::error_strip(&theme, error.clone()).mt_0());

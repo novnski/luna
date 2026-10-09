@@ -83,6 +83,7 @@ mod native_file_rewind;
 mod native_review;
 mod pane_chat;
 mod placement;
+mod project_picker;
 mod related_chats;
 mod settings_gallery;
 mod side_chats;
@@ -2483,8 +2484,6 @@ pub struct Shell {
     command_palette: Option<command_palette::CommandPalette>,
     /// The sidebar's space-filter dropdown.
     spaces_menu: popover::Popup<spaces::SpacesMenu>,
-    /// Hover/drag + scroll-linger state of the dropdown's floating rail.
-    spaces_menu_bar: popover::MenuScrollbarState,
     /// Persisted organization/sort/metadata controls beside the project filter.
     sidebar_view_menu: popover::Popup<spaces::SidebarViewMenu>,
     /// Natural-tab-order focus target for the icon-only view-options button.
@@ -3031,7 +3030,6 @@ impl Shell {
             add_space_flow_seq: 0,
             command_palette: None,
             spaces_menu: popover::Popup::default(),
-            spaces_menu_bar: popover::MenuScrollbarState::default(),
             sidebar_view_menu: popover::Popup::default(),
             sidebar_view_trigger_focus: cx.focus_handle().tab_stop(true),
             chat_status_hover: None,

@@ -32,37 +32,30 @@ pub use model::{BoardListFilters, BoardModel, BoardModelEvent, BoardStatus};
 pub use page::{BoardPage, BoardPageEvent};
 
 impl Shell {
-    /// The scope a newly opened Board starts with: the sidebar's explicit
-    /// project filter, else the last Board scope, else All projects. A
-    /// project that no longer exists falls back to All projects.
-    fn initial_board_scope(&self, cx: &App) -> luna_proto::BoardScope {
-        let state = self.state.read(cx);
-        self.settings
-            .space_filter
-            .clone()
-            .or_else(|| self.settings.board.project_id.clone())
-            .filter(|project_id| state.space_row(project_id).is_some())
-            .map(|project_id| luna_proto::BoardScope::Project { project_id })
-            .unwrap_or_default()
-    }
-
-    /// The Board page entity, created on first open. An explicit change of
-    /// the sidebar's project filter carries over to an existing page (the
-    /// Board opened from that project); otherwise it keeps its own scope.
+    /// The Board page entity, created on first open. Its scope is always
+    /// the sidebar's project filter (one project, or All projects): every
+    /// fetch hands the current filter over, so a change made anywhere
+    /// applies before the Board draws, and overlays for a project it no
+    /// longer shows close.
     pub(super) fn board_page(&mut self, cx: &mut Context<Self>) -> Entity<BoardPage> {
         let filter = self.settings.space_filter.clone();
         if let Some(page) = &self.board_page {
             let page = page.clone();
-            page.update(cx, |page, cx| page.follow_sidebar_filter(filter, cx));
+            if page.update(cx, |page, cx| page.follow_sidebar_filter(filter, cx)) {
+                let (scope, open_detail) = {
+                    let page = page.read(cx);
+                    (
+                        page.model().read(cx).scope().clone(),
+                        page.surfaces().read(cx).detail_work_item_id(cx),
+                    )
+                };
+                self.board_github_follow_scope(&scope, open_detail, cx);
+            }
             return page;
         }
-        let scope = self.initial_board_scope(cx);
+        let scope = page::scope_for_filter(filter);
         let state = self.state.clone();
-        let page = cx.new(|cx| {
-            let mut page = BoardPage::new(state, scope, cx);
-            page.note_sidebar_filter(filter);
-            page
-        });
+        let page = cx.new(|cx| BoardPage::new(state, scope, cx));
         // Both live as long as the page, which the Shell keeps for its
         // lifetime: the page's own events (prefs, Go to chat, the GitHub
         // picker) and its overlay host's (A9: Go to chat, Needs attention,
@@ -99,19 +92,19 @@ impl Shell {
         }
     }
 
-    /// Open the Board prefiltered to a project (a project shortcut), or to
-    /// All projects with `None`.
+    /// Open the Board for a project (a project shortcut), or for All
+    /// projects with `None`: the sidebar's filter changes with it, since the
+    /// Board always shows the sidebar's project.
     #[allow(dead_code)]
     pub(crate) fn open_board_for_project(
         &mut self,
         project_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let page = self.board_page(cx);
-        let scope = project_id
-            .map(|project_id| luna_proto::BoardScope::Project { project_id })
-            .unwrap_or_default();
-        page.update(cx, |page, cx| page.set_scope(scope, cx));
+        if self.settings.space_filter != project_id {
+            self.set_space_filter(project_id, cx);
+        }
+        self.board_page(cx);
         self.open_sidebar_page(SidebarPage::Board, cx);
     }
 

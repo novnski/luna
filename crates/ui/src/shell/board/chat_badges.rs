@@ -1039,8 +1039,26 @@ impl Shell {
 
     /// Open a ticket's detail: the Board page with the ticket selected and
     /// its detail drawer open (the page owns its selection and saves it).
+    /// The Board shows the sidebar's project, so a ticket of another project
+    /// moves the sidebar to that project first (All projects stays).
     pub(crate) fn chat_open_ticket(&mut self, work_item_id: String, cx: &mut Context<Self>) {
         self.board_chat.status_menu = None;
+        let project = self
+            .board_chat
+            .model
+            .as_ref()
+            .and_then(|model| model.read(cx).item(&work_item_id))
+            .or_else(|| {
+                self.board_page
+                    .as_ref()
+                    .and_then(|page| page.read(cx).model().read(cx).item(&work_item_id))
+            })
+            .map(|view| view.item.project_id.clone());
+        if let (Some(filter), Some(project)) = (self.settings.space_filter.as_deref(), project)
+            && filter != project
+        {
+            self.set_space_filter(Some(project), cx);
+        }
         let page = self.board_page(cx);
         self.open_sidebar_page(SidebarPage::Board, cx);
         page.update(cx, |page, cx| page.show_ticket(work_item_id, cx));

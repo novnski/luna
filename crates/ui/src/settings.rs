@@ -1014,9 +1014,6 @@ impl Default for UiSettings {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BoardUiPrefs {
-    /// Last project scope (`None`: All projects).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
     /// Board columns or the narrow List view.
     pub view: BoardViewMode,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -2711,7 +2708,6 @@ mod tests {
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
             last_sidebar_page: Some("board".into()),
             board: BoardUiPrefs {
-                project_id: Some("project-a".into()),
                 view: BoardViewMode::List,
                 search: "search".into(),
                 attention_only: true,

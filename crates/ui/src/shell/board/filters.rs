@@ -1,6 +1,6 @@
-//! Header and toolbar (A8): the project selector (one project, or All
-//! projects aggregated without merging ownership or execution targets), the
-//! Board/List switch, search, the Needs attention toggle, provider/source
+//! Header and toolbar (A8): which project the Board shows (the sidebar's
+//! project picker chooses it: one project, or All projects aggregated without
+//! merging ownership or execution targets), the Board/List switch, search, the Needs attention toggle, provider/source
 //! filters, From GitHub issue and New issue. Filters are applied by the
 //! engine (`BoardListFilters`) and saved as presentation preferences
 //! (`UiSettings.board`).
@@ -8,9 +8,10 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use luna_proto::{BoardScope, BoardSourceKind, HarnessId};
+use luna_proto::{BoardSourceKind, HarnessId};
 
-use super::page::{BoardMenu, BoardPage, MenuAction, MenuEntry, ProjectIntent};
+use super::super::sidebar_projects::{all_projects_tile, project_tile, project_tint};
+use super::page::{BoardMenu, BoardPage, MenuAction, MenuEntry};
 use crate::button::{ButtonKind, ControlSize, Segment};
 use crate::icons;
 use crate::settings::{BoardViewMode, widgets};
@@ -90,7 +91,7 @@ impl BoardPage {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let project = self.render_project_select(theme, cx);
+        let project = self.render_scope_label(theme, cx);
         let view = self.render_view_switch(theme, cx);
         let search = self.render_search(theme);
         let filters = self.filters(cx);
@@ -152,52 +153,43 @@ impl BoardPage {
             .into_any_element()
     }
 
-    fn render_project_select(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// Which project the Board shows. The sidebar's project picker chooses
+    /// it (one project, or All projects), so this only names it.
+    fn render_scope_label(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let label = self.scope_label(cx);
-        let open = self.menu.get() == Some(&BoardMenu::Project);
-        let mut trigger = crate::button::select_frame(
-            "board-project",
-            ControlSize::Md,
-            open && self.menu.is_open(),
-            true,
-            theme,
-        )
-        .aria_label(SharedString::from(format!("Project: {label}")))
-        .relative()
-        .max_w(ui_rems(240.0))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, _| {
-                this.menu
-                    .note_trigger_press_matching(|menu| *menu == BoardMenu::Project)
-            }),
-        )
-        .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
-            if this.menu.take_press_was_open() {
-                return;
+        let tile = match self.scope(cx).project_id() {
+            Some(project_id) => {
+                let tint = project_tint(self.state.read(cx), project_id);
+                project_tile(tint, &label, 22.0, theme)
             }
-            this.open_menu(BoardMenu::Project, event.is_keyboard(), cx);
-        }))
-        .child(crate::button::glyph(icons::FOLDER, ControlSize::Md))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(SharedString::from(label)),
-        )
-        .child(crate::button::select_chevron(theme));
-        if open {
-            let entries = self.menu_entries(&BoardMenu::Project, cx);
-            let closing = self.menu.closing_since();
-            let card = self.render_menu_card(entries, 260.0, theme, cx);
-            trigger = trigger.child(crate::popover::anchored_menu_below(
-                "board-project-menu",
-                card.into_any_element(),
-                closing,
-            ));
-        }
-        trigger.into_any_element()
+            None => all_projects_tile(22.0, theme),
+        };
+        div()
+            .id("board-project")
+            .aria_label(SharedString::from(format!("Project: {label}")))
+            .max_w(ui_rems(240.0))
+            .h(ui_rems(32.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(8.0))
+            .pr(ui_rems(4.0))
+            .text_size(ui_rems(13.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(theme.text)
+            .tooltip(crate::popover::text_tooltip(
+                "Choose the project in the sidebar's project picker",
+            ))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+            .child(tile)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(label)),
+            )
+            .into_any_element()
     }
 
     fn render_view_switch(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -322,13 +314,12 @@ impl BoardPage {
     }
 
     fn render_github_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let menu = self.menu.get().cloned();
-        let choosing = matches!(menu, Some(BoardMenu::ChooseProject(ProjectIntent::GitHub)));
+        let enabled = self.remote_scope(cx).is_none();
         let mut button = crate::button::button(
             "board-github",
             ButtonKind::Secondary,
             ControlSize::Md,
-            true,
+            enabled,
             theme,
         )
         .aria_label("From GitHub issue")
@@ -336,27 +327,21 @@ impl BoardPage {
         .gap(ui_rems(6.0))
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(|this, _, _, _| {
-                this.menu.note_trigger_press_matching(|menu| {
-                    *menu == BoardMenu::ChooseProject(ProjectIntent::GitHub)
-                })
-            }),
+            cx.listener(|this, _, _, _| this.project_picker.note_trigger_press()),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            if this.menu.take_press_was_open() {
+            if this.project_picker.take_press_was_open() {
                 return;
             }
             this.open_github(None, cx);
         }))
         .child(crate::button::glyph(icons::INBOX_IN, ControlSize::Md))
         .child("From GitHub issue");
-        if choosing && let Some(menu) = menu {
-            let entries = self.menu_entries(&menu, cx);
-            let closing = self.menu.closing_since();
-            let card = self.render_menu_card(entries, 240.0, theme, cx);
-            button = button.child(crate::popover::anchored_menu_below(
+        if let Some(open) = self.project_picker.get() {
+            let closing = self.project_picker.closing_since();
+            button = button.child(crate::popover::anchored_menu_below_end(
                 "board-choose-project-menu",
-                card.into_any_element(),
+                open.picker.clone().into_any_element(),
                 closing,
             ));
         }
@@ -367,20 +352,18 @@ impl BoardPage {
         let menu = self.menu.get().cloned();
         // Add existing chat lists its chats here.
         let anchored = matches!(menu, Some(BoardMenu::AddChat { .. }));
+        let enabled = self.remote_scope(cx).is_none();
         let mut button = crate::button::button(
             "board-new-issue",
             ButtonKind::Primary,
             ControlSize::Md,
-            true,
+            enabled,
             theme,
         )
         .aria_label("New issue")
         .relative()
         .gap(ui_rems(6.0))
-        .on_click(cx.listener(|this, _, window, cx| {
-            let project_id = this.scope(cx).project_id().map(str::to_owned);
-            this.open_new_ticket(project_id, window, cx);
-        }))
+        .on_click(cx.listener(|this, _, window, cx| this.open_new_ticket(None, window, cx)))
         .child(crate::button::glyph(icons::PLUS, ControlSize::Md).text_color(theme.on_solid))
         .child("New issue");
         if anchored && let Some(menu) = menu {
@@ -394,43 +377,6 @@ impl BoardPage {
             ));
         }
         button.into_any_element()
-    }
-
-    pub(super) fn project_menu_entries(&self, cx: &gpui::App) -> Vec<MenuEntry> {
-        let scope = self.scope(cx);
-        let summaries = self.model.read(cx).projects().to_vec();
-        let counts = |project_id: &str| {
-            summaries
-                .iter()
-                .find(|summary| summary.project_id == project_id)
-                .map(|summary| summary.backlog + summary.ready + summary.done)
-        };
-        let mut all = MenuEntry::new(
-            "scope-all",
-            "All projects",
-            MenuAction::Scope(BoardScope::AllProjects),
-        );
-        all.checked = scope == BoardScope::AllProjects;
-        all.glyph = Some(icons::LAYERS_MINIMALISTIC);
-        all.heading = Some("Board scope");
-        let mut entries = vec![all];
-        for (ix, (id, name)) in self.local_projects(cx).into_iter().enumerate() {
-            let mut entry = MenuEntry::new(
-                format!("scope-{id}"),
-                name,
-                MenuAction::Scope(BoardScope::Project {
-                    project_id: id.clone(),
-                }),
-            );
-            entry.checked = scope.project_id() == Some(id.as_str());
-            entry.glyph = Some(icons::FOLDER);
-            entry.hint = counts(&id).map(|count| count.to_string());
-            if ix == 0 {
-                entry.heading = Some("Projects");
-            }
-            entries.push(entry);
-        }
-        entries
     }
 
     pub(super) fn filter_menu_entries(&self, cx: &gpui::App) -> Vec<MenuEntry> {

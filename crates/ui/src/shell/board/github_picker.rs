@@ -841,6 +841,7 @@ impl GitHubIssuePicker {
         };
         let linked = self.linked_work_item();
         serde_json::json!({
+            "projectId": self.project_id,
             "sources": sources,
             "sourceId": self.source_id,
             "query": self.search.read(cx).text(),
@@ -2245,6 +2246,32 @@ pub(crate) struct BoardGitHubHost {
 }
 
 impl super::super::Shell {
+    /// The Board's scope changed: an issue picker for a project it no longer
+    /// shows closes, and so does a writeback confirmation whose ticket's
+    /// drawer closed with it.
+    pub(crate) fn board_github_follow_scope(
+        &mut self,
+        scope: &luna_proto::BoardScope,
+        open_detail: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = self
+            .board_github
+            .as_ref()
+            .is_some_and(|host| match &host.overlay {
+                BoardGitHubOverlay::Picker(picker) => {
+                    !super::page::scope_includes(scope, &picker.read(cx).project_id)
+                }
+                BoardGitHubOverlay::Writeback(dialog) => {
+                    open_detail.as_deref() != Some(dialog.read(cx).work_item_id.as_str())
+                }
+            });
+        if stale {
+            self.board_github = None;
+            cx.notify();
+        }
+    }
+
     /// Open "From GitHub issue" for a project (the Board page's New ticket
     /// menu calls this).
     pub fn open_board_github_picker(&mut self, project_id: String, cx: &mut Context<Self>) {

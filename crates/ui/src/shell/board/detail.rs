@@ -35,7 +35,7 @@ use luna_proto::{
     BoardExecutionOptionsRequest, BoardFollowUp, BoardItemChanges, BoardItemDetail,
     BoardMoveEffect, BoardMoveRequest, BoardMutationReceipt, BoardNavigationRequest,
     BoardNavigationTarget, BoardPhase, BoardReadRequest, BoardReceiptRequest,
-    BoardResolveSettingsRequest, BoardResolvedSettings, BoardReviewStartRequest,
+    BoardResolveSettingsRequest, BoardResolvedSettings, BoardReviewStartRequest, BoardScope,
     BoardSendUpdateRequest, CrossTaskSendMode, IssueLinkRole, WorkItemView,
 };
 
@@ -483,17 +483,19 @@ impl BoardSurfaces {
         window.focus(&focus, cx);
     }
 
-    /// Open the New ticket chooser. `None` (All projects) asks for the
-    /// project explicitly.
+    /// Open the New ticket chooser for the Board's scope: its project, or
+    /// under All projects an explicit choice (`preselect` starts it, as when
+    /// Write manually goes Back).
     pub fn open_new_ticket(
         &mut self,
-        project_id: Option<String>,
+        preselect: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let state = self.state.clone();
+        let model = self.model.clone();
         let probe = self.probe.clone();
-        let chooser = cx.new(|cx| NewTicketChooser::new(state, project_id, probe, cx));
+        let chooser = cx.new(|cx| NewTicketChooser::new(state, model, preselect, probe, cx));
         let subscription = cx.subscribe_in(
             &chooser,
             window,
@@ -567,16 +569,47 @@ impl BoardSurfaces {
 
     /// Close whatever is open.
     pub fn close(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.close_now(cx);
+    }
+
+    fn close_now(&mut self, cx: &mut Context<Self>) {
         self.surface = None;
         self._surface.clear();
         cx.notify();
+    }
+
+    /// The Board's scope is changing (the sidebar's project filter): close
+    /// a surface that belongs to a project it will no longer show, so
+    /// nothing is created or edited outside it. The chooser follows the new
+    /// scope instead; a drawer whose ticket's project is not known yet closes
+    /// whenever the scope names one project.
+    pub fn follow_scope(&mut self, scope: &BoardScope, cx: &mut Context<Self>) {
+        let keep = match &self.surface {
+            None => true,
+            Some(BoardSurface::Chooser(chooser)) => {
+                chooser.update(cx, |chooser, cx| chooser.follow_scope(scope, cx));
+                true
+            }
+            Some(BoardSurface::Manual(form)) => form
+                .read(cx)
+                .project_id
+                .as_deref()
+                .is_some_and(|project| super::page::scope_includes(scope, project)),
+            Some(BoardSurface::Detail(detail)) => match detail.read(cx).project_id(cx) {
+                Some(project) => super::page::scope_includes(scope, &project),
+                None => scope.project_id().is_none(),
+            },
+        };
+        if !keep {
+            self.close_now(cx);
+        }
     }
 
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_readback(&self, window: &Window, cx: &App) -> serde_json::Value {
         let surface = self.surface.as_ref().map(BoardSurface::key);
         let state = match &self.surface {
-            Some(BoardSurface::Chooser(chooser)) => chooser.read(cx).fixture_state(),
+            Some(BoardSurface::Chooser(chooser)) => chooser.read(cx).fixture_state(cx),
             Some(BoardSurface::Manual(form)) => form.read(cx).fixture_state(window, cx),
             Some(BoardSurface::Detail(detail)) => detail.read(cx).fixture_state(window, cx),
             None => serde_json::Value::Null,
@@ -828,6 +861,19 @@ pub struct BoardDetail {
 impl EventEmitter<BoardDetailEvent> for BoardDetail {}
 
 impl BoardDetail {
+    /// The ticket's project: from the loaded detail, else the Board's rows
+    /// (`None` before either knows it).
+    pub fn project_id(&self, cx: &App) -> Option<String> {
+        match &self.loaded {
+            Loaded::Ready(detail) => Some(detail.view.item.project_id.clone()),
+            Loaded::Loading | Loaded::Error(_) => self
+                .model
+                .read(cx)
+                .item(&self.work_item_id)
+                .map(|view| view.item.project_id.clone()),
+        }
+    }
+
     pub fn new(
         model: Entity<BoardModel>,
         state: Entity<AppState>,

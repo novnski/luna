@@ -32,6 +32,10 @@ use luna_proto::{
     HarnessId, OutcomeKind, WorkItem, WorkItemView,
 };
 
+use super::super::project_picker::{
+    ProjectPicker, ProjectPickerEvent, ProjectPickerIds, ProjectPickerOptions, ProjectPickerRow,
+    ProjectSource,
+};
 use super::api::BoardCallError;
 use super::detail::BoardSurfaces;
 use super::model::{BoardListFilters, BoardModel, BoardModelEvent, BoardStatus};
@@ -126,18 +130,9 @@ pub(super) struct BoardNotice {
     pub work_item_id: Option<String>,
 }
 
-/// Which project a creation action needs when the Board shows All projects
-/// (creation never guesses a project).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ProjectIntent {
-    GitHub,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BoardMenu {
-    Project,
     Filters,
-    ChooseProject(ProjectIntent),
     AddChat {
         project_id: Option<String>,
     },
@@ -162,13 +157,11 @@ pub(super) enum CardAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum MenuAction {
-    Scope(BoardScope),
     ToggleAttention,
     Provider(Option<HarnessId>),
     Source(Option<BoardSourceKind>),
     ToggleArchived,
     ClearFilters,
-    Project(ProjectIntent, String),
     AddChat(String),
     Card(CardAction, String),
 }
@@ -296,9 +289,9 @@ pub struct BoardPage {
     pending_menu_focus: bool,
     /// Scroll the focused card into view on the next frame.
     pending_reveal: Option<String>,
-    /// The sidebar project filter last applied, so the Board follows a
-    /// sidebar change but keeps its own explicit choice otherwise.
-    seen_sidebar_filter: Option<String>,
+    /// From GitHub issue under All projects: the shared project picker,
+    /// anchored under the toolbar button.
+    pub(super) project_picker: crate::popover::Popup<PageProjectPicker>,
     /// Whether this window's page is narrow enough for the List view (per
     /// page, so per window; never a saved preference).
     pub(super) narrow: bool,
@@ -309,6 +302,47 @@ pub struct BoardPage {
     _subscriptions: Vec<Subscription>,
 }
 
+/// The Board scope for the sidebar's project filter (`None`: All projects).
+pub(crate) fn scope_for_filter(filter: Option<String>) -> BoardScope {
+    filter
+        .map(|project_id| BoardScope::Project { project_id })
+        .unwrap_or_default()
+}
+
+/// Whether the Board shows `project_id`'s tickets under `scope`.
+pub(super) fn scope_includes(scope: &BoardScope, project_id: &str) -> bool {
+    scope.project_id().is_none_or(|scoped| scoped == project_id)
+}
+
+/// Each project's ticket total, the note the Board's project picker shows
+/// beside it (the sidebar's shows chat activity instead).
+pub(super) fn ticket_hints(state: &AppState, model: &BoardModel) -> HashMap<String, SharedString> {
+    state
+        .spaces
+        .iter()
+        .map(|space| {
+            let total = model
+                .projects()
+                .iter()
+                .find(|summary| summary.project_id == space.id)
+                .map_or(0, |summary| summary.backlog + summary.ready + summary.done);
+            let hint = match total {
+                0 => "No tickets".to_owned(),
+                1 => "1 ticket".to_owned(),
+                n => format!("{n} tickets"),
+            };
+            (space.id.clone(), SharedString::from(hint))
+        })
+        .collect()
+}
+
+/// From GitHub issue's project choice under All projects (an import needs
+/// one project): the shared project picker and its subscription.
+pub(super) struct PageProjectPicker {
+    pub(super) picker: Entity<ProjectPicker>,
+    _events: Subscription,
+}
+
 /// A request id the engine accepts (`[A-Za-z0-9_.:-]{1,128}`).
 pub(super) fn request_id(operation: &str) -> String {
     format!("ui-{operation}-{}", uuid::Uuid::new_v4().simple())
@@ -317,8 +351,7 @@ pub(super) fn request_id(operation: &str) -> String {
 impl BoardPage {
     pub fn new(state: Entity<AppState>, scope: BoardScope, cx: &mut Context<Self>) -> Self {
         let saved = crate::settings::current(cx).board;
-        let mut prefs = saved.clone();
-        prefs.project_id = scope.project_id().map(str::to_owned);
+        let prefs = saved.clone();
         let filters = BoardListFilters {
             text: prefs.search.clone(),
             attention_only: prefs.attention_only,
@@ -406,7 +439,7 @@ impl BoardPage {
             restore_scroll,
             pending_menu_focus: false,
             pending_reveal: None,
-            seen_sidebar_filter: None,
+            project_picker: crate::popover::Popup::default(),
             narrow: false,
             narrow_mode: NarrowMode::default(),
             #[cfg(feature = "appshots-fixture")]
@@ -421,8 +454,7 @@ impl BoardPage {
         }
     }
 
-    /// Hand the current preferences to a newly subscribed Shell (the scope
-    /// may differ from the saved one when the Board opened from a project).
+    /// Hand the current preferences to a newly subscribed Shell.
     pub fn sync_prefs(&mut self, cx: &mut Context<Self>) {
         self.persisted = self.prefs.clone();
         cx.emit(BoardPageEvent::PrefsChanged(self.prefs.clone()));
@@ -465,34 +497,63 @@ impl BoardPage {
         self.model.read(cx).scope().clone()
     }
 
-    /// Switch project scope (explicit choice): reload, remember it.
-    pub fn set_scope(&mut self, scope: BoardScope, cx: &mut Context<Self>) {
-        self.prefs.project_id = scope.project_id().map(str::to_owned);
+    /// The Board shows the sidebar's project filter: one project, or All
+    /// projects (`None`). The Shell hands the filter over whenever it fetches
+    /// the page, so a sidebar change made anywhere applies before the Board
+    /// draws again. Returns whether the scope changed.
+    pub fn follow_sidebar_filter(
+        &mut self,
+        filter: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let scope = scope_for_filter(filter);
+        if self.scope(cx) == scope {
+            return false;
+        }
+        self.set_scope(scope, cx);
+        true
+    }
+
+    /// Switch project scope and reload. Whatever belongs to a project the
+    /// Board no longer shows closes first, so nothing is created or edited
+    /// outside the scope: the drawer of another project's ticket, a new
+    /// ticket form for another project, and a Discuss with AI conversation
+    /// there (which keeps its Board draft, as Close always does). Under All
+    /// projects everything stays.
+    fn set_scope(&mut self, scope: BoardScope, cx: &mut Context<Self>) {
+        // Before the reload: the drawer reads its ticket's project from the
+        // loaded rows.
+        self.surfaces
+            .update(cx, |surfaces, cx| surfaces.follow_scope(&scope, cx));
+        if let Some(mount) = &self.authoring {
+            let pane = mount.pane.clone();
+            if !scope_includes(&scope, &pane.read(cx).project_id) {
+                pane.update(cx, |pane, cx| pane.close(cx));
+            }
+        }
+        self.close_menu(cx);
+        self.close_project_picker(cx);
         self.model
             .update(cx, |model, cx| model.set_scope(scope, cx));
         self.drag_over = None;
-        self.persist(cx);
         cx.notify();
     }
 
-    /// Follow an explicit change of the sidebar's project filter (opening the
-    /// Board from a project). Unchanged, or cleared to All, the Board keeps
-    /// its own scope: switching pages never changes the project.
-    pub fn follow_sidebar_filter(&mut self, filter: Option<String>, cx: &mut Context<Self>) {
-        if self.seen_sidebar_filter == filter {
-            return;
-        }
-        self.seen_sidebar_filter = filter.clone();
-        if let Some(project_id) = filter
-            && self.scope(cx).project_id() != Some(project_id.as_str())
-        {
-            self.set_scope(BoardScope::Project { project_id }, cx);
-        }
-    }
-
-    /// Record the sidebar filter the page was created under.
-    pub fn note_sidebar_filter(&mut self, filter: Option<String>) {
-        self.seen_sidebar_filter = filter;
+    /// The scope's project when it lives on another machine: its name and
+    /// that machine's. The Board is owner-local, so that project's tickets
+    /// are managed there.
+    pub(super) fn remote_scope(&self, cx: &App) -> Option<(String, String)> {
+        let project_id = self.scope(cx).project_id()?.to_owned();
+        let state = self.state.read(cx);
+        let local = state.local_device_id.as_deref()?;
+        let space = state.space_row(&project_id)?;
+        (space.device_id != local).then(|| {
+            let device = state
+                .device_name(&space.device_id)
+                .unwrap_or("another device")
+                .to_owned();
+            (space.display_name().to_owned(), device)
+        })
     }
 
     /// Projects this host owns (the only boards it can manage), sorted.
@@ -987,15 +1048,19 @@ impl BoardPage {
         self.apply_surface(SurfaceRequest::Detail(work_item_id), window, cx);
     }
 
-    /// Open the New ticket chooser (`None`, All projects: it asks for the
-    /// project; never guessed).
+    /// Open the New ticket chooser: bound to the Board's project, or under
+    /// All projects asking for one (`preselect` starts that choice; never
+    /// guessed).
     pub fn open_new_ticket(
         &mut self,
-        project_id: Option<String>,
+        preselect: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_surface(SurfaceRequest::NewTicket(project_id), window, cx);
+        if self.remote_scope(cx).is_some() {
+            return;
+        }
+        self.apply_surface(SurfaceRequest::NewTicket(preselect), window, cx);
     }
 
     /// Queue a surface change for the next frame (no window at hand).
@@ -1068,6 +1133,9 @@ impl BoardPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.remote_scope(cx).is_some() {
+            return;
+        }
         let request = match self.scope(cx).project_id().map(str::to_owned) {
             Some(project_id) if authoring => {
                 self.open_authoring(project_id, None, cx);
@@ -1082,10 +1150,13 @@ impl BoardPage {
     /// From GitHub issue: A7's picker for one project (asked for under All
     /// projects), hosted by the Shell.
     pub(super) fn open_github(&mut self, project_id: Option<String>, cx: &mut Context<Self>) {
+        if self.remote_scope(cx).is_some() {
+            return;
+        }
         let Some(project_id) =
             project_id.or_else(|| self.scope(cx).project_id().map(str::to_owned))
         else {
-            self.open_menu(BoardMenu::ChooseProject(ProjectIntent::GitHub), false, cx);
+            self.open_project_picker(cx);
             return;
         };
         cx.emit(BoardPageEvent::OpenGitHubPicker { project_id });
@@ -1119,6 +1190,9 @@ impl BoardPage {
     }
 
     pub(super) fn open_add_chat(&mut self, cx: &mut Context<Self>) {
+        if self.remote_scope(cx).is_some() {
+            return;
+        }
         let project_id = self.scope(cx).project_id().map(str::to_owned);
         self.open_menu(BoardMenu::AddChat { project_id }, false, cx);
     }
@@ -1135,6 +1209,52 @@ impl BoardPage {
         self.menu.open(menu);
         self.pending_menu_focus = true;
         cx.notify();
+    }
+
+    /// From GitHub issue under All projects: choose this host's project in
+    /// the shared project picker, under the toolbar button.
+    pub(super) fn open_project_picker(&mut self, cx: &mut Context<Self>) {
+        self.close_menu(cx);
+        let state = self.state.clone();
+        let hints = ticket_hints(self.state.read(cx), self.model.read(cx));
+        let options = ProjectPickerOptions {
+            source: ProjectSource::ThisHost,
+            selected: None,
+            all_row: false,
+            footer: false,
+            context_menu: false,
+            ids: ProjectPickerIds::BOARD,
+            width: px(crate::popover::MENU_W_L),
+        };
+        let picker = cx.new(|cx| {
+            let mut picker = ProjectPicker::new(state, options, cx);
+            picker.set_hints(hints);
+            picker
+        });
+        let events = cx.subscribe(&picker, |this: &mut Self, _, event, cx| match event {
+            ProjectPickerEvent::Chose(ProjectPickerRow::Space(project_id)) => {
+                let project_id = project_id.clone();
+                this.close_project_picker(cx);
+                this.open_github(Some(project_id), cx);
+            }
+            ProjectPickerEvent::Chose(_) | ProjectPickerEvent::Dismissed => {
+                this.close_project_picker(cx)
+            }
+            ProjectPickerEvent::ContextMenu { .. } => {}
+        });
+        self.project_picker.open(PageProjectPicker {
+            picker,
+            _events: events,
+        });
+        self.pending_menu_focus = true;
+        cx.notify();
+    }
+
+    pub(super) fn close_project_picker(&mut self, cx: &mut Context<Self>) {
+        if self.project_picker.begin_close() {
+            crate::popover::reap_popup(cx, |page: &mut Self| &mut page.project_picker);
+            cx.notify();
+        }
     }
 
     pub(super) fn close_menu(&mut self, cx: &mut Context<Self>) {
@@ -1175,25 +1295,7 @@ impl BoardPage {
     /// The rows of a menu (shared by rendering and keyboard activation).
     pub(super) fn menu_entries(&self, menu: &BoardMenu, cx: &App) -> Vec<MenuEntry> {
         match menu {
-            BoardMenu::Project => self.project_menu_entries(cx),
             BoardMenu::Filters => self.filter_menu_entries(cx),
-            BoardMenu::ChooseProject(intent) => self
-                .local_projects(cx)
-                .into_iter()
-                .enumerate()
-                .map(|(ix, (id, name))| {
-                    let mut entry = MenuEntry::new(
-                        format!("choose-{id}"),
-                        name,
-                        MenuAction::Project(*intent, id),
-                    );
-                    entry.glyph = Some(crate::icons::FOLDER);
-                    if ix == 0 {
-                        entry.heading = Some("Choose a project");
-                    }
-                    entry
-                })
-                .collect(),
             BoardMenu::AddChat { project_id } => self.add_chat_entries(project_id.as_deref(), cx),
             BoardMenu::Card { work_item_id, .. } => self.card_menu_entries(work_item_id, cx),
         }
@@ -1361,7 +1463,6 @@ impl BoardPage {
     ) {
         self.close_menu(cx);
         match action {
-            MenuAction::Scope(scope) => self.set_scope(scope, cx),
             MenuAction::ToggleAttention => self.update_filters(
                 |filters| filters.attention_only = !filters.attention_only,
                 cx,
@@ -1382,9 +1483,6 @@ impl BoardPage {
                 self.update_filters(|filters| filters.archived = archived, cx)
             }
             MenuAction::ClearFilters => self.clear_filters(cx),
-            MenuAction::Project(intent, project_id) => match intent {
-                ProjectIntent::GitHub => self.open_github(Some(project_id), cx),
-            },
             MenuAction::AddChat(task_id) => self.convert_chat(task_id, cx),
             MenuAction::Card(action, id) => self.run_card_action(action, &id, window, cx),
         }
@@ -2054,6 +2152,13 @@ impl BoardPage {
             self.pending_menu_focus = false;
             window.focus(&self.menu_focus, cx);
         }
+        if self.pending_menu_focus
+            && let Some(open) = self.project_picker.as_open()
+        {
+            self.pending_menu_focus = false;
+            let focus = open.picker.read(cx).search_focus(cx);
+            window.focus(&focus, cx);
+        }
         if let Some(id) = self.pending_reveal.take() {
             let geometry = self.geometry.borrow();
             let viewport = self.scroll.bounds();
@@ -2241,6 +2346,7 @@ impl Render for BoardPage {
         self.narrow_mode.update(width, low, high);
         self.narrow = self.narrow_mode.narrow;
 
+        let remote = self.remote_scope(cx);
         let header = self.render_header(&theme, window, cx);
         let notice = self.render_notice(&theme, cx);
         let body = self.render_body(&theme, window, cx);
@@ -2314,7 +2420,8 @@ impl Render for BoardPage {
                             .gap(ui_rems(14.0))
                             .child(header)
                             .children(notice)
-                            .child(self.drafts.clone())
+                            // Drafts belong to this host's projects.
+                            .when(remote.is_none(), |el| el.child(self.drafts.clone()))
                             .child(body),
                     ),
             )
@@ -2329,7 +2436,11 @@ impl Render for BoardPage {
 
 impl BoardPage {
     fn render_notice(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Another machine's project: the body says where its Board is; the
+        // engine's refusal to list it is expected, not an error to show.
+        let remote = self.remote_scope(cx).is_some();
         let status_text = match self.model.read(cx).status() {
+            _ if remote => None,
             BoardStatus::Live => None,
             BoardStatus::Loading => Some((NoticeTone::Info, "Loading tickets…".to_owned())),
             BoardStatus::Disconnected(reason) | BoardStatus::Error(reason) => {
@@ -2409,6 +2520,9 @@ impl BoardPage {
                 model.has_more(),
             )
         };
+        if let Some((project, device)) = self.remote_scope(cx) {
+            return self.render_remote(&project, &device, theme);
+        }
         // A filtered read can come back empty with more pages to read: the
         // columns stay, with their Load more.
         if count == 0 && live && !more {
@@ -2422,6 +2536,33 @@ impl BoardPage {
             BoardViewMode::Board => self.render_columns(theme, window, cx),
             BoardViewMode::List => self.render_list(theme, window, cx),
         }
+    }
+
+    /// The sidebar names a project on another machine: its tickets live on
+    /// that machine's Board.
+    fn render_remote(&self, project: &str, device: &str, theme: &Theme) -> AnyElement {
+        let copy = format!(
+            "{project} is on {device}. Its tickets are kept and run there; open LUNA on \
+             {device} to see or create them, or choose a project on this Mac in the sidebar."
+        );
+        div()
+            .id("board-remote")
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(ui_rems(4.0))
+            .py(ui_rems(24.0))
+            .child(
+                div()
+                    .text_size(ui_rems(15.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(SharedString::from(format!(
+                        "{project}'s Board is on {device}"
+                    ))),
+            )
+            .child(widgets::page_subtitle(theme, copy))
+            .into_any_element()
     }
 
     fn render_no_matches(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -2804,6 +2945,8 @@ impl BoardPage {
             "status": format!("{:?}", model.status()),
             "scope": model.scope(),
             "scopeLabel": self.scope_label(cx),
+            "remote": self.remote_scope(cx).map(|(project, device)| serde_json::json!({"project": project, "device": device})),
+            "projectPicker": self.project_picker.as_open().map(|open| open.picker.read(cx).fixture_readback(cx)),
             "headerCount": self.header_count(cx),
             "subtitle": self.header_subtitle(cx),
             "filters": {

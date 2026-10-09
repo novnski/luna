@@ -433,20 +433,11 @@ fn activity_sidebar_chats<'a>(
         .collect()
 }
 
-/// The space-filter dropdown, `Some` while open. The same searchable-menu
-/// recipe as the composer's ref picker: filter input on top
-/// (`PaletteSearch` context so ↑↓/⏎ bubble to the card), ranked substring
-/// rows, keyboard highlight.
+/// The space-filter dropdown, `Some` while open: the shared project picker
+/// ([`project_picker::ProjectPicker`]) and its event subscription.
 pub(super) struct SpacesMenu {
-    search: Entity<ComposerInput>,
-    /// Keyboard highlight — an index into [`Shell::spaces_menu_rows`], or
-    /// that list's length when the pinned "New project…" footer holds it.
-    active: usize,
-    /// Tracked on the card — puts it on the keyboard dispatch path while the
-    /// search input holds focus (the structure every working picker uses).
-    focus: FocusHandle,
-    list_scroll: gpui::ScrollHandle,
-    _search_events: Subscription,
+    picker: Entity<project_picker::ProjectPicker>,
+    _events: Subscription,
 }
 
 pub(super) struct SidebarViewMenu {
@@ -615,35 +606,6 @@ pub(super) fn sidebar_disclosure_header(
         )
 }
 
-/// One activatable row of the open dropdown, in nav order. `AddSpace` names
-/// the card's pinned "New project…" footer, not a list row — keyboard nav
-/// maps the list-length index to it.
-#[derive(Clone, PartialEq)]
-pub(super) enum SpacesMenuRow {
-    All,
-    Space(String),
-    AddSpace,
-    /// The pinned footer's second action: Settings › Projects.
-    ManageProjects,
-}
-
-/// One rendered row of the project picker: what it activates, its two text
-/// lines and its live counts (`None` for All projects, which sums them in
-/// its subtitle instead).
-struct SpacesMenuDetail {
-    row: SpacesMenuRow,
-    label: SharedString,
-    /// The folder path for a project; the total for All projects.
-    subtitle: SharedString,
-    /// The machine, only to tell apart same-named projects.
-    tag: Option<SharedString>,
-    offline: bool,
-    selected: bool,
-    activity: Option<super::sidebar_projects::ProjectActivity>,
-    /// The project's tile colour (`None` for All projects).
-    tint: Option<gpui::Hsla>,
-}
-
 /// New project navigates devices, locations, then folders on a command-palette surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectStep {
@@ -746,19 +708,6 @@ pub(super) fn status_dot_color(status: ChatIndicator, theme: &Theme) -> gpui::Hs
             theme.success.opacity(0.9) // emerald-400
         }
         ChatIndicator::Idle => crate::theme::ink(0.14),
-    }
-}
-
-// Handle-based rail host for the spaces dropdown: its list is a plain
-// tracked scroller, so the trait's default metrics/press/drag (off the live
-// ScrollHandle) apply unchanged.
-impl popover::ScrollRailHost for Shell {
-    fn rail_bar(&mut self) -> &mut popover::MenuScrollbarState {
-        &mut self.spaces_menu_bar
-    }
-
-    fn rail_scroll(&self) -> Option<gpui::ScrollHandle> {
-        self.spaces_menu.get().map(|menu| menu.list_scroll.clone())
     }
 }
 
@@ -893,17 +842,6 @@ impl Shell {
         }
     }
 
-    fn on_spaces_menu_list_hover(
-        &mut self,
-        hovered: &bool,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.spaces_menu_bar.set_list_hovered(*hovered) {
-            cx.notify();
-        }
-    }
-
     /// Open the new-session canvas in a just-added space, preserving the
     /// sidebar's current project filter.
     pub(super) fn land_in_space(&mut self, space_id: String, cx: &mut Context<Self>) {
@@ -925,205 +863,57 @@ impl Shell {
 
     // ---- sidebar sections ----
 
-    /// The filter's scrollable rows: "All projects", then spaces matching
-    /// the search (ranked — `popover::filter_indices`). "All" only shows on
-    /// an empty query (searching means hunting a space). The "New project…"
-    /// action is not a row here — the card renders it as a pinned footer.
-    fn spaces_menu_rows(&self, cx: &App) -> Vec<SpacesMenuRow> {
-        let query = self
-            .spaces_menu
-            .get()
-            .map(|menu| menu.search.read(cx).text().to_string())
-            .unwrap_or_default();
-        let state = self.state.read(cx);
-        let spaces = state.spaces_sorted();
-        let names: Vec<String> = spaces
-            .iter()
-            .map(|s| s.display_name().to_string())
-            .collect();
-        let mut rows: Vec<SpacesMenuRow> = Vec::new();
-        if query.trim().is_empty() {
-            rows.push(SpacesMenuRow::All);
-        }
-        rows.extend(
-            popover::filter_indices(&query, &names)
-                .into_iter()
-                .map(|ix| SpacesMenuRow::Space(spaces[ix].id.clone())),
-        );
-        rows
-    }
-
     fn open_spaces_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_sidebar_view_menu(cx);
-        // "PaletteSearch" context: ↑↓/⏎ stay unbound in the input and bubble
-        // to the card's key handler.
-        let search =
-            cx.new(|cx| ComposerInput::with_context("Search projects…", "PaletteSearch", cx));
-        let search_events = cx.subscribe(&search, |this: &mut Shell, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Edited) {
-                if let Some(menu) = this.spaces_menu.open_mut() {
-                    menu.active = 0;
-                }
+        let state = self.state.clone();
+        let width = px(self.settings.sidebar_width - super::SIDEBAR_GUTTER);
+        let options = project_picker::ProjectPickerOptions {
+            source: project_picker::ProjectSource::Every,
+            // The highlight starts ON the current filter row.
+            selected: self.settings.space_filter.clone(),
+            all_row: true,
+            footer: true,
+            context_menu: true,
+            ids: project_picker::ProjectPickerIds::SIDEBAR,
+            width,
+        };
+        let picker = cx.new(|cx| project_picker::ProjectPicker::new(state, options, cx));
+        let events = cx.subscribe(&picker, |this: &mut Shell, _, event, cx| match event {
+            project_picker::ProjectPickerEvent::Chose(row) => {
+                this.activate_spaces_menu_row(row.clone(), cx)
+            }
+            project_picker::ProjectPickerEvent::ContextMenu { space_id, position } => {
+                this.space_menu.open((space_id.clone(), *position));
                 cx.notify();
             }
+            project_picker::ProjectPickerEvent::Dismissed => this.close_spaces_menu(cx),
         });
-        // The highlight starts ON the current filter row.
-        let current = self.settings.space_filter.clone();
-        let handle = search.read(cx).focus_handle(cx);
+        let handle = picker.read(cx).search_focus(cx);
         self.spaces_menu.open(SpacesMenu {
-            search,
-            active: 0,
-            focus: cx.focus_handle(),
-            list_scroll: gpui::ScrollHandle::new(),
-            _search_events: search_events,
+            picker,
+            _events: events,
         });
-        // Fresh handle at the top — don't let the stale rail baseline read
-        // the reopen as scrolling.
-        self.spaces_menu_bar.clear_scroll_baseline();
-        let rows = self.spaces_menu_rows(cx);
-        let start = match &current {
-            None => 0,
-            Some(id) => rows
-                .iter()
-                .position(|row| matches!(row, SpacesMenuRow::Space(s) if s == id))
-                .unwrap_or(0),
-        };
-        if let Some(menu) = self.spaces_menu.open_mut() {
-            menu.active = start;
-        }
         // Focusable before first paint (the add-space palette's proven order).
         window.focus(&handle, cx);
         cx.notify();
     }
 
-    fn activate_spaces_menu_row(&mut self, row: SpacesMenuRow, cx: &mut Context<Self>) {
+    fn activate_spaces_menu_row(
+        &mut self,
+        row: project_picker::ProjectPickerRow,
+        cx: &mut Context<Self>,
+    ) {
         match row {
-            SpacesMenuRow::All => self.set_space_filter(None, cx),
-            SpacesMenuRow::Space(id) => self.set_space_filter(Some(id), cx),
-            SpacesMenuRow::AddSpace => {
+            project_picker::ProjectPickerRow::All => self.set_space_filter(None, cx),
+            project_picker::ProjectPickerRow::Space(id) => self.set_space_filter(Some(id), cx),
+            project_picker::ProjectPickerRow::AddSpace => {
                 self.close_spaces_menu(cx);
                 self.open_add_space(cx);
             }
-            SpacesMenuRow::ManageProjects => {
+            project_picker::ProjectPickerRow::ManageProjects => {
                 self.close_spaces_menu(cx);
                 self.open_settings(SettingsSection::Projects, cx);
             }
-        }
-    }
-
-    /// A picker row's live counts, right-aligned before the check column:
-    /// what needs the user, what is running, or when a quiet project was last
-    /// used.
-    fn spaces_menu_counts(
-        project: super::sidebar_projects::ProjectActivity,
-        now: chrono::DateTime<Utc>,
-        theme: &Theme,
-    ) -> gpui::Div {
-        let count = |tone: gpui::Hsla, glyph: AnyElement, n: usize| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(crate::typography::ui_rems(3.0))
-                .text_color(theme.readable_tone(tone, 1.0))
-                .child(glyph)
-                .child(SharedString::from(n.to_string()))
-        };
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(crate::typography::ui_rems(8.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .font_features(crate::typography::tabular_figures())
-            .when(project.need > 0, |el| {
-                el.child(count(
-                    theme.warning,
-                    icon(icons::SHIELD_WARNING)
-                        .size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.readable_icon(theme.warning))
-                        .into_any_element(),
-                    project.need,
-                ))
-            })
-            .when(project.working > 0, |el| {
-                // A small square: the running task's loader, at rest.
-                el.child(count(
-                    theme.busy,
-                    div()
-                        .size(crate::typography::ui_rems(6.0))
-                        .rounded(px(1.5))
-                        .bg(theme.busy)
-                        .into_any_element(),
-                    project.working,
-                ))
-            })
-            .when(project.need == 0 && project.working == 0, |el| {
-                el.child(
-                    div()
-                        .font_weight(gpui::FontWeight::NORMAL)
-                        .text_color(theme.readable_faint(0.9))
-                        .child(SharedString::from(
-                            project
-                                .last
-                                .map(|last| format_time_ago(last, now))
-                                .unwrap_or_default(),
-                        )),
-                )
-            })
-    }
-
-    /// Dropdown keys (bubbling from the focused search input): ↑↓ navigate,
-    /// ⏎ activates the highlighted row, esc closes.
-    fn spaces_menu_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        // The card stays mounted (and focused) through the exit animation —
-        // keys must not drive a dying menu.
-        if !self.spaces_menu.is_open() {
-            return;
-        }
-        let key = popover::classify_key(
-            event.keystroke.key.as_str(),
-            event.keystroke.modifiers.platform,
-            event.keystroke.modifiers.control,
-        );
-        match key {
-            popover::MenuKey::Escape => {
-                self.close_spaces_menu(cx);
-                cx.stop_propagation();
-            }
-            popover::MenuKey::Up | popover::MenuKey::Down => {
-                let rows = self.spaces_menu_rows(cx);
-                // +2: the pinned footer's two actions stay in the nav order,
-                // exactly as when they were the list's last rows.
-                let count = rows.len() + 2;
-                let delta = if key == popover::MenuKey::Up { -1 } else { 1 };
-                if let Some(menu) = self.spaces_menu.open_mut() {
-                    menu.active = popover::menu_step(Some(menu.active), count, delta).unwrap_or(0);
-                    // The footer renders below the scroller — only in-list
-                    // rows can be scrolled to (the footer index would leave
-                    // a request pending against a row that never exists).
-                    if menu.active < rows.len() {
-                        menu.list_scroll.scroll_to_item(menu.active);
-                    }
-                    cx.notify();
-                }
-            }
-            popover::MenuKey::Enter | popover::MenuKey::ModEnter => {
-                let active = self.spaces_menu.get().map(|m| m.active).unwrap_or(0);
-                let rows = self.spaces_menu_rows(cx);
-                // Past the scrollable rows come the pinned footer's actions.
-                let row = if active < rows.len() {
-                    rows[active].clone()
-                } else if active == rows.len() {
-                    SpacesMenuRow::AddSpace
-                } else {
-                    SpacesMenuRow::ManageProjects
-                };
-                self.activate_spaces_menu_row(row, cx);
-            }
-            popover::MenuKey::Backspace | popover::MenuKey::Other => {}
         }
     }
 
@@ -1494,7 +1284,7 @@ impl Shell {
             );
         let trigger = if self.spaces_menu.get().is_some() {
             let closing = self.spaces_menu.closing_since();
-            let menu = self.render_spaces_menu(theme, cx);
+            let menu = self.render_spaces_menu(cx);
             trigger.relative().child(popover::anchored_menu_below(
                 "spaces-filter-menu",
                 menu,
@@ -1770,352 +1560,31 @@ impl Shell {
         .into_any_element()
     }
 
-    /// The dropdown card: search on top, "All projects" + space rows (check on
-    /// the active filter; right-click for rename/remove) + "New project…".
-    fn render_spaces_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &theme.for_popup();
-        let (search, active, focus, list_scroll) = {
-            let Some(menu) = self.spaces_menu.get() else {
-                return div().into_any_element();
-            };
-            (
-                menu.search.clone(),
-                menu.active,
-                menu.focus.clone(),
-                menu.list_scroll.clone(),
-            )
+    /// The dropdown card: the shared project picker (search on top, "All
+    /// projects" and the project rows, a check on the active filter,
+    /// right-click for rename/remove, New project… and Manage projects…
+    /// pinned under the list).
+    fn render_spaces_menu(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(picker) = self.spaces_menu.get().map(|menu| menu.picker.clone()) else {
+            return div().into_any_element();
         };
-        let rows = self.spaces_menu_rows(cx);
-        let scrollbar = popover::rail(self, "spaces-menu-scrollbar", theme, cx);
-        let filter = self.settings.space_filter.clone();
-        // No machine names (user request), except to tell apart projects
-        // that share a name on different machines. Consume `rows` to avoid
-        // cloning the list children per frame.
         let activity = self.project_activity(cx);
-        let now = Utc::now();
-        let details: Vec<SpacesMenuDetail> = {
-            let state = self.state.read(cx);
-            let mut name_counts: std::collections::HashMap<&str, usize> = Default::default();
-            for row in &rows {
-                if let SpacesMenuRow::Space(id) = row
-                    && let Some(space) = state.space_row(id)
-                {
-                    *name_counts.entry(space.display_name()).or_default() += 1;
-                }
-            }
-            let projects = state.spaces.len();
-            rows.into_iter()
-                .map(|row| match row {
-                    SpacesMenuRow::All => {
-                        let active: usize = activity.values().map(|project| project.active).sum();
-                        SpacesMenuDetail {
-                            row: SpacesMenuRow::All,
-                            label: SharedString::from("All projects"),
-                            subtitle: format!(
-                                "{active} active across {projects} project{}",
-                                if projects == 1 { "" } else { "s" }
-                            )
-                            .into(),
-                            tag: None,
-                            offline: false,
-                            selected: filter.is_none(),
-                            activity: None,
-                            tint: None,
-                        }
-                    }
-                    SpacesMenuRow::Space(id) => {
-                        let selected = filter.as_deref() == Some(id.as_str());
-                        let project = activity.get(&id).copied().unwrap_or_default();
-                        let tint = Some(super::sidebar_projects::project_tint(&state, &id));
-                        match state.space_row(&id) {
-                            Some(space) => {
-                                let (tag, offline) = state.space_device_tag(space, now);
-                                let shared_name = name_counts
-                                    .get(space.display_name())
-                                    .is_some_and(|count| *count > 1);
-                                SpacesMenuDetail {
-                                    label: space.display_name().to_string().into(),
-                                    subtitle: super::sidebar_projects::display_project_path(
-                                        &space.path,
-                                    )
-                                    .into(),
-                                    tag: shared_name.then(|| tag.into()),
-                                    offline,
-                                    selected,
-                                    activity: Some(project),
-                                    tint,
-                                    row: SpacesMenuRow::Space(id),
-                                }
-                            }
-                            None => SpacesMenuDetail {
-                                row: SpacesMenuRow::Space(id),
-                                label: SharedString::from("?"),
-                                subtitle: SharedString::default(),
-                                tag: None,
-                                offline: false,
-                                selected,
-                                activity: Some(project),
-                                tint,
-                            },
-                        }
-                    }
-                    // spaces_menu_rows never yields these variants — the
-                    // footer actions are rendered by the card, not the list.
-                    SpacesMenuRow::AddSpace | SpacesMenuRow::ManageProjects => unreachable!(),
-                })
-                .collect()
-        };
+        // Match the trigger row as the sidebar is resized. Both live inside
+        // the sidebar's gutter.
+        let width = px(self.settings.sidebar_width - super::SIDEBAR_GUTTER);
+        picker.update(cx, |picker, _| {
+            picker.set_activity(activity);
+            picker.set_width(width);
+        });
         #[cfg(feature = "appshots-fixture")]
-        if let Some(probe) = self.sidebar_probe.as_mut() {
-            probe.texts.insert(
-                "spaces-menu".into(),
-                details
-                    .iter()
-                    .map(|detail| match &detail.tag {
-                        Some(tag) => format!("{} {tag}", detail.label),
-                        None => detail.label.to_string(),
-                    })
-                    .collect(),
-            );
-            probe.texts.insert(
-                "spaces-menu-details".into(),
-                details
-                    .iter()
-                    .map(|detail| {
-                        let counts = detail.activity.map_or(String::new(), |project| {
-                            format!(
-                                "need={} working={} active={}",
-                                project.need, project.working, project.active
-                            )
-                        });
-                        format!(
-                            "{}|{}|{}|{}",
-                            detail.label,
-                            detail.subtitle,
-                            if detail.selected { "selected" } else { "" },
-                            counts
-                        )
-                    })
-                    .collect(),
-            );
+        if self.sidebar_probe.is_some() {
+            let (labels, details) = picker.read(cx).fixture_lines(cx);
+            if let Some(probe) = self.sidebar_probe.as_mut() {
+                probe.texts.insert("spaces-menu".into(), labels);
+                probe.texts.insert("spaces-menu-details".into(), details);
+            }
         }
-        // The pinned footer's keyboard-nav index: one past the last
-        // scrollable row, its permanent place at the end of the nav order.
-        let add_index = details.len();
-        let manage_index = add_index + 1;
-
-        let list = popover::menu_scroll_host("spaces-menu-list-host")
-            .on_hover(cx.listener(Self::on_spaces_menu_list_hover))
-            .child(
-                popover::menu_scroll_list("spaces-menu-list", &list_scroll)
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    // Same scroll budget as the composer project menu.
-                    .max_h(crate::typography::ui_rems(224.0))
-                    .children(details.into_iter().enumerate().map(|(ix, detail)| {
-                        let SpacesMenuDetail {
-                            row,
-                            label,
-                            subtitle,
-                            tag,
-                            offline,
-                            selected,
-                            activity,
-                            tint,
-                        } = detail;
-                        let menu_space = match &row {
-                            SpacesMenuRow::Space(id) => Some(id.clone()),
-                            _ => None,
-                        };
-                        let tile = match tint {
-                            Some(tint) => {
-                                super::sidebar_projects::project_tile(tint, &label, 28.0, theme)
-                            }
-                            None => super::sidebar_projects::all_projects_tile(28.0, theme),
-                        };
-                        // Project rows show their folder (mono); the All
-                        // projects row a sentence.
-                        let is_path = activity.is_some();
-                        let counts = activity.map(|project| {
-                            Self::spaces_menu_counts(project, now, theme).into_any_element()
-                        });
-                        let activate = row;
-                        popover::menu_row_nav(theme, selected, ix == active)
-                            .id(("spaces-menu-row", ix))
-                            .on_mouse_move(cx.listener(
-                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                                    if let Some(menu) = this.spaces_menu.open_mut()
-                                        && menu.active != ix
-                                    {
-                                        menu.active = ix;
-                                        cx.notify();
-                                    }
-                                },
-                            ))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_spaces_menu_row(activate.clone(), cx);
-                            }))
-                            .when_some(menu_space, |el, space_id| {
-                                el.on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                        this.space_menu.open((space_id.clone(), event.position));
-                                        cx.notify();
-                                    }),
-                                )
-                            })
-                            .child(tile)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .gap(crate::typography::ui_rems(6.0))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(div().min_w_0().truncate().child(label))
-                                            .when_some(tag, |el, tag| {
-                                                el.child(
-                                                    div()
-                                                        .max_w(gpui::relative(0.5))
-                                                        .min_w_0()
-                                                        .truncate()
-                                                        .text_size(crate::typography::ui_rems(11.0))
-                                                        .font_weight(gpui::FontWeight::NORMAL)
-                                                        .text_color(theme.text_muted)
-                                                        .child(tag),
-                                                )
-                                            })
-                                            // Disconnected glyph, not the word (user request).
-                                            .when(offline, |el| {
-                                                el.child(
-                                                    icon(icons::WIFI_OFF)
-                                                        .size(crate::typography::ui_rems(12.0))
-                                                        .flex_none()
-                                                        .text_color(
-                                                            theme.readable_tone(theme.warning, 0.8),
-                                                        ),
-                                                )
-                                            }),
-                                    )
-                                    .when(!subtitle.is_empty(), |el| {
-                                        el.child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(crate::typography::ui_rems(11.0))
-                                                .font_weight(gpui::FontWeight::NORMAL)
-                                                .when(is_path, |el| {
-                                                    el.font_family(theme.font_mono.clone())
-                                                })
-                                                .text_color(theme.readable_faint(0.9))
-                                                .child(subtitle),
-                                        )
-                                    }),
-                            )
-                            .children(counts)
-                    })),
-            )
-            .children(scrollbar);
-
-        popover::popover_card(theme)
-            // Match the trigger row as the sidebar is resized. Both live
-            // inside the sidebar's gutter.
-            .w(px(self.settings.sidebar_width - super::SIDEBAR_GUTTER))
-            .track_focus(&focus)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                this.spaces_menu_key(event, cx)
-            }))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.close_spaces_menu(cx);
-            }))
-            .flex()
-            .flex_col()
-            // Same 2px rhythm as the composer project menu's root.
-            .gap(px(2.0))
-            .child(popover::search_input_frame(
-                theme,
-                search.into_any_element(),
-            ))
-            .child(list)
-            // "New project…" is a pinned action row under the list (the
-            // chat composer's project menu treatment) — scrolling must
-            // never carry it away, and its nav index (`add_index`) keeps it
-            // LAST.
-            .child(
-                // Full-bleed through the card's 4px inset — a divider
-                // stopping short of the edges reads as a mistake (the
-                // composer project menu's treatment).
-                div()
-                    .my(px(2.0))
-                    .mx(px(-popover::CARD_INSET))
-                    .h(px(1.0))
-                    .flex_none()
-                    .bg(theme.border.opacity(0.6)),
-            )
-            .child(
-                popover::menu_row_nav(theme, false, active == add_index)
-                    .id("spaces-menu-add")
-                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                        if let Some(menu) = this.spaces_menu.open_mut()
-                            && menu.active != add_index
-                        {
-                            menu.active = add_index;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activate_spaces_menu_row(SpacesMenuRow::AddSpace, cx);
-                    }))
-                    .child(
-                        icon(icons::PLUS)
-                            .size(crate::typography::ui_rems(12.0))
-                            .flex_none()
-                            .text_color(theme.text_muted),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from("New project…")),
-                    ),
-            )
-            .child(
-                popover::menu_row_nav(theme, false, active == manage_index)
-                    .id("spaces-menu-manage")
-                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                        if let Some(menu) = this.spaces_menu.open_mut()
-                            && menu.active != manage_index
-                        {
-                            menu.active = manage_index;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activate_spaces_menu_row(SpacesMenuRow::ManageProjects, cx);
-                    }))
-                    .child(
-                        icon(icons::SETTINGS)
-                            .size(crate::typography::ui_rems(12.0))
-                            .flex_none()
-                            .text_color(theme.text_muted),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from("Manage projects…")),
-                    ),
-            )
-            .into_any_element()
+        picker.into_any_element()
     }
 
     /// Flat top-to-bottom chat ids exactly as [`Self::render_active_rows`]
@@ -5464,6 +4933,11 @@ impl Shell {
             "scrollChildren": scroll_children,
             "bounds": probe.bounds.borrow().iter().map(|(label, bounds)| (label.clone(), rect(*bounds))).collect::<serde_json::Map<_, _>>(),
             "texts": probe.texts,
+            // The open project filter's rows (the shared project picker).
+            "projectPicker": self
+                .spaces_menu
+                .as_open()
+                .map(|menu| menu.picker.read(cx).fixture_readback(cx)),
             "activityView": self.activity.view_active,
             "canvas": self.workbench.geometry.borrow().canvas.map(rect),
         })
