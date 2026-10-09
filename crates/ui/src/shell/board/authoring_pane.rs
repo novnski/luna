@@ -107,6 +107,9 @@ pub struct AuthoringPane {
     ticket_tasks: Vec<Task<()>>,
     #[cfg(feature = "appshots-fixture")]
     probe: std::rc::Rc<std::cell::RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
+    /// QA: the send path's recent steps (focus, submit, send, frames).
+    #[cfg(feature = "appshots-fixture")]
+    trace: std::collections::VecDeque<String>,
     _input: Subscription,
 }
 
@@ -150,6 +153,7 @@ impl AuthoringPane {
         });
         let events = cx.subscribe(&input, |pane: &mut Self, _, event, cx| {
             if matches!(event, ComposerInputEvent::Submitted) {
+                pane.trace("composer submitted");
                 pane.send(cx);
             }
         });
@@ -185,6 +189,8 @@ impl AuthoringPane {
             ticket_tasks: Vec::new(),
             #[cfg(feature = "appshots-fixture")]
             probe: Default::default(),
+            #[cfg(feature = "appshots-fixture")]
+            trace: Default::default(),
             _input: events,
         }
     }
@@ -192,6 +198,18 @@ impl AuthoringPane {
     fn api(&self, cx: &App) -> Option<BoardApi> {
         self.model.read(cx).api(cx)
     }
+
+    /// QA: record one step of the send path (bounded; fixture builds only).
+    #[cfg(feature = "appshots-fixture")]
+    fn trace(&mut self, step: impl Into<String>) {
+        if self.trace.len() >= 60 {
+            self.trace.pop_front();
+        }
+        self.trace.push_back(step.into());
+    }
+
+    #[cfg(not(feature = "appshots-fixture"))]
+    fn trace(&mut self, _step: impl Into<String>) {}
 
     /// The session this pane shows (after the engine answered).
     #[allow(dead_code)] // for the New issue chooser (A9) and QA hooks
@@ -234,7 +252,10 @@ impl AuthoringPane {
                 self.status = PaneStatus::Ready;
                 self.start_watch(id, cx);
             }
-            Err(error) => self.status = PaneStatus::Error(error.message()),
+            Err(error) => {
+                self.trace(format!("start refused: {}", error.message()));
+                self.status = PaneStatus::Error(error.message());
+            }
         }
         cx.notify();
     }
@@ -301,6 +322,13 @@ impl AuthoringPane {
         }
         self.working = page.working;
         self.effective_access = page.effective_access;
+        let frame = format!(
+            "frame: {:?}, {} entries, working {}",
+            page.session.state,
+            self.entries.len(),
+            page.working
+        );
+        self.trace(frame);
         let created = page.session.created_item_ids.clone();
         self.session = Some(page.session);
         self.status = PaneStatus::Ready;
@@ -426,12 +454,26 @@ impl AuthoringPane {
     /// Send the composer's text as the next user message.
     pub fn send(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).text().trim().to_owned();
-        if text.is_empty() || !self.can_send() {
+        if text.is_empty() {
+            self.trace("send skipped: the composer is empty");
+            return;
+        }
+        if !self.can_send() {
+            let reason = format!(
+                "send skipped: state {:?}, working {}, sending {}, busy {}",
+                self.state(),
+                self.working,
+                self.sending,
+                self.busy
+            );
+            self.trace(reason);
             return;
         }
         let (Some(session_id), Some(api)) = (self.session_id.clone(), self.api(cx)) else {
+            self.trace("send skipped: no session or engine connection");
             return;
         };
+        self.trace(format!("send started ({} bytes)", text.len()));
         let message_id = format!("msg-{}", uuid::Uuid::new_v4().simple());
         self.pending = Some((message_id.clone(), text.clone()));
         self.input.update(cx, |input, cx| input.set_text("", cx));
@@ -454,8 +496,12 @@ impl AuthoringPane {
                 match result {
                     // The watch reports the turn; a reply can be older
                     // than a frame that already arrived.
-                    Ok(session) => pane.adopt(session),
+                    Ok(session) => {
+                        pane.trace(format!("send accepted (version {})", session.version));
+                        pane.adopt(session);
+                    }
                     Err(error) => {
+                        pane.trace(format!("send refused: {}", error.message()));
                         pane.pending = None;
                         pane.notice = Some(error.message());
                         pane.input.update(cx, |input, cx| input.set_text(text, cx));
@@ -904,7 +950,9 @@ impl AuthoringPane {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.readable_muted(0.85))
                     .child(
-                        icons::icon(icons::CLIPBOARD_LIST).size(crate::typography::ui_rems(12.0)),
+                        icons::icon(icons::CLIPBOARD_LIST)
+                            .size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.readable_muted(0.85)),
                     )
                     .child("Proposed ticket · read only"),
             )
@@ -985,7 +1033,11 @@ impl AuthoringPane {
                     .flex_row()
                     .items_center()
                     .gap(crate::typography::ui_rems(12.0))
-                    .child(icons::icon(icons::CLIPBOARD_LIST).size(crate::typography::ui_rems(16.0)))
+                    .child(
+                        icons::icon(icons::CLIPBOARD_LIST)
+                            .size(crate::typography::ui_rems(16.0))
+                            .text_color(theme.readable_muted(0.9)),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -1274,6 +1326,10 @@ impl AuthoringPane {
                 gpui::MouseButton::Left,
                 cx.listener(|pane, _, window, cx| {
                     window.focus(&pane.input.focus_handle(cx), cx);
+                    // Like GPUI's own focus transfer: a focusable ancestor
+                    // (the Shell) must not take focus back during bubbling.
+                    window.prevent_default();
+                    pane.trace("composer box pressed: input focused");
                 }),
             );
         div()
@@ -1299,7 +1355,9 @@ impl AuthoringPane {
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.readable_muted(0.8))
                             .child(
-                                icons::icon(icons::FOLDER).size(crate::typography::ui_rems(12.0)),
+                                icons::icon(icons::FOLDER)
+                                    .size(crate::typography::ui_rems(12.0))
+                                    .text_color(theme.readable_muted(0.8)),
                             )
                             .child("Project context available"),
                     )
@@ -1464,7 +1522,11 @@ impl Render for AuthoringPane {
                 .border_color(theme.separator(false))
                 .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.readable_muted(0.9))
-                .child(icons::icon(glyph).size(crate::typography::ui_rems(12.0)))
+                .child(
+                    icons::icon(glyph)
+                        .size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.readable_muted(0.9)),
+                )
                 .child(SharedString::from(label))
         };
         div()
@@ -1521,7 +1583,7 @@ impl Render for AuthoringPane {
 #[cfg(feature = "appshots-fixture")]
 impl AuthoringPane {
     /// QA: what the pane rendered and where its controls are.
-    pub fn fixture_readback(&self, cx: &App) -> serde_json::Value {
+    pub fn fixture_readback(&self, window: &Window, cx: &App) -> serde_json::Value {
         let bounds: serde_json::Map<String, serde_json::Value> = self
             .probe
             .borrow()
@@ -1566,6 +1628,10 @@ impl AuthoringPane {
             "notice": self.notice,
             "entries": entries,
             "composerText": self.input.read(cx).text(),
+            "composerFocused": self.input.read(cx).focus_handle(cx).is_focused(window),
+            "sendEnabled": self.can_send() && !self.input.read(cx).text().trim().is_empty(),
+            "pending": self.pending.as_ref().map(|(id, text)| serde_json::json!({"id": id, "text": text})),
+            "trace": self.trace.iter().collect::<Vec<_>>(),
             // The only text input in this mode is the composer: no title or
             // description field exists to report.
             "textInputs": ["composer"],
