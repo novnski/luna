@@ -5547,6 +5547,17 @@ impl EngineRpc {
                 cwd,
                 lineage,
             } => {
+                // A temporary Board discussion is never a chat or a task.
+                if task_id.starts_with(board_engine::authoring::AUTHORING_ID_PREFIX)
+                    && self
+                        .store
+                        .is_board_authoring_session(task_id)
+                        .unwrap_or(false)
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "A temporary Board discussion is not a chat and cannot become one.".into(),
+                    )));
+                }
                 let space_id = space_id.ok_or_else(|| {
                     TaskProjectionError::Mutation(crate::EngineError::Other(
                         "A project is required to create a session".into(),

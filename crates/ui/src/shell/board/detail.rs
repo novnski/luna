@@ -1,9 +1,11 @@
 //! Ticket detail drawer (A9) and the Board's overlay host.
 //!
 //! [`BoardSurfaces`] is the one overlay the Board page mounts: the New
-//! ticket chooser, Write manually, Discuss with AI (A6's pane) or one
-//! ticket's [`BoardDetail`] drawer. From GitHub issue leaves through
-//! [`BoardSurfacesEvent::OpenGitHub`] to A7's picker, which the Shell hosts. The page (A8)
+//! ticket chooser, Write manually or one ticket's [`BoardDetail`] drawer.
+//! Discuss with AI leaves through [`BoardSurfacesEvent::DiscussWithAi`] to
+//! A6's conversation, which the Board page mounts in place of its body, and
+//! From GitHub issue through [`BoardSurfacesEvent::OpenGitHub`] to A7's
+//! picker, which the Shell hosts. The page (A8)
 //! calls its entry points:
 //!
 //! * [`BoardSurfaces::open_detail`] — card click / Enter on a card.
@@ -38,7 +40,6 @@ use luna_proto::{
 };
 
 use super::api::{BoardApi, BoardCallError};
-use super::authoring_pane::AuthoringPane;
 use super::evidence::{self, EvidenceContext};
 use super::github_picker::{WritebackChoice, writeback_choices};
 use super::manual_form::{ChooserEvent, ManualFormEvent, ManualTicketForm, NewTicketChooser};
@@ -313,7 +314,6 @@ fn send_update_offered(detail: &BoardItemDetail) -> bool {
 pub enum BoardSurface {
     Chooser(Entity<NewTicketChooser>),
     Manual(Entity<ManualTicketForm>),
-    Authoring(Entity<AuthoringPane>),
     Detail(Entity<BoardDetail>),
 }
 
@@ -322,7 +322,6 @@ impl BoardSurface {
         match self {
             Self::Chooser(_) => "chooser",
             Self::Manual(_) => "manual",
-            Self::Authoring(_) => "authoring",
             Self::Detail(_) => "detail",
         }
     }
@@ -349,6 +348,8 @@ pub enum BoardSurfacesEvent {
     },
     /// From GitHub issue (A7's picker, hosted by the Shell).
     OpenGitHub { project_id: String },
+    /// Discuss with AI (A6's conversation, mounted by the Board page).
+    DiscussWithAi { project_id: String },
 }
 
 /// The Board's overlay: one surface at a time in a right-hand drawer.
@@ -521,36 +522,17 @@ impl BoardSurfaces {
         window.focus(&focus, cx);
     }
 
-    /// Discuss with AI: the temporary authoring pane (A6). It has no
-    /// title/description fields; the conversation drafts the ticket.
+    /// Discuss with AI: A6's temporary conversation, which the Board page
+    /// mounts in place of its body (it has no title/description fields; the
+    /// conversation drafts the ticket). The drawer closes.
     pub fn open_authoring(
         &mut self,
         project_id: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let model = self.model.clone();
-        let pane = cx.new(|cx| AuthoringPane::new(model, project_id, cx));
-        self.set_surface(BoardSurface::Authoring(pane), Vec::new(), cx);
-        window.focus(&self.focus, cx);
-    }
-
-    /// Resume a Board draft: a Discuss with AI session closed unfinished.
-    pub fn resume_authoring(
-        &mut self,
-        project_id: String,
-        session_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let model = self.model.clone();
-        let pane = cx.new(|cx| {
-            let mut pane = AuthoringPane::new(model, project_id, cx);
-            pane.session_id = Some(session_id);
-            pane
-        });
-        self.set_surface(BoardSurface::Authoring(pane), Vec::new(), cx);
-        window.focus(&self.focus, cx);
+        self.close(window, cx);
+        cx.emit(BoardSurfacesEvent::DiscussWithAi { project_id });
     }
 
     /// From a GitHub issue: A7's picker, which the Shell hosts (one host for
@@ -574,9 +556,6 @@ impl BoardSurfaces {
             Some(BoardSurface::Chooser(chooser)) => chooser.read(cx).fixture_state(),
             Some(BoardSurface::Manual(form)) => form.read(cx).fixture_state(window, cx),
             Some(BoardSurface::Detail(detail)) => detail.read(cx).fixture_state(window, cx),
-            Some(BoardSurface::Authoring(pane)) => {
-                serde_json::json!({ "projectId": pane.read(cx).project_id })
-            }
             None => serde_json::Value::Null,
         };
         serde_json::json!({
@@ -597,7 +576,6 @@ impl Render for BoardSurfaces {
         let content = match surface {
             BoardSurface::Chooser(entity) => entity.clone().into_any_element(),
             BoardSurface::Manual(entity) => entity.clone().into_any_element(),
-            BoardSurface::Authoring(entity) => entity.clone().into_any_element(),
             BoardSurface::Detail(entity) => entity.clone().into_any_element(),
         };
         self.probe.text("board-surface", surface.key());
@@ -1419,6 +1397,8 @@ impl BoardDetail {
                 work_item_id: work_item_id.clone(),
                 execution_generation: None,
                 profile: None,
+                // A user-requested review: the engine captures the current
+                // result itself (A5's implementer reports stay empty).
                 checks: Vec::new(),
                 summary: None,
                 evidence: Vec::new(),
@@ -3056,15 +3036,15 @@ impl Render for BoardDetail {
 
 impl Shell {
     /// Route a Board surface request to the existing app surfaces: Go to
-    /// chat (A10 refines `open_board_chat`), the existing attention UI, and
-    /// A7's GitHub picker and writeback dialog.
+    /// chat (A10's `board_open_navigation`), the existing attention UI, A6's
+    /// conversation, and A7's GitHub picker and writeback dialog.
     pub(in crate::shell) fn on_board_surface_event(
         &mut self,
         event: &BoardSurfacesEvent,
         cx: &mut Context<Self>,
     ) {
         match event {
-            BoardSurfacesEvent::GoToChat(target) => self.open_board_chat(target, cx),
+            BoardSurfacesEvent::GoToChat(target) => self.board_open_navigation(target.clone(), cx),
             BoardSurfacesEvent::OpenAttention {
                 task_id: Some(task_id),
                 ..
@@ -3088,6 +3068,12 @@ impl Shell {
             ),
             BoardSurfacesEvent::OpenGitHub { project_id } => {
                 self.open_board_github_picker(project_id.clone(), cx)
+            }
+            BoardSurfacesEvent::DiscussWithAi { project_id } => {
+                let page = self.board_page(cx);
+                page.update(cx, |page, cx| {
+                    page.open_authoring(project_id.clone(), None, cx);
+                });
             }
         }
     }

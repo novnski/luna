@@ -961,16 +961,13 @@ impl Shell {
         self.open_side_chat_in_pane(reveal.side, cx);
     }
 
-    /// Open a ticket's detail. The Board page owns the drawer (A8/A9): this
-    /// selects the ticket in the Board's restored presentation and opens
-    /// the page. Integration point for A9's open-detail call.
+    /// Open a ticket's detail: the Board page with the ticket selected and
+    /// its detail drawer open (the page owns its selection and saves it).
     pub(crate) fn chat_open_ticket(&mut self, work_item_id: String, cx: &mut Context<Self>) {
         self.board_chat.status_menu = None;
-        if self.settings.board.selected_item.as_deref() != Some(work_item_id.as_str()) {
-            self.settings.board.selected_item = Some(work_item_id);
-            self.schedule_save(cx);
-        }
+        let page = self.board_page(cx);
         self.open_sidebar_page(SidebarPage::Board, cx);
+        page.update(cx, |page, cx| page.show_ticket(work_item_id, cx));
     }
 
     pub(crate) fn board_chat_notice_error(

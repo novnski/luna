@@ -116,6 +116,11 @@ impl BoardModel {
         &self.scope
     }
 
+    /// The app state this model reads (project names, host identity).
+    pub fn state(&self) -> &Entity<AppState> {
+        &self.state
+    }
+
     pub fn filters(&self) -> &BoardListFilters {
         &self.filters
     }

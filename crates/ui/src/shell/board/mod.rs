@@ -92,33 +92,10 @@ impl Shell {
                     self.schedule_save(cx);
                 }
             }
-            BoardPageEvent::OpenChat(target) => self.open_board_chat(target, cx),
+            BoardPageEvent::GoToChat(request) => self.board_go_to_chat(request.clone(), cx),
             BoardPageEvent::OpenGitHubPicker { project_id } => {
                 self.open_board_github_picker(project_id.clone(), cx)
             }
-        }
-    }
-
-    /// Go to chat from a ticket: reopen the view, never relaunch or reparent.
-    /// A side worker opens in its main parent's workbench.
-    pub(super) fn open_board_chat(
-        &mut self,
-        target: &luna_proto::BoardNavigationTarget,
-        cx: &mut Context<Self>,
-    ) {
-        use luna_proto::BoardNavigationTarget as Target;
-        match target {
-            Target::MainChat { task_id } | Target::Direct { task_id, .. } => {
-                self.open_chat(task_id.clone(), cx)
-            }
-            Target::SideChat {
-                main_task_id,
-                side_task_id,
-            } => {
-                self.open_chat(main_task_id.clone(), cx);
-                self.open_side_chat_in_pane(side_task_id.clone(), cx);
-            }
-            Target::NoChat { .. } => {}
         }
     }
 

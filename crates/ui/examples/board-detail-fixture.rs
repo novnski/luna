@@ -863,6 +863,7 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
         },
         created_at_ms: now - (25 - round as i64 * 10) * minute,
         updated_at_ms: now - (20 - round as i64 * 10) * minute,
+        // A5's optional review-run fields (merge compile fix).
         detail: None,
         attention: None,
         requested_by: None,
@@ -870,8 +871,8 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
         late_result: false,
         outcome: None,
         implementer_summary: None,
-        evidence: vec![],
-        reported_check_ids: vec![],
+        evidence: Vec::new(),
+        reported_check_ids: Vec::new(),
         supersedes: None,
         relaunches: 0,
     };
@@ -1107,6 +1108,16 @@ fn open_detail(window: Window, cx: &mut AsyncApp, id: &str) -> anyhow::Result<()
     })?
 }
 
+/// Whether the Board page shows A6's Discuss with AI conversation.
+fn authoring_mounted(window: Window, cx: &mut AsyncApp) -> anyhow::Result<bool> {
+    draw(window, cx)?;
+    window.update(cx, |shell, _, cx| {
+        shell
+            .fixture_board_page()
+            .is_some_and(|page| page.read(cx).authoring_pane().is_some())
+    })
+}
+
 fn route(window: Window, cx: &mut AsyncApp) -> anyhow::Result<String> {
     window.update(cx, |shell, _, _| shell.fixture_board_detail_route())
 }
@@ -1204,23 +1215,51 @@ async fn scenario(
     )?;
     run.capture(window, cx, "d01-chooser")?;
     click(window, cx, "board-chooser-ai").await?;
-    let rb = wait_for(window, cx, "the authoring pane", |rb| {
-        rb["surface"] == "authoring"
-    })
-    .await?;
+    // Discuss with AI is A6's conversation, which the Board page mounts in
+    // place of its body (the drawer closes): no title/description inputs.
+    let mut mounted = false;
+    for _ in 0..120 {
+        mounted = authoring_mounted(window, cx)?;
+        if mounted {
+            break;
+        }
+        settle(cx, 100).await;
+    }
+    let rb = surfaces(window, cx)?;
     let inputs: Vec<&str> = ["manual-title", "manual-description"]
         .into_iter()
         .filter(|name| rect(&rb, name).is_some())
         .collect();
     run.check(
         "discuss-with-ai-has-no-form",
-        json!({ "surface": "authoring", "titleOrDescriptionInputs": [] }),
-        json!({ "surface": rb["surface"], "titleOrDescriptionInputs": inputs }),
-        rb["surface"] == "authoring" && inputs.is_empty(),
+        json!({ "authoringMounted": true, "titleOrDescriptionInputs": [] }),
+        json!({ "authoringMounted": mounted, "surface": rb["surface"], "titleOrDescriptionInputs": inputs }),
+        mounted && rb["surface"].is_null() && inputs.is_empty(),
     )?;
     run.keep("discuss-with-ai", &rb);
     run.capture(window, cx, "d02-discuss-with-ai")?;
+    // Close the conversation (as its Close button does) and return to the
+    // board.
+    window.update(cx, |shell, _, cx| {
+        if let Some(pane) = shell
+            .fixture_board_page()
+            .and_then(|page| page.read(cx).authoring_pane())
+        {
+            pane.update(cx, |pane, cx| pane.close(cx));
+        }
+    })?;
+    for _ in 0..120 {
+        if !authoring_mounted(window, cx)? {
+            break;
+        }
+        settle(cx, 100).await;
+    }
     // A pointer press on the scrim closes the overlay.
+    open_new_ticket(window, cx)?;
+    let rb = wait_for(window, cx, "the chooser again", |rb| {
+        rb["surface"] == "chooser" && rect(rb, "board-overlay").is_some()
+    })
+    .await?;
     let overlay = rect(&rb, "board-overlay").ok_or_else(|| anyhow!("no overlay painted"))?;
     click_at(
         window,

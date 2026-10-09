@@ -1048,6 +1048,22 @@ impl DocsStore {
         )?)
     }
 
+    /// Whether this id is a temporary authoring session or one of its
+    /// private provider bindings (current or retired), in any state. Native
+    /// provider-history import/adoption refuses these, so a discussion's
+    /// provider session never becomes a chat — also after discard or restart.
+    pub fn board_authoring_owns(&self, id: &str) -> Result<bool, StoreError> {
+        if id.is_empty() {
+            return Ok(false);
+        }
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM board_authoring_sessions WHERE id=?1 OR json_extract(CAST(record AS TEXT),'$.runtimeBinding')=?1)
+             OR EXISTS(SELECT 1 FROM board_authoring_sessions s, json_each(CAST(s.record AS TEXT),'$.retiredBindings') b WHERE b.value=?1)",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Transcript entries older than `before` (newest first, bounded).
     pub fn board_authoring_entries(
         &self,
