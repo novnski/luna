@@ -1,0 +1,89 @@
+Window: "T3 Code (Alpha)", App: T3 Code (Alpha).
+0 standard window T3 Code (Alpha), Secondary Actions: Raise
+	1 container T3 Code (Alpha)
+		2 container
+			3 HTML content T3 Code (Alpha), URL: t3code://app/#/settings/storage
+				4 container
+					5 container Settings
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search settings, Placeholder: Search
+							9 text /
+							10 content list
+								11 button General
+								12 button Appearance
+								13 button Keybindings
+								14 button SnapShots
+								15 button Providers
+								16 button Integrations
+								17 button Source Control
+								18 button Storage
+								19 button Connections
+								20 button Archive
+						21 content list
+							22 button Sign in to T3 Connect
+						23 content list
+							24 button Back
+							25 button Update 0.0.45 ready to download
+						26 button Resize Sidebar
+					27 container
+						28 container Settings breadcrumb
+							29 content list
+								30 text Settings
+								31 text Storage
+						32 text Applying settings for
+						33 pop up button Project scope: All projects
+						34 text across
+						35 pop up button Environment scope: All environments
+						36 heading Worktrees, Value: 2
+							37 text Worktrees
+						38 container
+							39 heading Delete worktrees with deleted threads, Value: 3
+								40 text Delete worktrees with deleted threads
+							41 text Remove unused worktrees when active or archived threads are deleted. Worktrees with local changes are kept.
+							42 switch Description: Delete worktrees with deleted threads, Value: off
+							43 heading Delete inactive worktrees, Value: 3
+								44 text Delete inactive worktrees
+							45 text Remove worktrees after their threads have been inactive for this many days. Branches and thread history are kept. Off
+							46 switch Description: Delete inactive worktrees, Value: off
+							47 heading Delete merged worktrees, Value: 3
+								48 text Delete merged worktrees
+							49 text Remove worktrees whose pull request is merged and whose commits are included in the default branch.
+							50 switch Description: Delete merged worktrees, Value: off
+							51 heading Delete unchanged worktrees, Value: 3
+								52 text Delete unchanged worktrees
+							53 text Remove worktrees with no commits beyond the default branch.
+							54 switch Description: Delete unchanged worktrees, Value: off
+						55 heading Artifacts and logs, Value: 2
+							56 text Artifacts and logs
+						57 container
+							58 heading Delete old browser artifacts, Value: 3
+								59 text Delete old browser artifacts
+							60 text Delete saved browser captures after this many days. Older capture links will no longer open. Off
+							61 switch Description: Delete old browser artifacts, Value: off
+							62 heading Delete old rotated logs, Value: 3
+								63 text Delete old rotated logs
+							64 text Delete inactive rotated log files after this many days. Current logs are kept. Off
+							65 switch Description: Delete old rotated logs, Value: off
+					66 toggle button Description: Toggle main sidebar, Value: 1
+					67 container Notifications
+					68 container Notifications
+						69 container Update Available: Codex v0.160.0
+							70 button Dismiss notification
+							71 heading Update Available: Codex v0.160.0, Value: 2
+								72 text Update Available: Codex v0.160.0
+							73 text Install the update now or review provider settings.
+							74 button Settings
+							75 button Update
+	76 close button
+	77 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	78 minimize button
+79 menu bar
+	80 T3 Code (Alpha)
+	81 File
+	82 Edit
+	83 View
+	84 Window
+	85 Help
+
+The focused UI element is 18 button Storage

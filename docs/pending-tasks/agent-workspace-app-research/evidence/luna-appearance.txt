@@ -1,0 +1,46 @@
+Window: "", App: LUNA Dev.
+0 standard window Secondary Actions: Raise
+	1 container
+		2 toggle button (settable, boolean) Appearance: System, Value: off
+		3 toggle button (settable, boolean) Appearance: Light, Value: off
+		4 toggle button (settable, boolean) Appearance: Dark, Value: on
+		5 button Light theme: Luna Light
+		6 button Dark theme: Luna Dark
+		7 toggle button (settable, boolean) Accent color: Theme default, Value: on
+		8 toggle button (settable, boolean) Accent color: Luna, Value: off
+		9 toggle button (settable, boolean) Accent color: Orange, Value: off
+		10 toggle button (settable, boolean) Accent color: Amber, Value: off
+		11 toggle button (settable, boolean) Accent color: Green, Value: off
+		12 toggle button (settable, boolean) Accent color: Cyan, Value: off
+		13 toggle button (settable, boolean) Accent color: Blue, Value: off
+		14 toggle button (settable, boolean) Accent color: Pink, Value: off
+		15 toggle button (settable, boolean) Glass: Theme default, Value: on
+		16 toggle button (settable, boolean) Glass: Frosted, Value: off
+		17 toggle button (settable, boolean) Glass: Opaque, Value: off
+		18 button Choose image
+		19 button Add theme
+		20 button Interface font family: Geist
+		21 button Interface font size: 16 px
+		22 button Terminal font family: Geist Mono
+		23 button Terminal font size: 13 px
+		24 button Code & diff font family: Geist Mono
+		25 button Code & diff font size: 12.5 px
+		26 slider (settable) Conversation width, Value: 736 pixels
+		27 switch (settable, boolean) Chat code wrapping, Value: off
+		28 switch (settable, boolean) Diff wrapping, Value: off
+		29 switch (settable, boolean) Workspace file wrapping, Value: off
+		30 toggle button (settable, boolean) Unified, Value: on
+		31 toggle button (settable, boolean) Side by side, Value: off
+		32 toggle button (settable, boolean) Red & green, Value: on
+		33 toggle button (settable, boolean) Blue & orange, Value: off
+		34 button Restore defaults
+	35 close button
+	36 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	37 minimize button
+38 menu bar
+	39 LUNA Dev
+	40 Edit
+	41 View
+	42 Window
+
+The focused UI element is 0 standard window Secondary Actions: Raise

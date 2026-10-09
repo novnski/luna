@@ -438,6 +438,14 @@ impl Shell {
                         .child(header_icon_button(
                             "expand-changes",
                             right_pane_expand_icon(self.right_pane_expanded),
+                            ChromeTip::new(
+                                if self.right_pane_expanded {
+                                    "Restore panel width"
+                                } else {
+                                    "Expand panel"
+                                },
+                                None,
+                            ),
                             &theme,
                             cx.listener(|this, _, _, cx| this.toggle_right_pane_expand(cx)),
                         )),
@@ -450,6 +458,14 @@ impl Shell {
                     .child(header_icon_button(
                         "toggle-changes",
                         icons::SIDEBAR_MINIMALISTIC,
+                        ChromeTip::new(
+                            if right_open {
+                                "Hide right sidebar"
+                            } else {
+                                "Show right sidebar"
+                            },
+                            self.shortcut_badge(ShortcutId::ToggleChanges),
+                        ),
                         &theme,
                         cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
                     ))

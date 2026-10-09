@@ -1,0 +1,48 @@
+Window: "", App: LUNA Dev.
+0 standard window Secondary Actions: Raise
+	1 container
+		2 button General settings
+		3 button Projects settings
+		4 button Providers settings
+		5 button Appearance settings
+		6 button Notifications settings
+		7 button Shortcuts settings
+		8 button Files settings
+		9 button Appshots settings
+		10 button Usage settings
+		11 button Updates settings
+		12 button Devices settings
+		13 button Backups settings
+		14 button Archived sessions settings
+		15 button Enable sync
+		16 button Back to chat
+		17 toggle button (settable, boolean) Project: claude-workspace · Iulian’s MacBook Pro 16, Value: off
+		18 toggle button (settable, boolean) Project: codex-terminal-61 · Iulian’s MacBook Pro 16, Value: off
+		19 toggle button (settable, boolean) Project: Pane QA claude · Iulian’s MacBook Pro 16, Value: off
+		20 toggle button (settable, boolean) Project: Pane QA codex · Iulian’s MacBook Pro 16, Value: off
+		21 toggle button (settable, boolean) Project: project · Iulian’s MacBook Pro 16, Value: on
+		22 toggle button (settable, boolean) Project: project · Iulian’s MacBook Pro 16, Value: off
+		23 toggle button (settable, boolean) Project: project-CRUhka · Iulian’s MacBook Pro 16, Value: off
+		24 toggle button (settable, boolean) Project: workspace · Iulian’s MacBook Pro 16, Value: off
+		25 toggle button (settable, boolean) Provider and model: Inherit global default, Value: on
+		26 toggle button (settable, boolean) Provider and model: Codex, Value: off
+		27 toggle button (settable, boolean) Provider and model: Claude Code, Value: off
+		28 toggle button (settable, boolean) Provider and model: OpenCode, Value: off
+		29 toggle button (settable, boolean) Permissions: Inherit global default, Value: on
+		30 toggle button (settable, boolean) Permissions: Approve for me, Value: off
+		31 toggle button (settable, boolean) Permissions: Full access, Value: off
+		32 toggle button (settable, boolean) Checkout: Inherit global default, Value: on
+		33 toggle button (settable, boolean) Checkout: Current checkout, Value: off
+		34 toggle button (settable, boolean) Checkout: New worktree, Value: off
+		35 button Project defaults: Inherit all global defaults
+		36 button Add project command
+	37 close button
+	38 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	39 minimize button
+40 menu bar
+	41 LUNA Dev
+	42 Edit
+	43 View
+	44 Window
+
+The focused UI element is 0 standard window Secondary Actions: Raise

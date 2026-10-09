@@ -1,0 +1,47 @@
+Window: "Conductor", App: Conductor.
+0 standard window Conductor, Secondary Actions: Raise
+	1 scroll area
+		2 HTML content Description: Tauri + React + Typescript, URL: tauri://localhost/settings/user/environment
+			3 container
+				4 button Back
+				5 pop up button Account menu
+				6 text field (settable) Search settings
+				7 container Search settings shortcut
+					8 text ⌘ F
+				9 text Personal
+				10 link General, Value: tauri://localhost/settings/user/general
+				11 link Account, Value: tauri://localhost/settings/user/account
+				12 link Appearance, Value: tauri://localhost/settings/user/appearance
+				13 link Default models, Value: tauri://localhost/settings/user/models
+				14 link Git, Value: tauri://localhost/settings/user/git
+				15 text Agents & environment
+				16 link Agents, Value: tauri://localhost/settings/user/providers
+				17 link Environment, Value: tauri://localhost/settings/user/environment
+				18 text Repositories
+				19 button (collapsed) luna luna, Secondary Actions: Expand
+				20 text More
+				21 link Experimental, Value: tauri://localhost/settings/user/experimental
+				22 link Advanced, Value: tauri://localhost/settings/user/advanced
+				23 button Finder icon Open settings.toml
+				24 pop up button
+				25 heading Environment, Value: 2
+					26 text Environment
+				27 text Configure environment variables used by Conductor and passed to agents.
+				28 button Add environment variable
+				29 text No variables set Add a variable to make it available in this environment.
+				30 button Show documented variables (18)
+				31 text Env files Load environment variables from env files. In the native file picker, press Cmd+Shift+. to show hidden files.
+				32 button Add env file
+			33 container Notifications alt+T
+	34 close button
+	35 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	36 minimize button
+37 menu bar
+	38 Conductor
+	39 File
+	40 Edit
+	41 View
+	42 Window
+	43 Help
+
+The focused UI element is 44 container

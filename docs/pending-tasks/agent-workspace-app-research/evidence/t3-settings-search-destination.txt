@@ -1,0 +1,198 @@
+Window: "T3 Code (Alpha)", App: T3 Code (Alpha).
+0 standard window T3 Code (Alpha), Secondary Actions: Raise
+	1 container T3 Code (Alpha)
+		2 container
+			3 HTML content T3 Code (Alpha), URL: t3code://app/#/settings/appearance
+				4 container
+					5 container Settings
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search settings, Placeholder: Search
+							9 text /
+							10 content list
+								11 button General
+								12 button Appearance
+								13 button Keybindings
+								14 button SnapShots
+								15 button Providers
+								16 button Integrations
+								17 button Source Control
+								18 button Storage
+								19 button Connections
+								20 button Archive
+						21 content list
+							22 button Sign in to T3 Connect
+						23 content list
+							24 button Back
+							25 button Update 0.0.45 ready to download
+						26 button Resize Sidebar
+					27 container
+						28 container Settings breadcrumb
+							29 content list
+								30 text Settings
+								31 text Appearance
+						32 container
+							33 heading Colors & themes, Value: 2
+								34 text Colors & themes
+							35 container
+								36 heading Color scheme, Value: 3
+									37 text Color scheme
+								38 container Appearance mode
+									39 toggle button Description: Follow the system appearance, Value: 1
+									40 toggle button Description: Use light mode, Value: 0
+									41 toggle button Description: Use dark mode, Value: 0
+								42 heading Themes, Value: 3
+									43 text Themes
+								44 button Create theme
+								45 button Add theme
+								46 container
+									47 toggle button Description: Use T3 Code light mode, Value: 1
+									48 toggle button Description: Use T3 Code dark mode, Value: 1
+								49 toggle button Description: Use T3 Code theme, Value: 0
+								50 button Duplicate T3 Code
+								51 container
+									52 toggle button Description: Use T3 Chat light mode, Value: 0
+									53 toggle button Description: Use T3 Chat dark mode, Value: 0
+								54 toggle button Description: Use T3 Chat theme, Value: 0
+								55 button Duplicate T3 Chat
+								56 container
+									57 toggle button Description: Use Grove light mode, Value: 0
+									58 toggle button Description: Use Grove dark mode, Value: 0
+								59 toggle button Description: Use Grove theme, Value: 0
+								60 button Duplicate Grove
+								61 container
+									62 toggle button Description: Use Ocean light mode, Value: 0
+									63 toggle button Description: Use Ocean dark mode, Value: 0
+								64 toggle button Description: Use Ocean theme, Value: 0
+								65 button Duplicate Ocean
+								66 container
+									67 toggle button Description: Use Ember light mode, Value: 0
+									68 toggle button Description: Use Ember dark mode, Value: 0
+								69 toggle button Description: Use Ember theme, Value: 0
+								70 button Duplicate Ember
+								71 container
+									72 toggle button Description: Use Iris light mode, Value: 0
+									73 toggle button Description: Use Iris dark mode, Value: 0
+								74 toggle button Description: Use Iris theme, Value: 0
+								75 button Duplicate Iris
+						76 container
+							77 heading Interface, Value: 2
+								78 text Interface
+							79 container
+								80 heading Contrast, Value: 3
+									81 text Contrast
+								82 text Adjust the contrast of colors and borders across the interface.
+								83 text 100
+								84 text %
+								85 slider Description: Contrast, Value: 100, Secondary Actions: Increment, Decrement
+							86 container Glass opacity Higher values make menus, dialogs, and the composer more solid. 80
+								87 heading Glass opacity, Value: 3
+									88 text Glass opacity
+								89 text Higher values make menus, dialogs, and the composer more solid.
+								90 container
+									91 text 80 %
+								92 slider Description: Glass opacity, Value: 80, Secondary Actions: Increment, Decrement
+							93 container
+								94 heading Diff colors, Value: 3
+									95 text Diff colors
+								96 text Choose colors for additions and deletions, including change counts.
+								97 combo box (settable) Description: Diff colors, Value: Red & green
+									98 text Red & green
+							99 container
+								100 heading Chat width, Value: 3
+									101 text Chat width
+								102 text Set how wide messages and the composer can grow on large screens.
+								103 combo box (settable) Description: Chat width, Value: Comfortable
+									104 text Comfortable
+						105 container
+							106 heading Motion, Value: 2
+								107 text Motion
+							108 container
+								109 heading Panel animations, Value: 3
+									110 text Panel animations
+								111 text Set how fast panels open and close.
+								112 button Replay panel animation preview
+								113 text 0
+								114 text  ms
+								115 slider Description: Panel animation duration, Value: 0, Secondary Actions: Increment, Decrement
+						116 container
+							117 heading Typography, Value: 2
+								118 text Typography
+							119 text Advanced
+							120 switch Advanced Show advanced typography settings, Value: off
+							121 container
+								122 heading Interface font, Value: 3
+									123 text Interface font
+								124 text Everything outside code blocks and the terminal.
+								125 combo box (settable) Description: Interface font family, Value: SF Pro
+									126 text SF Pro
+								127 combo box (settable) Description: Interface font size, Value: 16 px
+									128 text 16
+									129 text  px
+								130 text entry area (settable) Description: Ask for changes, send follow-ups, or attach images, Value: Use 
+Frontend Design
+ to fix the flaky test in 
+surface.test.ts
+ and align the header with 
+SettingsPanels.tsx
+ before shipping.
+									131 container
+										132 text Use 
+										133 pop up button Skill Frontend Design. Show details
+										134 text  to fix the flaky test in 
+										135 button Preview apps/web/src/terminal/ghostty/surface.test.ts
+										136 text  and align the header with 
+										137 button Preview apps/web/src/components/settings/SettingsPanels.tsx
+										138 text  before shipping.
+							139 container
+								140 heading Monospace font, Value: 3
+									141 text Monospace font
+								142 text Code blocks, diffs, file previews, and the terminal.
+								143 combo box (settable) Description: Monospace font family, Value: Menlo
+									144 text Menlo
+								145 combo box (settable) Description: Code font size, Value: 13 px
+									146 text 13
+									147 text  px
+								148 image
+								149 text src/formatUser.ts
+								150 text -1
+								151 text +1
+								152 container
+									153 text 1 2 2 3
+								154 container
+									155 text export  function  formatUser ( user :  User )  {
+								156 container
+									157 text   return  user . name . toUpperCase ();
+								158 container
+									159 text   return ` ${ user . name }  < ${ user . email } > ` ;  // 0O 1lI
+								160 text }
+								161 container Terminal font preview
+									162 text entry area (settable) Terminal input
+									163 scroll bar Description: Terminal scrollback, Value: 1
+							164 container
+								165 heading Word wrap, Value: 3
+									166 text Word wrap
+								167 text Wrap long lines in code blocks, tables, diffs, and file previews by default.
+								168 switch Description: Wrap code, tables, diffs, and file previews by default, Value: on
+					169 toggle button Description: Toggle main sidebar, Value: 1
+					170 container Notifications
+					171 container Notifications
+						172 container Update Available: Codex v0.160.0
+							173 button Dismiss notification
+							174 heading Update Available: Codex v0.160.0, Value: 2
+								175 text Update Available: Codex v0.160.0
+							176 text Install the update now or review provider settings.
+							177 button Settings
+							178 button Update
+	179 close button
+	180 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	181 minimize button
+182 menu bar
+	183 T3 Code (Alpha)
+	184 File
+	185 Edit
+	186 View
+	187 Window
+	188 Help
+
+The focused UI element is 86 container Glass opacity Higher values make menus, dialogs, and the composer more solid. 80

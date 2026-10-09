@@ -55,7 +55,7 @@ For each row, store the reference repository and commit, exact user trigger, scr
 
 Record whether behavior exists in LUNA today, is restricted by the remote policy, or needs a new backend operation. Separate source evidence, observed UI behavior, and proposed work. Do not mark a feature complete from a visible control, a successful socket, a static fixture, or a shared TypeScript/Rust schema alone.
 
-Codex and Claude parity and persistent child chats are merged; expose their existing host operations instead of building remote-only versions. Link overlapping work to [OpenCode parity](../opencode-feature-parity/README.md) while it remains open. This remote plan does not authorize implementing unrelated provider gaps. When a required operation is unavailable, show its absence through capability negotiation and preserve the backlog entry.
+Codex and Claude parity and persistent child chats are merged; expose their existing host operations instead of building remote-only versions. Remote use of every provider belongs to this plan, OpenCode included (it absorbs the former OpenCode parity package OC-16): the phone sees the providers, models and capabilities the Mac's engine reports, and provider binaries resolve on the Mac. This remote plan does not authorize implementing unrelated provider gaps. When a required operation is unavailable, show its absence through capability negotiation and preserve the backlog entry.
 
 ## Native and browser compatibility
 

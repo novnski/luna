@@ -457,20 +457,6 @@ pub(super) struct SidebarViewMenu {
     focus: FocusHandle,
 }
 
-struct SidebarViewOptionsTooltip;
-
-impl Render for SidebarViewOptionsTooltip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        crate::popover::tooltip_card(theme)
-            .px(crate::typography::ui_rems(8.0))
-            .py(crate::typography::ui_rems(6.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text)
-            .child("Sidebar view options")
-    }
-}
-
 #[derive(Clone, Copy)]
 enum SidebarViewRow {
     ByDevice,
@@ -1719,8 +1705,7 @@ impl Shell {
                     _ => {}
                 }
             }))
-            .tooltip(|_, cx| cx.new(|_| SidebarViewOptionsTooltip).into())
-            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+            .with_shortcut_tooltip("sidebar-view-options", "Sidebar view options", None)
             .child(
                 icon(icons::SORT)
                     .size(crate::typography::ui_rems(16.0))

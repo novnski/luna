@@ -1,0 +1,94 @@
+Window: "Conductor", App: Conductor.
+0 standard window Conductor, Secondary Actions: Raise
+	1 scroll area
+		2 HTML content Description: Tauri + React + Typescript, URL: tauri://localhost/settings/user/models
+			3 container
+				4 button Back
+				5 pop up button Account menu
+				6 text field (settable) Search settings
+				7 container Search settings shortcut
+					8 text ⌘ F
+				9 text Personal
+				10 link General, Value: tauri://localhost/settings/user/general
+				11 link Account, Value: tauri://localhost/settings/user/account
+				12 link Appearance, Value: tauri://localhost/settings/user/appearance
+				13 link Default models, Value: tauri://localhost/settings/user/models
+				14 link Git, Value: tauri://localhost/settings/user/git
+				15 text Agents & environment
+				16 link Agents, Value: tauri://localhost/settings/user/providers
+				17 link Environment, Value: tauri://localhost/settings/user/environment
+				18 text Repositories
+				19 button (collapsed) luna luna, Secondary Actions: Expand
+				20 text More
+				21 link Experimental, Value: tauri://localhost/settings/user/experimental
+				22 link Advanced, Value: tauri://localhost/settings/user/advanced
+				23 button Finder icon Open settings.toml
+				24 pop up button
+				25 heading Default models, Value: 2
+					26 text Default models
+				27 text Loadout
+				28 pop up button Setting actions
+				29 text Choose which models you want to use
+				30 button Share, Help: Open a shareable page for your loadout
+				31 text 1 2 3 DROP MODEL HERE 4 EMPTY 5
+				32 container
+					33 pop up button Change agent (Opus 5.5), Help: Opus 5.5
+					34 text DEFAULT
+				35 container
+					36 pop up button Change agent (GPT-6.1 Sol), Help: GPT-6.1 Sol
+					37 button Delete loadout 2
+				38 container
+					39 pop up button Change agent (GPT-6 Astra), Help: GPT-6 Astra
+					40 button Delete loadout 3
+				41 text Claude Code
+				42 button Add Fable 5.1 to loadout, Help: Fable 5.1
+				43 button Add Fable 5 to loadout, Help: Fable 5
+				44 button Add Opus 5.5 to loadout, Help: Opus 5.5
+				45 button Add Opus 5 to loadout, Help: Opus 5
+				46 button Add Opus 4.8 1M to loadout, Help: Opus 4.8 1M
+				47 button Add Opus 4.7 1M to loadout, Help: Opus 4.7 1M
+				48 button Add Opus 4.6 1M to loadout, Help: Opus 4.6 1M
+				49 button Add Sonnet 5.5 to loadout, Help: Sonnet 5.5
+				50 button Add Sonnet 5 1M to loadout, Help: Sonnet 5 1M
+				51 button Add Sonnet 4.6 1M to loadout, Help: Sonnet 4.6 1M
+				52 button Add Sonnet 4.6 to loadout, Help: Sonnet 4.6
+				53 button Add Haiku 4.5 to loadout, Help: Haiku 4.5
+				54 text Codex
+				55 button Add GPT-6 Astra to loadout, Help: GPT-6 Astra
+				56 button Add GPT-6.1 Sol to loadout, Help: GPT-6.1 Sol
+				57 button Add GPT-6 Sol to loadout, Help: GPT-6 Sol
+				58 button Add GPT-6 Luna to loadout, Help: GPT-6 Luna
+				59 button Add GPT-5.6 Sol to loadout, Help: GPT-5.6 Sol
+				60 button Add GPT-5.6 Terra to loadout, Help: GPT-5.6 Terra
+				61 button Add GPT-5.6 Luna to loadout, Help: GPT-5.6 Luna
+				62 button Add GPT-5.5 to loadout, Help: GPT-5.5
+				63 button Add GPT-5.4 to loadout, Help: GPT-5.4
+				64 text Cursor
+				65 button Configure Cursor
+				66 text OpenCode
+				67 button Configure OpenCode
+				68 text Codex personality
+				69 combo box (collapsed, settable) Value: Pragmatic (default), Secondary Actions: Expand
+					70 text Pragmatic (default)
+				71 text Claude output style Choose which 
+				72 link output style, Value: code.claude.com/docs/en/output-styles
+				73 text to apply to new chats. Existing chats do not change.
+				74 combo box (collapsed, settable) Value: Default, Secondary Actions: Expand
+					75 text Default
+				76 text Review model
+				77 pop up button Change agent (Opus 5), Help: Opus 5
+				78 text Default to plan mode in new chats
+				79 switch (settable, boolean) off
+			80 container Notifications alt+T
+	81 close button
+	82 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	83 minimize button
+84 menu bar
+	85 Conductor
+	86 File
+	87 Edit
+	88 View
+	89 Window
+	90 Help
+
+The focused UI element is 91 container
