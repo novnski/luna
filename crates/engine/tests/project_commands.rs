@@ -608,7 +608,10 @@ async fn generation_ownership_deletion_and_backup() {
             .unwrap()
             .is_empty()
     );
-    reopened.workspace.delete_space("p").unwrap();
+    reopened
+        .workspace
+        .delete_space_if_chats("p", &["a".to_string()])
+        .unwrap();
     assert!(
         reopened
             .project_commands

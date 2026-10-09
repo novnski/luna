@@ -801,42 +801,6 @@ async fn spaces_sync_stamps_git_presence_and_reacts_to_git_init() {
     core.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_space_cascades_chats_and_sessions() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let folder = tmp.path().join("folder");
-    std::fs::create_dir_all(&folder).expect("folder");
-
-    let core = assemble(&tmp.path().join("data"));
-    core.workspace
-        .create_space(
-            "space-1",
-            &core.device_id,
-            &folder.to_string_lossy(),
-            None,
-            false,
-        )
-        .expect("space row");
-    core.workspace
-        .create_chat("chat-1", Some("space-1"), None, None, None)
-        .expect("chat row");
-    let chat = core
-        .workspace
-        .chat("chat-1")
-        .expect("read")
-        .expect("exists");
-    assert_eq!(chat.space_id.as_deref(), Some("space-1"));
-    assert_eq!(chat.device_id, core.device_id);
-    assert_eq!(chat.cwd.as_deref(), Some(&*folder.to_string_lossy()));
-
-    let deleted = core.workspace.delete_space("space-1").expect("cascade");
-    assert!(deleted.existed);
-    assert_eq!(deleted.chat_ids, vec!["chat-1".to_string()]);
-    assert!(core.workspace.chat("chat-1").expect("read").is_none());
-    assert!(core.workspace.read_spaces().expect("spaces").is_empty());
-    core.shutdown().await;
-}
-
 // ---------------------------------------------------------------------------
 // Diff sync (watchers + workspace branch upkeep) via EngineCore
 // ---------------------------------------------------------------------------

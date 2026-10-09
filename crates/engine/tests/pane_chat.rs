@@ -2380,9 +2380,9 @@ fn legacy_child_rows_contracts_and_requests_decode_unchanged() {
         "status":"applied","snapshot":{"taskId":"c","taskRevision":1,"taskSequence":1},
         "actorId":"a","clientId":"c","clientSessionId":"s","acceptedAtMs":1,"observedAtMs":1},
         "initialMessageId":"child-initial:c","startupState":"durable-startup-intent"});
-    if let Ok(receipt) = serde_json::from_value::<luna_proto::ChildThreadReceipt>(legacy_receipt) {
-        assert_eq!(receipt.provisioning, None);
-    }
+    let receipt: luna_proto::ChildThreadReceipt =
+        serde_json::from_value(legacy_receipt).expect("a legacy child receipt still decodes");
+    assert_eq!(receipt.provisioning, None);
     let legacy_context = json!({
         "appVersion": "0.2.72", "protocolVersion": 1, "threadId": "t", "parentThreadId": null,
         "sourceThreadId": null, "projectId": "p", "projectName": "P", "environmentId": "e",

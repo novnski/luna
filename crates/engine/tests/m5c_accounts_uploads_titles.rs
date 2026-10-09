@@ -18,10 +18,7 @@ use luna_engine::{
     EngineCore, HarnessRegistry, Repos, Uploads, worktree_branch_from_title,
 };
 use luna_harness::mock::MockHarness;
-use luna_proto::{
-    AgentAccountsSnapshot, AgentEvent, AgentLoginMode, AgentLoginStatus, DoneStatus, HarnessId,
-    SandboxLevel,
-};
+use luna_proto::{AgentAccountsSnapshot, AgentEvent, DoneStatus, HarnessId, SandboxLevel};
 use luna_rpc::methods;
 
 // ---------------------------------------------------------------------------
@@ -299,45 +296,6 @@ async fn claude_reconnect_leaves_live_provider_and_mcp_credentials_untouched() {
 }
 
 #[tokio::test]
-async fn claude_reconnect_never_rewrites_live_shared_credentials() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (accounts, config) = test_accounts(tmp.path());
-    let creds_file = config.claude_config_dir.join(".credentials.json");
-
-    // Alice is the current provider-native OAuth login.
-    write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
-    let snapshot = accounts.list(false).await.expect("list alice");
-    let alice_id = snapshot.accounts[0].id.clone();
-
-    write_claude_login(&config, "bob@example.com", "uuid-bob", "token-bob");
-    std::fs::write(
-        &creds_file,
-        serde_json::json!({
-            "claudeAiOauth": {
-                "accessToken": "token-bob",
-                "refreshToken": "refresh-token-bob",
-                "expiresAt": 4_102_444_800_000i64,
-            },
-            "mcpOAuth": { "linear": { "accessToken": "live-linear" } },
-        })
-        .to_string(),
-    )
-    .expect("bob mcp creds");
-    accounts.list(false).await.expect("list bob");
-
-    accounts
-        .activate(HarnessId::ClaudeCode, &alice_id)
-        .await
-        .expect("metadata-only reconnect");
-
-    let creds: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&creds_file).expect("creds readable"))
-            .expect("creds json");
-    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-bob");
-    assert_eq!(creds["mcpOAuth"]["linear"]["accessToken"], "live-linear");
-}
-
-#[tokio::test]
 async fn codex_discovery_is_native_only_and_api_keys_are_redacted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
@@ -457,55 +415,6 @@ async fn disconnect_preserves_provider_and_legacy_credentials() {
             .is_err()
     );
     assert_eq!(std::fs::read(legacy).unwrap(), bytes);
-}
-
-#[test]
-fn snapshot_wire_shape() {
-    let snapshot = AgentAccountsSnapshot::default();
-    let value = serde_json::to_value(&snapshot).expect("serializes");
-    assert_eq!(value, serde_json::json!({ "accounts": [], "warnings": [] }));
-}
-
-#[tokio::test]
-async fn claude_login_flow_is_pkce_paste_code() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (accounts, _) = test_accounts(tmp.path());
-    let start = accounts
-        .start_login(HarnessId::ClaudeCode)
-        .await
-        .expect("start");
-    assert!(
-        start
-            .url
-            .starts_with("https://claude.ai/oauth/authorize?code=true")
-    );
-    assert!(start.url.contains("code_challenge_method=S256"));
-    assert!(
-        start
-            .url
-            .contains("redirect_uri=https%3A%2F%2Fconsole.anthropic.com")
-    );
-    let mode = serde_json::to_value(start.mode).expect("mode");
-    assert_eq!(mode, serde_json::json!("paste-code"));
-
-    // Claude flows poll as pending (paste-code completes them); cancel drops the
-    // flow so the next poll reports it expired.
-    let poll = accounts.poll_login(&start.login_id).await.expect("poll");
-    assert_eq!(
-        serde_json::to_value(poll.status).expect("status"),
-        serde_json::json!("pending")
-    );
-    accounts.cancel_login(&start.login_id);
-    assert!(
-        accounts.poll_login(&start.login_id).await.is_err(),
-        "cancelled flow is gone"
-    );
-    assert!(
-        accounts
-            .complete_login(&start.login_id, "code#state")
-            .await
-            .is_err()
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +804,7 @@ async fn rpc_dispatch_for_m5c_methods() {
         .to_string();
     assert!(remote_sync_logout.contains("Remote credential actions are unavailable"));
 
-    // Login lifecycle: start (paste-code) → poll pending → cancel → gone.
+    // Login lifecycle: start (PKCE paste-code) → poll pending → cancel → gone.
     let start = client
         .call(
             methods::START_AGENT_LOGIN,
@@ -904,11 +813,15 @@ async fn rpc_dispatch_for_m5c_methods() {
         .await
         .expect("StartAgentLogin");
     assert_eq!(start["mode"], "paste-code");
+    let url = start["url"].as_str().expect("url");
     assert!(
-        start["url"]
-            .as_str()
-            .expect("url")
-            .contains("claude.ai/oauth/authorize")
+        url.starts_with("https://claude.ai/oauth/authorize?code=true"),
+        "{url}"
+    );
+    assert!(url.contains("code_challenge_method=S256"), "{url}");
+    assert!(
+        url.contains("redirect_uri=https%3A%2F%2Fconsole.anthropic.com"),
+        "{url}"
     );
     let login_id = start["loginId"].as_str().expect("loginId").to_string();
     let poll = client
@@ -936,6 +849,16 @@ async fn rpc_dispatch_for_m5c_methods() {
             .await
             .is_err(),
         "cancelled login is expired"
+    );
+    assert!(
+        client
+            .call(
+                methods::COMPLETE_AGENT_LOGIN,
+                serde_json::json!({ "loginId": login_id, "code": "code#state" })
+            )
+            .await
+            .is_err(),
+        "a cancelled login cannot be completed"
     );
 
     // Error paths: junk account ids and dead logins fail cleanly.

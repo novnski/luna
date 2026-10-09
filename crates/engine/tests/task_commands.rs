@@ -2077,7 +2077,9 @@ async fn stale_project_preparation_never_deletes_a_moved_survivor() {
         "{:?}",
         moved.reason
     );
-    core.workspace.delete_space("old-project").unwrap();
+    core.workspace
+        .delete_space_if_chats("old-project", &[])
+        .unwrap();
     core.workspace.flush();
     drop(client);
     drop(core);

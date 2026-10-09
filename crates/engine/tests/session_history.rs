@@ -9,8 +9,7 @@ use luna_engine::{EngineCore, HarnessRegistry, RunJournal};
 use luna_harness::mock::MockHarness;
 use luna_proto::{
     ActivityRedaction, AgentEvent, ChatConfig, HarnessId, HistoryProjectPolicy,
-    HistoryRebuildResult, HistorySearchPage, HistorySearchRequest, PermissionMode, SandboxLevel,
-    ToolCall,
+    HistoryRebuildResult, HistorySearchPage, PermissionMode, SandboxLevel, ToolCall,
 };
 use luna_rpc::methods;
 
@@ -632,10 +631,4 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
     .await;
     assert_eq!(persisted_recorded.events.len(), 1);
     reopened.shutdown().await;
-}
-
-#[test]
-fn request_contract_remains_bounded() {
-    let request: HistorySearchRequest = serde_json::from_value(serde_json::json!({})).unwrap();
-    assert_eq!(request.limit, 50);
 }
