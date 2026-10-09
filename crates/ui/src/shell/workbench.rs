@@ -329,6 +329,9 @@ pub(super) struct TabMenu {
 pub(super) struct WorkbenchState {
     /// The owner: the selected left-navigation chat ("" on the canvas).
     main: String,
+    /// The execution focus this window last published to the shared
+    /// `AppState` (`None`: not yet published).
+    execution_focus_sent: Option<Option<String>>,
     generation: u64,
     profile: Option<String>,
     capable: bool,
@@ -463,6 +466,7 @@ impl WorkbenchState {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             main: String::new(),
+            execution_focus_sent: None,
             generation: 0,
             profile: None,
             capable: false,
@@ -792,11 +796,19 @@ impl Shell {
     /// Execution card and other diagnostics follow it, never Main).
     pub(super) fn sync_execution_focus(&mut self, cx: &mut Context<Self>) {
         let focus = self.workbench_execution_focus(cx);
-        if self.state.read(cx).execution_focus != focus {
-            self.state.update(cx, |state, cx| {
-                state.execution_focus = focus;
-                cx.notify();
-            });
+        // Publish this window's focus when it changes, not on every render.
+        // Every window's Shell shares one AppState: re-asserting a differing
+        // value each render made two windows overwrite each other forever
+        // (each write notifies the state, which re-renders the other window
+        // — 100% CPU, and a synchronous loop in test flushes).
+        if self.workbench.execution_focus_sent.as_ref() != Some(&focus) {
+            self.workbench.execution_focus_sent = Some(focus.clone());
+            if self.state.read(cx).execution_focus != focus {
+                self.state.update(cx, |state, cx| {
+                    state.execution_focus = focus;
+                    cx.notify();
+                });
+            }
         }
         // The focused chat's work watch follows the same focus (and the
         // engine connection); unchanged, this is a comparison only.

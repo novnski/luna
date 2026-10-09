@@ -43,6 +43,8 @@ use crate::typography::ui_rems;
 /// Below this page width (interface points at the default size) the Board
 /// shows the List view whatever the saved preference says.
 pub(super) const NARROW_WIDTH: f32 = 760.0;
+/// A narrow page returns to columns only this much above [`NARROW_WIDTH`].
+const NARROW_HYSTERESIS: f32 = 48.0;
 /// Search edits settle this long before the engine is asked again.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(220);
 /// Scroll offsets are saved once scrolling pauses.
@@ -319,8 +321,13 @@ pub struct BoardPage {
     /// The sidebar project filter last applied, so the Board follows a
     /// sidebar change but keeps its own explicit choice otherwise.
     seen_sidebar_filter: Option<String>,
-    /// Whether the last frame was narrow enough for the List view.
+    /// Whether this window's page is narrow enough for the List view (per
+    /// page, so per window; never a saved preference).
     pub(super) narrow: bool,
+    narrow_mode: NarrowMode,
+    /// Frames rendered (QA: a settled page stops rendering).
+    #[cfg(feature = "appshots-fixture")]
+    renders: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -423,6 +430,9 @@ impl BoardPage {
             pending_reveal: None,
             seen_sidebar_filter: None,
             narrow: false,
+            narrow_mode: NarrowMode::default(),
+            #[cfg(feature = "appshots-fixture")]
+            renders: 0,
             _subscriptions: vec![
                 observer,
                 surfaces_observer,
@@ -2118,6 +2128,58 @@ impl BoardPage {
     }
 }
 
+/// The automatic List decision for one page (one window). It converges: a
+/// flip never follows from the page's own re-layout in the new mode (its
+/// width can depend on the mode, e.g. the columns' minimum widths), only
+/// from an outside change of the page width, and the switch back to
+/// columns needs [`NARROW_HYSTERESIS`] more width.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) struct NarrowMode {
+    pub narrow: bool,
+    /// Flipped this frame: the next measured width is the new mode's own.
+    flipped: bool,
+    /// The page width measured right after the last flip.
+    baseline: Option<f32>,
+}
+
+impl NarrowMode {
+    fn wants_narrow(&self, width: f32, low: f32, high: f32) -> bool {
+        if self.narrow {
+            width < high
+        } else {
+            width < low
+        }
+    }
+
+    /// The width is the page's own re-layout after a flip, not a change.
+    fn echo(&self, width: f32) -> bool {
+        self.flipped
+            || self
+                .baseline
+                .is_some_and(|baseline| (width - baseline).abs() < 1.0)
+    }
+
+    /// Whether `width` (measured) calls for a flip next frame.
+    fn would_flip(&self, width: f32, low: f32, high: f32) -> bool {
+        self.wants_narrow(width, low, high) != self.narrow && !self.echo(width)
+    }
+
+    /// Decide this frame from the (estimated) page width.
+    fn update(&mut self, width: Option<f32>, low: f32, high: f32) {
+        let Some(width) = width else {
+            return;
+        };
+        if std::mem::take(&mut self.flipped) {
+            self.baseline = Some(width);
+        }
+        if self.would_flip(width, low, high) {
+            self.narrow = !self.narrow;
+            self.flipped = true;
+            self.baseline = None;
+        }
+    }
+}
+
 fn queue_text(reason: &BoardAdmissionReason) -> String {
     match reason {
         BoardAdmissionReason::ProjectCapacity { limit } => {
@@ -2181,6 +2243,10 @@ fn summarize_evidence(as_of: i64, outcomes: &luna_proto::BoardOutcomes) -> CardE
 impl Render for BoardPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        #[cfg(feature = "appshots-fixture")]
+        {
+            self.renders += 1;
+        }
         self.sync_frame(window, cx);
         if let Some(mount) = &self.authoring {
             // Discuss with AI (A6) takes the page while open: the
@@ -2193,8 +2259,13 @@ impl Render for BoardPage {
         }
         // The List view takes over below the narrow width: the last measured
         // page width, adjusted by how much the window changed since (so a
-        // window resize switches in the same frame).
-        let narrow_px = NARROW_WIDTH / 16.0 * f32::from(window.rem_size());
+        // window resize switches in the same frame). The decision converges
+        // (see `NarrowMode`).
+        let rem = f32::from(window.rem_size());
+        let (low, high) = (
+            NARROW_WIDTH / 16.0 * rem,
+            (NARROW_WIDTH + NARROW_HYSTERESIS) / 16.0 * rem,
+        );
         let viewport = window.viewport_size().width;
         let width = {
             let geometry = self.geometry.borrow();
@@ -2202,7 +2273,8 @@ impl Render for BoardPage {
                 .page
                 .map(|bounds| f32::from(bounds.size.width + (viewport - geometry.viewport_width)))
         };
-        self.narrow = width.is_some_and(|width| width < narrow_px);
+        self.narrow_mode.update(width, low, high);
+        self.narrow = self.narrow_mode.narrow;
 
         let header = self.render_header(&theme, window, cx);
         let notice = self.render_notice(&theme, cx);
@@ -2220,7 +2292,7 @@ impl Render for BoardPage {
 
         let geometry = self.geometry.clone();
         let entity = cx.entity_id();
-        let was_narrow = self.narrow;
+        let mode = self.narrow_mode;
         div()
             .on_children_prepainted(move |bounds, window, _| {
                 let page = bounds.first().copied();
@@ -2230,9 +2302,11 @@ impl Render for BoardPage {
                     geometry.viewport_width = window.viewport_size().width;
                 }
                 // The estimate missed (the sidebar or a pane changed width):
-                // render again with the measured width.
-                let narrow = page.is_some_and(|page| f32::from(page.size.width) < narrow_px);
-                if narrow != was_narrow {
+                // render once more with the measured width. Never for the
+                // page's own re-layout after a flip, so this cannot repeat.
+                if let Some(page) = page
+                    && mode.would_flip(f32::from(page.size.width), low, high)
+                {
                     window.on_next_frame(move |_, cx| cx.notify(entity));
                 }
             })
@@ -2764,6 +2838,7 @@ impl BoardPage {
             "view": format!("{:?}", self.prefs.view),
             "effectiveView": format!("{:?}", self.effective_view()),
             "narrow": self.narrow,
+            "renders": self.renders,
             "prefs": self.prefs,
             "selected": self.selected,
             "focused": focused,

@@ -60,6 +60,9 @@
 //! 14. Interface sizes 12, 16 and 20: columns stop sitting side by side at
 //!     the default width, a card overflows its column, or toolbar controls
 //!     overlap.
+//! 15. Convergence: a second, narrow window on the same app state keeps
+//!     redrawing (the automatic List decision flip-flopping, or two windows
+//!     overwriting shared state each frame), or never settles on the List.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-page-fixture
@@ -96,6 +99,8 @@ const P_SITE: &str = "proj-site";
 const P_NOTES: &str = "proj-notes";
 const WIDTH: f32 = 1440.0;
 const HEIGHT: f32 = 900.0;
+/// A second window narrow enough for the automatic List view.
+const NARROW_WINDOW: f32 = 760.0;
 /// Paces the Mock run so Working and Stopping are observable.
 const MOCK_DELAY_MS: &str = "700";
 
@@ -1493,6 +1498,64 @@ async fn prefs_pass(
     Ok(window)
 }
 
+/// The Board readback without drawing a frame (frame counting).
+fn board_undrawn(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    window.update(cx, |shell, window, cx| {
+        shell.fixture_board_readback(window, cx)
+    })
+}
+
+/// Item 15: a second, narrow window on the same app state settles. Both
+/// windows' Board pages stop rendering once nothing changes: no continuous
+/// redraw from the narrow decision (or anything else) in either window.
+async fn convergence_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    manifest: &mut Manifest,
+    open: impl FnOnce(&mut AsyncApp) -> anyhow::Result<Window>,
+) -> anyhow::Result<()> {
+    let narrow = open(cx)?;
+    settle(cx, 600).await;
+    // A few frames: the restored Board page mounts and decides List.
+    frames(narrow, cx, 400).await?;
+    let rb = wait(narrow, cx, "the narrow window's List", |rb| {
+        rb["status"] == "Live" && rb["effectiveView"] == "List"
+    })
+    .await?;
+    let png = capture(narrow, cx, manifest, "c-narrow-window")?;
+    // Now only watch: no input, no forced draws.
+    settle(cx, 300).await;
+    let before = (
+        num(&board_undrawn(narrow, cx)?["renders"]),
+        num(&board_undrawn(window, cx)?["renders"]),
+    );
+    settle(cx, 1000).await;
+    let after = (
+        num(&board_undrawn(narrow, cx)?["renders"]),
+        num(&board_undrawn(window, cx)?["renders"]),
+    );
+    anyhow::ensure!(
+        // A settled page renders only for real changes (a late engine
+        // observation, a timer); continuous redraw is dozens per second.
+        after.0 - before.0 <= 5.0 && after.1 - before.1 <= 5.0,
+        "item 15: the Board keeps redrawing with nothing changing: narrow {before:?} → {after:?} (renders)"
+    );
+    let still = board_undrawn(narrow, cx)?;
+    anyhow::ensure!(
+        still["effectiveView"] == "List" && still["view"] == rb["view"],
+        "item 15: the narrow window's view changed by itself: {}",
+        still["effectiveView"]
+    );
+    manifest.step(
+        "narrow-second-window-converges",
+        "a second narrow window on the same state shows the List and, like the first window, stops rendering within a second",
+        json!({"renders": {"before": before, "after": after}, "png": png}),
+    );
+    gpui::AnyWindowHandle::from(narrow).update(cx, |_, window, _| window.remove_window())?;
+    settle(cx, 200).await;
+    Ok(())
+}
+
 /// `Working` → `working` (the wire's camelCase phase names).
 fn lower_first(text: &str) -> String {
     let mut chars = text.chars();
@@ -1683,7 +1746,7 @@ fn main() -> anyhow::Result<()> {
             let open = {
                 let state = state.clone();
                 let boot = boot.clone();
-                move |cx: &mut gpui::App, height: f32| -> anyhow::Result<Window> {
+                move |cx: &mut gpui::App, width: f32, height: f32| -> anyhow::Result<Window> {
                     let state = state.clone();
                     let boot = boot.clone();
                     let window = cx.open_window(
@@ -1693,7 +1756,7 @@ fn main() -> anyhow::Result<()> {
                             focus: false,
                             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                                 point(px(20.0), px(20.0)),
-                                size(px(WIDTH), px(height)),
+                                size(px(width), px(height)),
                             ))),
                             ..Default::default()
                         },
@@ -1709,7 +1772,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(window)
                 }
             };
-            let window = match open(cx, HEIGHT) {
+            let window = match open(cx, WIDTH, HEIGHT) {
                 Ok(window) => window,
                 Err(error) => {
                     *failure_for_ui.lock().unwrap() = Some(format!("{error:#}"));
@@ -1741,7 +1804,11 @@ fn main() -> anyhow::Result<()> {
                     behaviour_pass(current, cx, &engine, &calls, &mut manifest, &seeds).await?;
                     let data = ui_data.clone();
                     current = prefs_pass(current, cx, &mut manifest, &data, |cx, height| {
-                        cx.update(|cx| open(cx, height))
+                        cx.update(|cx| open(cx, WIDTH, height))
+                    })
+                    .await?;
+                    convergence_pass(current, cx, &mut manifest, |cx| {
+                        cx.update(|cx| open(cx, NARROW_WINDOW, HEIGHT))
                     })
                     .await?;
                     Ok(())
