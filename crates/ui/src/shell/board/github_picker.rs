@@ -2036,6 +2036,7 @@ impl super::super::Shell {
         let events = cx.subscribe(&picker, move |shell: &mut Self, _, event, cx| match event {
             GitHubPickerEvent::Dismissed => {
                 shell.board_github = None;
+                shell.board_restore_drawer_focus(cx);
                 cx.notify();
             }
             GitHubPickerEvent::OpenCard { work_item_id } => {
@@ -2084,6 +2085,9 @@ impl super::super::Shell {
         let events = cx.subscribe(&dialog, move |shell: &mut Self, _, event, cx| match event {
             WritebackDialogEvent::Dismissed => {
                 shell.board_github = None;
+                // Escape must reach the drawer again (focus left with the
+                // dialog).
+                shell.board_restore_drawer_focus(cx);
                 cx.notify();
             }
             WritebackDialogEvent::Written(receipt) => {

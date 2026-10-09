@@ -374,6 +374,25 @@ pub(crate) fn describe_review(
 // The editor
 // ---------------------------------------------------------------------------
 
+/// One choice control's element id and QA probe name (see `slot`).
+struct Slot {
+    element: String,
+    probe: String,
+}
+
+/// The items in order with later duplicates (by `key`) dropped: a catalog
+/// may list one model, level or choice twice; one control each.
+fn unique_by<T, K: Eq + std::hash::Hash>(
+    items: impl IntoIterator<Item = T>,
+    key: impl Fn(&T) -> K,
+) -> Vec<T> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| seen.insert(key(item)))
+        .collect()
+}
+
 /// Mutable view of the fields both profiles share.
 struct Fields<'a> {
     harness: &'a mut Option<HarnessId>,
@@ -921,10 +940,31 @@ impl ExecutionSettingsEditor {
         format!("{}-{}-{rest}", self.prefix, which.key())
     }
 
+    /// One choice control's identity. The element id is namespaced by
+    /// editor, profile, row and (for rows that depend on it) harness, plus
+    /// the control's position in its row: never a catalog id or label, so no
+    /// catalog (a model listed twice, a `default` choice beside the Default
+    /// chip) can give two controls one id, which GPUI's accessibility tree
+    /// rejects. `probe` is the semantic name QA reads.
+    fn slot(
+        &self,
+        which: Which,
+        row: &str,
+        scope: Option<HarnessId>,
+        index: usize,
+        probe: impl Into<String>,
+    ) -> Slot {
+        let scope = scope.map_or_else(|| "any".to_owned(), harness_key);
+        Slot {
+            element: format!("{}-{}-{row}-{scope}-{index}", self.prefix, which.key()),
+            probe: format!("{}-{}-{}", self.prefix, which.key(), probe.into()),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn chip(
         &self,
-        id: String,
+        slot: Slot,
         label: impl Into<SharedString>,
         selected: bool,
         enabled: bool,
@@ -933,9 +973,9 @@ impl ExecutionSettingsEditor {
         on: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> AnyElement {
         let label: SharedString = label.into();
-        self.probe.chip(&id, &label, selected);
-        let probe = self.probe.bounds_el(id.clone());
-        let mut chip = button::chip(id, selected, ControlSize::Sm, enabled, theme)
+        self.probe.chip(&slot.probe, &label, selected);
+        let probe = self.probe.bounds_el(slot.probe);
+        let mut chip = button::chip(slot.element, selected, ControlSize::Sm, enabled, theme)
             .role(gpui::Role::RadioButton)
             .aria_label(label.clone())
             .max_w_full();
@@ -1007,7 +1047,7 @@ impl ExecutionSettingsEditor {
             (None, _) => "Inherit · not resolved yet".to_owned(),
         };
         let mut chips = vec![self.chip(
-            self.id(which, "harness-inherit"),
+            self.slot(which, "harness", None, 0, "harness-inherit"),
             inherit_label,
             values.harness.is_none(),
             true,
@@ -1015,15 +1055,23 @@ impl ExecutionSettingsEditor {
             cx,
             move |this, cx| this.select_harness(which, None, cx),
         )];
-        let harnesses: Vec<HarnessId> = options
-            .harnesses
-            .iter()
-            .filter(|entry| entry.available)
-            .map(|entry| entry.harness)
-            .collect();
-        for harness in harnesses {
+        let harnesses: Vec<HarnessId> = unique_by(
+            options
+                .harnesses
+                .iter()
+                .filter(|entry| entry.available)
+                .map(|entry| entry.harness),
+            |harness| *harness,
+        );
+        for (index, harness) in harnesses.into_iter().enumerate() {
             chips.push(self.chip(
-                self.id(which, &format!("harness:{}", harness_key(harness))),
+                self.slot(
+                    which,
+                    "harness",
+                    None,
+                    index + 1,
+                    format!("harness:{}", harness_key(harness)),
+                ),
                 harness_label(harness),
                 values.harness == Some(harness),
                 true,
@@ -1047,7 +1095,9 @@ impl ExecutionSettingsEditor {
         if entry.accounts.len() < 2 {
             return None;
         }
-        let accounts = entry.accounts.clone();
+        let accounts = unique_by(entry.accounts.iter().cloned(), |account| {
+            account.account_id.clone()
+        });
         let values = self.values(which);
         let active = accounts
             .iter()
@@ -1055,7 +1105,7 @@ impl ExecutionSettingsEditor {
             .map(|account| account.label.clone())
             .unwrap_or_else(|| "the active account".into());
         let mut chips = vec![self.chip(
-            self.id(which, "account-inherit"),
+            self.slot(which, "account", Some(harness), 0, "account-inherit"),
             format!("Inherit · {active} (active)"),
             values.account.is_none(),
             true,
@@ -1063,10 +1113,16 @@ impl ExecutionSettingsEditor {
             cx,
             move |this, cx| this.select_account(which, None, cx),
         )];
-        for account in accounts {
+        for (index, account) in accounts.into_iter().enumerate() {
             let id = account.account_id.clone();
             chips.push(self.chip(
-                self.id(which, &format!("account:{id}")),
+                self.slot(
+                    which,
+                    "account",
+                    Some(harness),
+                    index + 1,
+                    format!("account:{id}"),
+                ),
                 account.label.clone(),
                 values.account.as_deref() == Some(id.as_str()),
                 true,
@@ -1086,6 +1142,7 @@ impl ExecutionSettingsEditor {
     fn model_row(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let harness = self.effective_harness(which)?;
         let entry = harness_options(self.options()?, harness)?.clone();
+        let models = unique_by(entry.models.iter().cloned(), |model| model.id.clone());
         let values = self.values(which);
         let inherit_label = match self.inherited_model(which, harness) {
             Some((model, origin)) => format!(
@@ -1095,7 +1152,7 @@ impl ExecutionSettingsEditor {
             None => "Inherit · the provider's default model".to_owned(),
         };
         let mut chips = vec![self.chip(
-            self.id(which, "model-inherit"),
+            self.slot(which, "model", Some(harness), 0, "model-inherit"),
             inherit_label,
             values.model.is_none(),
             true,
@@ -1105,15 +1162,21 @@ impl ExecutionSettingsEditor {
         )];
         let expanded = self.expanded_models.contains(&(which, harness));
         let shown = if expanded {
-            entry.models.len()
+            models.len()
         } else {
-            MODEL_CHIPS.min(entry.models.len())
+            MODEL_CHIPS.min(models.len())
         };
-        for model in entry.models.iter().take(shown) {
+        for (index, model) in models.iter().take(shown).enumerate() {
             let id = model.id.clone();
             let selected = values.model.as_deref() == Some(id.as_str());
             chips.push(self.chip(
-                self.id(which, &format!("model:{id}")),
+                self.slot(
+                    which,
+                    "model",
+                    Some(harness),
+                    index + 1,
+                    format!("model:{id}"),
+                ),
                 model.label.clone(),
                 selected,
                 true,
@@ -1125,10 +1188,16 @@ impl ExecutionSettingsEditor {
         // A saved model the loaded page does not list stays visible as such.
         if let Some(saved) = &values.model
             && values.harness.is_none_or(|h| h == harness)
-            && !entry.models.iter().any(|model| &model.id == saved)
+            && !models.iter().any(|model| &model.id == saved)
         {
             chips.push(self.chip(
-                self.id(which, &format!("model:{saved}")),
+                self.slot(
+                    which,
+                    "model",
+                    Some(harness),
+                    models.len() + 1,
+                    format!("model:{saved}"),
+                ),
                 format!("{saved} (not in the loaded catalog)"),
                 true,
                 true,
@@ -1137,7 +1206,7 @@ impl ExecutionSettingsEditor {
                 |_, _| {},
             ));
         }
-        if entry.models.len() > shown {
+        if models.len() > shown {
             let key = (which, harness);
             chips.push(
                 button::button(
@@ -1148,7 +1217,8 @@ impl ExecutionSettingsEditor {
                     theme,
                 )
                 .aria_label("Show all models")
-                .child(format!("Show all {}", entry.models.len()))
+                .child(format!("Show all {}", models.len()))
+                .children(self.probe.bounds_el(self.id(which, "model-show-all")))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.expanded_models.push(key);
                     cx.notify();
@@ -1180,7 +1250,8 @@ impl ExecutionSettingsEditor {
     }
 
     fn reasoning_row(&self, which: Which, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let levels = self.supported_levels(which);
+        let levels = unique_by(self.supported_levels(which), |level| reasoning_key(*level));
+        let scope = self.effective_harness(which);
         let model = self
             .effective_model_info(which)
             .map(|model| model.label.clone());
@@ -1197,7 +1268,7 @@ impl ExecutionSettingsEditor {
             None => "Inherit · the model's default".to_owned(),
         };
         let mut chips = vec![self.chip(
-            self.id(which, "reasoning-inherit"),
+            self.slot(which, "reasoning", scope, 0, "reasoning-inherit"),
             inherit_label,
             values.reasoning.is_none(),
             true,
@@ -1205,9 +1276,15 @@ impl ExecutionSettingsEditor {
             cx,
             move |this, cx| this.select_reasoning(which, None, cx),
         )];
-        for level in levels {
+        for (index, level) in levels.into_iter().enumerate() {
             chips.push(self.chip(
-                self.id(which, &format!("reasoning:{}", reasoning_key(level))),
+                self.slot(
+                    which,
+                    "reasoning",
+                    scope,
+                    index + 1,
+                    format!("reasoning:{}", reasoning_key(level)),
+                ),
                 reasoning_label(level),
                 values.reasoning == Some(level),
                 true,
@@ -1229,8 +1306,11 @@ impl ExecutionSettingsEditor {
             return Vec::new();
         };
         let values = self.values(which);
+        let scope = self.effective_harness(which);
         let mut rows = Vec::new();
-        for option in model.options {
+        let options = unique_by(model.options.into_iter(), |option| option.id.clone());
+        for (option_index, option) in options.into_iter().enumerate() {
+            let row = format!("option{option_index}");
             let current = values
                 .options
                 .get(&option.id)
@@ -1244,7 +1324,13 @@ impl ExecutionSettingsEditor {
                 .unwrap_or_else(|| option.default_choice.clone());
             let option_id = option.id.clone();
             let mut chips = vec![self.chip(
-                self.id(which, &format!("option:{}:default", option.id)),
+                self.slot(
+                    which,
+                    &row,
+                    scope,
+                    0,
+                    format!("option-default:{}", option.id),
+                ),
                 format!("Default · {default_label}"),
                 current.is_none(),
                 true,
@@ -1255,11 +1341,18 @@ impl ExecutionSettingsEditor {
                     move |this, cx| this.select_model_option(which, option_id.clone(), None, cx)
                 },
             )];
-            for choice in option.choices {
+            let choices = unique_by(option.choices.into_iter(), |choice| choice.id.clone());
+            for (choice_index, choice) in choices.into_iter().enumerate() {
                 let choice_id = choice.id.clone();
                 let option_id = option_id.clone();
                 chips.push(self.chip(
-                    self.id(which, &format!("option:{}:{}", option.id, choice.id)),
+                    self.slot(
+                        which,
+                        &row,
+                        scope,
+                        choice_index + 1,
+                        format!("option:{}={}", option.id, choice.id),
+                    ),
                     choice.label.clone(),
                     current.as_deref() == Some(choice.id.as_str()),
                     true,
@@ -1290,16 +1383,26 @@ impl ExecutionSettingsEditor {
 
     fn access_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let harness = self.effective_harness(Which::Implementation)?;
-        let modes = harness_options(self.options()?, harness)?
-            .permission_modes
-            .clone();
+        let modes = unique_by(
+            harness_options(self.options()?, harness)?
+                .permission_modes
+                .iter()
+                .copied(),
+            |mode| *mode,
+        );
         let inherit_label = match self.inherited_permission() {
             Some((mode, origin)) => format!("Inherit · {} ({origin})", permission_label(mode)),
             None => "Inherit · the provider's default access".to_owned(),
         };
         let current = self.implementation.permission_mode;
         let mut chips = vec![self.chip(
-            self.id(Which::Implementation, "access-inherit"),
+            self.slot(
+                Which::Implementation,
+                "access",
+                Some(harness),
+                0,
+                "access-inherit",
+            ),
             inherit_label,
             current.is_none(),
             true,
@@ -1307,11 +1410,14 @@ impl ExecutionSettingsEditor {
             cx,
             |this, cx| this.select_permission(None, cx),
         )];
-        for mode in modes {
+        for (index, mode) in modes.into_iter().enumerate() {
             chips.push(self.chip(
-                self.id(
+                self.slot(
                     Which::Implementation,
-                    &format!("access:{}", permission_key(mode)),
+                    "access",
+                    Some(harness),
+                    index + 1,
+                    format!("access:{}", permission_key(mode)),
                 ),
                 permission_label(mode),
                 current == Some(mode),
@@ -1339,7 +1445,13 @@ impl ExecutionSettingsEditor {
         let current = self.implementation.checkout.clone();
         let chips = vec![
             self.chip(
-                self.id(Which::Implementation, "checkout-inherit"),
+                self.slot(
+                    Which::Implementation,
+                    "checkout",
+                    None,
+                    0,
+                    "checkout-inherit",
+                ),
                 inherit,
                 current.is_none(),
                 true,
@@ -1348,7 +1460,13 @@ impl ExecutionSettingsEditor {
                 |this, cx| this.select_checkout(None, cx),
             ),
             self.chip(
-                self.id(Which::Implementation, "checkout:current"),
+                self.slot(
+                    Which::Implementation,
+                    "checkout",
+                    None,
+                    1,
+                    "checkout:current",
+                ),
                 "Current checkout",
                 current == Some(BoardCheckoutChoice::Current),
                 true,
@@ -1357,7 +1475,13 @@ impl ExecutionSettingsEditor {
                 |this, cx| this.select_checkout(Some(BoardCheckoutChoice::Current), cx),
             ),
             self.chip(
-                self.id(Which::Implementation, "checkout:worktree"),
+                self.slot(
+                    Which::Implementation,
+                    "checkout",
+                    None,
+                    2,
+                    "checkout:worktree",
+                ),
                 "New worktree",
                 matches!(current, Some(BoardCheckoutChoice::NewWorktree { .. })),
                 true,
@@ -1421,7 +1545,7 @@ impl ExecutionSettingsEditor {
         let mode = self.implementation_mode;
         let modes = vec![
             self.chip(
-                self.id(which, "mode-defaults"),
+                self.slot(which, "mode", None, 0, "mode-defaults"),
                 "Use project defaults",
                 mode == ImplementationMode::ProjectDefaults,
                 true,
@@ -1430,7 +1554,7 @@ impl ExecutionSettingsEditor {
                 |this, cx| this.set_implementation_mode(ImplementationMode::ProjectDefaults, cx),
             ),
             self.chip(
-                self.id(which, "mode-custom"),
+                self.slot(which, "mode", None, 1, "mode-custom"),
                 "Choose settings",
                 mode == ImplementationMode::Custom,
                 true,
@@ -1439,7 +1563,7 @@ impl ExecutionSettingsEditor {
                 |this, cx| this.set_implementation_mode(ImplementationMode::Custom, cx),
             ),
             self.chip(
-                self.id(which, "mode-deferred"),
+                self.slot(which, "mode", None, 2, "mode-deferred"),
                 "Decide later",
                 mode == ImplementationMode::Deferred,
                 true,
@@ -1511,7 +1635,7 @@ impl ExecutionSettingsEditor {
         let mode = self.review_mode;
         let modes = vec![
             self.chip(
-                self.id(which, "mode-default"),
+                self.slot(which, "mode", None, 0, "mode-default"),
                 "Project default",
                 mode == ReviewMode::ProjectDefault,
                 true,
@@ -1520,7 +1644,7 @@ impl ExecutionSettingsEditor {
                 |this, cx| this.set_review_mode(ReviewMode::ProjectDefault, cx),
             ),
             self.chip(
-                self.id(which, "mode-custom"),
+                self.slot(which, "mode", None, 1, "mode-custom"),
                 "Choose reviewer",
                 mode == ReviewMode::Custom,
                 true,
@@ -1607,7 +1731,10 @@ impl Render for ExecutionSettingsEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let mut root = div()
-            .id(SharedString::from(format!("{}-settings", self.prefix)))
+            .id(SharedString::from(format!(
+                "{}-settings-editor",
+                self.prefix
+            )))
             .w_full()
             .flex()
             .flex_col();
