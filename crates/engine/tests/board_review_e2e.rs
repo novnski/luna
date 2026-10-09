@@ -49,6 +49,16 @@
 //! 10. Stop during sibling review: moving the side ticket to Backlog misses
 //!     the sibling reviewer, stops an unrelated sibling or the main chat, or
 //!     a late passing result marks the ticket Done.
+//! 11. Committed results: committing on main before the first review hides
+//!     the implementation behind a new HEAD base; committing a repair makes
+//!     its freshly reported checks stale against the retained review base.
+//! 12. A newly failed check is hidden by an older passing check on the same
+//!     diff, or an inherited reviewer model is silently substituted while
+//!     an explicitly selected model would be rejected.
+//! 13. Changing bytes beyond the prefix of a large binary artifact is
+//!     missed by the stale-review guard even though the file size is stable.
+//! 14. Checks for the old binary contents survive a fresh review, or Git's
+//!     collapsed untracked-directory listing hides new nested source files.
 //!
 //! Every scenario writes a JSON manifest (steps, expected/observed, SHA-256
 //! of snapshots) under `target/qa/board/review/`.
@@ -90,6 +100,7 @@ struct PeerControl {
     /// The model the Claude peer reports in `SessionStarted` regardless of
     /// the request (an unobserved provider-side substitution).
     reviewer_reports: Mutex<Option<String>>,
+    inherited_reviewer_reports: Mutex<Option<String>>,
 }
 
 /// One provider turn, held open until the scenario finishes it (or the
@@ -174,6 +185,12 @@ impl Harness for Peer {
         let interrupted = Arc::new(AtomicBool::new(false));
         let reported = match self.id {
             HarnessId::ClaudeCode => self.control.reviewer_reports.lock().unwrap().clone(),
+            HarnessId::Codex if request.prompt.contains("# LUNA review packet") => self
+                .control
+                .inherited_reviewer_reports
+                .lock()
+                .unwrap()
+                .clone(),
             _ => None,
         };
         let model = reported
@@ -814,6 +831,139 @@ fn review_start(key: &str, item: &str, passed: bool) -> Value {
         "checks": [{"name": "unit", "command": "cargo test", "passed": passed, "exitCode": if passed { 0 } else { 1 }}],
         "summary": "Implemented add; unit checks ran.",
     })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_initial_result_is_in_the_review_packet() {
+    committed_initial_result("committed_initial_result", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_first_result_in_an_unborn_repository_is_reviewed() {
+    committed_initial_result("committed_unborn_result", true).await;
+}
+
+async fn committed_initial_result(scenario: &'static str, unborn: bool) {
+    let mut rig = Rig::new(scenario).await;
+    if unborn {
+        // Empty history at launch, followed by the worker's first commit.
+        git(&rig.repo, &["update-ref", "-d", "refs/heads/main"]);
+    }
+    let item = rig
+        .create_ticket("committed", "Add numbers", json!({}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    rig.move_to(&id, "committed-ready", "ready").await;
+    let turn = rig
+        .ticket_turn(&id, "implementation", |turn| !turn.is_packet())
+        .await;
+    let worker = rig.working_chat(&id).await;
+    rig.write("src/lib.rs", FIXED);
+    git(&rig.repo, &["add", "src/lib.rs"]);
+    git(&rig.repo, &["commit", "-qm", "implement add"]);
+    rig.tool(
+        &worker,
+        "review_start",
+        review_start("committed-review", &id, true),
+    )
+    .await
+    .expect("submit committed result");
+    turn.finish();
+    let (review, run) = reviewer_turn(&mut rig, &id, "committed review").await;
+    rig.evidence.check(
+        "the review compares the committed result with the pre-launch revision",
+        run["basis"]["baseRevision"] != run["basis"]["headRevision"]
+            && review.prompt.contains("+    a + b"),
+        run["basis"].clone(),
+    );
+    let reviewer = run["reviewerTaskId"].as_str().unwrap();
+    rig.tool(
+        reviewer,
+        "review_submit",
+        submit("committed-pass", &run, "passed", json!([])),
+    )
+    .await
+    .expect("pass committed result");
+    review.finish();
+    let detail = rig
+        .wait_detail(&id, "committed Done", |d| {
+            d["view"]["item"]["column"] == "done"
+        })
+        .await;
+    rig.evidence.step(
+        "committed result completes automatically",
+        json!("done"),
+        detail["view"]["item"]["column"].clone(),
+        Some(&detail),
+    );
+    rig.evidence.write();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_repair_checks_match_the_retained_review_base() {
+    let mut rig = Rig::new("committed_repair_checks").await;
+    let item = rig
+        .create_ticket("repair-commit", "Add numbers", json!({}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    let (worker, _) = implement_and_submit(&mut rig, &id, "repair-commit-ready", DEFECT).await;
+    let (review, run0) = reviewer_turn(&mut rig, &id, "initial review").await;
+    let reviewer = run0["reviewerTaskId"].as_str().unwrap().to_owned();
+    rig.tool(
+        &reviewer,
+        "review_submit",
+        submit(
+            "request-committed-repair",
+            &run0,
+            "changesRequested",
+            defect_finding("subtract", "add subtracts instead of adding."),
+        ),
+    )
+    .await
+    .expect("request repair");
+    review.finish();
+    let repair = rig.turn("repair", Turn::is_repair).await;
+    rig.write("src/lib.rs", FIXED);
+    git(&rig.repo, &["add", "src/lib.rs"]);
+    git(&rig.repo, &["commit", "-qm", "repair add"]);
+    rig.tool(
+        &worker,
+        "review_start",
+        review_start("committed-repair-review", &id, true),
+    )
+    .await
+    .expect("submit committed repair");
+    repair.finish();
+    let (review, run1) = reviewer_turn(&mut rig, &id, "committed repair review").await;
+    rig.evidence.check(
+        "fresh checks are included for the retained review base",
+        run1["basis"]["baseRevision"] == run0["basis"]["baseRevision"]
+            && run1["basis"]["checkOutcomeIds"]
+                .as_array()
+                .is_some_and(|ids| !ids.is_empty())
+            && review.prompt.contains("+    a + b"),
+        run1["basis"].clone(),
+    );
+    rig.tool(
+        &reviewer,
+        "review_submit",
+        submit("committed-repair-pass", &run1, "passed", json!([])),
+    )
+    .await
+    .expect("pass repair");
+    review.finish();
+    let detail = rig
+        .wait_detail(&id, "repair Done", |d| {
+            d["view"]["item"]["column"] == "done"
+        })
+        .await;
+    rig.evidence.step(
+        "committed repair completes automatically",
+        json!("done"),
+        detail["view"]["item"]["column"].clone(),
+        Some(&detail),
+    );
+    rig.evidence.write();
 }
 
 fn submit(key: &str, run: &Value, verdict: &str, findings: Value) -> Value {
@@ -1591,6 +1741,28 @@ async fn omitted_checks_and_unobserved_substitution_never_complete() {
     );
 
     // Unobserved substitution: the provider reports another model.
+    let detail = rig
+        .wait_detail(&id, "idle after missing checks", |d| {
+            d["view"]["phase"] == "idle"
+        })
+        .await;
+    rig.evidence.check(
+        "missing required checks show attention and Retry on the Board",
+        detail["view"]["attention"]
+            .as_array()
+            .is_some_and(|reasons| {
+                reasons.iter().any(|r| {
+                    r["detail"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("Required checks")
+                })
+            })
+            && detail["view"]["actions"]
+                .as_array()
+                .is_some_and(|actions| actions.contains(&json!("retry"))),
+        detail["view"].clone(),
+    );
     *rig.control.reviewer_reports.lock().unwrap() = Some("sonnet-5".into());
     let item = rig
         .create_ticket("subst-1", "Substitution", json!({}))
@@ -1753,6 +1925,190 @@ async fn exhausted_repair_rounds_need_attention() {
 }
 
 // ---------------------------------------------------------------------------
+// A fresh failed check supersedes an old pass on an unchanged diff.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_current_failed_check_cannot_reuse_an_older_pass() {
+    let mut rig = Rig::new("current_failed_check").await;
+    let item = rig
+        .create_ticket("fresh-check", "Add numbers", json!({}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    let (worker, _) = implement_and_submit(&mut rig, &id, "fresh-check-ready", DEFECT).await;
+    let (review, run0) = reviewer_turn(&mut rig, &id, "initial review").await;
+    let reviewer = run0["reviewerTaskId"].as_str().unwrap().to_owned();
+    rig.tool(
+        &reviewer,
+        "review_submit",
+        submit(
+            "fresh-check-repair",
+            &run0,
+            "changesRequested",
+            defect_finding("bad", "add subtracts."),
+        ),
+    )
+    .await
+    .expect("request repair");
+    review.finish();
+    let repair = rig.turn("repair", Turn::is_repair).await;
+    // The implementation did not change, but its latest test run failed.
+    rig.tool(
+        &worker,
+        "review_start",
+        review_start("fresh-check-failed", &id, false),
+    )
+    .await
+    .expect("report failed check");
+    repair.finish();
+    let (review, run1) = reviewer_turn(&mut rig, &id, "re-review").await;
+    rig.tool(
+        &reviewer,
+        "review_submit",
+        submit("fresh-check-verdict", &run1, "passed", json!([])),
+    )
+    .await
+    .expect("review verdict accepted");
+    review.finish();
+    let status = rig
+        .wait_status(&id, "failed check outcome", |s| {
+            !latest_run(s)["outcome"].is_null()
+        })
+        .await;
+    rig.evidence.step(
+        "latest failed check blocks Done even on the same diff",
+        json!("needsAttention"),
+        latest_run(&status)["outcome"]["kind"].clone(),
+        Some(&status),
+    );
+    rig.evidence.write();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inherited_reviewer_model_substitution_is_rejected() {
+    let mut rig = Rig::new("inherited_reviewer_substitution").await;
+    *rig.control.inherited_reviewer_reports.lock().unwrap() = Some("different-model".into());
+    let item = rig
+        .create_ticket("inherit-model", "Add numbers", json!({"review":{}}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    implement_and_submit(&mut rig, &id, "inherit-model-ready", FIXED).await;
+    let (review, run) = reviewer_turn(&mut rig, &id, "inherited model review").await;
+    let reviewer = run["reviewerTaskId"].as_str().unwrap();
+    let result = rig
+        .tool(
+            reviewer,
+            "review_submit",
+            submit("inherit-model-pass", &run, "passed", json!([])),
+        )
+        .await
+        .expect("record rejected verdict");
+    review.finish();
+    rig.evidence.step(
+        "inherited implementation model requires matching observation",
+        json!({"state":"failed","attention":"modelUnavailable"}),
+        json!({"state":result["run"]["state"],"attention":result["run"]["attention"]}),
+        Some(&result),
+    );
+    rig.evidence.write();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn large_artifact_tail_changes_invalidate_review() {
+    use std::io::{Seek as _, Write as _};
+    let mut rig = Rig::new("large_artifact_tail_change").await;
+    let artifact = rig.repo.join("artifact.bin");
+    std::fs::write(&artifact, vec![0u8; 17 * 1024 * 1024]).unwrap();
+    let item = rig
+        .create_ticket("large-artifact", "Add numbers", json!({}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    implement_and_submit(&mut rig, &id, "large-artifact-ready", FIXED).await;
+    let (review, run) = reviewer_turn(&mut rig, &id, "large artifact review").await;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&artifact)
+        .unwrap();
+    file.seek(std::io::SeekFrom::Start(2 * 1024 * 1024))
+        .unwrap();
+    file.write_all(&[1]).unwrap();
+    file.sync_all().unwrap();
+    let reviewer = run["reviewerTaskId"].as_str().unwrap();
+    let result = rig
+        .tool(
+            reviewer,
+            "review_submit",
+            submit("large-artifact-pass", &run, "passed", json!([])),
+        )
+        .await
+        .expect("record stale result");
+    review.finish();
+    rig.evidence.step(
+        "a same-size change after the first MiB invalidates review",
+        json!("stale"),
+        result["run"]["state"].clone(),
+        Some(&result),
+    );
+    let (again, rerun) = reviewer_turn(&mut rig, &id, "review changed binary").await;
+    rig.tool(
+        &turn_owner(&rerun),
+        "review_submit",
+        submit("large-artifact-fresh-pass", &rerun, "passed", json!([])),
+    )
+    .await
+    .expect("record fresh review");
+    again.finish();
+    let status = rig
+        .wait_status(&id, "binary check freshness", |status| {
+            runs(status)
+                .iter()
+                .any(|r| r["id"] == rerun["id"] && !r["outcome"].is_null())
+        })
+        .await;
+    let applied = runs(&status)
+        .into_iter()
+        .find(|r| r["id"] == rerun["id"])
+        .unwrap();
+    rig.evidence.step(
+        "checks for the old binary cannot complete the changed artifact",
+        json!("needsAttention"),
+        applied["outcome"]["kind"].clone(),
+        Some(&applied),
+    );
+    rig.evidence.write();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn new_nested_files_are_in_the_review_packet() {
+    let mut rig = Rig::new("new_nested_files").await;
+    let item = rig
+        .create_ticket("nested-files", "Add numbers", json!({}))
+        .await;
+    let id = item["id"].as_str().unwrap().to_owned();
+    let nested = rig.repo.join("new-module/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        nested.join("new.rs"),
+        "pub fn nested_result() -> u32 { 42 }\n",
+    )
+    .unwrap();
+    implement_and_submit(&mut rig, &id, "nested-files-ready", FIXED).await;
+    let (review, run) = reviewer_turn(&mut rig, &id, "new nested file review").await;
+    rig.evidence.check(
+        "new files in untracked directories are visible to the reviewer",
+        review.prompt.contains("new-module/nested/new.rs")
+            && review.prompt.contains("+pub fn nested_result()"),
+        run["basis"].clone(),
+    );
+    rig.tool(
+        &turn_owner(&run),
+        "review_submit",
+        submit("nested-files-pass", &run, "passed", json!([])),
+    )
+    .await
+    .unwrap();
+    review.finish();
+    rig.evidence.write();
+}
+
 // Scenario 7: converted main chat, implementation-model fallback reviewer.
 // ---------------------------------------------------------------------------
 

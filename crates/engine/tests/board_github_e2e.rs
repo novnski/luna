@@ -45,6 +45,8 @@
 //!     brief other than the imported snapshot, an `existing` import
 //!     dispatches again, or a preview made stale by a remote edit is
 //!     imported silently.
+//!     A saved import started after a remote edit must revalidate its source
+//!     and freeze the original structured issue context in the launch.
 //! 12. Source changes: a remote edit or closure overwrites the local
 //!     title/brief, injects a message, or is not visible as source-changed
 //!     (flag + one event); repeated observations journal duplicate events.
@@ -61,6 +63,8 @@
 //!     response followed by a retry posts a duplicate comment; a retried
 //!     request id after success writes again; an agent caller can write;
 //!     Close is allowed without an accepted (Done) outcome.
+//!     Concurrent retries (same request or same preview with another request)
+//!     must also post at most one comment for one confirmed preview.
 //! 16. Local Done: an engine-owned Done commit writes, comments, labels or
 //!     closes the GitHub issue by itself.
 //! 17. No live access: any invocation is missing from the fake's call log
@@ -565,7 +569,100 @@ async fn board_github_e2e() {
     Box::pin(import_dedupe_and_concurrency()).await;
     Box::pin(snapshot_start_and_source_changes()).await;
     Box::pin(link_unlink_and_dependencies()).await;
+    Box::pin(concurrent_writeback_posts_once()).await;
+    Box::pin(dispatch_revalidates_imported_issue()).await;
     Box::pin(writeback_readback_and_local_done()).await;
+}
+
+async fn dispatch_revalidates_imported_issue() {
+    let w = world();
+    let (core, c) = boot(&w);
+    projects(&c, &core, &w).await;
+    let mut ev = Evidence::new("dispatch-source-revalidation");
+    let imported = import(&c, "saved-source", 10, json!({})).await.unwrap();
+    let id = imported["mutation"]["workItemId"].as_str().unwrap();
+    w.edit_issue("acme/widgets", 10, |issue| {
+        issue["body"] = json!("Changed after import, before dispatch.");
+        issue["state"] = json!("closed");
+        issue["updated_at"] = json!("2026-10-09T09:00:00Z");
+    });
+    let started = ok(
+        &c,
+        "BoardStart",
+        json!({"requestId": "start-saved-source", "workItemId": id}),
+    )
+    .await;
+    let detail = read(&c, id).await;
+    ev.step("Start revalidates a saved import without replacing the approved brief",
+        json!({"changed": true, "remote": "closed", "brief": imported["mutation"]["item"]["description"]}),
+        json!({"changed": detail["view"]["issue"]["sourceChanged"], "remote": detail["view"]["issue"]["remoteState"], "brief": detail["view"]["item"]["description"]}),
+        Some(&detail));
+    ev.step(
+        "launch freezes the structured imported context",
+        imported["issue"]["importSnapshot"].clone(),
+        started["launch"]["issueContext"].clone(),
+        Some(&started),
+    );
+    ev.write(&w);
+    stop(core, c).await;
+}
+
+async fn concurrent_writeback_posts_once() {
+    let w = world();
+    let (core, c) = boot(&w);
+    projects(&c, &core, &w).await;
+    let mut ev = Evidence::new("concurrent-writeback");
+    let card = import(&c, "concurrent-wb-import", 10, json!({}))
+        .await
+        .unwrap();
+    let id = &card["mutation"]["workItemId"];
+    let issue = &card["issue"]["id"];
+    for (same_request, label) in [(true, "same-request"), (false, "same-preview")] {
+        let preview = ok(
+            &c,
+            "BoardIssueWritebackPreview",
+            json!({
+                "workItemId": id, "issueRefId": issue,
+                "action": {"kind": "comment", "body": label}
+            }),
+        )
+        .await;
+        let before = w.writes().len();
+        let first = json!({"requestId": format!("{label}-1"), "workItemId": id, "previewId": preview["previewId"]});
+        let mut second = first.clone();
+        if !same_request {
+            second["requestId"] = json!(format!("{label}-2"));
+        }
+        let (a, b) = tokio::join!(
+            c.call_as::<Value>("BoardIssueWriteback", first),
+            c.call_as::<Value>("BoardIssueWriteback", second),
+        );
+        ev.step(
+            &format!("{label}: one confirmed preview posts once under concurrent calls"),
+            json!(1),
+            json!(w.writes().len() - before),
+            None,
+        );
+        ev.step(
+            &format!("{label}: at least one verified response"),
+            json!(true),
+            json!(
+                a.as_ref().is_ok_and(|r| r["readbackVerified"] == true)
+                    || b.as_ref().is_ok_and(|r| r["readbackVerified"] == true)
+            ),
+            None,
+        );
+        if same_request {
+            ev.step(
+                "same request returns the canonical receipt to both callers",
+                a.unwrap(),
+                b.unwrap(),
+                None,
+            );
+        }
+    }
+    ev.write(&w);
+    stop(core, c).await;
 }
 
 /// Cases 1, 17.

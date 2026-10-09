@@ -1050,6 +1050,7 @@ fn seed_evidence(env: &Env, item: &WorkItem, blocker: &str, choice: &Choice) -> 
             instruction_text: text,
             context_refs: vec![],
             issue_context: None,
+            review_base: None,
             requested: item.implementation.clone(),
             resolved: resolved(&choice.b, None),
             destination: BoardDestination::NewMain,

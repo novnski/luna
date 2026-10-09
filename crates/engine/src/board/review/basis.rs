@@ -6,7 +6,7 @@
 //! review constraints. The implementer may add a summary but never controls
 //! the only evidence the reviewer sees. Versioned and size-bounded.
 use super::*;
-use luna_proto::{Chat, DiffFileSummary, ReviewBasis};
+use luna_proto::{BoardReviewBase, Chat, DiffFileSummary, ReviewBasis};
 use sha2::Sha256;
 use std::path::{Path, PathBuf};
 
@@ -19,8 +19,6 @@ const GUIDANCE_MAX_BYTES: usize = 6 * 1024;
 const CONTEXT_FILES_MAX: usize = 6;
 const CONTEXT_FILE_MAX_BYTES: usize = 6 * 1024;
 const FILES_LISTED_MAX: usize = 200;
-/// Files larger than this are identified by size and a prefix hash.
-const MANIFEST_READ_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PACKET_KEY: &str = "board-review-packet:";
 
@@ -79,20 +77,20 @@ async fn file_digest(path: &Path) -> (String, u64) {
         return ("missing".into(), 0);
     };
     let size = metadata.len();
-    let mut hasher = Sha256::new();
-    if size > MANIFEST_READ_MAX_BYTES {
-        hasher.update(format!("size:{size}"));
-        if let Ok(mut file) = tokio::fs::File::open(path).await {
-            use tokio::io::AsyncReadExt;
-            let mut buffer = vec![0u8; 1024 * 1024];
-            if let Ok(read) = file.read(&mut buffer).await {
-                hasher.update(&buffer[..read]);
-            }
-        }
-    } else if let Ok(bytes) = tokio::fs::read(path).await {
-        hasher.update(&bytes);
-    } else {
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
         return ("unreadable".into(), size);
+    };
+    let mut hasher = Sha256::new();
+    // Every byte affects the review basis, including binary artifacts whose
+    // Git patch only reports "binary files differ". Stream to bound memory.
+    use tokio::io::AsyncReadExt;
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(_) => return ("unreadable".into(), size),
+        }
     }
     (crate::repos::hex(&hasher.finalize()), size)
 }
@@ -154,6 +152,56 @@ fn acceptance_criteria(description: &str) -> Option<String> {
 }
 
 impl EngineRpc {
+    /// Use the same durable base for launch, check reports and every review
+    /// pass. Older profiles may only have a review basis; new launches save
+    /// the anchor before any provider turn can commit changes.
+    pub(crate) async fn board_resolve_review_base(
+        &self,
+        work_item_id: &str,
+        cwd: &str,
+    ) -> BoardResult<Option<BoardReviewBase>> {
+        let launches = self
+            .store
+            .board_launches(work_item_id, 64)
+            .map_err(storage)?;
+        let mut base = launches.into_iter().find_map(|launch| launch.review_base);
+        if base.is_none() {
+            base = self
+                .store
+                .board_review_runs(work_item_id, RUNS_READ)
+                .map_err(storage)?
+                .into_iter()
+                .find_map(|run| {
+                    let basis = run.basis?;
+                    Some(BoardReviewBase {
+                        checkout_id: basis.checkout_id?,
+                        revision: basis.base_revision?,
+                    })
+                });
+        }
+        let identity = self.repos.checkout_identity(Path::new(cwd)).await;
+        if let Some(base) = base {
+            if !identity
+                .as_ref()
+                .is_ok_and(|identity| identity.id == base.checkout_id)
+            {
+                return Err(BoardError::Unavailable {
+                    reason: "The ticket's review checkout changed or is unavailable; its saved review base cannot be reused.".into(),
+                });
+            }
+            return Ok(Some(base));
+        }
+        let Ok(identity) = identity else {
+            return Ok(None);
+        };
+        Ok(Some(BoardReviewBase {
+            checkout_id: identity.id,
+            revision: self
+                .review_default_base(&identity.root, &mut Vec::new())
+                .await,
+        }))
+    }
+
     /// Snapshot the working tree of `cwd` against `base` (or the cycle's
     /// default base). A folder without Git is a non-code result: its basis
     /// is the manifest of the referenced evidence files.
@@ -165,6 +213,11 @@ impl EngineRpc {
     ) -> BoardResult<Capture> {
         let cwd_path = PathBuf::from(cwd);
         let Ok(identity) = self.repos.checkout_identity(&cwd_path).await else {
+            if base.is_some() {
+                return Err(BoardError::Unavailable {
+                    reason: "The repository for the saved review base is unavailable.".into(),
+                });
+            }
             let mut manifest = Vec::new();
             for path in evidence
                 .iter()
@@ -203,14 +256,22 @@ impl EngineRpc {
         let root = identity.root.clone();
         let mut notes = Vec::new();
         let base = match base {
-            Some(base)
-                if git(&root, &["merge-base", "--is-ancestor", base, "HEAD"])
-                    .await
-                    .is_some() =>
-            {
+            Some(base) => {
+                // A rebase or an unborn repository's first commit must not
+                // silently replace the recorded base with the new HEAD.
+                if base != EMPTY_TREE
+                    && git(&root, &["cat-file", "-e", &format!("{base}^{{tree}}")])
+                        .await
+                        .is_none()
+                {
+                    return Err(BoardError::Unavailable {
+                        reason: "The saved review base is no longer available in the repository."
+                            .into(),
+                    });
+                }
                 base.to_owned()
             }
-            _ => self.review_default_base(&root, &mut notes).await,
+            None => self.review_default_base(&root, &mut notes).await,
         };
         let diff = crate::diff_sync::capture_diff_against(&self.repos, &root, Some(&base))
             .await
@@ -238,6 +299,16 @@ impl EngineRpc {
                     .into(),
             );
         }
+        let manifest_hash = board_digest(&manifest)?;
+        // The display patch may omit binary contents or truncate large
+        // text files. Checks must bind to the complete reviewed contents,
+        // not just to the display checksum shared by those snapshots.
+        let diff_hash = board_digest(&(
+            "repository-review-v2",
+            &base,
+            &diff.checksum,
+            &manifest_hash,
+        ))?;
         Ok(Capture {
             repository: true,
             root,
@@ -245,8 +316,8 @@ impl EngineRpc {
             branch: Some(diff.branch.clone()),
             base: Some(base),
             head: diff.head_sha.clone(),
-            diff_hash: diff.checksum.clone(),
-            manifest_hash: Some(board_digest(&manifest)?),
+            diff_hash,
+            manifest_hash: Some(manifest_hash),
             patch: diff.patch,
             files: diff.files,
             additions: diff.additions,
@@ -493,10 +564,12 @@ impl EngineRpc {
                 && !outcome.historical
         }) {
             any_check = true;
-            let current = outcome.basis.as_deref() == Some(capture.diff_hash.as_str());
+            let same_basis = outcome.basis.as_deref() == Some(capture.diff_hash.as_str());
+            let current = current_check(outcomes, run, &capture.diff_hash, &outcome.label)
+                .is_some_and(|latest| latest.id == outcome.id);
             if current {
                 check_ids.push(outcome.id.clone());
-            } else {
+            } else if !same_basis {
                 omissions.push(format!(
                     "Check `{}` ran against an earlier snapshot ({}); it does not count for this result.",
                     outcome.label,
@@ -517,17 +590,15 @@ impl EngineRpc {
                     .unwrap_or_default(),
                 if current {
                     ""
+                } else if same_basis {
+                    "; SUPERSEDED (newer check result)"
                 } else {
                     "; STALE (earlier snapshot)"
                 }
             ));
         }
         for name in &item.completion.required_checks {
-            if !outcomes.iter().any(|outcome| {
-                outcome.kind == OutcomeKind::Check
-                    && &outcome.label == name
-                    && outcome.basis.as_deref() == Some(capture.diff_hash.as_str())
-            }) {
+            if current_check(outcomes, run, &capture.diff_hash, name).is_none() {
                 omissions.push(format!(
                     "Required check `{name}` has no result for this snapshot; the ticket cannot complete without it."
                 ));

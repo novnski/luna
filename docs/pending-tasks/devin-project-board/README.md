@@ -5,13 +5,14 @@
 **Verification (2026-10-09):**
 
 - **Engine E2E:** `crates/engine/tests/board_*_e2e.rs` cover store, lifecycle, chat model, Codex/Claude/OpenCode tools, review, GitHub and authoring.
-- **Headless UI fixtures:** `crates/ui/examples/board-*-fixture.rs`.
+- **Headless UI fixtures:** all five `crates/ui/examples/board-*-fixture.rs` pass the independent QA run (page/pagination, detail, authoring, GitHub controls and chat placement), with screenshots, readbacks and pass manifests retained.
 - **Native QA:** run on a signed LUNA QA Board app with real providers.
   - Codex implemented two tickets and Claude Code Haiku reviewed them, both in a main and in a side-ticket placement; the second ticket was stopped and then continued in the same chat.
   - An agent created and started tickets through LUNA tools.
   - Discuss with AI saved a ticket and kept, resumed and discarded a draft.
   - An existing chat was converted to a ticket.
-- **Not run live:** GitHub issues (no authorized repository was chosen; covered by the fake-`gh` E2E and fixture).
+- **Live GitHub readback:** the existing `novnski/luna` QA issues #1–#4 were read again during the independent review, including Unicode titles, closed state, labels and the saved LUNA writeback comment. The earlier native GitHub run is retained under `luna-worktrees/evidence/board-2026-10-09/round2-live-github-visual/`. Current writeback regression tests use the isolated fake `gh` service.
+- **Independent regression QA:** 53 Board E2Es, 25 Git/diff integration tests and 21 adjacent session/profile tests pass. Three existing opt-in tests (live Codex, live Claude, private incident data) are skipped. `target/qa/board-independent-review-20261009/` retains baseline and failing reproductions for review bases, complete content/check freshness, nested new files, concurrent GitHub writeback, source revalidation, dependency holds and review recovery. Repeatable scenarios emit manifests under `target/qa/board/`; pagination evidence is in `target/qa/board-pagination-20261009-124055/`.
 
 **Researched:** 2026-10-08, Europe/Bucharest.
 

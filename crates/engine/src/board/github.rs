@@ -2314,7 +2314,6 @@ impl EngineRpc {
 
     /// The source issue context frozen at import, for
     /// `LaunchSnapshot.issue_context`.
-    #[allow(dead_code)] // called by the lifecycle slice
     pub(crate) fn board_issue_launch_context(
         &self,
         work_item_id: &str,
@@ -2331,7 +2330,6 @@ impl EngineRpc {
     /// Revalidate the source issue before a dispatch. Records a remote edit
     /// or closure as source-changed; never edits the brief (the user decides
     /// whether to send an update).
-    #[allow(dead_code)] // called by the lifecycle slice
     pub(crate) async fn board_issue_revalidate(
         &self,
         work_item_id: &str,
@@ -2592,6 +2590,17 @@ impl EngineRpc {
             &request.work_item_id,
             &request.preview_id,
         ))?;
+        // Hold both identities across the external effect and independent
+        // readback. A concurrent retry must see the durable outcome; one
+        // confirmed preview must not be consumed by two request ids.
+        let _request_gate = self
+            .board_hub()
+            .gate(&format!("github-write-request:{request_id}"))
+            .await;
+        let _preview_gate = self
+            .board_hub()
+            .gate(&format!("github-write-preview:{}", request.preview_id))
+            .await;
         let outcome_id = format!(
             "oc-wb-{}",
             &board_digest(&("writeback", &request_id))?[..32]

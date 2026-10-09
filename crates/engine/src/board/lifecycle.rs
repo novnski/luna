@@ -831,7 +831,11 @@ impl EngineRpc {
                 ticket.intent.launch_state,
                 BoardLaunchState::Pending | BoardLaunchState::Unsent
             );
-        let waiting = ticket.intent.served_intent_revision < ticket.intent.intent_revision;
+        let waiting = ticket.intent.served_intent_revision < ticket.intent.intent_revision
+            && !matches!(
+                ticket.intent.queue,
+                Some(BoardAdmissionReason::Dependency { .. })
+            );
         if ticket.item.column == BoardColumn::Ready && (active || waiting) {
             // Running or already accepted: reuse in place, never a second
             // launch. A requested report still subscribes.
@@ -1615,7 +1619,13 @@ impl EngineRpc {
             instruction_hash: instruction_hash(&text),
             instruction_text: text,
             context_refs: item.context_refs.clone(),
-            issue_context: None,
+            issue_context: self.board_issue_launch_context(&item.id)?,
+            review_base: self
+                .board_resolve_review_base(
+                    &item.id,
+                    &self.board_worker_settings(&item, &link.task_id)?.cwd,
+                )
+                .await?,
             requested: item.implementation.clone(),
             resolved: self.board_worker_settings(&item, &link.task_id)?,
             destination: match &main_parent_id {

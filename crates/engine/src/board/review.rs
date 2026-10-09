@@ -173,6 +173,32 @@ fn blocking_count(findings: &[ReviewFinding]) -> u32 {
     findings.iter().filter(|finding| finding.blocking).count() as u32
 }
 
+/// One current result per named check. A new failure on an unchanged diff
+/// supersedes its old pass; checks reported for this run take precedence.
+fn current_check<'a>(
+    outcomes: &'a [OutcomeReference],
+    run: &ReviewRun,
+    diff_hash: &str,
+    name: &str,
+) -> Option<&'a OutcomeReference> {
+    outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.kind == OutcomeKind::Check
+                && outcome.label == name
+                && outcome.execution_generation == run.execution_generation
+                && !outcome.historical
+                && outcome.basis.as_deref() == Some(diff_hash)
+        })
+        .max_by_key(|outcome| {
+            (
+                run.reported_check_ids.contains(&outcome.id),
+                outcome.observed_at_ms,
+                outcome.id.as_str(),
+            )
+        })
+}
+
 /// Same finding across rounds: file plus normalized explanation.
 fn finding_fingerprint(finding: &ReviewFinding) -> String {
     let explanation = finding
@@ -625,13 +651,16 @@ impl EngineRpc {
             });
         }
         // Checks are tied to the snapshot that exists when they are reported.
+        let review_base = self
+            .board_resolve_review_base(&item.id, primary.cwd.as_deref().unwrap_or("."))
+            .await?;
         let check_basis = if checks.is_empty() {
             None
         } else {
             Some(
                 self.review_capture(
                     primary.cwd.as_deref().unwrap_or("."),
-                    None,
+                    review_base.as_ref().map(|base| base.revision.as_str()),
                     &request.evidence,
                 )
                 .await?
@@ -1096,7 +1125,6 @@ impl EngineRpc {
                 run.profile.resolved.harness
             ));
         } else if let Some(requested) = run.profile.resolved.model.as_deref()
-            && !run.profile.implementation_fallback
             && !observed_model
                 .as_deref()
                 .is_some_and(|observed| profile::model_matches(requested, observed))
@@ -1643,15 +1671,20 @@ impl EngineRpc {
             .ok_or_else(|| BoardError::Unavailable {
                 reason: "The ticket's working chat is unavailable.".into(),
             })?;
-        // Reuse the base of this cycle's earlier passes so the final review
-        // covers every repair, committed or not.
-        let prior_base = runs
-            .iter()
-            .filter(|other| other.id != run.id)
-            .find_map(|other| other.basis.as_ref()?.base_revision.clone());
         let cwd = primary.cwd.clone().unwrap_or_else(|| ".".into());
+        let review_base = match self.board_resolve_review_base(&item.id, &cwd).await {
+            Ok(base) => base,
+            Err(error) => {
+                self.review_fail(run, BoardAttentionKind::ReviewUnavailable, &error.message())?;
+                return Ok(true);
+            }
+        };
         let capture = match self
-            .review_capture(&cwd, prior_base.as_deref(), &run.evidence)
+            .review_capture(
+                &cwd,
+                review_base.as_ref().map(|base| base.revision.as_str()),
+                &run.evidence,
+            )
             .await
         {
             Ok(capture) => capture,
@@ -2401,13 +2434,8 @@ impl EngineRpc {
             .required_checks
             .iter()
             .filter(|name| {
-                !outcomes.iter().any(|outcome| {
-                    outcome.kind == OutcomeKind::Check
-                        && &outcome.label == *name
-                        && outcome.execution_generation == run.execution_generation
-                        && outcome.basis.as_deref() == Some(basis.diff_hash.as_str())
-                        && outcome.state.as_deref() == Some("passed")
-                })
+                !current_check(&outcomes, run, &basis.diff_hash, name)
+                    .is_some_and(|outcome| outcome.state.as_deref() == Some("passed"))
             })
             .cloned()
             .collect::<Vec<_>>();

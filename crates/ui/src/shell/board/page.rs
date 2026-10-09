@@ -609,6 +609,32 @@ impl BoardPage {
             .clone()
     }
 
+    /// Load one more page of `column`. The selection stays, and keyboard
+    /// focus returns to the selected card without scrolling (the button
+    /// disappears once the column is complete), so Down continues into the
+    /// new page.
+    pub(super) fn load_more(
+        &mut self,
+        column: BoardColumn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .model
+            .update(cx, |model, cx| model.load_more(column, cx))
+        {
+            return;
+        }
+        match self.selected.clone() {
+            Some(id) if self.model.read(cx).item(&id).is_some() => {
+                let handle = self.card_focus(&id, cx);
+                window.focus(&handle, cx);
+            }
+            _ => window.focus(&self.focus, cx),
+        }
+        cx.notify();
+    }
+
     /// Select a card (and focus it when `focus`), remembering the choice.
     pub(super) fn select(
         &mut self,
@@ -767,6 +793,14 @@ impl BoardPage {
             "up" | "down" | "left" | "right" | "home" | "end" => {
                 if let Some(next) = self.neighbour(id, key, cx) {
                     self.select(&next, true, window, cx);
+                } else if key == "down"
+                    && self.effective_view() == BoardViewMode::Board
+                    && let Some(column) = self.model.read(cx).item(id).map(|view| view.item.column)
+                {
+                    // Past the column's last loaded card: its next page (the
+                    // card keeps focus; Down again continues into it).
+                    self.model
+                        .update(cx, |model, cx| model.load_more(column, cx));
                 }
                 true
             }
@@ -2367,14 +2401,17 @@ impl BoardPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (count, live) = {
+        let (count, live, more) = {
             let model = self.model.read(cx);
             (
                 model.items().len(),
                 matches!(model.status(), BoardStatus::Live),
+                model.has_more(),
             )
         };
-        if count == 0 && live {
+        // A filtered read can come back empty with more pages to read: the
+        // columns stay, with their Load more.
+        if count == 0 && live && !more {
             return if self.any_filter(cx) {
                 self.render_no_matches(theme, cx)
             } else {
@@ -2741,11 +2778,19 @@ impl BoardPage {
         let columns: Vec<serde_json::Value> = BoardColumn::ALL
             .into_iter()
             .map(|column| {
+                let paging = model.paging(column);
                 serde_json::json!({
                     "column": column.as_str(),
                     "label": column.label(),
                     "help": column.help(),
                     "count": model.column(column).count(),
+                    "loaded": paging.loaded,
+                    "total": paging.total,
+                    "hasMore": paging.has_more,
+                    "pages": paging.pages,
+                    "atLimit": paging.at_limit,
+                    "loading": paging.loading,
+                    "countText": paging.count_text(),
                     "ids": model.column(column).map(|view| view.item.id.clone()).collect::<Vec<_>>(),
                     "bounds": geometry
                         .columns
@@ -2759,6 +2804,8 @@ impl BoardPage {
             "status": format!("{:?}", model.status()),
             "scope": model.scope(),
             "scopeLabel": self.scope_label(cx),
+            "headerCount": self.header_count(cx),
+            "subtitle": self.header_subtitle(cx),
             "filters": {
                 "text": model.filters().text,
                 "attentionOnly": model.filters().attention_only,
@@ -2802,7 +2849,7 @@ impl BoardPage {
             "columns": columns,
             "cards": cards,
             "controls": geometry.controls.iter().map(|(label, bounds)| (label.clone(), rect(*bounds))).collect::<serde_json::Map<_, _>>(),
-            "emptyState": model.items().is_empty() && matches!(model.status(), BoardStatus::Live) && !self.any_filter(cx),
+            "emptyState": model.items().is_empty() && !model.has_more() && matches!(model.status(), BoardStatus::Live) && !self.any_filter(cx),
         })
     }
 }

@@ -322,6 +322,15 @@ pub enum BoardSettingOrigin {
     ExistingWorker,
 }
 
+/// Repository basis frozen before a ticket's first execution. Continuations
+/// and repairs retain it so committing work cannot remove it from review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardReviewBase {
+    pub checkout_id: String,
+    pub revision: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchSnapshot {
@@ -345,6 +354,8 @@ pub struct LaunchSnapshot {
     pub context_refs: Vec<BoardContextRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue_context: Option<IssueContextSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_base: Option<BoardReviewBase>,
     pub requested: BoardExecutionProfile,
     pub resolved: ResolvedExecution,
     pub destination: BoardDestination,

@@ -967,6 +967,34 @@ impl EngineRpc {
             }
             return Ok(BoardMoveEffect::Queued { reason });
         }
+        // PB-2 dependencies are holds, not automatic scheduling. Once a
+        // start was blocked, clearing/completing a prerequisite (or restart)
+        // cannot launch it. A fresh Start clears this queue in accept_ready.
+        if matches!(
+            ticket.intent.queue,
+            Some(BoardAdmissionReason::Dependency { .. })
+        ) {
+            let mut changed = ticket.intent.served_intent_revision != ticket.intent.intent_revision
+                || ticket.intent.pending_start.is_some();
+            ticket.intent.served_intent_revision = ticket.intent.intent_revision;
+            ticket.intent.pending_start = None;
+            if self.board_open_blockers(&ticket.item.id)?.is_empty() {
+                changed = true;
+                ticket.intent.queue = None;
+                ticket.intent.launch_failure = Some(attention(
+                    BoardAttentionKind::DependencyBlocked,
+                    "The prerequisites are clear. Choose Start or Retry to run this held ticket.",
+                    None,
+                ));
+            }
+            if changed {
+                self.board_intent_only(ticket)?;
+            }
+            return Ok(match ticket.intent.queue.clone() {
+                Some(reason) => BoardMoveEffect::Queued { reason },
+                None => BoardMoveEffect::None,
+            });
+        }
         if ticket.intent.served_intent_revision >= ticket.intent.intent_revision {
             return Ok(BoardMoveEffect::Coalesced);
         }
@@ -1462,6 +1490,15 @@ impl EngineRpc {
         worker: Option<WorkItemTaskLink>,
         pending: BoardPendingStart,
     ) -> BoardResult<BoardMoveEffect> {
+        // A saved issue may have changed since import. Record fresh source
+        // state before dispatch, but keep the user's approved brief intact.
+        if self
+            .board_issue_revalidate(&ticket.item.id)
+            .await?
+            .is_some()
+        {
+            self.board_reload(ticket)?;
+        }
         let (task_id, main_parent_id, resolved, destination) = match worker {
             Some(link) => {
                 let main = match &link.original_container {
@@ -1547,6 +1584,9 @@ impl EngineRpc {
             generation,
             ticket.intent.intent_revision,
         ))?;
+        let review_base = self
+            .board_resolve_review_base(&item.id, &resolved.cwd)
+            .await?;
         let launch = LaunchSnapshot {
             id: format!("ls-{}", &digest[..32]),
             work_item_id: item.id.clone(),
@@ -1560,7 +1600,8 @@ impl EngineRpc {
             instruction_hash: instruction_hash(&text),
             instruction_text: text,
             context_refs: item.context_refs.clone(),
-            issue_context: None,
+            issue_context: self.board_issue_launch_context(&item.id)?,
+            review_base,
             requested: pending
                 .execution
                 .clone()

@@ -270,6 +270,10 @@ to the latest intent behind the barrier; a late Stop acknowledgement or review r
 generation changes nothing; restart reads intents (`board_intents_needing_reconcile`) and queries
 receipts/runtime before acting; offline owner → Unknown/reconciling, never a launch elsewhere.
 
+PB-2 dependencies hold a blocked start until a fresh Start/Retry. Clearing or completing a
+prerequisite, maintenance, and restart never release that hold automatically (PB-4 owns dependency
+scheduling). Capacity and checkout queues still resume the user's accepted start when capacity frees.
+
 ### 5.5 Review runs (A5)
 
 `Queued → Starting → Running ⇄ Waiting → Completed | Failed | Cancelled | Stale`, plus `OutcomeUnknown`
@@ -277,6 +281,21 @@ receipts/runtime before acting; offline owner → Unknown/reconciling, never a l
 repairs (≤ 3 passes), counters persisted on the intent so Stop/Continue/restart cannot reset them.
 Cleanup `NotStarted → Pending → Archived → Closed | Failed` with independent readback; Done may show
 `CleanupPending`.
+
+New launch snapshots persist `reviewBase { checkoutId, revision }` before execution. Continuations,
+check reports and review passes reuse that base so commits on the default branch remain in the
+reviewed diff; the empty tree is retained across a repository's first commit. Missing bases or a
+different checkout require attention instead of substituting HEAD. Older snapshots deserialize with
+no base and can recover one from recorded review runs.
+Working-tree and referenced artifact manifests hash complete file contents with bounded streaming
+memory, so a same-size change anywhere in a large binary file invalidates the review.
+Repository review/check hashes include that content manifest as well as the display diff; binary or
+truncated changes invalidate earlier checks. New files inside untracked directories are included.
+
+Only the latest named check for the reviewed snapshot counts; a fresh failure supersedes an older
+pass even when the diff is unchanged. The observed reviewer model must match the resolved model for
+both explicit selections and implementation-model inheritance. Terminal review attention is projected
+onto Board cards, with explicit Retry available for recoverable idle/failed/unknown work.
 
 ### 5.6 Authoring sessions (A6)
 
@@ -513,6 +532,10 @@ called; remove it when wiring them.
   Other}` — `Lost` means reconcile by request id), `BoardModel` (entity per page: scope, filters, items,
   projects, status; loads via `BoardList`, follows `BoardWatch`, re-reads on events/observations/reconnect;
   `apply_receipt` shows a committed record immediately), `BoardPage` (minimal three-column page).
+  Columns page independently (500 tickets per read, Load more up to 10 pages per column), so a long
+  Backlog never hides Ready or Done. Counts distinguish loaded tickets from available totals; the
+  bound directs users to search/filter. Live changes re-read loaded pages; scope/filter changes reset
+  paging and discard old-query results. Loading more preserves selection and keyboard focus.
   `Shell::board_page()` creates it with the sidebar's project filter, else the last Board scope, else All
   projects. QA hook: `Shell::fixture_board_page()`.
 

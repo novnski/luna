@@ -63,6 +63,24 @@
 //! 15. Convergence: a second, narrow window on the same app state keeps
 //!     redrawing (the automatic List decision flip-flopping, or two windows
 //!     overwriting shared state each frame), or never settles on the List.
+//! 16. Pagination: in a project with more tickets than one engine page
+//!     (528 Backlog, then Ready and Done tickets that sort after all of
+//!     them), a Ready or Done ticket is missing; a column count reports only
+//!     the loaded page or disagrees with the engine; Backlog offers no Load
+//!     more; Load more is not exactly one bounded `BoardList` (limit ≤ 500)
+//!     for that column with the engine's cursor; the next page is missing,
+//!     duplicated or out of the engine's order; or loading it clears or
+//!     moves the selection or keyboard focus.
+//! 17. Live update after more pages: a ticket created at the top through RPC
+//!     (shifting every ticket across the page boundary) is missing, or the
+//!     re-read loses, duplicates or reorders a ticket, drops the loaded pages
+//!     back to the first, or the selected page-2 card loses selection or
+//!     focus.
+//! 18. Scope/filter change during pagination: a search typed while a Load
+//!     more is in flight shows a stale ticket or keeps extra pages; clearing
+//!     the search does not return to the first page; switching to All
+//!     projects and back shows another scope's ticket, keeps the old pages,
+//!     or disagrees with the engine.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-page-fixture
@@ -74,6 +92,7 @@
 //! the partial manifest and exits nonzero.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -86,8 +105,8 @@ use luna_engine::{
 };
 use luna_harness::mock::MockHarness;
 use luna_proto::{
-    AgentEvent, BoardCreateRequest, BoardListRequest, BoardPlacement, BoardReadRequest, BoardScope,
-    DoneStatus, HarnessId,
+    AgentEvent, BoardColumn, BoardCreateRequest, BoardListRequest, BoardPlacement,
+    BoardReadRequest, BoardScope, DoneStatus, HarnessId, WorkItemEventKind,
 };
 use luna_rpc::methods;
 use luna_ui::*;
@@ -112,6 +131,47 @@ type Calls = Arc<Mutex<Vec<(String, Value)>>>;
 struct CountingRpc {
     inner: Arc<dyn luna_rpc::RpcService>,
     calls: Calls,
+    hold: Arc<Hold>,
+}
+
+/// Item 18's gate on the UI transport: while closed, a `BoardList` with a
+/// cursor (a Load more) waits before it reaches the engine, so a search
+/// provably reaches the engine while that read is in flight. The fixture
+/// opens it only after it has observed the search's result.
+struct Hold {
+    /// `true`: open (the default; every read passes).
+    gate: tokio::sync::watch::Sender<bool>,
+    /// Held reads not yet answered (or abandoned).
+    held: AtomicU64,
+    /// Held reads the engine answered (an abandoned one is dropped first).
+    answered: AtomicU64,
+    /// Search reads (`BoardList` with text) that arrived while a held read
+    /// was unanswered.
+    overlapped: AtomicU64,
+}
+
+impl Hold {
+    fn new() -> Self {
+        Self {
+            gate: tokio::sync::watch::channel(true).0,
+            held: AtomicU64::new(0),
+            answered: AtomicU64::new(0),
+            overlapped: AtomicU64::new(0),
+        }
+    }
+
+    fn set_open(&self, open: bool) {
+        self.gate.send_replace(open);
+    }
+}
+
+/// Counts a held read until it is answered or dropped.
+struct Held<'a>(&'a AtomicU64);
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, AtomicOrdering::SeqCst);
+    }
 }
 
 #[async_trait::async_trait]
@@ -126,6 +186,20 @@ impl luna_rpc::RpcService for CountingRpc {
                 .lock()
                 .unwrap()
                 .push((method.to_owned(), params.clone()));
+        }
+        if method == methods::BOARD_LIST {
+            if params["cursor"].is_string() && !*self.hold.gate.borrow() {
+                self.hold.held.fetch_add(1, AtomicOrdering::SeqCst);
+                let _held = Held(&self.hold.held);
+                let mut gate = self.hold.gate.subscribe();
+                let _ = gate.wait_for(|open| *open).await;
+                let reply = self.inner.handle(method, params).await;
+                self.hold.answered.fetch_add(1, AtomicOrdering::SeqCst);
+                return reply;
+            }
+            if params["text"].is_string() && self.hold.held.load(AtomicOrdering::SeqCst) > 0 {
+                self.hold.overlapped.fetch_add(1, AtomicOrdering::SeqCst);
+            }
         }
         self.inner.handle(method, params).await
     }
@@ -211,6 +285,43 @@ impl Engine {
             .filter(|view| view["item"]["column"] == column)
             .filter_map(|view| view["item"]["id"].as_str().map(str::to_owned))
             .collect())
+    }
+
+    /// Every ticket id of one column in the engine's order, following the
+    /// engine's cursor page by page (the ground truth for pagination).
+    async fn all_ids(
+        &self,
+        scope: BoardScope,
+        column: BoardColumn,
+        text: Option<&str>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut ids = Vec::new();
+        let mut cursor = None;
+        for _ in 0..50 {
+            let request = BoardListRequest {
+                scope: scope.clone(),
+                columns: vec![column],
+                text: text.map(str::to_owned),
+                cursor: cursor.take(),
+                limit: Some(luna_proto::BOARD_LIST_MAX_LIMIT),
+                ..Default::default()
+            };
+            let page = self
+                .call(methods::BOARD_LIST, serde_json::to_value(request)?)
+                .await?;
+            ids.extend(
+                page["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|view| view["item"]["id"].as_str().map(str::to_owned)),
+            );
+            match page["nextCursor"].as_str() {
+                Some(next) => cursor = Some(next.to_owned()),
+                None => return Ok(ids),
+            }
+        }
+        anyhow::bail!("the engine's {column:?} pages never ended")
     }
 
     async fn phase(&self, id: &str) -> anyhow::Result<String> {
@@ -1556,6 +1667,628 @@ async fn convergence_pass(
     Ok(())
 }
 
+/// One column's pagination readback: (loaded, total, hasMore, pages, count text).
+fn paging(rb: &Value, name: &str) -> (usize, Value, Value, Value, Value) {
+    let entry = column(rb, name).cloned().unwrap_or(Value::Null);
+    (
+        column_ids(rb, name).len(),
+        entry["total"].clone(),
+        entry["hasMore"].clone(),
+        entry["pages"].clone(),
+        entry["countText"].clone(),
+    )
+}
+
+fn unique(ids: &[String]) -> bool {
+    ids.iter().collect::<std::collections::HashSet<_>>().len() == ids.len()
+}
+
+/// The `BoardList` calls among `calls`.
+fn list_calls(calls: &[(String, String, Value)]) -> Vec<Value> {
+    calls
+        .iter()
+        .filter(|(m, ..)| m == methods::BOARD_LIST)
+        .map(|(.., params)| params.clone())
+        .collect()
+}
+
+/// Every UI read is bounded by the engine's page.
+fn ensure_bounded(lists: &[Value], context: &str) -> anyhow::Result<()> {
+    for params in lists {
+        let limit = params["limit"].as_u64();
+        anyhow::ensure!(
+            limit.is_some_and(
+                |limit| limit >= 1 && limit <= u64::from(luna_proto::BOARD_LIST_MAX_LIMIT)
+            ),
+            "{context}: an unbounded BoardList: {params}"
+        );
+    }
+    Ok(())
+}
+
+/// Wheel the Board page back to its top: the header and toolbar scroll
+/// with the page, so toolbar controls are only clickable there.
+async fn scroll_top(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    let rb = board(window, cx)?;
+    let offset = num(&rb["scroll"]["offset"]);
+    if offset > 0.5 {
+        let viewport = rect_of(&rb["scroll"]["viewport"])?;
+        wheel(window, cx, center(viewport), offset + 400.0).await?;
+    }
+    wait(window, cx, "the page scrolled to its top", |rb| {
+        num(&rb["scroll"]["offset"]) < 0.5
+    })
+    .await
+}
+
+/// Bring the Backlog column's Load more into view: select the column's
+/// first visible card (closing the drawer the click opens), End to its last
+/// loaded card (the keyboard reveal scrolls), then wheel until the control
+/// sits inside the window.
+async fn reveal_load_more(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    let rb = board(window, cx)?;
+    let first = column_ids(&rb, "backlog")
+        .into_iter()
+        .find(|id| card_rect(&rb, id).is_ok_and(|rect| rect.1 > 0.0 && rect.1 + rect.3 < HEIGHT))
+        .ok_or_else(|| anyhow::anyhow!("no visible Backlog card: {rb}"))?;
+    // A click selects the card and opens its drawer; Escape closes the
+    // drawer and returns focus to the card.
+    click(window, cx, center(card_rect(&rb, &first)?)).await?;
+    press(window, cx, "escape").await?;
+    wait(window, cx, "the drawer closed on the clicked card", |rb| {
+        rb["overlay"].is_null() && rb["focused"] == first.as_str()
+    })
+    .await?;
+    press(window, cx, "end").await?;
+    let last = column_ids(&rb, "backlog")
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    let mut rb = wait(window, cx, "the last loaded Backlog card", |rb| {
+        rb["selected"] == last.as_str() && rb["focused"] == last.as_str()
+    })
+    .await?;
+    for _ in 0..12 {
+        if let Ok(rect) = control(&rb, "board-load-more-backlog")
+            && rect.1 > 0.0
+            && rect.1 + rect.3 < HEIGHT - 4.0
+        {
+            return Ok(rb);
+        }
+        let lane = rect_of(&column(&rb, "backlog")?["bounds"])?;
+        wheel(window, cx, (lane.0 + lane.2 / 2.0, HEIGHT / 2.0), -240.0).await?;
+        rb = board(window, cx)?;
+    }
+    anyhow::bail!(
+        "Backlog's Load more never came into view: {}",
+        rb["controls"]
+    )
+}
+
+/// Items 16–18: a project past one engine page. Runs last: it adds 531
+/// Website tickets.
+async fn pagination_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    engine: &Engine,
+    store: &Arc<luna_sync::DocsStore>,
+    calls: &Calls,
+    hold: &Hold,
+    manifest: &mut Manifest,
+) -> anyhow::Result<()> {
+    let start = mark(calls);
+    // Full size, Board view, no search or source filter (item 13 left the
+    // List, "o" and Written manually).
+    window.update(cx, |_, window, _| {
+        window.resize(size(px(WIDTH), px(HEIGHT)))
+    })?;
+    frames(window, cx, 400).await?;
+    let rb = scroll_top(window, cx).await?;
+    let switch = control(&rb, "board-view")?;
+    click(
+        window,
+        cx,
+        (switch.0 + switch.2 * 0.25, switch.1 + switch.3 / 2.0),
+    )
+    .await?;
+    let rb = wait(window, cx, "the Board view", |rb| rb["view"] == "Board").await?;
+    click(window, cx, center(control(&rb, "board-search")?)).await?;
+    press(window, cx, "cmd-a").await?;
+    press(window, cx, "backspace").await?;
+    let rb = wait(window, cx, "the search cleared", |rb| {
+        rb["filters"]["text"] == ""
+    })
+    .await?;
+    // Filters rows: attention, any provider, three providers, then Any source.
+    click(window, cx, center(control(&rb, "board-filters")?)).await?;
+    for _ in 0..6 {
+        press(window, cx, "down").await?;
+    }
+    press(window, cx, "enter").await?;
+    wait(window, cx, "any source", |rb| {
+        rb["filters"]["source"].is_null() && rb["menu"].is_null()
+    })
+    .await?;
+
+    // Seed 530 Website tickets at the bottom through the Board RPC; five
+    // titles carry "zebra" (two of them past the first page). The last four
+    // then go to Done and Ready as stored records with no execution intent
+    // (the lifecycle never starts a saved Ready), so they sort after every
+    // Backlog ticket in the engine's (project, column, rank) order.
+    let seeded = Instant::now();
+    let zebra = [7usize, 250, 480, 505, 520];
+    let mut paged = Vec::with_capacity(530);
+    for n in 1..=530usize {
+        let title = if zebra.contains(&n) {
+            format!("Zebra crossing sign {n:03}")
+        } else {
+            format!("Paged backlog ticket {n:03}")
+        };
+        paged.push(
+            engine
+                .create(P_SITE, &format!("S{n:03}"), &title, BoardPlacement::Bottom)
+                .await?,
+        );
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    for (n, to) in [
+        (527usize, BoardColumn::Done),
+        (528, BoardColumn::Done),
+        (529, BoardColumn::Ready),
+        (530, BoardColumn::Ready),
+    ] {
+        let id = &paged[n - 1];
+        let item = store
+            .board_item(id)
+            .map_err(|error| anyhow::anyhow!("reading {id}: {error:?}"))?
+            .ok_or_else(|| anyhow::anyhow!("seeded ticket {id} is missing"))?;
+        let mut moved = item.clone();
+        moved.column = to;
+        moved.revision += 1;
+        moved.updated_at_ms = now_ms;
+        let event = match to {
+            BoardColumn::Done => WorkItemEventKind::Completed {
+                execution_generation: 0,
+            },
+            _ => WorkItemEventKind::Moved {
+                from: BoardColumn::Backlog,
+                to,
+                intent_revision: 0,
+            },
+        };
+        store
+            .board_commit(
+                luna_sync::BoardCommit {
+                    request_id: format!("fixture-paged-{n}"),
+                    payload_hash: "fixture".into(),
+                    committed_at_ms: now_ms,
+                    item: luna_sync::BoardItemWrite::Replace {
+                        expected_revision: item.revision,
+                        item: Box::new(moved),
+                        placement: Some(luna_sync::BoardRankPlacement::Bottom),
+                    },
+                    rows: Vec::new(),
+                    event: Some((event, true)),
+                    receipt: None,
+                },
+                None,
+            )
+            .map_err(|error| anyhow::anyhow!("seeding S{n:03} into {to:?}: {error:?}"))?;
+    }
+    let site = BoardScope::Project {
+        project_id: P_SITE.into(),
+    };
+    let backlog = engine
+        .all_ids(site.clone(), BoardColumn::Backlog, None)
+        .await?;
+    let ready = engine
+        .all_ids(site.clone(), BoardColumn::Ready, None)
+        .await?;
+    let done = engine
+        .all_ids(site.clone(), BoardColumn::Done, None)
+        .await?;
+    anyhow::ensure!(
+        backlog.len() > 500
+            && ready.ends_with(&[paged[528].clone(), paged[529].clone()])
+            && done.ends_with(&[paged[526].clone(), paged[527].clone()]),
+        "item 16: seeding did not produce the paged Website board: {} Backlog, Ready {ready:?}, Done {done:?}",
+        backlog.len()
+    );
+    let seed_ms = seeded.elapsed().as_millis();
+
+    // Item 16: Website opens on its first page per column.
+    let rb = scroll_top(window, cx).await?;
+    click(window, cx, center(control(&rb, "board-project")?)).await?;
+    for _ in 0..4 {
+        press(window, cx, "down").await?;
+    }
+    press(window, cx, "enter").await?;
+    let rb = wait(window, cx, "the paged Website board", |rb| {
+        rb["scope"]["projectId"] == P_SITE
+            && rb["status"] == "Live"
+            && column_ids(rb, "backlog").len() >= 500
+    })
+    .await?;
+    let png = capture(window, cx, manifest, "g-first-page")?;
+    let snapshot = manifest.json_snapshot("g-first-page-readback", &rb)?;
+    anyhow::ensure!(
+        column_ids(&rb, "ready") == ready && column_ids(&rb, "done") == done,
+        "item 16: later Ready/Done tickets are unreachable: Ready shows {:?} of {ready:?}, Done shows {:?} of {done:?} (Backlog shows {} of {}; header {:?})",
+        column_ids(&rb, "ready"),
+        column_ids(&rb, "done"),
+        column_ids(&rb, "backlog").len(),
+        backlog.len(),
+        rb["subtitle"]
+    );
+    let first_page = luna_proto::BOARD_LIST_MAX_LIMIT as usize;
+    anyhow::ensure!(
+        column_ids(&rb, "backlog") == backlog[..first_page],
+        "item 16: Backlog's first page differs from the engine's"
+    );
+    let (loaded, total, more, pages, text) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        loaded == first_page
+            && total == backlog.len()
+            && more == true
+            && pages == 1
+            && text == format!("{first_page} of {}", backlog.len()),
+        "item 16: Backlog must say {first_page} of {} with more to load: loaded {loaded}, total {total}, hasMore {more}, pages {pages}, count {text}",
+        backlog.len()
+    );
+    for (name, ids) in [("ready", &ready), ("done", &done)] {
+        let (loaded, total, more, _, text) = paging(&rb, name);
+        anyhow::ensure!(
+            loaded == ids.len()
+                && total == ids.len()
+                && more == false
+                && text == ids.len().to_string(),
+            "item 16: {name} must be complete with the engine's count {}: loaded {loaded}, total {total}, hasMore {more}, count {text}",
+            ids.len()
+        );
+    }
+    control(&rb, "board-load-more-backlog")?;
+    for name in ["ready", "done"] {
+        anyhow::ensure!(
+            rb["controls"][format!("board-load-more-{name}")].is_null(),
+            "item 16: a complete {name} column offers Load more"
+        );
+    }
+    manifest.step(
+        "pagination-first-page",
+        "a 528-ticket Backlog shows its first 500 (500 of 528, Load more) while the Ready and Done tickets that sort after all of them are shown with the engine's counts",
+        json!({"backlog": backlog.len(), "ready": ready, "done": done, "seedMs": seed_ms, "png": png, "readback": snapshot}),
+    );
+
+    // Load more: one bounded column read with the engine's cursor; the
+    // selection and focus stay on the last first-page card.
+    let rb = reveal_load_more(window, cx).await?;
+    let anchor = backlog[first_page - 1].clone();
+    let engine_cursor = engine
+        .call(
+            methods::BOARD_LIST,
+            serde_json::to_value(BoardListRequest {
+                scope: site.clone(),
+                columns: vec![BoardColumn::Backlog],
+                limit: Some(luna_proto::BOARD_LIST_MAX_LIMIT),
+                ..Default::default()
+            })?,
+        )
+        .await?["nextCursor"]
+        .clone();
+    let before = mark(calls);
+    click(window, cx, center(control(&rb, "board-load-more-backlog")?)).await?;
+    let rb = wait(window, cx, "the second Backlog page", |rb| {
+        column_ids(rb, "backlog").len() == backlog.len()
+    })
+    .await?;
+    let made = calls_since(calls, before);
+    let lists = list_calls(&made);
+    let png = capture(window, cx, manifest, "g-load-more")?;
+    let snapshot = manifest.json_snapshot("g-load-more-readback", &rb)?;
+    anyhow::ensure!(
+        lists.len() == 1
+            && lists[0]["columns"] == json!(["backlog"])
+            && lists[0]["cursor"] == engine_cursor
+            && lists[0]["scope"]["projectId"] == P_SITE,
+        "item 16: Load more must be one Backlog BoardList with the engine's cursor {engine_cursor}: {lists:?}"
+    );
+    ensure_bounded(&lists, "item 16")?;
+    ensure_no_execution(&made, "item 16")?;
+    let ids = column_ids(&rb, "backlog");
+    anyhow::ensure!(
+        ids == backlog && unique(&ids),
+        "item 16: Backlog after Load more differs from the engine's order or repeats a ticket"
+    );
+    let (_, total, more, pages, text) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        total == backlog.len() && more == false && pages == 2 && text == backlog.len().to_string(),
+        "item 16: a fully loaded Backlog must say {}: total {total}, hasMore {more}, pages {pages}, count {text}",
+        backlog.len()
+    );
+    anyhow::ensure!(
+        rb["selected"] == anchor.as_str() && rb["focused"] == anchor.as_str(),
+        "item 16: Load more moved the selection/focus from {anchor}: selected {}, focused {}",
+        rb["selected"],
+        rb["focused"]
+    );
+    anyhow::ensure!(
+        rb["controls"]["board-load-more-backlog"].is_null(),
+        "item 16: a complete Backlog still offers Load more"
+    );
+    manifest.step(
+        "pagination-load-more",
+        "Load more is one bounded Backlog BoardList with the engine's cursor; Backlog then matches the engine (528, no duplicates) and the selected card keeps selection and focus",
+        json!({"call": lists[0], "png": png, "readback": snapshot}),
+    );
+
+    // Item 17: select a page-2 card, then a ticket created at the top
+    // shifts every ticket by one across the page boundary.
+    press(window, cx, "end").await?;
+    let tail = backlog.last().unwrap().clone();
+    wait(window, cx, "a page-2 card selected", |rb| {
+        rb["selected"] == tail.as_str() && rb["focused"] == tail.as_str()
+    })
+    .await?;
+    let before = mark(calls);
+    let live = engine
+        .create(
+            P_SITE,
+            "SL1",
+            "Live ticket created at the top",
+            BoardPlacement::Top,
+        )
+        .await?;
+    let backlog = engine
+        .all_ids(site.clone(), BoardColumn::Backlog, None)
+        .await?;
+    anyhow::ensure!(
+        backlog.first() == Some(&live),
+        "item 17: the live ticket is not first in the engine's Backlog"
+    );
+    let rb = wait(window, cx, "the live ticket with every page", |rb| {
+        column_ids(rb, "backlog") == backlog
+    })
+    .await?;
+    let made = calls_since(calls, before);
+    let lists = list_calls(&made);
+    let png = capture(window, cx, manifest, "g-live-update")?;
+    let snapshot = manifest.json_snapshot("g-live-update-readback", &rb)?;
+    ensure_bounded(&lists, "item 17")?;
+    ensure_no_execution(&made, "item 17")?;
+    anyhow::ensure!(
+        lists
+            .iter()
+            .any(|params| params["columns"] == json!(["backlog"]) && params["cursor"].is_string()),
+        "item 17: the live re-read did not re-read Backlog's second page: {lists:?}"
+    );
+    let (_, total, more, pages, _) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        unique(&column_ids(&rb, "backlog"))
+            && total == backlog.len()
+            && more == false
+            && pages == 2,
+        "item 17: the re-read must keep both pages without duplicates: total {total}, hasMore {more}, pages {pages}"
+    );
+    anyhow::ensure!(
+        column_ids(&rb, "ready") == ready && column_ids(&rb, "done") == done,
+        "item 17: the live re-read changed Ready/Done"
+    );
+    anyhow::ensure!(
+        rb["selected"] == tail.as_str() && rb["focused"] == tail.as_str(),
+        "item 17: the live update moved the selection/focus from page-2 card {tail}: selected {}, focused {}",
+        rb["selected"],
+        rb["focused"]
+    );
+    manifest.step(
+        "pagination-live-update",
+        "a ticket created at the top after Load more shows first; the re-read keeps both pages (529, no duplicates, engine order) and the selected page-2 card keeps selection and focus",
+        json!({"live": live, "reads": lists.len(), "png": png, "readback": snapshot}),
+    );
+
+    // Item 18: All projects resets to each column's first page.
+    let rb = scroll_top(window, cx).await?;
+    click(window, cx, center(control(&rb, "board-project")?)).await?;
+    press(window, cx, "down").await?;
+    press(window, cx, "enter").await?;
+    let all = BoardScope::AllProjects;
+    let all_backlog = engine
+        .all_ids(all.clone(), BoardColumn::Backlog, None)
+        .await?;
+    let all_ready = engine
+        .all_ids(all.clone(), BoardColumn::Ready, None)
+        .await?;
+    let all_done = engine.all_ids(all.clone(), BoardColumn::Done, None).await?;
+    let rb = wait(window, cx, "All projects' first pages", |rb| {
+        rb["scope"]["kind"] == "allProjects"
+            && rb["status"] == "Live"
+            && column_ids(rb, "backlog") == all_backlog[..first_page]
+    })
+    .await?;
+    let png = capture(window, cx, manifest, "g-all-projects")?;
+    let (_, total, more, pages, _) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        total == all_backlog.len() && more == true && pages == 1,
+        "item 18: All projects must start on Backlog's first page: total {total}, hasMore {more}, pages {pages}"
+    );
+    anyhow::ensure!(
+        column_ids(&rb, "ready") == all_ready && column_ids(&rb, "done") == all_done,
+        "item 18: All projects' Ready/Done differ from the engine's"
+    );
+    // A search typed while Load more is in flight: the transport's gate
+    // holds the cursor read until the search's result is on screen, so the
+    // search's reads provably reach the engine first and the stale page
+    // answers after them. No stale ticket or page may survive.
+    let rb = reveal_load_more(window, cx).await?;
+    let more_at = center(control(&rb, "board-load-more-backlog")?);
+    let before = mark(calls);
+    hold.set_open(false);
+    let clicked = Instant::now();
+    hover(window, cx, more_at, None)?;
+    draw(window, cx)?;
+    button(window, cx, more_at, MouseButton::Left, true)?;
+    button(window, cx, more_at, MouseButton::Left, false)?;
+    frames(window, cx, 120).await?;
+    let loading = board(window, cx)?;
+    let in_flight = list_calls(&calls_since(calls, before))
+        .iter()
+        .any(|params| params["cursor"].is_string());
+    let held_at_click = hold.held.load(AtomicOrdering::SeqCst);
+    anyhow::ensure!(
+        in_flight && held_at_click == 1 && column(&loading, "backlog")?["loading"] == true,
+        "item 18: Load more did not issue a held cursor read (held {held_at_click}) or show it loading: {:?}",
+        column(&loading, "backlog")?
+    );
+    let loading_png = capture(window, cx, manifest, "g-load-more-in-flight")?;
+    press(window, cx, "cmd-f").await?;
+    type_text(window, cx, "zebra").await?;
+    let zebras = engine
+        .all_ids(all.clone(), BoardColumn::Backlog, Some("zebra"))
+        .await?;
+    anyhow::ensure!(
+        zebras.len() == zebra.len(),
+        "item 18: the engine's zebra search found {zebras:?}"
+    );
+    wait(window, cx, "only the search's tickets", |rb| {
+        rb["filters"]["text"] == "zebra" && column_ids(rb, "backlog") == zebras
+    })
+    .await?;
+    let searched_ms = clicked.elapsed().as_millis() as u64;
+    let made = calls_since(calls, before);
+    let ordered = made
+        .iter()
+        .position(|(m, _, p)| m == methods::BOARD_LIST && p["cursor"].is_string())
+        < made
+            .iter()
+            .position(|(m, _, p)| m == methods::BOARD_LIST && p["text"] == "zebra");
+    let overlapped = hold.overlapped.load(AtomicOrdering::SeqCst);
+    // 1: the Load more is still in flight; 0: the UI abandoned it (the
+    // transport dropped the held call).
+    let held_at_result = hold.held.load(AtomicOrdering::SeqCst);
+    anyhow::ensure!(
+        ordered && overlapped >= 1,
+        "item 18: the search's reads did not reach the engine while Load more was in flight (search reads during the held read: {overlapped}; shown after {searched_ms} ms)"
+    );
+    // Release the held Load more only now: its stale page (if the UI still
+    // waits for it) answers after the search's result.
+    hold.set_open(true);
+    let mut resolved = false;
+    for _ in 0..100 {
+        if hold.held.load(AtomicOrdering::SeqCst) == 0 {
+            resolved = true;
+            break;
+        }
+        settle(cx, 50).await;
+    }
+    anyhow::ensure!(resolved, "item 18: the released Load more never resolved");
+    frames(window, cx, 1000).await?;
+    let held_answered = hold.answered.load(AtomicOrdering::SeqCst);
+    let rb = board(window, cx)?;
+    let png_search = capture(window, cx, manifest, "g-search-during-load")?;
+    let snapshot = manifest.json_snapshot("g-search-during-load-readback", &rb)?;
+    let stale: Vec<String> = rb["cards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|card| {
+            !card["title"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("zebra")
+        })
+        .map(|card| card["id"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    let (_, _, more, pages, _) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        stale.is_empty() && column_ids(&rb, "backlog") == zebras && more == false && pages == 1,
+        "item 18: a search during Load more kept stale tickets {stale:?} or pages (hasMore {more}, pages {pages})"
+    );
+    // Clearing the search returns to the first page.
+    press(window, cx, "cmd-a").await?;
+    press(window, cx, "backspace").await?;
+    let all_backlog = engine
+        .all_ids(all.clone(), BoardColumn::Backlog, None)
+        .await?;
+    let rb = wait(window, cx, "the first page again", |rb| {
+        rb["filters"]["text"] == "" && column_ids(rb, "backlog") == all_backlog[..first_page]
+    })
+    .await?;
+    let (_, _, more, pages, _) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        more == true && pages == 1,
+        "item 18: clearing the search must return to Backlog's first page: hasMore {more}, pages {pages}"
+    );
+    // Back to Website: its first page, nothing from another project.
+    let rb = scroll_top(window, cx).await?;
+    click(window, cx, center(control(&rb, "board-project")?)).await?;
+    for _ in 0..4 {
+        press(window, cx, "down").await?;
+    }
+    press(window, cx, "enter").await?;
+    let rb = wait(window, cx, "Website's first page again", |rb| {
+        rb["scope"]["projectId"] == P_SITE
+            && rb["status"] == "Live"
+            && column_ids(rb, "backlog") == backlog[..first_page]
+    })
+    .await?;
+    let png_back = capture(window, cx, manifest, "g-website-again")?;
+    let snapshot_back = manifest.json_snapshot("g-website-again-readback", &rb)?;
+    let foreign: Vec<&Value> = rb["cards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|card| card["project"] != P_SITE)
+        .collect();
+    let (_, total, more, pages, text) = paging(&rb, "backlog");
+    anyhow::ensure!(
+        foreign.is_empty()
+            && total == backlog.len()
+            && more == true
+            && pages == 1
+            && text == format!("{first_page} of {}", backlog.len())
+            && column_ids(&rb, "ready") == ready
+            && column_ids(&rb, "done") == done,
+        "item 18: Website after All projects: foreign {foreign:?}, total {total}, hasMore {more}, pages {pages}, count {text}"
+    );
+    let all_lists = list_calls(&calls_since(calls, start));
+    ensure_bounded(&all_lists, "items 16–18")?;
+    manifest.step(
+        "pagination-scope-and-filter",
+        "All projects starts on each column's first page and matches the engine; a search typed while Load more is in flight shows only its five tickets (no stale page); clearing it and switching back to Website return to the first page with nothing from another scope",
+        json!({
+            "heldAtClick": held_at_click,
+            "heldWhenSearchShown": held_at_result,
+            "searchShownAfterMs": searched_ms,
+            "searchReadsDuringHeldLoadMore": overlapped,
+            "heldLoadMoreAnsweredByEngine": held_answered,
+            "loadMoreInFlightPng": loading_png,
+            "allProjectsPng": png,
+            "searchPng": png_search,
+            "searchReadback": snapshot,
+            "websitePng": png_back,
+            "websiteReadback": snapshot_back,
+            "boardListCalls": all_lists.len(),
+        }),
+    );
+    Ok(())
+}
+
+/// End a failed run with a nonzero status. The GPUI run loop can end the
+/// process on quit with status 0, so a failure (whose failure.txt,
+/// failure.png and manifest are already written) never reaches it. The
+/// fixture's temporary data root goes with it, as on a normal exit.
+fn exit_failed(temp_root: &Path) -> ! {
+    if let Err(error) = std::fs::remove_dir_all(temp_root) {
+        eprintln!(
+            "board-page fixture: temporary root {} left behind: {error}",
+            temp_root.display()
+        );
+    }
+    std::process::exit(1)
+}
+
 /// `Working` → `working` (the wire's camelCase phase names).
 fn lower_first(text: &str) -> String {
     let mut chars = text.chars();
@@ -1605,6 +2338,9 @@ fn main() -> anyhow::Result<()> {
         let _ = std::fs::remove_file(output.join(stale));
     }
     let root = tempfile::tempdir()?;
+    // A failed run exits from inside the GPUI loop (below), where the
+    // tempdir's drop never runs: it removes this root itself.
+    let temp_root = root.path().to_path_buf();
     let ui_data = root.path().join("ui");
     let engine_data = root.path().join("engine");
     std::fs::create_dir_all(&ui_data)?;
@@ -1633,6 +2369,7 @@ fn main() -> anyhow::Result<()> {
     auth.use_in_memory_credentials_for_tests();
     core.set_auth(Auth::new(auth));
     let device = core.device_id.clone();
+    let store = core.store.clone();
     for (id, name) in [(P_LUNA, "Luna"), (P_SITE, "Website"), (P_NOTES, "Notes")] {
         let path = root.path().join(name.to_lowercase());
         std::fs::create_dir_all(&path)?;
@@ -1667,9 +2404,11 @@ fn main() -> anyhow::Result<()> {
         anyhow::Ok(seeds)
     })?;
     let calls: Calls = Arc::new(Mutex::new(Vec::new()));
+    let hold = Arc::new(Hold::new());
     let service: Arc<dyn luna_rpc::RpcService> = Arc::new(CountingRpc {
         inner: core.rpc_service(),
         calls: calls.clone(),
+        hold: hold.clone(),
     });
     let handle = runtime.block_on(state::EngineHandle::fixture_from_core_with_service(
         &core, service,
@@ -1775,9 +2514,9 @@ fn main() -> anyhow::Result<()> {
             let window = match open(cx, WIDTH, HEIGHT) {
                 Ok(window) => window,
                 Err(error) => {
-                    *failure_for_ui.lock().unwrap() = Some(format!("{error:#}"));
-                    cx.quit();
-                    return;
+                    eprintln!("board-page fixture failed: {error:#}");
+                    let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
+                    exit_failed(&temp_root);
                 }
             };
             let out = output.clone();
@@ -1811,6 +2550,16 @@ fn main() -> anyhow::Result<()> {
                         cx.update(|cx| open(cx, NARROW_WINDOW, HEIGHT))
                     })
                     .await?;
+                    pagination_pass(
+                        current,
+                        cx,
+                        &engine,
+                        &store,
+                        &calls,
+                        &hold,
+                        &mut manifest,
+                    )
+                    .await?;
                     Ok(())
                 }
                 .await;
@@ -1819,12 +2568,18 @@ fn main() -> anyhow::Result<()> {
                         let written = manifest.write("pass").and_then(|_| {
                             std::fs::write(
                                 out.join("board-page.pass"),
-                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell\n",
+                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell; past one engine page every column stays reachable: Load more is one bounded cursor read per column, live re-reads keep every loaded page without duplicates and keep the selection, and scope or search changes return to the first page\n",
                             )
                             .map_err(anyhow::Error::from)
                         });
                         if let Err(error) = written {
+                            eprintln!("board-page fixture could not write evidence: {error:#}");
+                            let _ = std::fs::write(
+                                out.join("failure.txt"),
+                                format!("could not write evidence: {error:#}\n"),
+                            );
                             *failure.lock().unwrap() = Some(format!("{error:#}"));
+                            exit_failed(&temp_root);
                         }
                     }
                     Err(error) => {
@@ -1838,10 +2593,23 @@ fn main() -> anyhow::Result<()> {
                         });
                         let _ = manifest.write("fail");
                         *failure.lock().unwrap() = Some(format!("{error:#}"));
+                        exit_failed(&temp_root);
                     }
                 }
                 let _ = gpui::AnyWindowHandle::from(current)
                     .update(cx, |_, window, _| window.remove_window());
+                // A passing run ends here too: the GPUI run loop can end the
+                // process on quit, before the tempdir's drop runs. Persist the
+                // last settings revision first and drop its debounced write,
+                // so nothing recreates the root after it is removed.
+                settle(cx, 200).await;
+                cx.update(|cx| settings::flush(cx));
+                if let Err(error) = std::fs::remove_dir_all(&temp_root) {
+                    eprintln!(
+                        "board-page fixture: temporary root {} left behind: {error}",
+                        temp_root.display()
+                    );
+                }
                 cx.update(|cx| cx.quit());
             })
             .detach();

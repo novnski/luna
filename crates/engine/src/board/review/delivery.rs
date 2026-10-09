@@ -604,6 +604,9 @@ impl EngineRpc {
                 }
             }
         };
+        let review_base = self
+            .board_resolve_review_base(&item.id, &resolved.cwd)
+            .await?;
         let launch = LaunchSnapshot {
             id: format!(
                 "ls-{}",
@@ -620,7 +623,8 @@ impl EngineRpc {
             instruction_hash: crate::repos::hex(&Sha256::digest(text.as_bytes())),
             instruction_text: text,
             context_refs: Vec::new(),
-            issue_context: None,
+            issue_context: self.board_issue_launch_context(&item.id)?,
+            review_base,
             requested: item.implementation.clone(),
             resolved,
             destination: BoardDestination::Auto,

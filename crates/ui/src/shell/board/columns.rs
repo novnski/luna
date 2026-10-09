@@ -2,14 +2,18 @@
 //! count and short help ("Held or stopped", "Runs automatically"), its cards
 //! in rank order and a drop target. A drop between columns is one
 //! `BoardMove`; a drop within a column is one `BoardRank`; Done accepts no
-//! drop from another column (it is set by the engine, never by a drag).
+//! drop from another column (it is set by the engine, never by a drag). A
+//! column with more tickets than it loaded says so in its count ("500 of
+//! 528") and ends with Load more.
 use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use luna_proto::{BoardColumn, WorkItemView};
 
+use super::model::ColumnPaging;
 use super::page::{BoardCardDrag, BoardPage};
+use crate::button::{ButtonKind, ControlSize};
 use crate::theme::Theme;
 use crate::typography::ui_rems;
 
@@ -59,6 +63,8 @@ impl BoardPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let count = cards.len();
+        let paging = self.model.read(cx).paging(column);
+        let load_more = self.render_load_more(column, paging, theme, cx);
         let drop_slot = self
             .drag_over
             .as_ref()
@@ -105,11 +111,10 @@ impl BoardPage {
             )))
             .role(gpui::Role::Group)
             .aria_label(SharedString::from(format!(
-                "{} — {}, {} ticket{}",
+                "{} — {}, {}",
                 column.label(),
                 column.help().to_lowercase(),
-                count,
-                if count == 1 { "" } else { "s" }
+                count_label(&paging)
             )))
             .flex_1()
             .min_w(ui_rems(COLUMN_MIN_WIDTH))
@@ -129,10 +134,11 @@ impl BoardPage {
             .on_drop(cx.listener(move |this, drag: &BoardCardDrag, _, cx| {
                 this.drop_card(drag, column, cx);
             }))
-            .child(column_header(column, count, theme))
+            .child(column_header(column, &paging, theme))
             .child(list)
             .when(end_line, |el| el.child(super::card::drop_indicator(theme)))
-            .when(count == 0, |el| {
+            .children(load_more)
+            .when(count == 0 && !paging.has_more, |el| {
                 el.child(
                     div()
                         .px(ui_rems(4.0))
@@ -147,8 +153,95 @@ impl BoardPage {
     }
 }
 
+impl BoardPage {
+    /// A column's Load more after its last card (or, at the page bound, how
+    /// to find the rest). Its bounds go to the QA probe as
+    /// `board-load-more-<column>`.
+    pub(super) fn render_load_more(
+        &mut self,
+        column: BoardColumn,
+        paging: ColumnPaging,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let label = format!("board-load-more-{}", column.as_str());
+        if !paging.has_more || paging.at_limit {
+            self.geometry.borrow_mut().controls.remove(&label);
+        }
+        if !paging.has_more {
+            return None;
+        }
+        if paging.at_limit {
+            return Some(
+                div()
+                    .px(ui_rems(4.0))
+                    .py(ui_rems(6.0))
+                    .text_size(ui_rems(11.0))
+                    .line_height(ui_rems(15.0))
+                    .text_color(theme.readable_muted(0.7))
+                    .child(SharedString::from(format!(
+                        "Showing the first {}. Search or filter to find the rest.",
+                        paging.loaded
+                    )))
+                    .into_any_element(),
+            );
+        }
+        let geometry = self.geometry.clone();
+        let key = label.clone();
+        Some(
+            div()
+                .on_children_prepainted(move |bounds, _, _| {
+                    if let Some(bounds) = bounds.first() {
+                        geometry.borrow_mut().controls.insert(key.clone(), *bounds);
+                    }
+                })
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(
+                    crate::button::button(
+                        label,
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        !paging.loading,
+                        theme,
+                    )
+                    .w_full()
+                    .aria_label(SharedString::from(format!(
+                        "Load more {} tickets ({})",
+                        column.label(),
+                        paging.count_text()
+                    )))
+                    .child(if paging.loading {
+                        "Loading…"
+                    } else {
+                        "Load more"
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.load_more(column, window, cx);
+                    })),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// "500 of 528 tickets", "500+ tickets", "1 ticket".
+pub(super) fn count_label(paging: &ColumnPaging) -> String {
+    let one = !paging.has_more && paging.loaded == 1;
+    format!(
+        "{} ticket{}",
+        paging.count_text(),
+        if one { "" } else { "s" }
+    )
+}
+
 /// A column's title, count and help.
-pub(super) fn column_header(column: BoardColumn, count: usize, theme: &Theme) -> gpui::Div {
+pub(super) fn column_header(
+    column: BoardColumn,
+    paging: &ColumnPaging,
+    theme: &Theme,
+) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -170,7 +263,7 @@ pub(super) fn column_header(column: BoardColumn, count: usize, theme: &Theme) ->
                     div()
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.readable_muted(0.7))
-                        .child(SharedString::from(count.to_string())),
+                        .child(SharedString::from(paging.count_text())),
                 ),
         )
         .child(

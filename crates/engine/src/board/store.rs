@@ -559,9 +559,56 @@ impl EngineRpc {
                     actions.push(BoardAction::MoveToBacklog);
                     if working_chat.is_some() {
                         actions.push(BoardAction::Stop);
+                    } else if intent.as_ref().is_some_and(|intent| {
+                        intent.launch_failure.is_some()
+                            || matches!(
+                                intent.queue,
+                                Some(luna_proto::BoardAdmissionReason::Dependency { .. })
+                            )
+                    }) {
+                        actions.push(BoardAction::Start);
                     }
                 }
                 BoardColumn::Done => actions.push(BoardAction::Reopen),
+            }
+            // Recovery is explicit. The detail UI already renders Retry
+            // from this canonical action list; without it unknown delivery
+            // and exhausted review cycles cannot be recovered in the app.
+            if item.column != BoardColumn::Done
+                && matches!(
+                    observation.phase,
+                    BoardPhase::Idle
+                        | BoardPhase::Failed
+                        | BoardPhase::Stopped
+                        | BoardPhase::Unknown
+                        | BoardPhase::NotStarted
+                )
+                && (intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.launch_failure.is_some())
+                    || observation.attention.iter().any(|reason| {
+                        matches!(
+                            reason.kind,
+                            luna_proto::BoardAttentionKind::DeliveryUnknown
+                                | luna_proto::BoardAttentionKind::ReviewBlocked
+                                | luna_proto::BoardAttentionKind::ReviewUnavailable
+                                | luna_proto::BoardAttentionKind::ModelUnavailable
+                                | luna_proto::BoardAttentionKind::ProviderFailure
+                        )
+                    })
+                    || self
+                        .board_review_runs_of(&item.id)
+                        .first()
+                        .is_some_and(|run| {
+                            Some(run.execution_generation)
+                                == intent.as_ref().map(|intent| intent.execution_generation)
+                                && matches!(
+                                    run.outcome,
+                                    Some(luna_proto::ReviewRunOutcome::NeedsAttention { .. })
+                                )
+                        }))
+            {
+                actions.push(BoardAction::Retry);
             }
             actions.push(BoardAction::Archive);
         }

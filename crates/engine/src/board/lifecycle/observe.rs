@@ -6,7 +6,7 @@
 use super::*;
 use luna_proto::{
     AttentionKind, BoardAttentionKind, BoardAttentionReason, ReviewCleanupState, ReviewRun,
-    SessionStatus,
+    ReviewRunOutcome, SessionStatus,
 };
 
 /// What the engine can observe about one chat right now.
@@ -244,6 +244,18 @@ impl EngineRpc {
             reasons.push(attention(
                 BoardAttentionKind::ReviewUnavailable,
                 format!("Review {} is {}.", run.id, run.state.as_str()),
+                run.reviewer_task_id.as_deref(),
+            ));
+        }
+        if let Some(run) = current_runs.first()
+            && let Some(ReviewRunOutcome::NeedsAttention { reason }) = run.outcome
+            && item.column != BoardColumn::Done
+        {
+            reasons.push(attention(
+                reason,
+                run.detail
+                    .as_deref()
+                    .unwrap_or("The review needs attention."),
                 run.reviewer_task_id.as_deref(),
             ));
         }

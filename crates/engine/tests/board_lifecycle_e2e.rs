@@ -62,6 +62,10 @@
 //! 16. Settings the user deliberately deferred are silently filled with
 //!     defaults (or broader access) at dispatch; Ready must hold the ticket
 //!     with a visible SettingsUnresolved reason until they are chosen.
+//! 17. Clearing/completing a dependency dispatches a previously blocked
+//!     ticket without a fresh Start, including after restart (PB-4 is not
+//!     enabled). An unresolved delivery omits Retry from the engine's UI
+//!     actions, leaving the only recovery tool inaccessible in the app.
 //!
 //! Scenarios that create workers depend on the chat-model slice (A3:
 //! `board_create_main_chat` / `board_create_side_chat` with a ticket
@@ -930,6 +934,73 @@ async fn queued_launch_is_cancelled_before_sending() {
     stop(b).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_a_dependency_requires_a_new_start() {
+    let f = fixture();
+    let b = boot(&f);
+    let mut ev = Evidence::new("dependency-needs-new-start");
+    space(&b, &f, "project-orbit", "orbit").await;
+    let (blocker, _) = ticket(&b, "blocker", "project-orbit", "Prerequisite").await;
+    let (id, key) = ticket(&b, "dependent", "project-orbit", "Dependent").await;
+    f.peer.hold(&key);
+    ok(
+        &b.c,
+        "BoardSetDependency",
+        json!({"requestId":"block","workItemId":id,"blockedById":blocker,"present":true}),
+    )
+    .await;
+    mv(&b, "blocked-ready", &id, "ready").await;
+    let blocked = read(&b, &id).await;
+    ev.step(
+        "dependency holds the ticket with a visible reason",
+        json!("dependency"),
+        blocked["view"]["queueReason"]["kind"].clone(),
+        Some(&blocked),
+    );
+    ok(
+        &b.c,
+        "BoardSetDependency",
+        json!({"requestId":"unblock","workItemId":id,"blockedById":blocker,"present":false}),
+    )
+    .await;
+    for _ in 0..3 {
+        b.rpc.board_lifecycle_tick().await.unwrap();
+    }
+    let held = read(&b, &id).await;
+    ev.step(
+        "clearing the dependency does not create a worker or launch",
+        json!({"chat":null,"launches":0}),
+        json!({"chat":worker(&held),"launches":launches(&held).len()}),
+        Some(&held),
+    );
+    stop(b).await;
+    let b = boot(&f);
+    b.rpc.board_qa_reconcile().await.unwrap();
+    let held = read(&b, &id).await;
+    ev.step(
+        "restart keeps the dependency hold",
+        json!({"chat":null,"launches":0}),
+        json!({"chat":worker(&held),"launches":launches(&held).len()}),
+        Some(&held),
+    );
+    ok(
+        &b.c,
+        "BoardStart",
+        json!({"requestId":"explicit-start","workItemId":id}),
+    )
+    .await;
+    let started = wait_phase(&b, &id, "working").await;
+    ev.step(
+        "a fresh Start launches exactly once",
+        json!(1),
+        json!(launches(&started).len()),
+        Some(&started),
+    );
+    f.peer.release(&key);
+    ev.write();
+    stop(b).await;
+}
+
 /// Cases 7 and 8: an unprovable first delivery stays Unknown, is never
 /// resent by moves or a restart, and only an explicit Retry sends again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -942,6 +1013,17 @@ async fn unknown_first_delivery_is_reconciled_not_resent() {
     f.peer.lose(&key, true);
     mv(&b, "ready-1", &id, "ready").await;
     let unknown = wait_phase(&b, &id, "unknown").await;
+    ev.step(
+        "unknown delivery exposes explicit Retry to the UI",
+        json!(true),
+        json!(
+            unknown["view"]["actions"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("retry"))
+        ),
+        Some(&unknown),
+    );
     ev.step(
         "lost acceptance is Unknown with Needs attention, not delivered or failed",
         json!({"firstPrompt":"unknown","launchState":"unknown","attention":true,"prompts":1}),

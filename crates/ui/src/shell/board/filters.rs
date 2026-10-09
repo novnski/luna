@@ -34,18 +34,9 @@ impl BoardPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (count, more) = {
-            let model = self.model.read(cx);
-            (model.items().len(), model.has_more())
-        };
+        let count = self.header_count(cx);
+        let subtitle = self.header_subtitle(cx);
         let toolbar = self.render_toolbar(theme, window, cx);
-        let subtitle = if more {
-            "Showing the first page of tickets. Move a ticket to Ready to start it; move it back \
-             to Backlog to stop it."
-        } else {
-            "Move a ticket to Ready to start it; move it back to Backlog to stop it. Done is set \
-             when checks and the review pass."
-        };
         div()
             .id("board-header")
             .flex()
@@ -60,6 +51,37 @@ impl BoardPage {
             )
             .child(toolbar)
             .into_any_element()
+    }
+
+    /// The title's count: the engine's total when exact, else what is
+    /// loaded.
+    pub(super) fn header_count(&self, cx: &gpui::App) -> usize {
+        let model = self.model.read(cx);
+        model
+            .board_total()
+            .filter(|_| model.has_more())
+            .map(|total| (total as usize).max(model.items().len()))
+            .unwrap_or(model.items().len())
+    }
+
+    /// The header's help, saying how much is loaded while a column has more.
+    pub(super) fn header_subtitle(&self, cx: &gpui::App) -> String {
+        let model = self.model.read(cx);
+        let help = "Move a ticket to Ready to start it; move it back to Backlog to stop it.";
+        if !model.has_more() {
+            return format!("{help} Done is set when checks and the review pass.");
+        }
+        let loaded = model.items().len();
+        match model.board_total() {
+            Some(total) => format!(
+                "Showing {loaded} of {} tickets; Load more at the end of a column. {help}",
+                (total as usize).max(loaded)
+            ),
+            None => format!(
+                "Showing the first {loaded} matching tickets; Load more at the end of a column. \
+                 {help}"
+            ),
+        }
     }
 
     fn render_toolbar(

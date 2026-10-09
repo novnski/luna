@@ -1847,7 +1847,10 @@ async fn fixed_parent_rejects_idle_and_active_reparenting() {
         if phase == "active" {
             send(&c, &worker, "HOLD_FIXED_WORKER").await;
             wait_for("worker active", 10, || {
-                core.sessions.turn_in_flight(&worker)
+                // In-flight includes startup before the harness receives
+                // the request. Take the no-extra-runs baseline only after
+                // this original request has actually reached the peer.
+                core.sessions.turn_in_flight(&worker) && runs_with(&f, "HOLD_FIXED_WORKER") == 1
             })
             .await;
         }

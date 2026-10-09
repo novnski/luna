@@ -58,6 +58,8 @@ impl BoardPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let count = rows.len();
+        let paging = self.model.read(cx).paging(column);
+        let load_more = self.render_load_more(column, paging, theme, cx);
         let ids: Vec<String> = rows.iter().map(|view| view.item.id.clone()).collect();
         let elements: Vec<AnyElement> = rows
             .iter()
@@ -71,16 +73,15 @@ impl BoardPage {
             )))
             .role(gpui::Role::Group)
             .aria_label(SharedString::from(format!(
-                "{} — {}, {} ticket{}",
+                "{} — {}, {}",
                 column.label(),
                 column.help().to_lowercase(),
-                count,
-                if count == 1 { "" } else { "s" }
+                super::columns::count_label(&paging)
             )))
             .flex()
             .flex_col()
             .gap(ui_rems(6.0))
-            .child(super::columns::column_header(column, count, theme))
+            .child(super::columns::column_header(column, &paging, theme))
             .child(
                 div()
                     .on_children_prepainted(move |bounds, _, _| {
@@ -97,7 +98,8 @@ impl BoardPage {
                     .overflow_hidden()
                     .children(elements),
             )
-            .when(count == 0, |el| {
+            .children(load_more)
+            .when(count == 0 && !paging.has_more, |el| {
                 el.child(
                     div()
                         .px(ui_rems(4.0))
