@@ -63,6 +63,8 @@ const REVEAL_RETRY: Duration = Duration::from_millis(1500);
 const PLACEMENT_WAIT: Duration = Duration::from_millis(1500);
 /// How often a waiting reveal checks again.
 const REVEAL_POLL: Duration = Duration::from_millis(250);
+/// A reveal asks the workbench at most this many times.
+const REVEAL_ASKS: u8 = 3;
 /// Recent board activity kept for the Activity view.
 const ACTIVITY_KEPT: usize = 40;
 
@@ -206,6 +208,11 @@ pub(crate) struct PendingReveal {
     pub side: String,
     started: Instant,
     asked: Option<Instant>,
+    /// How many times the reveal has asked the workbench for the tab.
+    asks: u8,
+    /// The committed focused chat when it last asked: any other tab (not
+    /// the side chat) focused since then is the user's own choice.
+    focus_before: Option<String>,
 }
 
 /// The status control's open menu.
@@ -873,6 +880,8 @@ impl Shell {
                     side: side_task_id,
                     started: Instant::now(),
                     asked: None,
+                    asks: 0,
+                    focus_before: None,
                 });
                 self.board_chat_settle_reveal(cx);
             }
@@ -929,10 +938,10 @@ impl Shell {
         if selected.as_deref() != Some(reveal.main.as_str())
             || !matches!(self.route, crate::shell::Route::Chat)
         {
-            // The user went elsewhere: the reveal no longer applies.
-            if reveal.started.elapsed() > Duration::from_millis(300) {
-                self.board_chat.reveal = None;
-            }
+            // The user went elsewhere (the main chat is selected before the
+            // reveal starts): it no longer applies and never steals focus.
+            self.board_chat.reveal = None;
+            self.board_chat.reveal_timer = None;
             return;
         }
         if !self.workbench.capable() {
@@ -947,6 +956,10 @@ impl Shell {
         let ready = self.workbench.main() == reveal.main
             && self.workbench.loaded()
             && self.workbench.settled();
+        let committed_focus = self
+            .workbench
+            .committed()
+            .and_then(|layout| layout.focused_chat_id().map(str::to_string));
         let (focused, placed) = self
             .workbench
             .committed()
@@ -962,6 +975,17 @@ impl Shell {
             })
             .unwrap_or((false, false));
         if ready && focused {
+            self.board_chat.reveal = None;
+            self.board_chat.reveal_timer = None;
+            return;
+        }
+        // After it asked, a different tab focused (neither the side chat nor
+        // what was focused when it asked) is the user's choice: stop. So is
+        // a third refusal; the side chat stays one click away in Related.
+        if ready
+            && reveal.asks > 0
+            && (committed_focus != reveal.focus_before || reveal.asks >= REVEAL_ASKS)
+        {
             self.board_chat.reveal = None;
             self.board_chat.reveal_timer = None;
             return;
@@ -990,8 +1014,11 @@ impl Shell {
         }
         if let Some(pending) = self.board_chat.reveal.as_mut() {
             pending.asked = Some(Instant::now());
+            pending.asks += 1;
+            pending.focus_before = committed_focus;
         }
         self.open_side_chat_in_pane(reveal.side, cx);
+        self.board_chat_schedule_reveal(cx);
     }
 
     /// Check a pending reveal again shortly: nothing else may redraw while

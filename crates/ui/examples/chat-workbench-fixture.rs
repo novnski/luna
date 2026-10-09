@@ -4141,6 +4141,16 @@ fn main() -> anyhow::Result<()> {
                     let id = fork_child.clone();
                     wait_for(window, cx, "the sibling's tab closed", move |rb| occurrences(rb, &id) == 0).await?;
                 }
+                // The second fork survives here (a fork of a fork can no
+                // longer be made to orphan it), so its tab closes too: Main's
+                // group holds the same tabs the later steps were written
+                // for (Main, Draft release notes, the first fork, the
+                // orphan).
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close(&fork_two, cx))?;
+                {
+                    let id = fork_two.clone();
+                    wait_for(window, cx, "the second fork's tab closed", move |rb| occurrences(rb, &id) == 0).await?;
+                }
                 progress(&output, &mut record, "forkOperations".into(), serde_json::json!({"archive": after_shortcut, "placed": placed["sidebarOrder"], "marks": marks, "sibling": fork_child, "library": back["relatedTrees"][MAIN]}));
 
                 // w20d. Failure case 31: a new Main before the engine's
@@ -4581,6 +4591,8 @@ fn main() -> anyhow::Result<()> {
                     anyhow::bail!("Main's group needs a second tab to test a stale chooser");
                 }
                 click_tab(window, cx, MAIN).await?;
+                // The chooser below opens on the focused group's chat: Main.
+                wait_for(window, cx, "Main focused again", |rb| rb["focusedChat"] == MAIN).await?;
                 progress(&output, &mut record, "chooserSideChat".into(), serde_json::json!({"chooser": side_chooser, "recentFork": recent_fork}));
 
                 // w20i. Failure case 36: Settings in the contained plane, its
