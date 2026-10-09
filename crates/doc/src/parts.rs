@@ -572,6 +572,29 @@ pub fn fold_message_start_into_parts(out: &mut Vec<MessagePart>, event: &AgentEv
     fold_event(out, event, false);
 }
 
+/// Fold one event of a provider stream whose message ends the caller tracks
+/// in `message_ended`: after `AssistantMessageCompleted`, the next text or
+/// thought opens its own part ([`fold_message_start_into_parts`]). For folds
+/// with no segment split of their own (child transcripts, Board discussions).
+pub fn fold_event_across_messages(
+    out: &mut Vec<MessagePart>,
+    event: &AgentEvent,
+    message_ended: &mut bool,
+) {
+    let opens_content = matches!(
+        event,
+        AgentEvent::TextDelta { text } | AgentEvent::ReasoningDelta { text } if !text.is_empty()
+    );
+    if opens_content && std::mem::take(message_ended) {
+        fold_message_start_into_parts(out, event);
+    } else {
+        fold_event_into_parts(out, event);
+    }
+    if matches!(event, AgentEvent::AssistantMessageCompleted { .. }) {
+        *message_ended = true;
+    }
+}
+
 fn fold_event(out: &mut Vec<MessagePart>, event: &AgentEvent, continue_tail: bool) {
     match event {
         AgentEvent::SessionStarted { .. } | AgentEvent::Steered { .. } => {

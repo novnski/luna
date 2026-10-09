@@ -15758,7 +15758,9 @@ mod tests {
             "a-copy",
             MessageStatus::Complete,
             vec![
-                text_part("p1", "First **paragraph**."),
+                // A provider's own message separator (Codex ends each message
+                // with a blank line) must not double the join's paragraph break.
+                text_part("p1", "First **paragraph**.\n\n"),
                 tool_part("tool", "printf hidden"),
                 text_part("p2", "    indented code\n    stays indented"),
             ],
