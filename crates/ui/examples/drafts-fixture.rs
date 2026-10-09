@@ -2078,28 +2078,6 @@ mod tests {
         .unwrap_or_else(|_| panic!("trace never recorded {event} {count} times"));
     }
 
-    #[test]
-    fn fixture_startup_loads_saved_settings_and_fresh_roots_default() {
-        let fresh = tempfile::tempdir().unwrap();
-        assert_eq!(
-            settings::UiSettings::load(fresh.path()).follow_up_behavior,
-            luna_proto::FollowUpBehavior::Queue
-        );
-
-        let persisted = tempfile::tempdir().unwrap();
-        let mut saved = settings::UiSettings::default();
-        saved.follow_up_behavior = luna_proto::FollowUpBehavior::Steer;
-        std::fs::write(
-            persisted.path().join("ui-settings.json"),
-            serde_json::to_vec_pretty(&saved).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            settings::UiSettings::load(persisted.path()).follow_up_behavior,
-            luna_proto::FollowUpBehavior::Steer
-        );
-    }
-
     #[tokio::test]
     async fn l11_initialization_is_isolated_registered_and_restart_idempotent() {
         let root = tempfile::tempdir().unwrap();

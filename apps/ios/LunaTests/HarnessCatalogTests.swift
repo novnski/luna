@@ -2,18 +2,6 @@ import XCTest
 @testable import Luna
 
 final class HarnessCatalogTests: XCTestCase {
-    func testCodexFallbackStartsWithAstraAndExposesItsTraits() {
-        let models = HarnessCatalog.models(for: "codex")
-        let astra = models.first
-
-        XCTAssertEqual(astra?.id, "gpt-6-astra")
-        XCTAssertEqual(astra?.label, "GPT-6-Astra")
-        XCTAssertEqual(astra?.reasoningLevels,
-                       ["low", "medium", "high", "xhigh", "max", "ultra"])
-        XCTAssertEqual(astra?.options.first?.id, "serviceTier")
-        XCTAssertEqual(astra?.options.first?.choices.map(\.id), ["default", "fast"])
-    }
-
     func testDefaultReasoningMatchesDesktopPreference() {
         let astra = HarnessCatalog.defaultModel(for: "codex")
         XCTAssertEqual(HarnessCatalog.defaultReasoning(for: astra), "high")

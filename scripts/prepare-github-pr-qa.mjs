@@ -212,7 +212,7 @@ try {
     const deadline = Date.now() + 15000;
     while (receipt?.status === 'pending' && Date.now() < deadline) {
       await pause(50);
-      receipt = await client.call('ReadTaskCommandReceipt', { taskId: params.chatId, commandId: receipt.commandId });
+      receipt = await client.call('GetTaskCommandReceipt', { commandId: receipt.commandId });
     }
     if (receipt) assert.equal(receipt.status, 'applied', JSON.stringify(receipt));
   };

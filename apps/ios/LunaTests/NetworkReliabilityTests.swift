@@ -60,11 +60,9 @@ final class NetworkReliabilityTests: XCTestCase {
     // MARK: upload chunk plan (attachments.rs PR #164 invariants)
 
     func testChunkSizeWireInvariants() {
-        // % 4 == 0: every base64 slice decodes independently.
+        // % 4 == 0: every base64 slice decodes independently, and its binary
+        // slice (b64 / 4 * 3 bytes) concatenates to the whole file's encoding.
         XCTAssertEqual(uploadChunkB64Chars % 4, 0)
-        // The binary slice boundary is % 3 == 0, so per-slice base64
-        // concatenates to the whole file's encoding.
-        XCTAssertEqual((uploadChunkB64Chars / 4 * 3) % 3, 0)
         // Envelope headroom under Cloudflare's 1 MiB WS message cap.
         XCTAssertLessThan(uploadChunkB64Chars + 1_024, 1_048_576)
     }

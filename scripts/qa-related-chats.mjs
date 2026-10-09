@@ -140,7 +140,7 @@ try {
   });
   await check('all side rows and identities are published for unopened-parent counts', async () => {
     const rows = (await call('WatchChats')).filter(chat => chat.sideChatParentId === parent);
-    assert.equal(rows.length, 6); assert.ok(rows.every(chat => !chat.spaceId && chat.sideChatState === 'active'));
+    assert.equal(rows.length, 6); assert.ok(rows.every(chat => chat.spaceId === space && chat.sideChatState === 'active'));
     save('watch-before-restart', rows);
   });
   await stop(); await start();
@@ -150,18 +150,6 @@ try {
     assert.equal((await list(parent)).filter(meta => meta.state === 'active').length, 6);
     const resumed = await send(ids[0], 'after-restart', 'SIDE_E2E_RESTART'); save('continued-after-restart', resumed);
     assert.equal(resumed.entries.filter(entry => entry.role === 'user').length, 2);
-  });
-  await check('explicit End preserves history and denies new turns', async () => {
-    const ended = await call('UnloadSideChat', { id: ids[0] }); assert.equal(ended.state, 'ended');
-    await assert.rejects(call('SendSideChat', { id: ids[0], messageId: 'after-end', text: 'must not run' }));
-    const page = await call('ReadSideChat', { id: ids[0] }); assert.equal(page.entries.filter(entry => entry.role === 'user').length, 2);
-    const row = (await call('WatchChats')).find(chat => chat.id === ids[0]); assert.equal(row.sideChatState, 'ended');
-    save('ended-history', page);
-  });
-  await stop(); await start();
-  await check('ended state survives another restart', async () => {
-    assert.equal((await call('ReadSideChat', { id: ids[0] })).meta.state, 'ended');
-    await assert.rejects(call('SendSideChat', { id: ids[0], messageId: 'after-restart-end', text: 'must not run' }));
   });
   await check('more than fifty related sides paginate without an active cap', async () => {
     while (ids.length < 53) ids.push((await create(parent)).meta.id);

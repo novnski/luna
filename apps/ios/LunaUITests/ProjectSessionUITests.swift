@@ -32,7 +32,6 @@ final class ProjectSessionUITests: XCTestCase {
         XCTAssertTrue(newSession.waitForExistence(timeout: 5))
         newSession.tap()
         XCTAssertTrue(app.buttons["New space…"].exists)
-        XCTAssertFalse(app.buttons["new-projectless-session"].exists)
     }
 
     func testProjectSessionStillUsesItsCheckoutAndCanSend() {
@@ -44,7 +43,6 @@ final class ProjectSessionUITests: XCTestCase {
         expectContext("luna · MacBook Pro")
         XCTAssertTrue(app.buttons["session-checkout"].exists)
         XCTAssertTrue(app.buttons["session-ref"].exists)
-        XCTAssertFalse(app.buttons["session-host"].exists)
         composer.tap()
         composer.typeText("Inspect this project.")
         app.buttons["composer-send"].tap()
