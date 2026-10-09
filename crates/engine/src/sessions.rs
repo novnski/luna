@@ -1574,6 +1574,8 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
     git_checkpoints: OnceLock<crate::git_checkpoints::GitCheckpoints>,
     side_chat_lookup: OnceLock<SideChatLookup>,
+    /// Engine-owned: chats that run review-constrained (a board reviewer).
+    review_constrained_lookup: OnceLock<SideChatLookup>,
     legacy_side_send_lookup: OnceLock<LegacySideSendLookup>,
     side_chat_admission: OnceLock<SideChatAdmission>,
 }
@@ -1656,6 +1658,7 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
                 git_checkpoints: OnceLock::new(),
                 side_chat_lookup: OnceLock::new(),
+                review_constrained_lookup: OnceLock::new(),
                 legacy_side_send_lookup: OnceLock::new(),
                 side_chat_admission: OnceLock::new(),
             }),
@@ -4043,6 +4046,13 @@ impl SessionsEngine {
 
     pub(crate) fn set_side_chat_lookup(&self, lookup: SideChatLookup) {
         let _ = self.inner.side_chat_lookup.set(lookup);
+    }
+
+    /// Install the engine's review-constrained predicate (board reviewers
+    /// run with a read-only sandbox on every turn; see
+    /// `board/review.rs`).
+    pub(crate) fn set_review_constrained_lookup(&self, lookup: SideChatLookup) {
+        let _ = self.inner.review_constrained_lookup.set(lookup);
     }
 
     pub(crate) fn set_legacy_side_send_lookup(&self, lookup: LegacySideSendLookup) {

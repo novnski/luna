@@ -60,6 +60,19 @@ pub const ASK_AUTO_TOOL_GRANT: &[&str] = &[
     "WebFetch",
 ];
 
+/// The built-in tools a review-constrained (read-only) run keeps: reading,
+/// searching and asking, never editing, writing or running commands. The
+/// engine resolves the read-only sandbox (a board reviewer); `--restricted`
+/// still confines these to the working directories.
+pub const READ_ONLY_TOOL_GRANT: &[&str] = &[
+    "AskUserQuestion",
+    "Glob",
+    "Grep",
+    "Read",
+    "ReportFindings",
+    "WebSearch",
+];
+
 /// Which built-in tools a launch asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolSelection {
@@ -68,6 +81,8 @@ pub enum ToolSelection {
     ModeDefault,
     /// `--tools ""` (title runs).
     Disabled,
+    /// [`READ_ONLY_TOOL_GRANT`] for an engine-resolved read-only sandbox.
+    ReadOnly,
 }
 
 /// The configuration identity of one Claude process: permission policy, tools,
@@ -115,6 +130,9 @@ impl ClaudeLaunchProfile {
         args.extend(mode_args(self.mode).iter().map(|arg| (*arg).to_owned()));
         match self.tools {
             ToolSelection::Disabled => args.extend(["--tools".into(), String::new()]),
+            ToolSelection::ReadOnly => {
+                args.extend(["--tools".into(), READ_ONLY_TOOL_GRANT.join(",")]);
+            }
             ToolSelection::ModeDefault if self.restricted() => {
                 args.extend(["--tools".into(), ASK_AUTO_TOOL_GRANT.join(",")]);
             }

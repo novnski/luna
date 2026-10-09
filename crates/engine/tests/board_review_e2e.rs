@@ -497,6 +497,57 @@ impl Rig {
         }
     }
 
+    /// [`Self::turn`] for a ticket's turn; a timeout reports the ticket's
+    /// engine view and intent (phase, queue reason, attention) for triage.
+    async fn ticket_turn(
+        &mut self,
+        item: &str,
+        what: &str,
+        wanted: impl Fn(&Turn) -> bool,
+    ) -> Turn {
+        if let Some(index) = self.pending.iter().position(&wanted) {
+            return self.pending.remove(index).unwrap();
+        }
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            match tokio::time::timeout_at(deadline, self.turns.recv()).await {
+                Ok(Some(turn)) if wanted(&turn) => return turn,
+                Ok(Some(turn)) => {
+                    if self.autofinish.is_some_and(|autofinish| autofinish(&turn)) {
+                        turn.finish();
+                    } else {
+                        self.pending.push_back(turn);
+                    }
+                }
+                Ok(None) => panic!("peer channel closed"),
+                Err(_) => {
+                    let detail = self.detail(item).await;
+                    panic!(
+                        "{}: no {what} turn within {WAIT:?}; view {:#} intent {:#}",
+                        self.evidence.scenario,
+                        json!({"phase": detail["view"]["phase"], "attention": detail["view"]["attention"],
+                            "queueReason": detail["view"]["queueReason"], "column": detail["view"]["item"]["column"]}),
+                        detail["intent"]
+                    );
+                }
+            }
+        }
+    }
+
+    /// Wait until a chat's turn has settled.
+    async fn wait_idle(&self, chat: &str) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while self.core().sessions.active_turn_id(chat).is_some()
+            || self.core().sessions.turn_in_flight(chat)
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{chat} never settled"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// No matching turn arrives within `window`.
     async fn no_turn(&mut self, window: Duration, wanted: impl Fn(&Turn) -> bool) -> bool {
         if self.pending.iter().any(&wanted) {
@@ -647,7 +698,21 @@ impl Rig {
                     "config": {"harness": "codex", "model": IMPLEMENTER_MODEL, "sandbox": "workspace-write", "permissionMode": "ask"}}}),
         )
         .await;
-        let _ = title;
+        // Named before any provider session exists, so the title is local
+        // (a later ticket conversion keeps it instead of renaming).
+        let snapshot = self
+            .ok("GetTaskCommandSnapshot", json!({"taskId": id}))
+            .await["snapshot"]
+            .clone();
+        let renamed = self
+            .ok(
+                "ExecuteTaskCommand",
+                json!({"commandId": format!("title-{id}"), "actorId": "board-review-e2e", "clientId": "board-review-e2e",
+                    "clientSessionId": "e2e", "taskId": id, "expectedTaskRevision": snapshot["taskRevision"],
+                    "intent": {"kind": "rename", "title": title}}),
+            )
+            .await;
+        assert_eq!(renamed["status"], "applied", "{renamed}");
     }
 
     fn write(&self, path: &str, text: &str) {
@@ -785,7 +850,7 @@ async fn implement_and_submit(
 ) -> (String, Value) {
     rig.move_to(item, move_key, "ready").await;
     let turn = rig
-        .turn("implementer first start", |turn| {
+        .ticket_turn(item, "implementer first start", |turn| {
             turn.harness == HarnessId::Codex && !turn.is_packet()
         })
         .await;
@@ -1705,10 +1770,12 @@ async fn converted_main_chat_keeps_identity_with_fallback_reviewer() {
     })
     .await
     .finish();
+    // Convert an idle chat: a still-live turn is reused in place, not continued.
+    rig.wait_idle(&chat).await;
     let converted = rig
         .ok(
             "BoardConvertChat",
-            json!({"requestId": "convert-1", "taskId": chat, "description": "Implement add.\n\n## Acceptance criteria\n- returns the sum\n",
+            json!({"requestId": "convert-1", "taskId": chat, "title": "Discussion", "description": "Implement add.\n\n## Acceptance criteria\n- returns the sum\n",
                 "completion": {"mode": "automaticChecksAndReview", "requiredChecks": ["unit"]}}),
         )
         .await;
@@ -1724,7 +1791,7 @@ async fn converted_main_chat_keeps_identity_with_fallback_reviewer() {
     );
     rig.move_to(&id, "convert-1-ready", "ready").await;
     let turn = rig
-        .turn("continuation", |turn| {
+        .ticket_turn(&id, "continuation", |turn| {
             turn.harness == HarnessId::Codex && !turn.is_packet()
         })
         .await;
