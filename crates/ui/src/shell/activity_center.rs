@@ -824,12 +824,21 @@ mod tests {
         };
         let active = route_transition(&completed, focused);
         assert!(!active.banner);
-        let other = route_transition(
-            &transition(AttentionKind::ApprovalRequired, "other"),
-            focused,
-        );
+        let request = transition(AttentionKind::ApprovalRequired, "other");
+        let other = route_transition(&request, focused);
         assert!(!other.banner);
         assert_eq!(other.sound, Some(crate::sound::Sound::Request));
+        // The background-only setting banners a request once the app loses
+        // focus.
+        let backgrounded = route_transition(
+            &request,
+            DeliveryContext {
+                app_focused: false,
+                ..focused
+            },
+        );
+        assert!(backgrounded.banner);
+        assert_eq!(backgrounded.sound, Some(crate::sound::Sound::Request));
     }
 
     #[test]

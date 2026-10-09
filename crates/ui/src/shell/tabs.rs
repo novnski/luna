@@ -550,60 +550,38 @@ impl Shell {
 mod cycle_tests {
     use super::*;
 
-    fn order(ids: &[&str]) -> Vec<String> {
-        ids.iter().map(|id| id.to_string()).collect()
-    }
-
     #[test]
-    fn steps_forward_and_back_through_the_list() {
-        let list = order(&["a", "b", "c"]);
-        assert_eq!(cycle_target(&list, Some("a"), true).as_deref(), Some("b"));
-        assert_eq!(cycle_target(&list, Some("b"), true).as_deref(), Some("c"));
-        assert_eq!(cycle_target(&list, Some("c"), false).as_deref(), Some("b"));
-        assert_eq!(cycle_target(&list, Some("b"), false).as_deref(), Some("a"));
-    }
-
-    #[test]
-    fn wraps_at_both_ends() {
-        let list = order(&["a", "b", "c"]);
-        assert_eq!(cycle_target(&list, Some("c"), true).as_deref(), Some("a"));
-        assert_eq!(cycle_target(&list, Some("a"), false).as_deref(), Some("c"));
-    }
-
-    #[test]
-    fn a_single_session_cycles_to_itself() {
-        // Not a no-op by accident: with one row both directions must resolve,
-        // so the shortcut never looks broken by dead-ending on `None`.
-        let list = order(&["only"]);
-        assert_eq!(
-            cycle_target(&list, Some("only"), true).as_deref(),
-            Some("only")
-        );
-        assert_eq!(
-            cycle_target(&list, Some("only"), false).as_deref(),
-            Some("only")
-        );
-    }
-
-    #[test]
-    fn no_selection_enters_the_list_from_the_matching_end() {
-        let list = order(&["a", "b", "c"]);
-        assert_eq!(cycle_target(&list, None, true).as_deref(), Some("a"));
-        assert_eq!(cycle_target(&list, None, false).as_deref(), Some("c"));
-        assert_eq!(
-            cycle_target(&list, Some("gone"), true).as_deref(),
-            Some("a")
-        );
-        assert_eq!(
-            cycle_target(&list, Some("gone"), false).as_deref(),
-            Some("c")
-        );
-    }
-
-    #[test]
-    fn an_empty_list_has_nothing_to_select() {
-        assert_eq!(cycle_target(&[], None, true), None);
-        assert_eq!(cycle_target(&[], Some("a"), true), None);
+    fn cycle_target_steps_wraps_and_enters_from_the_matching_end() {
+        let abc: &[&str] = &["a", "b", "c"];
+        for (list, selected, forward, expected) in [
+            // Steps forward and back through the list.
+            (abc, Some("a"), true, Some("b")),
+            (abc, Some("b"), true, Some("c")),
+            (abc, Some("c"), false, Some("b")),
+            (abc, Some("b"), false, Some("a")),
+            // Wraps at both ends.
+            (abc, Some("c"), true, Some("a")),
+            (abc, Some("a"), false, Some("c")),
+            // One row resolves in both directions, so the shortcut never
+            // looks broken by dead-ending on `None`.
+            (&["only"][..], Some("only"), true, Some("only")),
+            (&["only"][..], Some("only"), false, Some("only")),
+            // No (or a vanished) selection enters from the matching end.
+            (abc, None, true, Some("a")),
+            (abc, None, false, Some("c")),
+            (abc, Some("gone"), true, Some("a")),
+            (abc, Some("gone"), false, Some("c")),
+            // An empty list has nothing to select.
+            (&[][..], None, true, None),
+            (&[][..], Some("a"), true, None),
+        ] {
+            let order: Vec<String> = list.iter().map(|id| id.to_string()).collect();
+            assert_eq!(
+                cycle_target(&order, selected, forward).as_deref(),
+                expected,
+                "{list:?} from {selected:?} forward={forward}"
+            );
+        }
     }
 
     // Cycling walks the rows the sidebar is drawing, not every chat: that

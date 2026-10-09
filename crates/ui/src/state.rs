@@ -5794,13 +5794,10 @@ mod tests {
         assert!(state.transcript_replayed);
     }
 
+    /// The scope/auth rows live in `luna_proto::view::gate_tests`; these are
+    /// the connection phases and the signed-in synced row it does not cover.
     #[test]
     fn gate_phases() {
-        let user = UserProfile {
-            id: "u".into(),
-            email: "w@example.com".into(),
-            name: None,
-        };
         assert_eq!(
             gate_phase(&ConnectionStatus::Connecting, None, None),
             GatePhase::Loading
@@ -5812,38 +5809,17 @@ mod tests {
         assert_eq!(
             gate_phase(
                 &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Local),
-                Some(&AuthState::SignedOut),
-            ),
-            GatePhase::Ready
-        );
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Synced),
-                Some(&AuthState::SignedOut),
-            ),
-            GatePhase::SignIn
-        );
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
                 Some(WorkspaceScope::Synced),
                 Some(&AuthState::SignedIn {
-                    user: user.clone(),
+                    user: UserProfile {
+                        id: "u".into(),
+                        email: "w@example.com".into(),
+                        name: None,
+                    },
                     org_id: None
                 })
             ),
             GatePhase::Ready
-        );
-        // No org yet → org gate.
-        assert_eq!(
-            gate_phase(
-                &ConnectionStatus::Ready,
-                Some(WorkspaceScope::Synced),
-                Some(&AuthState::NeedsOrganization { user })
-            ),
-            GatePhase::OrgGate
         );
     }
 

@@ -441,37 +441,35 @@ mod tests {
     }
 
     #[test]
-    fn source_context_chat_finds_local_snapshot() {
-        let chat = with_source(
-            chat("chat", "local", Some("/repo"), Some("checkout")),
-            "feature/pr",
-        );
+    fn change_request_for_chat_requires_the_exact_device_checkout_and_branch() {
         let status = snapshot("local", "/repo", "checkout");
-        assert_eq!(
-            change_request_for_chat(&chat, &[], [&status]).map(|pr| pr.number),
-            Some(90)
-        );
-    }
-
-    #[test]
-    fn remote_chat_requires_the_same_device() {
-        let chat = with_source(
-            chat("chat", "remote", Some("/repo"), Some("checkout")),
-            "feature/pr",
-        );
-        let status = snapshot("local", "/repo", "checkout");
-        assert!(change_request_for_chat(&chat, &[], [&status]).is_none());
-    }
-
-    #[test]
-    fn mismatched_checkout_rejects_cwd_match() {
-        let mut chat = with_source(
-            chat("chat", "local", Some("/repo"), Some("new-checkout")),
-            "feature/pr",
-        );
-        chat.source_context.as_mut().unwrap().checkout_id = "new-checkout".into();
-        let status = snapshot("local", "/repo", "old-checkout");
-        assert!(change_request_for_chat(&chat, &[], [&status]).is_none());
+        for (case, device, checkout, branch, expected) in [
+            ("same checkout", "local", "checkout", "feature/pr", Some(90)),
+            ("another device", "remote", "checkout", "feature/pr", None),
+            (
+                "another checkout at the same cwd",
+                "local",
+                "new-checkout",
+                "feature/pr",
+                None,
+            ),
+            // The legacy scalar `branch` still names the snapshot's branch.
+            (
+                "another conversation branch",
+                "local",
+                "checkout",
+                "feature/other",
+                None,
+            ),
+        ] {
+            let mut chat = with_source(chat("chat", device, Some("/repo"), Some(checkout)), branch);
+            chat.source_context.as_mut().unwrap().checkout_id = checkout.into();
+            assert_eq!(
+                change_request_for_chat(&chat, &[], [&status]).map(|pr| pr.number),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -489,17 +487,6 @@ mod tests {
         let status = snapshot("local", "/project", "checkout");
         assert!(change_request_for_chat(&chat, &[space("local")], [&status]).is_none());
         assert!(desired_watch_targets(&[chat], &[space("local")], |_| false).is_empty());
-    }
-
-    #[test]
-    fn different_branch_hides_snapshot() {
-        let mut chat = with_source(
-            chat("chat", "local", Some("/repo"), Some("checkout")),
-            "feature/other",
-        );
-        chat.branch = Some("feature/pr".into());
-        let status = snapshot("local", "/repo", "checkout");
-        assert!(change_request_for_chat(&chat, &[], [&status]).is_none());
     }
 
     #[test]

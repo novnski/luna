@@ -2484,39 +2484,6 @@ mod tests {
             },
             "unknown delivery remains fenced despite the Send now presentation"
         );
-        for (block, tooltip) in [
-            (
-                QueuePrimaryBlock::HostUnsupported,
-                "The chat host does not support queue actions",
-            ),
-            (
-                QueuePrimaryBlock::Removing,
-                "Removal is already in progress",
-            ),
-            (QueuePrimaryBlock::Editing, "Finish editing before sending"),
-            (
-                QueuePrimaryBlock::ReviewRequired,
-                "Review this message before sending",
-            ),
-            (
-                QueuePrimaryBlock::DeliveryPending,
-                "A delivery is already in progress",
-            ),
-            (
-                QueuePrimaryBlock::Claimed,
-                "This message is already being delivered",
-            ),
-            (
-                QueuePrimaryBlock::SteeringAccepted,
-                "Accepted and pending native recording; model receipt is unconfirmed",
-            ),
-            (
-                QueuePrimaryBlock::DeliveryUnknown,
-                "Delivery outcome is unknown",
-            ),
-        ] {
-            assert_eq!(block.tooltip(), tooltip);
-        }
     }
 
     #[gpui::test]

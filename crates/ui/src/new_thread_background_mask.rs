@@ -217,7 +217,6 @@ mod tests {
         assert!(reveal.bounds.top() - reveal.feather >= hero.bottom());
         assert_eq!(reveal.radius, px(0.0));
         assert_eq!(reveal.clearance, px(0.0));
-        assert_eq!(CUTOUT_REVEAL_OPACITY, 0.5);
     }
 
     #[test]

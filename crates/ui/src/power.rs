@@ -36,11 +36,6 @@ impl<A: PowerAdapter> KeepAwake<A> {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    fn held_task(&self) -> Option<&str> {
-        self.held.as_ref().map(|(id, _)| id.as_str())
-    }
 }
 
 impl<A: PowerAdapter> Drop for KeepAwake<A> {
@@ -191,10 +186,11 @@ mod tests {
         guard.reconcile(Some("b")).unwrap();
         guard.adapter.1 = true;
         assert!(guard.reconcile(Some("c")).is_err());
-        assert_eq!(guard.held_task(), None);
         guard.adapter.1 = false;
         guard.reconcile(Some("d")).unwrap();
         drop(guard);
+        // The failed acquire left nothing held: `d` acquires without a
+        // preceding release, and drop releases only `d`.
         assert_eq!(
             *events.lock().unwrap(),
             [

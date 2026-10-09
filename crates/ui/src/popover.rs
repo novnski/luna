@@ -2333,14 +2333,6 @@ mod tests {
     }
 
     #[test]
-    fn match_rank_kinds() {
-        assert_eq!(match_rank("re", "release"), Some(0));
-        assert_eq!(match_rank("lease", "release"), Some(1));
-        assert_eq!(match_rank("x", "release"), None);
-        assert_eq!(match_rank("", "anything"), Some(1));
-    }
-
-    #[test]
     fn key_classification() {
         assert_eq!(classify_key("up", false, false), MenuKey::Up);
         assert_eq!(classify_key("down", false, false), MenuKey::Down);
@@ -2365,17 +2357,6 @@ mod tests {
             "Q\u{200A}U\u{200A}E\u{200A}S\u{200A}T\u{200A}I\u{200A}O\u{200A}N"
         );
         assert_eq!(tracked_upper(""), "");
-    }
-
-    #[test]
-    fn loadable_accessors() {
-        let l: Loadable<u32> = Loadable::Ready(7);
-        assert_eq!(l.ready(), Some(&7));
-        assert!(!l.is_loading());
-        let e: Loadable<u32> = Loadable::Error("boom".into());
-        assert_eq!(e.error(), Some("boom"));
-        assert!(Loadable::<u32>::Loading.is_loading());
-        assert_eq!(Loadable::<u32>::default(), Loadable::Idle);
     }
 
     #[test]

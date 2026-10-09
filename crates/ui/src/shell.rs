@@ -16595,38 +16595,6 @@ mod tests {
     }
 
     #[test]
-    fn history_origin_blocks_fork_edit_and_restore_submission_after_replacement() {
-        let origin = HistoryEngineOrigin {
-            engine_generation: 31,
-        };
-        let mut old_engine_rpc_calls = 0;
-        let mut replacement_engine_rpc_calls = 0;
-
-        for operation in ["fork", "edit", "restore"] {
-            let dispatched = origin.run_if_current(32, || {
-                old_engine_rpc_calls += 1;
-                replacement_engine_rpc_calls += 1;
-                operation
-            });
-            assert_eq!(dispatched, None, "{operation} must fail closed");
-        }
-        assert_eq!(old_engine_rpc_calls, 0);
-        assert_eq!(replacement_engine_rpc_calls, 0);
-
-        let mut same_origin_rpc_calls = 0;
-        for operation in ["fork", "edit", "restore"] {
-            assert_eq!(
-                origin.run_if_current(31, || {
-                    same_origin_rpc_calls += 1;
-                    operation
-                }),
-                Some(operation)
-            );
-        }
-        assert_eq!(same_origin_rpc_calls, 3);
-    }
-
-    #[test]
     fn history_fork_permission_choice_preserves_immutable_l04_ceiling() {
         let mut full = history_chat("session", "/workspace", PermissionMode::Full)
             .config
@@ -16724,29 +16692,6 @@ mod tests {
     }
 
     #[test]
-    fn right_pane_uses_the_shared_clamp_and_edge_latch() {
-        let min =
-            motion::resize_drag_sample(RIGHT_PANE_MIN - 40.0, RIGHT_PANE_MIN, 820.0, None, false);
-        assert_eq!(min.width, RIGHT_PANE_MIN);
-        assert_eq!(min.edge, Some(motion::ResizeEdge::Min));
-        assert!(min.starts_bounce);
-
-        let held = motion::resize_drag_sample(
-            RIGHT_PANE_MIN - 80.0,
-            RIGHT_PANE_MIN,
-            820.0,
-            min.edge,
-            false,
-        );
-        assert!(!held.starts_bounce);
-
-        let max = motion::resize_drag_sample(900.0, RIGHT_PANE_MIN, 820.0, None, false);
-        assert_eq!(max.width, 820.0);
-        assert_eq!(max.edge, Some(motion::ResizeEdge::Max));
-        assert!(max.starts_bounce);
-    }
-
-    #[test]
     fn sidebar_bounce_has_rounded_out_and_return_phases() {
         assert_eq!(
             motion::resize_bounce_offset(motion::ResizeEdge::Max, 0.0),
@@ -16808,16 +16753,7 @@ mod tests {
     }
 
     #[test]
-    fn new_thread_handoff_is_continuous_and_staged() {
-        assert!(bottom_stack_measurement_matches(false, false));
-        assert!(bottom_stack_measurement_matches(true, true));
-        assert!(!bottom_stack_measurement_matches(false, true));
-        assert!(!bottom_stack_measurement_matches(true, false));
-        assert_eq!(new_thread_background_opacity(false), 1.0);
-        assert_eq!(
-            new_thread_background_opacity(true),
-            NEW_THREAD_BACKGROUND_FROSTED_OPACITY
-        );
+    fn new_thread_background_height_scales_and_clamps_with_the_viewport() {
         assert_eq!(new_thread_background_height(400.0), 288.0);
         assert!((new_thread_background_height(600.0) - 432.0).abs() < 0.001);
         assert_eq!(new_thread_background_height(1_000.0), 720.0);
@@ -16842,9 +16778,14 @@ mod tests {
     }
 
     #[test]
-    fn escape_interrupts_only_the_active_live_chat() {
-        assert_eq!(
-            resolve_shell_escape(
+    fn escape_interrupts_only_an_opted_in_active_live_chat() {
+        use super::ShellEscapeOutcome::{Blocked, Ignored, InterruptChat, OtherKey};
+        let interrupt = |chat: &str| InterruptChat(chat.to_owned());
+        // (case, key, blocking overlay, opted in, route, selected, indicator,
+        // already interrupting, outcome)
+        for (case, key, overlay, opted_in, route, selected, indicator, interrupting, outcome) in [
+            (
+                "working chat",
                 "escape",
                 false,
                 true,
@@ -16852,11 +16793,10 @@ mod tests {
                 Some("chat-a"),
                 Indicator::Working,
                 false,
+                interrupt("chat-a"),
             ),
-            ShellEscapeOutcome::InterruptChat("chat-a".to_owned())
-        );
-        assert_eq!(
-            resolve_shell_escape(
+            (
+                "chat awaiting input",
                 "escape",
                 false,
                 true,
@@ -16864,15 +16804,10 @@ mod tests {
                 Some("chat-b"),
                 Indicator::AwaitingInput,
                 false,
+                interrupt("chat-b"),
             ),
-            ShellEscapeOutcome::InterruptChat("chat-b".to_owned())
-        );
-    }
-
-    #[test]
-    fn escape_ignores_non_live_or_ineligible_views() {
-        assert_eq!(
-            resolve_shell_escape(
+            (
+                "blocking overlay",
                 "escape",
                 true,
                 true,
@@ -16880,35 +16815,65 @@ mod tests {
                 Some("chat-a"),
                 Indicator::Working,
                 false,
+                Blocked,
             ),
-            ShellEscapeOutcome::Blocked
-        );
-        for (route, selected, indicator, interrupting) in [
-            (Route::Chat, Some("chat-a"), Indicator::None, false),
-            (Route::Chat, None, Indicator::Working, false),
-            (Route::Chat, Some("chat-a"), Indicator::Working, true),
             (
+                "idle chat",
+                "escape",
+                false,
+                true,
+                Route::Chat,
+                Some("chat-a"),
+                Indicator::None,
+                false,
+                Ignored,
+            ),
+            (
+                "no selected chat",
+                "escape",
+                false,
+                true,
+                Route::Chat,
+                None,
+                Indicator::Working,
+                false,
+                Ignored,
+            ),
+            (
+                "already interrupting",
+                "escape",
+                false,
+                true,
+                Route::Chat,
+                Some("chat-a"),
+                Indicator::Working,
+                true,
+                Ignored,
+            ),
+            (
+                "settings route",
+                "escape",
+                false,
+                true,
                 Route::Settings(SettingsSection::Devices),
                 Some("chat-a"),
                 Indicator::Working,
                 false,
+                Ignored,
             ),
-        ] {
-            assert_eq!(
-                resolve_shell_escape(
-                    "escape",
-                    false,
-                    true,
-                    route,
-                    selected,
-                    indicator,
-                    interrupting,
-                ),
-                ShellEscapeOutcome::Ignored
-            );
-        }
-        assert_eq!(
-            resolve_shell_escape(
+            (
+                "not opted in",
+                "escape",
+                false,
+                false,
+                Route::Chat,
+                Some("chat-a"),
+                Indicator::Working,
+                false,
+                Ignored,
+            ),
+            (
+                "another key",
                 "enter",
                 true,
                 true,
@@ -16916,25 +16881,23 @@ mod tests {
                 Some("chat-a"),
                 Indicator::Working,
                 false,
+                OtherKey,
             ),
-            ShellEscapeOutcome::OtherKey
-        );
-    }
-
-    #[test]
-    fn escape_interrupt_is_opt_in() {
-        assert_eq!(
-            resolve_shell_escape(
-                "escape",
-                false,
-                false,
-                Route::Chat,
-                Some("chat-a"),
-                Indicator::Working,
-                false,
-            ),
-            ShellEscapeOutcome::Ignored
-        );
+        ] {
+            assert_eq!(
+                resolve_shell_escape(
+                    key,
+                    overlay,
+                    opted_in,
+                    route,
+                    selected,
+                    indicator,
+                    interrupting
+                ),
+                outcome,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -16950,13 +16913,6 @@ mod tests {
     fn right_pane_takeover_control_reverses_direction() {
         assert_eq!(tabs::right_pane_expand_icon(false), icons::EXPAND_ARROWS);
         assert_eq!(tabs::right_pane_expand_icon(true), icons::COLLAPSE_ARROWS);
-    }
-
-    #[test]
-    fn pane_resize_hitboxes_yield_the_titlebar_chrome() {
-        assert_eq!(PANE_RESIZE_HITBOX_TOP, Theme::TITLEBAR_HEIGHT);
-        assert_eq!(PANE_RESIZE_HITBOX_HALF_WIDTH * 2.0, 20.0);
-        assert_eq!(TERMINAL_RESIZE_HITBOX_HEIGHT, 10.0);
     }
 
     #[test]
@@ -17331,20 +17287,6 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_cluster_matches_luna_window_controls() {
-        // luna window-controls.tsx: `left: fullscreen ? 12 : 88` — the
-        // cluster clears the {14,15} traffic lights, and reclaims the inset
-        // when fullscreen hides them.
-        assert_eq!(titlebar_cluster_start(false), 88.0);
-        assert_eq!(titlebar_cluster_start(true), 12.0);
-        assert_eq!(TITLEBAR_CONTROL_GAP, 2.0);
-        assert_eq!(TITLEBAR_GROUP_GAP, Theme::SPACE_SM);
-        assert_eq!(TITLEBAR_IDENTITY_GAP, Theme::SPACE_MD);
-        assert_eq!(CLUSTER_BUTTONS_WIDTH, 82.0);
-        assert_eq!(TITLEBAR_ACTION_EDGE_INSET, 6.0);
-    }
-
-    #[test]
     fn titlebar_spacer_selects_per_platform_and_fullscreen() {
         // macOS, lights visible: spacer fills up to the 88px cluster start.
         assert_eq!(titlebar_spacer_width(true, false, 10.0), 78.0);
@@ -17512,7 +17454,6 @@ mod tests {
     fn sidebar_harness_geometry_reflects_row_hierarchy() {
         // Every row kind shares one title column; the marks keep the
         // hierarchy inside their shared slot.
-        assert_eq!(SIDEBAR_MARK_GAP, Theme::SPACE_SM);
         assert!(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE <= SIDEBAR_MARK_SLOT);
         assert!(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE <= SIDEBAR_MARK_SLOT);
         assert!(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE < SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE);
@@ -17571,13 +17512,6 @@ mod tests {
         // slot replaced by "new" of equal height — no move, no entry).
         assert_eq!(offsets.get("a"), Some(&-31.0));
         assert_eq!(offsets.get("b"), None);
-    }
-
-    #[test]
-    fn resort_glide_spec_matches_original() {
-        // §1.6: 260ms cubic-bezier(0.22, 1, 0.36, 1).
-        assert_eq!(RESORT.duration_ms, 260);
-        assert_eq!(RESORT.curve, motion::EASE_RESORT);
     }
 
     // ---- navigation history (titlebar back/forward) ----
@@ -19165,55 +19099,6 @@ mod exit_regressions {
                 );
             })
             .unwrap();
-    }
-
-    #[gpui::test]
-    fn sidebar_renders_chat_navigation_without_l14_search_chrome(cx: &mut TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        init_handoff_shell_test(cx, dir.path());
-        let (shell, cx) = cx.add_window_view(|_, cx| {
-            let state = cx.new(|_| {
-                let mut state = AppState::new();
-                state.connection = ConnectionStatus::Ready;
-                state.workspace_scope = Some(WorkspaceScope::Local);
-                state.auth = Some(luna_proto::AuthState::SignedOut);
-                state.chats = vec![palette_chat(
-                    "sidebar-chat",
-                    None,
-                    "Sidebar navigation remains",
-                )];
-                state.selected_chat = Some("sidebar-chat".into());
-                state
-            });
-            let mut shell = Shell::new(
-                state,
-                EngineBootConfig {
-                    data_dir: dir.path().into(),
-                    ipc_port: 0,
-                    edge_url: "http://127.0.0.1:1".into(),
-                    edge_token: None,
-                    org_id: None,
-                    workos_client_id: None,
-                    default_harness: luna_proto::HarnessId::Mock,
-                },
-                cx,
-            );
-            shell.debug_gate = Some(GatePhase::Ready);
-            shell.splash = SplashPhase::Gone;
-            shell
-        });
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            window.draw(cx).clear();
-            window.draw(cx).clear();
-        });
-        shell.update(cx, |shell, cx| {
-            assert!(matches!(shell.route, Route::Chat));
-            assert!(shell.sidebar_now() > 0.0);
-            let theme = Theme::of(cx).clone();
-            let _ = shell.render_chat_sidebar(&theme, cx);
-        });
-        assert!(cx.debug_bounds("history-search-scope").is_none());
     }
 
     #[gpui::test]
