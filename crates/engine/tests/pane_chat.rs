@@ -20,7 +20,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use luna_harness::{Harness, HarnessError, RunControls};
+use luna_harness::codex::native::CodexNativeClient;
+use luna_harness::{Harness, HarnessError, NativeHistoryScope, NativeHistoryTurns, RunControls};
 use luna_proto::{
     AgentEvent, ChildCheckoutKind, ChildCreator, DoneStatus, HarnessId, LunaAgentRuntimeContract,
     Model, PermissionMode, ProviderForkCapability, ProviderForkRequest, ProviderForkResult,
@@ -46,6 +47,87 @@ struct Recorder {
 struct Synthetic {
     id: HarnessId,
     recorder: Recorder,
+    /// Codex keeps its native thread records here, where the injected
+    /// metadata app-server ([`METADATA`]) reads them back.
+    codex_home: PathBuf,
+}
+
+impl Synthetic {
+    /// Native side forks first prove the provider's own history matches
+    /// LUNA's retained turns. Codex answers through its metadata app-server,
+    /// so mirror the session's turns into the thread record it serves.
+    fn persist_thread(&self, session: &str, cwd: &str, name: Option<&str>, checkpoints: &[String]) {
+        if self.id != HarnessId::Codex {
+            return;
+        }
+        let turns: Vec<Value> = checkpoints
+            .iter()
+            .map(|id| json!({"id": id, "status": "completed"}))
+            .collect();
+        let path = self.codex_home.join(format!("{session}.json"));
+        // Keep a thread name set earlier (a run names it like the real
+        // adapter; `thread/name/set` renames it).
+        let mut record = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or_else(|| json!({}));
+        if let Some(name) = name {
+            record["name"] = json!(name);
+        }
+        for (key, value) in [
+            ("id", json!(session)),
+            ("cwd", json!(cwd)),
+            ("historyMode", json!("paginated")),
+            ("ephemeral", json!(false)),
+            ("status", json!({"type": "idle"})),
+            ("archived", json!(false)),
+            ("turns", json!(turns)),
+        ] {
+            record[key] = value;
+        }
+        std::fs::create_dir_all(&self.codex_home).unwrap();
+        std::fs::write(path, record.to_string()).unwrap();
+    }
+}
+
+/// Minimal Codex metadata app-server: thread records written by
+/// [`Synthetic::persist_thread`]; everything else is an empty success.
+const METADATA: &str = r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path(os.environ['CODEX_HOME'])
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    method, params = request['method'], request.get('params', {})
+    path = root / (str(params.get('threadId')) + '.json')
+    result, error = {}, None
+    if method in ('thread/read', 'thread/turns/list'):
+        if not path.exists():
+            error = {'code': -32600, 'message': 'no synthetic thread record'}
+        elif method == 'thread/read':
+            record = json.loads(path.read_text()); record.pop('turns')
+            result = {'thread': record}
+        else:
+            result = {'data': json.loads(path.read_text())['turns'], 'nextCursor': None}
+    elif method == 'thread/name/set' and path.exists():
+        record = json.loads(path.read_text()); record['name'] = params['name']
+        path.write_text(json.dumps(record))
+    elif method == 'config/read':
+        result = {'config': {'mcp_servers': {}}}
+    elif method == 'thread/list':
+        result = {'data': []}
+    frame = {'id': request['id']}
+    frame['error' if error else 'result'] = error if error else result
+    print(json.dumps(frame), flush=True)
+"#;
+
+fn metadata_client(config: &AgentAccountsConfig, root: &Path) -> CodexNativeClient {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(&config.codex_home).unwrap();
+    let executable = root.join("synthetic-codex-metadata.py");
+    std::fs::write(&executable, METADATA).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    CodexNativeClient::new(&config.codex_home).with_executable(executable)
 }
 
 #[async_trait]
@@ -93,13 +175,28 @@ impl Harness for Synthetic {
             .iter()
             .map(|checkpoint| (checkpoint.clone(), format!("{fork}:{checkpoint}")))
             .collect();
-        checkpoints.insert(
-            fork.clone(),
-            source.iter().map(|cp| format!("{fork}:{cp}")).collect(),
-        );
+        let forked: Vec<String> = source.iter().map(|cp| format!("{fork}:{cp}")).collect();
+        self.persist_thread(&fork, &request.cwd, request.target_name.as_deref(), &forked);
+        checkpoints.insert(fork.clone(), forked);
         Ok(ProviderForkResult {
             provider_session_id: fork,
             checkpoint_map,
+        })
+    }
+    async fn native_history_turns(
+        &self,
+        scope: NativeHistoryScope,
+    ) -> Result<NativeHistoryTurns, HarnessError> {
+        Ok(NativeHistoryTurns {
+            turn_starts: self
+                .recorder
+                .checkpoints
+                .lock()
+                .unwrap()
+                .get(&scope.session_id)
+                .cloned()
+                .unwrap_or_default(),
+            compacted: false,
         })
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
@@ -144,13 +241,16 @@ impl Harness for Synthetic {
             .clone()
             .unwrap_or_else(|| format!("synthetic-{}-{n}", provider_name(self.id)));
         let checkpoint = format!("cp-{n}");
-        self.recorder
-            .checkpoints
-            .lock()
-            .unwrap()
-            .entry(session.clone())
-            .or_default()
-            .push(checkpoint.clone());
+        {
+            let mut checkpoints = self.recorder.checkpoints.lock().unwrap();
+            let turns = checkpoints.entry(session.clone()).or_default();
+            turns.push(checkpoint.clone());
+            let name = request
+                .model_options
+                .get(luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION)
+                .and_then(Value::as_str);
+            self.persist_thread(&session, &request.cwd, name, turns);
+        }
         self.recorder.runs.lock().unwrap().push(request.clone());
         let started = AgentEvent::SessionStarted {
             harness: self.id,
@@ -279,16 +379,20 @@ fn assemble(root: &Path, id: HarnessId) -> (EngineCore, Recorder) {
     let recorder = Recorder::default();
     let _ = RUN_LOG.set(recorder.clone());
     let registry = Arc::new(HarnessRegistry::new());
+    let accounts = account_config(root);
     registry.register(Arc::new(Synthetic {
         id,
         recorder: recorder.clone(),
+        codex_home: accounts.codex_home.clone(),
     }));
-    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+    let metadata = metadata_client(&accounts, root);
+    let core = EngineCore::assemble_with_profile_and_injected_codex_metadata_client(
         EngineProfile::development(&root.join("engine"), "pane-org", "pane-user"),
         registry,
         id,
         None,
-        account_config(root),
+        accounts,
+        metadata,
     )
     .unwrap();
     (core, recorder)
@@ -1263,20 +1367,23 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         RuntimeCheckoutOwnership::SharedWithParent
     );
     assert!(identity.capabilities.persistent);
-    assert!(identity.capabilities.create_child_threads);
+    // Chat model: a side chat creates siblings or new main chats, never its
+    // own children (`create_thread` is withheld from side callers).
+    assert!(!identity.capabilities.create_child_threads);
     assert!(!identity.capabilities.access_capped_by_parent);
     assert!(
-        side_contract
+        !side_contract
             .tools
             .iter()
             .any(|tool| tool.name == "create_thread")
     );
     assert!(
-        !side_contract
+        side_contract
             .omitted_tools
             .iter()
-            .any(|tool| tool.name == "create_thread"
-                && tool.reason.contains("side chats cannot create child chats"))
+            .any(|tool| tool.name == "create_thread" && tool.reason.contains("create_side_chat")),
+        "{:?}",
+        side_contract.omitted_tools
     );
     let text = instructions(&side_contract);
     assert!(text.contains("Chat role: fork thread"), "{text}");
@@ -2307,18 +2414,22 @@ fn assemble_multi_provider(root: &Path) -> (EngineCore, Recorder) {
     worktrees_root();
     let recorder = Recorder::default();
     let registry = Arc::new(HarnessRegistry::new());
+    let accounts = account_config(root);
     for id in [HarnessId::Codex, HarnessId::ClaudeCode] {
         registry.register(Arc::new(Synthetic {
             id,
             recorder: recorder.clone(),
+            codex_home: accounts.codex_home.clone(),
         }));
     }
-    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+    let metadata = metadata_client(&accounts, root);
+    let core = EngineCore::assemble_with_profile_and_injected_codex_metadata_client(
         EngineProfile::development(&root.join("engine"), "execution-org", "execution-user"),
         registry,
         HarnessId::Codex,
         None,
-        account_config(root),
+        accounts,
+        metadata,
     )
     .unwrap();
     (core, recorder)
