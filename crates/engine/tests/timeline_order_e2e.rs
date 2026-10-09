@@ -16,6 +16,9 @@
 //! 6. A notice landing during the final answer, then a bare provider message
 //!    end, closes the last entry early: Done then has no entry for its
 //!    checkpoint, or writes an empty stub.
+//! 7. Two provider messages with only the provider's message end between
+//!    them glue into one text or thought part (`Checking.The answer is 42.`)
+//!    when no notice has buried the reply.
 //!
 //! `TIMELINE_ORDER_EVIDENCE_DIR` keeps the final parent transcript as JSON.
 use async_trait::async_trait;
@@ -125,6 +128,7 @@ impl Harness for Timeline {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let child = request.prompt.contains("TIMELINE_CHILD");
+        let back_to_back = request.prompt.contains("TIMELINE_MESSAGES");
         let cwd = request.cwd.clone();
         let session_id = request
             .resume
@@ -166,6 +170,21 @@ impl Harness for Timeline {
                     send(text("CHILD_ANSWER_42"));
                 }
                 released
+            } else if back_to_back {
+                // Three provider messages, none carrying its own separator:
+                // a thought alone, a thought then text, then text alone.
+                send(AgentEvent::ReasoningDelta {
+                    text: "Reading the fixture.".into(),
+                });
+                send(message_end());
+                send(AgentEvent::ReasoningDelta {
+                    text: "Comparing the totals.".into(),
+                });
+                send(text("Checking."));
+                send(message_end());
+                send(text("The answer is 42."));
+                send(message_end());
+                true
             } else {
                 send(AgentEvent::ReasoningDelta {
                     text: "Planning one helper thread.".into(),
@@ -299,19 +318,28 @@ async fn until(label: &str, core: &EngineCore, parent: &str, mut ready: impl FnM
     }
 }
 
-fn evidence(value: Value) {
+fn evidence(name: &str, value: Value) {
     if let Ok(dir) = std::env::var("TIMELINE_ORDER_EVIDENCE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            std::path::Path::new(&dir).join("timeline-order.json"),
+            std::path::Path::new(&dir).join(format!("{name}.json")),
             serde_json::to_vec_pretty(&value).unwrap(),
         )
         .unwrap();
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn notices_written_mid_turn_stay_in_chronological_order() {
+/// A parent chat on the scripted provider, through the real RPC, with
+/// `prompt` queued as its turn.
+async fn start_turn(
+    prompt: &str,
+) -> (
+    tempfile::TempDir,
+    Arc<Timeline>,
+    EngineCore,
+    luna_rpc::RpcClient,
+    String,
+) {
     let root = tempfile::tempdir().unwrap();
     let harness = Arc::new(Timeline::default());
     let registry = Arc::new(HarnessRegistry::new());
@@ -331,10 +359,16 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
     rpc.call("Mutate", json!({"op":"createChat","chatId":parent,"spaceId":"timeline","cwd":root.path(),"config":{"harness":"mock","model":null,"modelOptions":{},"sandbox":"read-only","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
     rpc.call(
         "QueueMessage",
-        json!({"chatId":parent,"messageId":"timeline-ask","text":"Create one helper and report back","holdForTurnEnd":true}),
+        json!({"chatId":parent,"messageId":"timeline-ask","text":prompt,"holdForTurnEnd":true}),
     )
     .await
     .unwrap();
+    (root, harness, core, rpc, parent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notices_written_mid_turn_stay_in_chronological_order() {
+    let (_root, harness, core, rpc, parent) = start_turn("Create one helper and report back").await;
 
     // The live reply must already be in the doc before anything lands below.
     until("parent streams its create call", &core, &parent, || {
@@ -424,7 +458,10 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
 
     let entries = messages(&core, &parent);
     let lines = outline(&entries);
-    evidence(json!({ "outline": lines, "entries": entries }));
+    evidence(
+        "timeline-order",
+        json!({ "outline": lines, "entries": entries }),
+    );
     let shape: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap())
@@ -499,6 +536,38 @@ async fn notices_written_mid_turn_stay_in_chronological_order() {
             .as_deref(),
         Some("timeline-turn"),
         "Case 6: the turn's checkpoint lands on its last written entry\n{}",
+        lines.join("\n")
+    );
+    drop(rpc);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn back_to_back_provider_messages_stay_separate_parts() {
+    let (_root, _harness, core, rpc, parent) = start_turn("TIMELINE_MESSAGES").await;
+    until("reply settles", &core, &parent, || {
+        messages(&core, &parent).iter().any(|entry| {
+            entry.status == Some(MessageStatus::Complete)
+                && body(entry).contains("The answer is 42.")
+        })
+    })
+    .await;
+
+    let entries = messages(&core, &parent);
+    let lines = outline(&entries);
+    evidence(
+        "message-boundary",
+        json!({ "outline": lines, "entries": entries }),
+    );
+    let replies: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("assistant"))
+        .collect();
+    assert_eq!(
+        replies,
+        ["assistant [thought, thought, text(Checking.), text(The answer is 42.)] Some(Complete)"],
+        "Case 7: each provider message opens its own thought or text part\n{}",
         lines.join("\n")
     );
     drop(rpc);
