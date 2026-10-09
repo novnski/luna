@@ -355,21 +355,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn context_intents_carry_revision_and_binding_fences() {
+    fn context_and_organization_intents_carry_revision_and_binding_fences() {
         for kind in [
             "setModel",
             "compactContext",
             "clearContext",
             "switchProvider",
-        ] {
-            assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
-            assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");
-        }
-    }
-
-    #[test]
-    fn organization_intents_carry_revision_and_binding_fences() {
-        for kind in [
             "rename",
             "setPinned",
             "setRead",

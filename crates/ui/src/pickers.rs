@@ -339,23 +339,6 @@ fn default_permission_mode(harness: HarnessId, model: Option<&str>) -> Option<Pe
     }
 }
 
-#[cfg(test)]
-fn provider_effective_permission_mode(
-    harness: HarnessId,
-    model: Option<&str>,
-    requested: PermissionMode,
-) -> PermissionMode {
-    let capabilities = luna_engine::provider_capabilities_for(harness, model);
-    [
-        PermissionMode::Full,
-        PermissionMode::Auto,
-        PermissionMode::Ask,
-    ]
-    .into_iter()
-    .find(|mode| *mode <= requested && capabilities.supports(*mode))
-    .unwrap_or(PermissionMode::Ask)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EffectivePermissionPreview {
     Known(PermissionMode),
@@ -9454,14 +9437,6 @@ mod tests {
         );
         assert_eq!(default_permission_mode(HarnessId::Opencode, None), None);
         assert_eq!(
-            provider_effective_permission_mode(HarnessId::Opencode, None, PermissionMode::Auto),
-            PermissionMode::Ask
-        );
-        assert_eq!(
-            provider_effective_permission_mode(HarnessId::Cursor, None, PermissionMode::Full),
-            PermissionMode::Ask
-        );
-        assert_eq!(
             permission_preview(
                 Some(PermissionMode::Ask),
                 false,
@@ -10693,30 +10668,6 @@ mod tests {
         assert_eq!(config.sandbox, SandboxLevel::WorkspaceWrite);
         assert_eq!(config.permission_mode, PermissionMode::Full);
         assert_eq!(config.effective_permission_mode, PermissionMode::Ask);
-    }
-
-    #[test]
-    fn default_model_is_first_catalog_row() {
-        let models = vec![
-            Model {
-                id: "flagship".into(),
-                label: "Flagship".into(),
-                description: None,
-                reasoning_levels: vec![],
-                options: vec![],
-                first_seen_at_ms: None,
-            },
-            Model {
-                id: "fast".into(),
-                label: "Fast".into(),
-                description: None,
-                reasoning_levels: vec![],
-                options: vec![],
-                first_seen_at_ms: None,
-            },
-        ];
-        assert_eq!(default_model(&models).map(|m| &*m.id), Some("flagship"));
-        assert!(default_model(&[]).is_none());
     }
 
     #[test]

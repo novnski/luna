@@ -198,24 +198,15 @@ mod tests {
     }
 
     #[test]
-    fn a_sent_comment_block_becomes_one_pill() {
-        let staged = vec![
-            ReviewComment::new("a.rs", CommentSide::New, 3, "fix"),
-            ReviewComment::new("b.rs", CommentSide::Old, 9, "why"),
-        ];
-        let (text, badges) = split(&with_comments("do", &staged));
-        assert_eq!(text, "do");
-        assert_eq!(badges.len(), 1);
-        assert_eq!(badges[0].label.as_ref(), "2 comments");
-    }
-
-    #[test]
-    fn the_card_carries_one_row_per_comment() {
+    fn a_sent_comment_block_becomes_one_pill_with_one_row_per_comment() {
         let staged = vec![
             ReviewComment::new("src/main.rs", CommentSide::New, 42, "early-return here"),
             ReviewComment::new("src/lib.rs", CommentSide::Old, 7, "why was this dropped?"),
         ];
-        let (_, badges) = split(&with_comments("look", &staged));
+        let (text, badges) = split(&with_comments("look", &staged));
+        assert_eq!(text, "look");
+        assert_eq!(badges.len(), 1);
+        assert_eq!(badges[0].label.as_ref(), "2 comments");
         let details = &badges[0].details;
         assert_eq!(details.len(), 2);
         assert_eq!(details[0].location.as_ref(), "src/main.rs:42");
