@@ -62,6 +62,12 @@ fn ago(at_ms: i64) -> String {
     }
 }
 
+/// `1 comment`, `2 comments`.
+fn count(n: impl Into<u64>, singular: &str, plural: &str) -> String {
+    let n = n.into();
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
 /// A short date from an ISO-8601 timestamp (`2026-10-08`).
 fn day(iso: &str) -> &str {
     iso.get(..10).unwrap_or(iso)
@@ -1076,7 +1082,7 @@ impl GitHubIssuePicker {
             }
             meta.push(format!("updated {}", day(&row.updated_at)));
             if row.comments > 0 {
-                meta.push(format!("{} comments", row.comments));
+                meta.push(count(row.comments, "comment", "comments"));
             }
             let on_board = row
                 .linked_work_item_id
@@ -1133,13 +1139,8 @@ impl GitHubIssuePicker {
         let mut footer = Vec::new();
         if self.pull_requests_excluded > 0 {
             footer.push(format!(
-                "{} pull request{} hidden (issues only).",
-                self.pull_requests_excluded,
-                if self.pull_requests_excluded == 1 {
-                    ""
-                } else {
-                    "s"
-                }
+                "{} hidden (issues only).",
+                count(self.pull_requests_excluded, "pull request", "pull requests")
             ));
         }
         if let Some(page) = &self.page
@@ -1291,7 +1292,7 @@ impl GitHubIssuePicker {
                 action_button(
                     theme,
                     "load-comments",
-                    &format!("Load comments ({comment_count})"),
+                    &format!("Load {}", count(comment_count, "comment", "comments")),
                     ButtonKind::Ghost,
                     true,
                 )
@@ -1305,8 +1306,9 @@ impl GitHubIssuePicker {
             pane = pane.child(meta_text(
                 theme,
                 format!(
-                    "Select comments to include ({} selected). Unselected comments stay out of the brief.",
-                    self.selected_comments.len()
+                    "Select comments to include: {} of {} selected. Unselected comments stay out of the brief.",
+                    self.selected_comments.len(),
+                    count(self.comments.len() as u64, "comment", "comments")
                 ),
             ));
         }
@@ -1648,15 +1650,48 @@ pub enum WritebackDialogEvent {
     Written(Box<IssueWritebackReceipt>),
 }
 
+/// GitHub's `state_reason` for closing an issue (the engine accepts only
+/// these; a free-text reason is never sent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloseReason {
+    #[default]
+    Completed,
+    NotPlanned,
+}
+
+impl CloseReason {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::NotPlanned => "notPlanned",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Completed => "Completed",
+            Self::NotPlanned => "Not planned",
+        }
+    }
+
+    fn from_state_reason(reason: &str) -> Self {
+        match reason {
+            "not_planned" | "notPlanned" => Self::NotPlanned,
+            _ => Self::Completed,
+        }
+    }
+}
+
+/// Reviewed writes are sent in order: a closing comment before the close.
 enum WritebackStage {
     Editing,
     Previewing,
-    Confirm(IssueWritebackPreview),
-    Writing(IssueWritebackPreview),
-    Done(IssueWritebackReceipt),
-    /// The write was sent but its result could not be confirmed. Check
-    /// again reconciles with the same request id and never resends.
-    Unknown(IssueWritebackPreview),
+    Confirm(Vec<IssueWritebackPreview>),
+    Writing(Vec<IssueWritebackPreview>),
+    Done(Vec<IssueWritebackReceipt>),
+    /// A write was sent but its result could not be confirmed. Check again
+    /// reconciles with the same request ids and never resends.
+    Unknown(Vec<IssueWritebackPreview>),
 }
 
 /// Explicit writeback: edit → preview (exact account/repo/issue/payload) →
@@ -1667,11 +1702,16 @@ pub struct IssueWritebackDialog {
     issue_ref_id: String,
     display: String,
     kind: WritebackKind,
+    /// Comment body, label, or (for Close) the optional closing comment.
     input: Entity<ComposerInput>,
+    close_reason: CloseReason,
+    /// The closing comment once verified: a retry or re-review after a
+    /// failed close never posts it again.
+    posted_note: Option<IssueWritebackReceipt>,
     stage: WritebackStage,
     error: Option<String>,
-    /// Generated on confirm; every retry reuses it.
-    request_id: Option<String>,
+    /// One per reviewed write, generated on confirm; every retry reuses them.
+    request_ids: Vec<String>,
     task: Option<Task<()>>,
     focus_pending: bool,
 }
@@ -1699,11 +1739,15 @@ impl IssueWritebackDialog {
             WritebackChoice::Comment { draft } => (WritebackKind::Comment, draft, "Comment"),
             WritebackChoice::AddLabel => (WritebackKind::AddLabel, String::new(), "Label"),
             WritebackChoice::RemoveLabel { label } => (WritebackKind::RemoveLabel, label, "Label"),
-            WritebackChoice::Close => (WritebackKind::Close, String::new(), "Reason"),
+            WritebackChoice::Close => (
+                WritebackKind::Close,
+                String::new(),
+                "Closing comment (optional): posted before the issue is closed",
+            ),
         };
         let input = cx.new(|cx| {
             let input = ComposerInput::new(placeholder, cx);
-            if kind == WritebackKind::Comment {
+            if matches!(kind, WritebackKind::Comment | WritebackKind::Close) {
                 input
             } else {
                 input.with_single_line()
@@ -1717,27 +1761,41 @@ impl IssueWritebackDialog {
             display,
             kind,
             input,
+            close_reason: CloseReason::Completed,
+            posted_note: None,
             stage: WritebackStage::Editing,
             error: None,
-            request_id: None,
+            request_ids: Vec::new(),
             task: None,
             focus_pending: true,
         }
     }
 
-    fn action(&self, cx: &App) -> IssueWritebackAction {
+    pub fn set_close_reason(&mut self, reason: CloseReason, cx: &mut Context<Self>) {
+        if matches!(self.stage, WritebackStage::Editing) {
+            self.close_reason = reason;
+            cx.notify();
+        }
+    }
+
+    /// The writes to review, in send order.
+    fn actions(&self, cx: &App) -> Vec<IssueWritebackAction> {
         let text = self.input.read(cx).text().trim().to_owned();
         match self.kind {
-            WritebackKind::Comment => IssueWritebackAction::Comment { body: text },
-            WritebackKind::AddLabel => IssueWritebackAction::AddLabel { label: text },
-            WritebackKind::RemoveLabel => IssueWritebackAction::RemoveLabel { label: text },
-            WritebackKind::Close => IssueWritebackAction::Close {
-                reason: if text.is_empty() {
-                    "completed".into()
-                } else {
-                    text
-                },
-            },
+            WritebackKind::Comment => vec![IssueWritebackAction::Comment { body: text }],
+            WritebackKind::AddLabel => vec![IssueWritebackAction::AddLabel { label: text }],
+            WritebackKind::RemoveLabel => vec![IssueWritebackAction::RemoveLabel { label: text }],
+            WritebackKind::Close => {
+                let mut actions = Vec::new();
+                // Only a non-empty note becomes a comment, and only once.
+                if !text.is_empty() && self.posted_note.is_none() {
+                    actions.push(IssueWritebackAction::Comment { body: text });
+                }
+                actions.push(IssueWritebackAction::Close {
+                    reason: self.close_reason.wire().into(),
+                });
+                actions
+            }
         }
     }
 
@@ -1745,24 +1803,38 @@ impl IssueWritebackDialog {
         let Some(api) = self.model.read(cx).api(cx) else {
             return;
         };
-        let request = BoardIssueWritebackPreviewRequest {
-            work_item_id: self.work_item_id.clone(),
-            issue_ref_id: self.issue_ref_id.clone(),
-            action: self.action(cx),
-        };
+        let requests: Vec<BoardIssueWritebackPreviewRequest> = self
+            .actions(cx)
+            .into_iter()
+            .map(|action| BoardIssueWritebackPreviewRequest {
+                work_item_id: self.work_item_id.clone(),
+                issue_ref_id: self.issue_ref_id.clone(),
+                action,
+            })
+            .collect();
         self.stage = WritebackStage::Previewing;
         self.error = None;
         cx.notify();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = api.issue_writeback_preview(request).await;
-            this.update(cx, |dialog, cx| {
-                match result {
-                    Ok(preview) => {
-                        dialog.request_id = None;
-                        dialog.stage = WritebackStage::Confirm(preview);
-                    }
+            let mut previews = Vec::new();
+            let mut failure = None;
+            for request in requests {
+                match api.issue_writeback_preview(request).await {
+                    Ok(preview) => previews.push(preview),
                     Err(error) => {
-                        dialog.error = Some(error.message());
+                        failure = Some(error.message());
+                        break;
+                    }
+                }
+            }
+            this.update(cx, |dialog, cx| {
+                match failure {
+                    None => {
+                        dialog.request_ids.clear();
+                        dialog.stage = WritebackStage::Confirm(previews);
+                    }
+                    Some(error) => {
+                        dialog.error = Some(error);
                         dialog.stage = WritebackStage::Editing;
                     }
                 }
@@ -1773,48 +1845,81 @@ impl IssueWritebackDialog {
     }
 
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        let preview = match &self.stage {
-            WritebackStage::Confirm(preview) | WritebackStage::Unknown(preview) => preview.clone(),
+        let previews = match &self.stage {
+            WritebackStage::Confirm(previews) | WritebackStage::Unknown(previews) => {
+                previews.clone()
+            }
             _ => return,
         };
         let Some(api) = self.model.read(cx).api(cx) else {
             return;
         };
-        let request = BoardIssueWritebackRequest {
-            request_id: self
-                .request_id
-                .get_or_insert_with(|| format!("gh-write-{}", uuid::Uuid::new_v4().simple()))
-                .clone(),
-            work_item_id: self.work_item_id.clone(),
-            preview_id: preview.preview_id.clone(),
-        };
-        self.stage = WritebackStage::Writing(preview.clone());
+        while self.request_ids.len() < previews.len() {
+            self.request_ids
+                .push(format!("gh-write-{}", uuid::Uuid::new_v4().simple()));
+        }
+        let requests: Vec<BoardIssueWritebackRequest> = previews
+            .iter()
+            .zip(&self.request_ids)
+            .map(|(preview, request_id)| BoardIssueWritebackRequest {
+                request_id: request_id.clone(),
+                work_item_id: self.work_item_id.clone(),
+                preview_id: preview.preview_id.clone(),
+            })
+            .collect();
+        self.stage = WritebackStage::Writing(previews.clone());
         self.error = None;
         cx.notify();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let mut result = api.issue_writeback(request.clone()).await;
-            if matches!(result, Err(BoardCallError::Lost)) {
-                // Same request id: the engine reconciles, never resends.
-                result = api.issue_writeback(request).await;
+            let mut receipts = Vec::new();
+            let mut failure = None;
+            // In order; a step that already completed replays its stored
+            // receipt, so retries never repeat a write.
+            for request in requests {
+                let mut result = api.issue_writeback(request.clone()).await;
+                if matches!(result, Err(BoardCallError::Lost)) {
+                    // Same request id: the engine reconciles, never resends.
+                    result = api.issue_writeback(request).await;
+                }
+                match result {
+                    Ok(receipt) => receipts.push(receipt),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
             }
             this.update(cx, |dialog, cx| {
-                match result {
-                    Ok(receipt) => {
-                        cx.emit(WritebackDialogEvent::Written(Box::new(receipt.clone())));
-                        dialog.stage = WritebackStage::Done(receipt);
+                for (receipt, preview) in receipts.iter().zip(&previews) {
+                    if dialog.kind == WritebackKind::Close
+                        && matches!(preview.action, IssueWritebackAction::Comment { .. })
+                    {
+                        dialog.posted_note = Some(receipt.clone());
                     }
-                    Err(BoardCallError::Board(luna_proto::BoardError::OutcomeUnknown { .. }))
-                    | Err(BoardCallError::Lost) => {
+                    cx.emit(WritebackDialogEvent::Written(Box::new(receipt.clone())));
+                }
+                match failure {
+                    None => dialog.stage = WritebackStage::Done(receipts),
+                    Some(BoardCallError::Board(luna_proto::BoardError::OutcomeUnknown {
+                        ..
+                    }))
+                    | Some(BoardCallError::Lost) => {
                         dialog.error = Some(
                             "GitHub did not confirm the write. Check again reads it back without sending it twice."
                                 .into(),
                         );
-                        dialog.stage = WritebackStage::Unknown(preview);
+                        dialog.stage = WritebackStage::Unknown(previews);
                     }
-                    Err(error) => {
-                        dialog.error = Some(error.message());
+                    Some(error) => {
+                        dialog.error = Some(match &dialog.posted_note {
+                            Some(_) if receipts.len() < previews.len() => format!(
+                                "The closing comment was posted; closing failed: {}",
+                                error.message()
+                            ),
+                            _ => error.message(),
+                        });
                         dialog.stage = WritebackStage::Editing;
-                        dialog.request_id = None;
+                        dialog.request_ids.clear();
                     }
                 }
                 cx.notify();
@@ -1823,13 +1928,45 @@ impl IssueWritebackDialog {
         }));
     }
 
-    fn confirm_label(&self) -> &'static str {
+    fn confirm_label(&self, previews: &[IssueWritebackPreview]) -> &'static str {
         match self.kind {
             WritebackKind::Comment => "Post comment",
             WritebackKind::AddLabel => "Add label",
             WritebackKind::RemoveLabel => "Remove label",
+            WritebackKind::Close if previews.len() > 1 => "Comment and close",
             WritebackKind::Close => "Close issue",
         }
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_readback(&self, cx: &App) -> serde_json::Value {
+        let (stage, previews, receipts) = match &self.stage {
+            WritebackStage::Editing => ("editing", Vec::new(), Vec::new()),
+            WritebackStage::Previewing => ("previewing", Vec::new(), Vec::new()),
+            WritebackStage::Confirm(previews) => ("confirm", previews.clone(), Vec::new()),
+            WritebackStage::Writing(previews) => ("writing", previews.clone(), Vec::new()),
+            WritebackStage::Unknown(previews) => ("unknown", previews.clone(), Vec::new()),
+            WritebackStage::Done(receipts) => ("done", Vec::new(), receipts.clone()),
+        };
+        serde_json::json!({
+            "kind": format!("{:?}", self.kind),
+            "stage": stage,
+            "closeReason": self.close_reason.wire(),
+            "note": self.input.read(cx).text(),
+            "notePosted": self.posted_note.is_some(),
+            "previews": previews.iter().map(|preview| serde_json::json!({
+                "action": preview.action,
+                "account": preview.account,
+                "number": preview.number,
+                "payload": payload_text(&preview.action),
+            })).collect::<Vec<_>>(),
+            "receipts": receipts.iter().map(|receipt| serde_json::json!({
+                "verified": receipt.readback_verified,
+                "label": receipt.outcome.label,
+                "url": receipt.canonical_url,
+            })).collect::<Vec<_>>(),
+            "error": self.error,
+        })
     }
 }
 
@@ -1838,7 +1975,48 @@ fn payload_text(action: &IssueWritebackAction) -> String {
         IssueWritebackAction::Comment { body } => body.clone(),
         IssueWritebackAction::AddLabel { label } => format!("Add label: {label}"),
         IssueWritebackAction::RemoveLabel { label } => format!("Remove label: {label}"),
-        IssueWritebackAction::Close { reason } => format!("Close issue (state_reason: {reason})"),
+        IssueWritebackAction::Close { reason } => format!(
+            "Close issue as {} (state_reason: {reason})",
+            CloseReason::from_state_reason(reason).label()
+        ),
+    }
+}
+
+impl IssueWritebackDialog {
+    /// The two-option close reason (Completed is the default).
+    fn render_close_reason(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .id("board-gh-close-reason")
+            .role(gpui::Role::RadioGroup)
+            .aria_label("Close reason")
+            .child(meta_text(theme, "Close as:"));
+        for (reason, probe_name) in [
+            (CloseReason::Completed, "close-reason-completed"),
+            (CloseReason::NotPlanned, "close-reason-not-planned"),
+        ] {
+            let selected = self.close_reason == reason;
+            row = row.child(
+                action_button(
+                    theme,
+                    probe_name,
+                    reason.label(),
+                    if selected {
+                        ButtonKind::Secondary
+                    } else {
+                        ButtonKind::Ghost
+                    },
+                    true,
+                )
+                .role(gpui::Role::RadioButton)
+                .aria_selected(selected)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_close_reason(reason, cx))),
+            );
+        }
+        row.into_any_element()
     }
 }
 
@@ -1878,19 +2056,39 @@ impl Render for IssueWritebackDialog {
                 preview.canonical_url
             )
         };
-        let payload = |preview: &IssueWritebackPreview| {
-            div()
-                .id("board-gh-writeback-payload")
-                .relative()
-                .max_h(ui_rems(240.0))
-                .overflow_y_scroll()
-                .p(ui_rems(10.0))
-                .rounded(px(8.0))
-                .bg(theme.code_wash)
-                .text_size(ui_rems(12.0))
-                .whitespace_normal()
-                .child(payload_text(&preview.action))
-                .children(probe("writeback-payload"))
+        // Every reviewed write with its exact payload, numbered in send order.
+        let reviewed = |previews: &[IssueWritebackPreview]| {
+            let mut list = div().flex().flex_col().gap(ui_rems(8.0));
+            if let Some(first) = previews.first() {
+                list = list.child(meta_text(&theme, target(first)));
+            }
+            list = list.child(meta_text(
+                &theme,
+                "Exactly this will be sent, in this order:",
+            ));
+            for (index, preview) in previews.iter().enumerate() {
+                list = list.child(
+                    div()
+                        .id(ElementId::Name(
+                            format!("board-gh-writeback-payload-{index}").into(),
+                        ))
+                        .relative()
+                        .max_h(ui_rems(200.0))
+                        .overflow_y_scroll()
+                        .p(ui_rems(10.0))
+                        .rounded(px(8.0))
+                        .bg(theme.code_wash)
+                        .text_size(ui_rems(12.0))
+                        .whitespace_normal()
+                        .child(if previews.len() > 1 {
+                            format!("{}. {}", index + 1, payload_text(&preview.action))
+                        } else {
+                            payload_text(&preview.action)
+                        })
+                        .children(probe(format!("writeback-payload-{index}"))),
+                );
+            }
+            list
         };
         let mut buttons = div()
             .mt(ui_rems(6.0))
@@ -1910,14 +2108,35 @@ impl Render for IssueWritebackDialog {
             );
         match &self.stage {
             WritebackStage::Editing | WritebackStage::Previewing => {
-                card = card
-                    .child(meta_text(
+                card = card.child(meta_text(
+                    &theme,
+                    "Nothing is sent until you review the exact target and payload.",
+                ));
+                if self.kind == WritebackKind::Close {
+                    card = card.child(self.render_close_reason(&theme, cx));
+                }
+                if self.kind == WritebackKind::Close && self.posted_note.is_some() {
+                    card = card.child(notice(
                         &theme,
-                        "Nothing is sent until you review the exact target and payload.",
-                    ))
-                    .child(crate::popover::dialog_field(
-                        self.input.clone().into_any_element(),
+                        "The closing comment was already posted; only the close remains.",
+                        false,
                     ));
+                } else {
+                    card = card.child(
+                        div()
+                            .relative()
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    focus_field(&this.input, window, cx)
+                                }),
+                            )
+                            .child(crate::popover::dialog_field(
+                                self.input.clone().into_any_element(),
+                            ))
+                            .children(probe("writeback-input")),
+                    );
+                }
                 buttons = buttons.child(
                     action_button(
                         &theme,
@@ -1929,12 +2148,10 @@ impl Render for IssueWritebackDialog {
                     .on_click(cx.listener(|this, _, _, cx| this.review(cx))),
                 );
             }
-            WritebackStage::Confirm(preview) | WritebackStage::Writing(preview) => {
-                card = card
-                    .child(meta_text(&theme, target(preview)))
-                    .child(meta_text(&theme, "Exactly this will be sent:"))
-                    .child(payload(preview));
+            WritebackStage::Confirm(previews) | WritebackStage::Writing(previews) => {
+                card = card.child(reviewed(previews));
                 if let WritebackStage::Confirm(_) = self.stage {
+                    let label = self.confirm_label(previews);
                     buttons = buttons
                         .child(
                             action_button(
@@ -1953,7 +2170,7 @@ impl Render for IssueWritebackDialog {
                             action_button(
                                 &theme,
                                 "writeback-confirm",
-                                self.confirm_label(),
+                                label,
                                 ButtonKind::Primary,
                                 true,
                             )
@@ -1963,10 +2180,8 @@ impl Render for IssueWritebackDialog {
                     card = card.child(meta_text(&theme, "Writing, then reading it back…"));
                 }
             }
-            WritebackStage::Unknown(preview) => {
-                card = card
-                    .child(meta_text(&theme, target(preview)))
-                    .child(payload(preview));
+            WritebackStage::Unknown(previews) => {
+                card = card.child(reviewed(previews));
                 buttons = buttons.child(
                     action_button(
                         &theme,
@@ -1978,30 +2193,33 @@ impl Render for IssueWritebackDialog {
                     .on_click(cx.listener(|this, _, _, cx| this.confirm(cx))),
                 );
             }
-            WritebackStage::Done(receipt) => {
-                let url = receipt.canonical_url.clone();
-                card = card.child(notice(
-                    &theme,
-                    if receipt.readback_verified {
-                        format!("Done and verified on GitHub: {}", receipt.outcome.label)
-                    } else {
-                        format!(
-                            "Sent; GitHub has not confirmed it yet: {}",
-                            receipt.outcome.label
-                        )
-                    },
-                    !receipt.readback_verified,
-                ));
-                buttons = buttons.child(
-                    action_button(
+            WritebackStage::Done(receipts) => {
+                for receipt in receipts {
+                    card = card.child(notice(
                         &theme,
-                        "writeback-open",
-                        "Open on GitHub",
-                        ButtonKind::Primary,
-                        true,
-                    )
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
-                );
+                        if receipt.readback_verified {
+                            format!("Done and verified on GitHub: {}", receipt.outcome.label)
+                        } else {
+                            format!(
+                                "Sent; GitHub has not confirmed it yet: {}",
+                                receipt.outcome.label
+                            )
+                        },
+                        !receipt.readback_verified,
+                    ));
+                }
+                if let Some(url) = receipts.last().map(|receipt| receipt.canonical_url.clone()) {
+                    buttons = buttons.child(
+                        action_button(
+                            &theme,
+                            "writeback-open",
+                            "Open on GitHub",
+                            ButtonKind::Primary,
+                            true,
+                        )
+                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                }
             }
         }
         if let Some(error) = &self.error {
@@ -2124,7 +2342,16 @@ impl super::super::Shell {
         }
     }
 
-    /// QA: what the open picker shows plus the Board page's cards.
+    #[cfg_attr(not(feature = "appshots-fixture"), allow(dead_code))]
+    fn board_github_writeback(&self) -> Option<Entity<IssueWritebackDialog>> {
+        match self.board_github.as_ref().map(|host| &host.overlay) {
+            Some(BoardGitHubOverlay::Writeback(dialog)) => Some(dialog.clone()),
+            _ => None,
+        }
+    }
+
+    /// QA: what the open picker or writeback dialog shows plus the Board
+    /// page's cards.
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_board_github_readback(&self, cx: &App) -> serde_json::Value {
         let cards = self
@@ -2153,15 +2380,40 @@ impl super::super::Shell {
             "picker": self
                 .board_github_picker()
                 .map(|picker| picker.read(cx).fixture_readback(cx)),
+            "writeback": self
+                .board_github_writeback()
+                .map(|dialog| dialog.read(cx).fixture_readback(cx)),
             "cards": cards,
         })
     }
 
-    /// QA: re-render the picker so its layout probes repaint.
+    /// QA: open the Close issue confirmation (the detail drawer's "Close
+    /// issue…" calls `open_board_issue_writeback` the same way).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_open_board_issue_close(
+        &mut self,
+        work_item_id: String,
+        issue_ref_id: String,
+        display: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_board_issue_writeback(
+            work_item_id,
+            issue_ref_id,
+            display,
+            WritebackChoice::Close,
+            cx,
+        );
+    }
+
+    /// QA: re-render the overlay so its layout probes repaint.
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_board_github_repaint(&self, cx: &mut App) {
         if let Some(picker) = self.board_github_picker() {
             picker.update(cx, |_, cx| cx.notify());
+        }
+        if let Some(dialog) = self.board_github_writeback() {
+            dialog.update(cx, |_, cx| cx.notify());
         }
     }
 }

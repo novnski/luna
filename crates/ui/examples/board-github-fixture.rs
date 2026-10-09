@@ -20,6 +20,12 @@
 //! 6. After adding, the row and the preview do not show "On board" / Open
 //!    card, or Add to board stays enabled.
 //! 7. Any GitHub write happens during the flow (the fake records none).
+//! 8. Close issue (PB-3, after the ticket is Done) asks for a free-text
+//!    reason instead of GitHub's two choices, does not default to
+//!    Completed, cannot switch to Not planned, posts a comment when the
+//!    optional closing comment is empty, hides the comment or the
+//!    state_reason from the reviewed payload, writes before Confirm, or
+//!    does not end verified with exactly the reviewed comment + close.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-github-fixture
@@ -368,6 +374,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     let spaces = core.workspace.read_spaces()?;
     let handle = runtime.block_on(state::EngineHandle::fixture_from_core(&core))?;
+    let store = core.store.clone();
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port: 59994,
@@ -517,9 +524,97 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(after["cards"].as_array().map(Vec::len) == Some(1), "still one card: {after}");
                 record.insert("onBoard".into(), marked);
 
-                // 7. No GitHub write during the whole flow.
+                // 7. No GitHub write during the whole picker flow.
                 anyhow::ensure!(lines(&writes_log) == 0, "GitHub writes recorded: {}", std::fs::read_to_string(&writes_log).unwrap_or_default());
-                record.insert("fakeGh".into(), serde_json::json!({"calls": lines(&calls_log), "writes": 0}));
+
+                // 8. Close issue: the ticket's outcome is accepted (the
+                // engine-owned Done commit), then the explicit close dialog.
+                let card_id = card.as_str().unwrap_or_default().to_owned();
+                let current = store.board_item(&card_id)?.ok_or_else(|| anyhow::anyhow!("imported card missing"))?;
+                let mut done = current.clone();
+                done.column = luna_proto::BoardColumn::Done;
+                done.revision += 1;
+                store.board_commit(
+                    luna_sync::BoardCommit {
+                        request_id: "br-fixture-local-done".into(),
+                        payload_hash: "fixture-local-done".into(),
+                        committed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        item: luna_sync::BoardItemWrite::Replace {
+                            expected_revision: current.revision,
+                            item: Box::new(done),
+                            placement: Some(luna_sync::BoardRankPlacement::Top),
+                        },
+                        rows: Vec::new(),
+                        event: Some((luna_proto::WorkItemEventKind::Completed { execution_generation: 0 }, true)),
+                        receipt: None,
+                    },
+                    None,
+                )?;
+                anyhow::ensure!(lines(&writes_log) == 0, "local Done wrote to GitHub");
+                let issue = after["cards"][0]["issue"].clone();
+                let (issue_ref, display) = (issue["id"].as_str().unwrap_or_default().to_owned(), issue["display"].as_str().unwrap_or_default().to_owned());
+                window.update(cx, |shell, _, cx| shell.fixture_open_board_issue_close(card_id.clone(), issue_ref, display, cx))?;
+                let opened = until(window, cx, "close dialog", |r| r["writeback"]["kind"] == "Close").await?;
+                anyhow::ensure!(opened["writeback"]["stage"] == "editing" && opened["writeback"]["closeReason"] == "completed" && opened["writeback"]["note"] == "", "Completed is the default and the note starts empty: {opened}");
+                let painted = probes(window, cx)?;
+                anyhow::ensure!(center_of(&painted, "close-reason-completed").is_ok() && center_of(&painted, "close-reason-not-planned").is_ok(), "two close choices: {painted:?}");
+                click_probe(window, cx, "close-reason-not-planned").await?;
+                until(window, cx, "Not planned", |r| r["writeback"]["closeReason"] == "notPlanned").await?;
+                click_probe(window, cx, "close-reason-completed").await?;
+                until(window, cx, "Completed again", |r| r["writeback"]["closeReason"] == "completed").await?;
+                // An empty closing comment reviews to the close alone.
+                click_probe(window, cx, "writeback-review").await?;
+                let close_only = until(window, cx, "close-only review", |r| r["writeback"]["stage"] == "confirm").await?;
+                anyhow::ensure!(
+                    close_only["writeback"]["previews"] == serde_json::json!([{
+                        "action": {"kind": "close", "reason": "completed"},
+                        "account": "octo-a",
+                        "number": 1,
+                        "payload": "Close issue as Completed (state_reason: completed)",
+                    }]),
+                    "an empty note is not a comment: {close_only}"
+                );
+                anyhow::ensure!(lines(&writes_log) == 0, "a review never writes");
+                // Not planned with a closing comment: both shown, in order.
+                click_probe(window, cx, "writeback-edit").await?;
+                until(window, cx, "editing", |r| r["writeback"]["stage"] == "editing").await?;
+                click_probe(window, cx, "close-reason-not-planned").await?;
+                click_probe(window, cx, "writeback-input").await?;
+                type_text(window, cx, "Closing via the LUNA ticket.").await?;
+                until(window, cx, "closing comment typed", |r| r["writeback"]["note"] == "Closing via the LUNA ticket." && r["writeback"]["closeReason"] == "notPlanned").await?;
+                click_probe(window, cx, "writeback-review").await?;
+                let reviewed = until(window, cx, "comment + close review", |r| r["writeback"]["stage"] == "confirm").await?;
+                let previews = reviewed["writeback"]["previews"].as_array().cloned().unwrap_or_default();
+                anyhow::ensure!(previews.len() == 2, "comment then close: {reviewed}");
+                let comment_payload = previews[0]["payload"].as_str().unwrap_or_default().to_owned();
+                anyhow::ensure!(
+                    previews[0]["action"]["kind"] == "comment"
+                        && comment_payload.starts_with("Closing via the LUNA ticket.\n\n<!-- luna-board-writeback:")
+                        && previews[1]["action"] == serde_json::json!({"kind": "close", "reason": "not_planned"})
+                        && previews[1]["payload"] == "Close issue as Not planned (state_reason: not_planned)",
+                    "the exact payloads in send order: {reviewed}"
+                );
+                anyhow::ensure!(lines(&writes_log) == 0, "a review never writes");
+                let painted = probes(window, cx)?;
+                anyhow::ensure!(center_of(&painted, "writeback-payload-0").is_ok() && center_of(&painted, "writeback-payload-1").is_ok(), "both payloads painted: {painted:?}");
+                captures.insert("04-close-review".into(), capture(window, cx, output.join("04-close-review.png"))?.into());
+                click_probe(window, cx, "writeback-confirm").await?;
+                let closed = until(window, cx, "verified close", |r| r["writeback"]["stage"] == "done").await?;
+                anyhow::ensure!(
+                    closed["writeback"]["receipts"].as_array().is_some_and(|receipts| receipts.len() == 2 && receipts.iter().all(|receipt| receipt["verified"] == true)),
+                    "comment and close verified by readback: {closed}"
+                );
+                let world: serde_json::Value = serde_json::from_slice(&std::fs::read(state_dir.join("state.json"))?)?;
+                let remote = world["issues"]["acme/widgets"].as_array().and_then(|issues| issues.iter().find(|issue| issue["number"] == 1)).cloned().unwrap_or_default();
+                let notes = remote["_comments"].as_array().map_or(0, |comments| comments.iter().filter(|comment| comment["body"].as_str() == Some(comment_payload.as_str())).count());
+                anyhow::ensure!(
+                    remote["state"] == "closed" && remote["state_reason"] == "not_planned" && notes == 1 && lines(&writes_log) == 2,
+                    "GitHub got exactly the reviewed comment and a Not planned close: state={} reason={} notes={notes} writes={}",
+                    remote["state"], remote["state_reason"], lines(&writes_log)
+                );
+                captures.insert("05-closed".into(), capture(window, cx, output.join("05-closed.png"))?.into());
+                record.insert("close".into(), serde_json::json!({"closeOnly": close_only["writeback"], "reviewed": reviewed["writeback"], "closed": closed["writeback"]}));
+                record.insert("fakeGh".into(), serde_json::json!({"calls": lines(&calls_log), "writes": lines(&writes_log)}));
                 record.insert("captures".into(), serde_json::Value::Object(captures));
                 Ok(serde_json::Value::Object(record))
             }
@@ -542,7 +637,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| std::fs::write(qa.join("fixture-manifest.json"), serde_json::to_vec_pretty(&manifest).unwrap_or_default()))
                         .and_then(|_| std::fs::write(
                             output.join("board-github.pass"),
-                            "PASS: production Shell over the Board page; fork + upstream remotes require an explicit repository; issues listed with fields and PRs excluded; the latest search wins; preview shows the canonical link, body, attachment notice, selectable comments and the editable prompt; Add to board creates exactly one card; the row and preview then show On board / Open card; no GitHub writes\n",
+                            "PASS: production Shell over the Board page; fork + upstream remotes require an explicit repository; issues listed with fields and PRs excluded; the latest search wins; preview shows the canonical link, body, attachment notice, selectable comments and the editable prompt; Add to board creates exactly one card; the row and preview then show On board / Open card; no GitHub writes until the explicit close; Close issue offers Completed (default) / Not planned, reviews an empty note as the close alone and a closing comment as comment then close with exact payloads, and ends verified on GitHub\n",
                         ));
                     if let Err(error) = written {
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error}\n"));

@@ -283,6 +283,11 @@ fn attachment_links(body: &str) -> usize {
         + body.matches("/user-attachments/").count()
 }
 
+/// `1 comment`, `2 comments`.
+fn count(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
 /// A code fence longer than any backtick run in `text`.
 fn fence_for(text: &str) -> String {
     let mut longest = 0;
@@ -380,7 +385,14 @@ fn compose_import(
     }
     let links = attachment_links(&raw.body);
     if links > 0 {
-        let note = format!("{links} image/attachment link(s) were not fetched.");
+        let note = format!(
+            "{} not fetched.",
+            count(
+                links,
+                "image/attachment link was",
+                "image/attachment links were"
+            )
+        );
         section.push_str(&format!("> {note}\n"));
         omitted.push(note);
     }
@@ -422,7 +434,10 @@ fn compose_import(
     }
     let unselected = (raw.comments as usize).saturating_sub(comments.len());
     if unselected > 0 {
-        omitted.push(format!("{unselected} unselected comment(s) not included."));
+        omitted.push(format!(
+            "{} not included.",
+            count(unselected, "unselected comment", "unselected comments")
+        ));
     }
     let section = section.trim_end().to_owned();
     let additions = additions.trim();
@@ -1395,7 +1410,12 @@ impl EngineRpc {
         let links = attachment_links(&raw.body);
         if links > 0 {
             omitted.push(format!(
-                "{links} image/attachment link(s) are not fetched or included."
+                "{} not fetched or included.",
+                count(
+                    links,
+                    "image/attachment link is",
+                    "image/attachment links are"
+                )
             ));
         }
         Ok(IssueDetail {
