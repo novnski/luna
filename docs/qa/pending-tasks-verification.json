@@ -81,5 +81,14 @@
     ],
     "evidence_files_preserved": true,
     "primary_app_data_and_build_cache_preserved": true
+  },
+  "hosted_ci": {
+    "code_commit": "015c7d072f1560425874c09a42f4bf1cddf0f3a1",
+    "run_url": "https://github.com/novnski/luna/actions/runs/38094436754",
+    "job_id": 114337306748,
+    "conclusion": "blocked_before_runner_start",
+    "steps_executed": 0,
+    "reason": "GitHub reported failed recent account payments or an insufficient spending limit. No test steps started; account billing was not changed.",
+    "readback": "gh api repos/novnski/luna/check-runs/114337306748/annotations"
   }
 }
