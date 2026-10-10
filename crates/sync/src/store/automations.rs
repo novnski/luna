@@ -36,6 +36,16 @@ fn write_run(c: &Connection, r: &AutomationRun) -> Result<(), StoreError> {
     Ok(())
 }
 impl DocsStore {
+    pub fn automation_changes(
+        &self,
+    ) -> tokio::sync::watch::Receiver<luna_proto::AutomationWatchFrame> {
+        self.automation_changes.subscribe()
+    }
+
+    fn notify_automation_change(&self) {
+        self.automation_changes
+            .send_modify(|frame| frame.seq = frame.seq.wrapping_add(1));
+    }
     pub fn automation_attention_sources(
         &self,
         host: &str,
@@ -96,6 +106,7 @@ impl DocsStore {
         }
         write_record(&tx, next)?;
         tx.commit()?;
+        self.notify_automation_change();
         Ok(true)
     }
 
@@ -361,6 +372,7 @@ impl DocsStore {
         write_record(&tx, r)?;
         tx.execute("INSERT INTO automation_mutations(request_id,automation_id,payload_hash,committed_at_ms,receipt) VALUES(?1,?2,?3,?4,?5)",params![receipt.request_id,r.id,receipt.payload_hash,receipt.committed_at_ms,serde_json::to_vec(receipt)?])?;
         tx.commit()?;
+        self.notify_automation_change();
         Ok(receipt.clone())
     }
     /// The occurrence and next due slot commit together. No effects run under this lock.
@@ -402,6 +414,7 @@ impl DocsStore {
         // The monotonic due cursor prevents replay after pruning terminal history.
         tx.execute("DELETE FROM automation_runs WHERE automation_id=?1 AND blocks_next=0 AND id NOT IN (SELECT id FROM automation_runs WHERE automation_id=?1 ORDER BY id DESC LIMIT 1000)",[&run.automation_id])?;
         tx.commit()?;
+        self.notify_automation_change();
         Ok(run.state == State::Claimed)
     }
     /// CAS prevents a late reconciliation from overwriting a real completion.
@@ -434,6 +447,7 @@ impl DocsStore {
         }
         write_run(&tx, r)?;
         tx.commit()?;
+        self.notify_automation_change();
         Ok(true)
     }
     /// Called with the admitted native run's write ticket and exact user-message id.
@@ -478,6 +492,7 @@ impl DocsStore {
             }
         }
         tx.commit()?;
+        self.notify_automation_change();
         Ok(())
     }
 }

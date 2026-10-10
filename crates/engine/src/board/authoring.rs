@@ -694,6 +694,15 @@ impl EngineRpc {
             &device,
             crate::now_ms(),
         );
+        // Preserve the validated structured inputs independently of the text
+        // so later agent turns can attach them to a ticket after a restart.
+        let entry = if attachments.is_empty() {
+            entry
+        } else {
+            let mut value: Value = serde_json::from_str(&entry).map_err(storage)?;
+            value["attachments"] = serde_json::json!(attachments);
+            serde_json::to_string(&value).map_err(storage)?
+        };
         let session = self.authoring_update(&session.id, |session| {
             session.message_count += 1;
             session.last_error = None;

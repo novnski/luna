@@ -88,6 +88,7 @@ impl Shell {
             json!({
                 "taskId": badge.task_id,
                 "workItemId": badge.work_item_id,
+                "archived": badge.archived,
                 "key": badge.key,
                 "title": badge.title,
                 "role": badge.role.as_str(),

@@ -1758,6 +1758,7 @@ impl EngineRpc {
             brief_revision: 0,
             column: BoardColumn::Backlog,
             archived: false,
+            deleted: false,
             rank: String::new(),
             revision: 0,
             field_revisions: Default::default(),

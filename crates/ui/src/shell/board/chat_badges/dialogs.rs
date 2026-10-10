@@ -391,6 +391,7 @@ impl Shell {
                         self.board_chat.badges.insert(
                             chat_id.clone(),
                             ChatTicketBadge {
+                                archived: false,
                                 task_id: chat_id.clone(),
                                 work_item_id: mutation.work_item_id.clone(),
                                 key: mutation.key.clone(),
@@ -429,6 +430,7 @@ impl Shell {
                             .any(|badge| badge.work_item_id == receipt.work_item_id)
                         {
                             related.push(ChatTicketBadge {
+                                archived: false,
                                 task_id: chat_id.clone(),
                                 work_item_id: receipt.work_item_id.clone(),
                                 key: receipt.key.clone(),
@@ -452,6 +454,9 @@ impl Shell {
                         if let Some(model) = self.board_chat.model.clone() {
                             model.update(cx, |model, cx| model.apply_receipt(&receipt, cx));
                         }
+                        // Confirm the receipt against a snapshot read after it:
+                        // archived or deleted meanwhile, it retires there.
+                        self.board_chat_refresh(cx);
                         self.sidebar_notice = Some(SidebarNotice::transient_status(format!(
                             "{} saved to {}. No chat was created.",
                             receipt.key,

@@ -98,6 +98,7 @@ impl EngineRpc {
             methods::BOARD_UPDATE => board_async!(this, params, board_update),
             methods::BOARD_RANK => board_async!(this, params, board_rank),
             methods::BOARD_ARCHIVE => board_async!(this, params, board_archive),
+            methods::BOARD_DELETE => board_async!(this, params, board_delete),
             methods::BOARD_EVENTS => board_sync!(this, params, board_events),
             methods::BOARD_GET_RECEIPT => board_sync!(this, params, board_get_receipt),
             methods::BOARD_WATCH => board_stream!(this, params, board_watch),

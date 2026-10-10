@@ -233,9 +233,14 @@ pub fn describe_trigger(d: &AutomationDefinition) -> String {
         AutomationTrigger::Once { at_ms } => {
             format!("Once, {}", format_in_zone(*at_ms, &d.timezone))
         }
-        AutomationTrigger::Interval { every_minutes, .. } => {
-            format!("Every {every_minutes} minutes")
-        }
+        AutomationTrigger::Interval { every_minutes, .. } => match every_minutes {
+            1 => "Every minute".into(),
+            60 => "Every hour".into(),
+            1440 => "Every day".into(),
+            n if n % 1440 == 0 => format!("Every {} days", n / 1440),
+            n if n % 60 == 0 => format!("Every {} hours", n / 60),
+            n => format!("Every {n} minutes"),
+        },
         AutomationTrigger::Calendar {
             hour,
             minute,

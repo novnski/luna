@@ -459,6 +459,7 @@ pub(crate) fn event_summary(kind: &WorkItemEventKind) -> String {
         WorkItemEventKind::Reordered { .. } => "Reordered".into(),
         WorkItemEventKind::Archived => "Archived".into(),
         WorkItemEventKind::Unarchived => "Unarchived".into(),
+        WorkItemEventKind::Deleted => "Deleted".into(),
         WorkItemEventKind::Moved { to, .. } => format!("Moved to {}", to.label()),
         WorkItemEventKind::Completed { .. } => "Done".into(),
         WorkItemEventKind::Reopened { .. } => "Reopened".into(),

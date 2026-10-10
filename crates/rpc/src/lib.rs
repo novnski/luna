@@ -36,6 +36,7 @@ pub use server::{serve_connection, serve_ws_listener, serve_ws_listener_with_fac
 /// Full surface: docs/research/feature-inventory.md §2.
 pub mod methods {
     pub const LIST_AUTOMATIONS: &str = "ListAutomations";
+    pub const WATCH_AUTOMATIONS: &str = "WatchAutomations";
     pub const LIST_AUTOMATION_RUNS: &str = "ListAutomationRuns";
     pub const PREVIEW_AUTOMATION: &str = "PreviewAutomation";
     pub const MUTATE_AUTOMATION: &str = "MutateAutomation";
@@ -49,6 +50,7 @@ pub mod methods {
     pub const BOARD_UPDATE: &str = "BoardUpdate";
     pub const BOARD_RANK: &str = "BoardRank";
     pub const BOARD_ARCHIVE: &str = "BoardArchive";
+    pub const BOARD_DELETE: &str = "BoardDelete";
     pub const BOARD_EVENTS: &str = "BoardEvents";
     /// Stream of `BoardWatchFrame` for a scope (first frame immediately).
     pub const BOARD_WATCH: &str = "BoardWatch";
@@ -416,6 +418,7 @@ pub mod methods {
         BOARD_UPDATE,
         BOARD_RANK,
         BOARD_ARCHIVE,
+        BOARD_DELETE,
         BOARD_EVENTS,
         BOARD_WATCH,
         BOARD_GET_RECEIPT,
@@ -464,6 +467,7 @@ pub mod methods {
     /// Inventory of shipped RPC names. Remote policy treats unlisted names as unknown.
     pub const ALL: &[&str] = &[
         LIST_AUTOMATIONS,
+        WATCH_AUTOMATIONS,
         LIST_AUTOMATION_RUNS,
         PREVIEW_AUTOMATION,
         MUTATE_AUTOMATION,
@@ -474,6 +478,7 @@ pub mod methods {
         BOARD_UPDATE,
         BOARD_RANK,
         BOARD_ARCHIVE,
+        BOARD_DELETE,
         BOARD_EVENTS,
         BOARD_WATCH,
         BOARD_GET_RECEIPT,

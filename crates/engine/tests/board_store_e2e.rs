@@ -338,6 +338,163 @@ impl Evidence {
     }
 }
 
+/// LUN-11: long insertion sequences, legacy migration and neighbor moves retain
+/// exact order across restart without growing persisted rank keys.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_fix_bounded_ranks_preserve_legacy_order_and_neighbors() {
+    let f = fixture();
+    let (core, c) = boot(&f);
+    space(&c, &core, &f, "rank-project", "luna").await;
+    let mut expected = Vec::new();
+    for n in 0..8 {
+        let r = create(&c, &format!("legacy-{n}"), "rank-project", "Legacy").await;
+        expected.insert(0, r["workItemId"].as_str().unwrap().to_owned());
+    }
+    stop(core, c).await;
+    // Historical persisted data, before opening the engine: binary rank format.
+    let db = rusqlite::Connection::open(f.root.join("profiles/local/docs.sqlite3")).unwrap();
+    for (n, id) in expected.iter().enumerate() {
+        let rank = format!("{}1", "0".repeat(8 - n));
+        db.execute("UPDATE board_items SET rank=?2,record=CAST(json_set(CAST(record AS TEXT),'$.rank',?2) AS BLOB) WHERE id=?1", rusqlite::params![id, rank]).unwrap();
+    }
+    drop(db);
+    let (core, c) = boot(&f);
+    let mut maximum = 0;
+    for placement in ["top", "bottom"] {
+        for n in 0..1000 {
+            let mut req =
+                create_request(&format!("{placement}-{n}"), "rank-project", "Bounded rank");
+            req["placement"] = json!(placement);
+            let r = ok(&c, "BoardCreate", req).await;
+            maximum = maximum.max(r["item"]["rank"].as_str().unwrap().len());
+            let id = r["workItemId"].as_str().unwrap().to_owned();
+            if placement == "top" {
+                expected.insert(0, id);
+            } else {
+                expected.push(id);
+            }
+        }
+    }
+    assert!(maximum <= 16, "rank key grew to {maximum} characters");
+    let moving = expected.pop().unwrap();
+    ok(
+        &c,
+        "BoardRank",
+        json!({"requestId":"middle-before","workItemId":moving,"beforeId":expected[5]}),
+    )
+    .await;
+    expected.insert(5, moving.clone());
+    ok(
+        &c,
+        "BoardRank",
+        json!({"requestId":"middle-after","workItemId":moving,"afterId":expected[10]}),
+    )
+    .await;
+    expected.remove(5);
+    expected.insert(10, moving);
+    stop(core, c).await;
+    let (core, c) = boot(&f);
+    let mut actual = Vec::new();
+    let mut cursor = Value::Null;
+    loop {
+        let page = list(
+            &c,
+            project("rank-project"),
+            json!({"limit":500,"cursor":cursor}),
+        )
+        .await;
+        for view in page["items"].as_array().unwrap() {
+            assert!(view["item"]["rank"].as_str().unwrap().len() <= 16);
+            assert_eq!(view["item"]["revision"], 1);
+            actual.push(view["item"]["id"].as_str().unwrap().to_owned());
+        }
+        cursor = page["nextCursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+    }
+    let mut evidence = Evidence::new("ticket-fix-bounded-ranks");
+    evidence.step(
+        "exact order after legacy migration, 2000 insertions, neighbor moves and restart",
+        json!(expected),
+        json!(actual),
+        None,
+    );
+    evidence.step(
+        "no provider work",
+        json!(0),
+        json!(f.seen.lock().unwrap().len()),
+        None,
+    );
+    evidence.write();
+    stop(core, c).await;
+}
+
+/// LUN-12: a tombstone is invisible, durable and idempotent; archives do not
+/// remain in source-chat banners. Chats and audit events remain intact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_fix_delete_and_archive_remove_related_badges_without_losing_history() {
+    let f = fixture();
+    let (core, c) = boot(&f);
+    let cwd = space(&c, &core, &f, "delete-project", "luna").await;
+    let source = "b5555555-5555-4555-8555-555555555555";
+    chat(&c, "delete-project", source, &cwd).await;
+    let mut req = create_request("delete-source", "delete-project", "Delete me");
+    req["origin"] = json!({"kind":"chat","taskId":source});
+    let r = ok(&c, "BoardCreate", req).await;
+    let id = r["workItemId"].clone();
+    let badges = ok(&c, "BoardChatBadges", json!({"taskIds":[source]})).await;
+    assert_eq!(badges["related"].as_array().unwrap().len(), 1);
+    ok(
+        &c,
+        "BoardArchive",
+        json!({"requestId":"archive-source","workItemId":id,"archived":true}),
+    )
+    .await;
+    let badges = ok(&c, "BoardChatBadges", json!({"taskIds":[source]})).await;
+    assert!(
+        badges["related"]
+            .as_array()
+            .is_none_or(|v| v.iter().all(|b| b["archived"] == true)),
+        "archived source badge has no archived marker: {badges}"
+    );
+    let delete = json!({"requestId":"delete-source-ticket","workItemId":id,"expectedRevision":2});
+    let receipt = ok(&c, "BoardDelete", delete.clone()).await;
+    assert_eq!(receipt["item"]["deleted"], true);
+    assert_eq!(ok(&c, "BoardDelete", delete.clone()).await, receipt);
+    assert!(
+        call(&c, "BoardRead", json!({"workItemId":id}))
+            .await
+            .is_err()
+    );
+    let page = list(&c, project("delete-project"), json!({"archived":"include"})).await;
+    assert!(page["items"].as_array().unwrap().is_empty());
+    let badges = ok(&c, "BoardChatBadges", json!({"taskIds":[source]})).await;
+    assert!(badges["related"].as_array().is_none_or(Vec::is_empty));
+    let journal = events(&c, id.as_str().unwrap()).await;
+    assert_eq!(kinds(&journal), ["created", "archived", "deleted"]);
+    assert_eq!(chats(&c).await.len(), 1);
+    stop(core, c).await;
+    let (core, c) = boot(&f);
+    assert_eq!(ok(&c, "BoardDelete", delete).await, receipt);
+    let next = create(&c, "next-key", "delete-project", "Next ticket").await;
+    assert_eq!(next["key"], "LUN-2");
+    let mut evidence = Evidence::new("ticket-fix-delete-archive");
+    evidence.step(
+        "delete retry preserves receipt after restart",
+        receipt.clone(),
+        ok(
+            &c,
+            "BoardGetReceipt",
+            json!({"requestId":"delete-source-ticket"}),
+        )
+        .await,
+        None,
+    );
+    evidence.write();
+    stop(core, c).await;
+}
+
 /// Cases 1, 2, 5, 6, 10: save-only creation, idempotency, keys, scope.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn create_is_save_only_idempotent_and_project_scoped() {
@@ -771,6 +928,21 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
     let second = create(&c, "r2", "project-luna", "Restart two").await;
     ok(&c, "BoardRank", json!({"requestId":"r-rank","workItemId":second["workItemId"],"afterId":first["workItemId"]})).await;
     ok(&c, "BoardUpdate", json!({"requestId":"r-edit","workItemId":first["workItemId"],"expectedRevision":1,"changes":{"description":"Edited before restart"}})).await;
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    ok(
+        &c,
+        "UploadChunk",
+        json!({"uploadId":"board-backup-image","seq":0,"data":png}),
+    )
+    .await;
+    let image = ok(
+        &c,
+        "UploadCommit",
+        json!({"uploadId":"board-backup-image","fileName":"screenshot.png"}),
+    )
+    .await["path"]
+        .clone();
+    ok(&c, "BoardUpdate", json!({"requestId":"r-image","workItemId":first["workItemId"],"expectedRevision":2,"changes":{"attachments":[image]}})).await;
     let before = list(&c, project("project-luna"), json!({})).await;
     evidence.step(
         "a reorder before restart is part of the saved order",
@@ -810,6 +982,9 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
         third["key"].clone(),
         None,
     );
+    let deletion =
+        json!({"requestId":"backup-delete","workItemId":third["workItemId"],"expectedRevision":1});
+    let deletion_receipt = ok(&c, "BoardDelete", deletion.clone()).await;
     let backed_up = list(&c, project("project-luna"), json!({})).await;
     let journal_backed_up = ok(&c, "BoardEvents", json!({"limit":500})).await;
     stop(core, c).await;
@@ -820,8 +995,8 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
     );
     let backup = service.export(&f.backups.join("board.lunabk")).unwrap();
     evidence.step(
-        "archive records schema 19",
-        json!(19),
+        "archive records schema 20",
+        json!(20),
         json!(backup.manifest.databases[0].schema_version),
         None,
     );
@@ -859,6 +1034,24 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
 
     let (core, c) = boot(&f);
     let restored = list(&c, project("project-luna"), json!({})).await;
+    let image_read = ok(&c, "ReadAttachmentChunk", json!({"path":image,"offset":0})).await;
+    evidence.step(
+        "backup restores exact ticket image bytes",
+        json!(png),
+        image_read["data"].clone(),
+        None,
+    );
+    evidence.step(
+        "backup preserves deletion receipts and tombstones",
+        deletion_receipt,
+        ok(&c, "BoardDelete", deletion).await,
+        None,
+    );
+    assert!(
+        call(&c, "BoardRead", json!({"workItemId":third["workItemId"]}))
+            .await
+            .is_err()
+    );
     let journal_restored = ok(&c, "BoardEvents", json!({"limit":500})).await;
     evidence.step(
         "restore round-trips tickets and order exactly",
@@ -976,7 +1169,7 @@ async fn every_board_method_is_routed_and_older_profiles_upgrade_additively() {
             row.get(0)
         })
         .unwrap();
-    evidence.step("schema is 19", json!(19), json!(version), None);
+    evidence.step("schema is 20", json!(20), json!(version), None);
     evidence.write();
 }
 

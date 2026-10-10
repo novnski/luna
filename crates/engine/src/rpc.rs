@@ -8112,6 +8112,7 @@ fn is_stream_method(method: &str) -> bool {
         methods::WATCH_TASK_WORK
             | methods::WATCH_TASK_COMMANDS
             | methods::WATCH_DOC_MESSAGES
+            | methods::WATCH_AUTOMATIONS
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
             | methods::WATCH_CHECKOUT_DIFFS
@@ -9487,6 +9488,7 @@ impl EngineRpc {
                 .await;
         }
         match method {
+            methods::WATCH_AUTOMATIONS => Ok(RpcReply::Stream(watch_stream(self.store.automation_changes()))),
             methods::LIST_AUTOMATIONS | methods::LIST_AUTOMATION_RUNS | methods::PREVIEW_AUTOMATION | methods::MUTATE_AUTOMATION | methods::GET_AUTOMATION_MUTATION_RECEIPT => self.handle_automations(method, params).await,
             methods::GET_TASK_WORK | methods::WATCH_TASK_WORK | methods::PREVIEW_STOP_TASK_WORK | methods::STOP_TASK_WORK => self.handle_task_work(method, params).await,
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),

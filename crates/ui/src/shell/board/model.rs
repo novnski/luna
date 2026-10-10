@@ -124,13 +124,15 @@ enum Load {
     More(ColumnRead),
 }
 
-/// The engine's list order: project, column, rank, id.
+/// The engine's list order: project, column, rank, id. Board ranks are
+/// fixed-width keys that sort as plain strings (the store's SQL order),
+/// independent of the sidebar's pin-order fractions.
 fn board_order(left: &WorkItemView, right: &WorkItemView) -> Ordering {
     left.item
         .project_id
         .cmp(&right.item.project_id)
         .then(left.item.column.order().cmp(&right.item.column.order()))
-        .then_with(|| luna_proto::compare_pin_order(&left.item.rank, &right.item.rank))
+        .then_with(|| left.item.rank.cmp(&right.item.rank))
         .then_with(|| left.item.id.cmp(&right.item.id))
 }
 
@@ -442,6 +444,18 @@ impl BoardModel {
     /// Show a committed mutation immediately (its record is canonical), then
     /// re-read the engine's derived view.
     pub fn apply_receipt(&mut self, receipt: &BoardMutationReceipt, cx: &mut Context<Self>) {
+        // A deleted ticket leaves the board at once (the re-read excludes it).
+        if receipt.item.deleted {
+            let before = self.items.len();
+            self.items
+                .retain(|view| view.item.id != receipt.work_item_id);
+            if self.items.len() != before {
+                cx.emit(BoardModelEvent::Changed);
+                cx.notify();
+            }
+            self.refresh(cx);
+            return;
+        }
         if let Some(view) = self
             .items
             .iter_mut()
@@ -662,7 +676,9 @@ impl BoardModel {
             return;
         }
         let changed = frame.reset || !frame.events.is_empty() || !frame.observed.is_empty();
-        if !frame.events.is_empty() {
+        // A reset (a gap the stream could not replay) carries no events but
+        // may hide any change: journal readers such as chat badges re-read.
+        if !frame.events.is_empty() || frame.reset {
             cx.emit(BoardModelEvent::Events(frame.events));
         }
         if changed && frame.seq >= self.as_of_seq {

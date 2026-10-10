@@ -5726,6 +5726,112 @@ fn main() -> anyhow::Result<()> {
                     .filter_map(|row| row["id"].as_str().map(str::to_string))
                     .collect();
                 anyhow::ensure!(ids.len() == 52 && ids.contains(&automation_id), "Load more adds the rest once: {} ids", ids.len());
+                // LUN-2 (board-automation-ticket-fixes): an automation deleted
+                // outside this panel (the host path an agent's
+                // `automation_update` uses) while the page is hidden is never
+                // shown when the page opens again, not for a single frame;
+                // and one deleted while the page is visible leaves it within
+                // the host's change stream, before the 5 s poll. Before the
+                // fix the retained panel painted its cached rows until that
+                // poll. Every painted frame is kept as an artifact.
+                let first_ids: Vec<String> = first_page["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row["id"].as_str().filter(|id| id.starts_with("w20m-bulk-")).map(str::to_string))
+                    .collect();
+                anyhow::ensure!(first_ids.len() >= 2, "the first page holds paging rows to delete: {first_ids:?}");
+                let delete_outside = |id: String, revision: u64, request: String| {
+                    let reader = reader.clone();
+                    let owner = queue_device.clone();
+                    async move {
+                        let request = luna_proto::AutomationMutationRequest {
+                            request_id: request,
+                            automation_id: id,
+                            owner_host_id: owner,
+                            expected_revision: revision,
+                            operation: luna_proto::AutomationOperation::Delete,
+                            preview_id: String::new(),
+                            permission_ceiling: None,
+                        };
+                        let preview: luna_proto::AutomationPreview = reader
+                            .call_as(luna_rpc::methods::PREVIEW_AUTOMATION, serde_json::to_value(&request)?)
+                            .await?;
+                        let mut apply = request;
+                        apply.preview_id = preview.preview_id;
+                        let receipt: luna_proto::AutomationMutationReceipt = reader
+                            .call_as(luna_rpc::methods::MUTATE_AUTOMATION, serde_json::to_value(&apply)?)
+                            .await?;
+                        anyhow::ensure!(receipt.record.deleted, "the host deleted it: {:?}", receipt.record);
+                        anyhow::Ok(())
+                    }
+                };
+                let revision_of = |rb: &Value, id: &str| -> u64 {
+                    rb["rows"]
+                        .as_array()
+                        .and_then(|rows| rows.iter().find(|row| row["id"] == id))
+                        .and_then(|row| row["revision"].as_u64())
+                        .unwrap_or(0)
+                };
+                let hidden_victim = first_ids[0].clone();
+                let hidden_revision = revision_of(&all_pages, &hidden_victim);
+                window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                // At least one frame without the page, so it counts as hidden.
+                draw(window, cx)?;
+                settle(cx, 100).await;
+                draw(window, cx)?;
+                delete_outside(hidden_victim.clone(), hidden_revision, "lun2-hidden-delete".into()).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation_settings(cx))?;
+                let mut reveal_frames = Vec::new();
+                let mut reopened = Value::Null;
+                for _ in 0..80 {
+                    draw(window, cx)?;
+                    let rb = automations(window, cx, true)?;
+                    let shown: Vec<&str> = rb["rows"].as_array().into_iter().flatten().filter_map(|row| row["id"].as_str()).collect();
+                    let leaked = shown.contains(&hidden_victim.as_str());
+                    reveal_frames.push(serde_json::json!({
+                        "revalidating": rb["revalidating"], "loading": rb["loading"],
+                        "rows": shown.len(), "deletedShown": leaked, "watchSeq": rb["watchSeq"],
+                    }));
+                    if leaked {
+                        let _ = std::fs::write(output.join("w20m-lun2-reveal.json"), serde_json::to_vec_pretty(&reveal_frames).unwrap_or_default());
+                        anyhow::bail!("LUN-2: the reopened page painted {hidden_victim}, deleted while it was hidden: {rb}");
+                    }
+                    if rb["revalidating"] == false && rb["loading"] == false && !shown.is_empty() {
+                        reopened = rb;
+                        break;
+                    }
+                    settle(cx, 25).await;
+                }
+                std::fs::write(output.join("w20m-lun2-reveal.json"), serde_json::to_vec_pretty(&reveal_frames)?)?;
+                anyhow::ensure!(!reopened.is_null(), "LUN-2: the reopened page settles with its fresh rows: {reveal_frames:?}");
+                shot(window, cx, output.join("w20m-lun2-reopened.png")).await?;
+                let visible_victim = first_ids[1].clone();
+                let visible_revision = revision_of(&reopened, &visible_victim);
+                anyhow::ensure!(visible_revision > 0, "{visible_victim} is listed before its delete: {reopened}");
+                let deleted_at = std::time::Instant::now();
+                delete_outside(visible_victim.clone(), visible_revision, "lun2-visible-delete".into()).await?;
+                let gone = wait_automations(window, cx, true, "the visible page drops an automation deleted elsewhere", 30, |rb| {
+                    rb["rows"].as_array().is_some_and(|rows| !rows.is_empty() && !rows.iter().any(|row| row["id"] == visible_victim.as_str()))
+                })
+                .await?;
+                let gone_ms = deleted_at.elapsed().as_millis() as u64;
+                anyhow::ensure!(gone_ms < 4_000, "LUN-2: the change stream, not the 5 s poll, removed it ({gone_ms} ms)");
+                progress(&output, &mut record, "lun2StaleAutomations".into(), serde_json::json!({
+                    "hiddenDeleted": hidden_victim,
+                    "revealFrames": reveal_frames.len(),
+                    "visibleDeleted": visible_victim,
+                    "visibleGoneMs": gone_ms,
+                    "watchSeq": gone["watchSeq"],
+                }));
+                // LUN-1: the list in light and dark (the editor's own
+                // captures are w20m-automation-editor-pane and w20n).
+                cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
+                settle(cx, 300).await;
+                shot(window, cx, output.join("w20m-lun1-list-light.png")).await?;
+                cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
+                settle(cx, 200).await;
+                shot(window, cx, output.join("w20m-lun1-list-dark.png")).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
                 // w20n. Failure cases 73-83: the project-scoped manager and
                 // editor through the real RPC (docs/design/automations-workflow/
@@ -5849,6 +5955,14 @@ fn main() -> anyhow::Result<()> {
                 // reasoning is validated against the chosen model.
                 panel!(true, |p, c| p.fixture_set("kind", "interval", c));
                 panel!(true, |p, c| p.fixture_set("every", "60", c));
+                // The Once refusal ("Enter the time as HH:MM.") was about a
+                // form that no longer exists: an interval every hour reads
+                // as editable, not refused (a stale footer error before).
+                let after_switch = editor_of(cx)?;
+                anyhow::ensure!(
+                    after_switch["phase"] == "editing" && after_switch["built"] != "Enter the time as HH:MM.",
+                    "switching to a valid interval retires the earlier refusal: {after_switch}"
+                );
                 panel!(true, |p, c| p.fixture_set("notifications", "never", c));
                 panel!(true, |p, c| p.fixture_set("archive", "true", c));
                 panel!(true, |p, c| p.fixture_set("harness", "mock", c));
@@ -6243,6 +6357,71 @@ fn main() -> anyhow::Result<()> {
                     "Edit opens that automation's own editor: {}",
                     edited_from_card["editor"]
                 );
+                // LUN-2 (cards): a change made outside the card (the host
+                // path an agent uses) reaches the inline card through the
+                // change stream, not its 30 s freshness window; a read that
+                // was in flight when the frame arrived can't keep the old
+                // state (each frame fences earlier reads).
+                // The card store's own record (what Open and Edit route by),
+                // as the painted card describes it.
+                let card = |cx: &mut AsyncApp| -> anyhow::Result<Value> {
+                    Ok(cx.update(|cx| {
+                        luna_ui::automations::AutomationCards::global(cx)
+                            .read(cx)
+                            .record(&automation_id)
+                            .map(|record| {
+                                serde_json::json!({
+                                    "revision": record.revision,
+                                    "updatedAtMs": record.updated_at_ms,
+                                    "deleted": record.deleted,
+                                    "status": luna_ui::automations::Lifecycle::of(record).label(),
+                                })
+                            })
+                            .unwrap_or(Value::Null)
+                    }))
+                };
+                let before_card = card(cx)?;
+                let card_revision = before_card["revision"].as_u64().unwrap_or(0);
+                anyhow::ensure!(card_revision > 0 && before_card["deleted"] == false, "the card read its record: {before_card}");
+                // Back to the chat (still Main) so its card paints again.
+                window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                let request = luna_proto::AutomationMutationRequest {
+                    request_id: "lun2-card-delete".into(),
+                    automation_id: automation_id.clone(),
+                    owner_host_id: queue_device.clone(),
+                    expected_revision: card_revision,
+                    operation: luna_proto::AutomationOperation::Delete,
+                    preview_id: String::new(),
+                    permission_ceiling: None,
+                };
+                let preview: luna_proto::AutomationPreview = reader
+                    .call_as(luna_rpc::methods::PREVIEW_AUTOMATION, serde_json::to_value(&request)?)
+                    .await?;
+                let mut apply = request;
+                apply.preview_id = preview.preview_id;
+                reader.call(luna_rpc::methods::MUTATE_AUTOMATION, serde_json::to_value(&apply)?).await?;
+                let changed_at = std::time::Instant::now();
+                let mut card_frames = Vec::new();
+                let mut card_after = Value::Null;
+                for _ in 0..60 {
+                    draw(window, cx)?;
+                    let now = card(cx)?;
+                    card_frames.push(now.clone());
+                    if now["deleted"] == true && now["status"] == "Deleted" {
+                        card_after = now;
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                std::fs::write(output.join("w20n-lun2-card.json"), serde_json::to_vec_pretty(&card_frames)?)?;
+                let card_ms = changed_at.elapsed().as_millis() as u64;
+                anyhow::ensure!(
+                    !card_after.is_null() && card_ms < 4_000,
+                    "LUN-2: the inline card shows the deletion through the change stream ({card_ms} ms): {}",
+                    card_frames.last().cloned().unwrap_or(Value::Null)
+                );
+                shot(window, cx, output.join("w20n-lun2-card-deleted.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation_settings(cx))?;
                 window.update(cx, |shell, _, cx| {
                     shell.fixture_leave_settings(false, cx);
                     shell.fixture_set_space_filter(None, cx);

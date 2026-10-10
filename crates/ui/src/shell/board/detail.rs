@@ -31,7 +31,7 @@ use gpui::{
 use luna_proto::{
     BOARD_TITLE_MAX_CHARS, BoardAction, BoardAdmissionReason, BoardArchiveRequest,
     BoardAttentionKind, BoardChatRole, BoardColumn, BoardContextMode, BoardControlAction,
-    BoardControlRequest, BoardDestination, BoardError, BoardExecutionOptions,
+    BoardControlRequest, BoardDeleteRequest, BoardDestination, BoardError, BoardExecutionOptions,
     BoardExecutionOptionsRequest, BoardFollowUp, BoardItemChanges, BoardItemDetail,
     BoardMoveEffect, BoardMoveRequest, BoardMutationReceipt, BoardNavigationRequest,
     BoardNavigationTarget, BoardPhase, BoardReadRequest, BoardReceiptRequest,
@@ -740,7 +740,17 @@ impl EditTarget {
 }
 
 /// One in-place edit of the ticket against the revision it started from.
+/// One image of a brief being edited: already saved on the ticket's host,
+/// or staged on this device (uploaded to the host on Save).
+#[derive(Clone)]
+enum BriefImage {
+    Saved(String),
+    Staged(crate::attachments::StagedAttachment),
+}
+
 struct Edit {
+    /// The brief's images as edited (empty for the title and settings).
+    images: Vec<BriefImage>,
     base_revision: u64,
     saving: bool,
     error: Option<String>,
@@ -785,10 +795,14 @@ enum DetailAction {
     MoveToBacklog,
     Stop,
     Reopen,
-    Retry { adopt_latest: bool },
+    Retry {
+        adopt_latest: bool,
+    },
     Review,
     Archive,
     Unarchive,
+    /// Permanent: only after the drawer's own confirmation.
+    Delete,
 }
 
 impl DetailAction {
@@ -807,6 +821,7 @@ impl DetailAction {
             Self::Review => "review",
             Self::Archive => "archive",
             Self::Unarchive => "unarchive",
+            Self::Delete => "delete",
         }
     }
 
@@ -825,6 +840,7 @@ impl DetailAction {
             Self::Review => "Review now",
             Self::Archive => "Archive",
             Self::Unarchive => "Unarchive",
+            Self::Delete => "Delete ticket",
         }
     }
 }
@@ -848,6 +864,8 @@ pub struct BoardDetail {
     settings_edit: Option<Edit>,
     /// The action in flight and its request id (reused after a lost answer).
     pending_action: Option<(DetailAction, String)>,
+    /// The Delete confirmation is open (nothing is sent until its button).
+    confirm_delete: bool,
     action_task: Option<Task<()>>,
     pending_send: Option<String>,
     send_task: Option<Task<()>>,
@@ -855,6 +873,14 @@ pub struct BoardDetail {
     preview: Option<Result<BoardResolvedSettings, String>>,
     preview_task: Option<Task<()>>,
     expanded_launch: Option<String>,
+    /// Brief image reads in flight; images land in the chat thumbnails'
+    /// shared cache, so one already seen in a chat shows at once.
+    image_loads: std::collections::HashMap<crate::attachments::AttachmentKey, Task<()>>,
+    /// The brief image open full size, in the chat's lightbox.
+    image_preview: Option<crate::attachments::PreviewImage>,
+    image_preview_focus: FocusHandle,
+    /// The brief editor's image picker, while it is open.
+    image_picker: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -882,6 +908,17 @@ impl BoardDetail {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&model, |this, _, event: &BoardModelEvent, cx| {
+            // Deleted elsewhere (another surface or an agent): it can't be
+            // read again, so the drawer closes instead of showing an error.
+            if let BoardModelEvent::Events(events) = event
+                && events.iter().any(|event| {
+                    event.work_item_id == this.work_item_id
+                        && matches!(event.kind, luna_proto::WorkItemEventKind::Deleted)
+                })
+            {
+                cx.emit(BoardDetailEvent::Close);
+                return;
+            }
             let relevant = match event {
                 BoardModelEvent::Changed => true,
                 BoardModelEvent::Events(events) => events
@@ -898,6 +935,10 @@ impl BoardDetail {
             state,
             probe,
             focus: cx.focus_handle(),
+            image_loads: Default::default(),
+            image_preview: None,
+            image_preview_focus: cx.focus_handle(),
+            image_picker: None,
             scroll: ScrollHandle::new(),
             loaded: Loaded::Loading,
             options: None,
@@ -908,6 +949,7 @@ impl BoardDetail {
             brief_edit: None,
             settings_edit: None,
             pending_action: None,
+            confirm_delete: false,
             action_task: None,
             pending_send: None,
             send_task: None,
@@ -1098,7 +1140,17 @@ impl BoardDetail {
                 }
             });
         let focus = input.read(cx).focus_handle(cx);
+        let images = if target == EditTarget::Brief {
+            item.attachments
+                .iter()
+                .cloned()
+                .map(BriefImage::Saved)
+                .collect()
+        } else {
+            Vec::new()
+        };
         *self.edit_mut(target) = Some(Edit {
+            images,
             base_revision,
             saving: false,
             error: None,
@@ -1130,6 +1182,7 @@ impl BoardDetail {
             ExecutionSettingsEditor::new(model, state, project, draft, "detail", probe, None, cx)
         });
         self.settings_edit = Some(Edit {
+            images: Vec::new(),
             base_revision,
             saving: false,
             error: None,
@@ -1207,6 +1260,22 @@ impl BoardDetail {
             return;
         };
         let work_item_id = self.work_item_id.clone();
+        // The brief's images: saved paths stay, staged ones upload to the
+        // ticket's host first; the list is sent only when it changed.
+        let (saved_images, owner) = self
+            .ready()
+            .map(|detail| {
+                (
+                    detail.view.item.attachments.clone(),
+                    detail.view.item.owner_host_id.clone(),
+                )
+            })
+            .unwrap_or_default();
+        let (engine, local) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.local_device_id.clone())
+        };
+        let host = (local.as_deref() != Some(owner.as_str())).then_some(owner);
         let Some(edit) = self.edit_mut(target).as_mut() else {
             return;
         };
@@ -1227,7 +1296,8 @@ impl BoardDetail {
             .request_id
             .get_or_insert_with(|| new_request_id(target.key()))
             .clone();
-        let request = luna_proto::BoardUpdateRequest {
+        let images = edit.images.clone();
+        let mut request = luna_proto::BoardUpdateRequest {
             request_id: request_id.clone(),
             work_item_id,
             expected_revision: edit.base_revision,
@@ -1235,6 +1305,61 @@ impl BoardDetail {
         };
         cx.notify();
         cx.spawn(async move |this, cx| {
+            if target == EditTarget::Brief {
+                let mut paths = Vec::with_capacity(images.len());
+                for image in images {
+                    let attachment = match image {
+                        BriefImage::Saved(path) => {
+                            paths.push(path);
+                            continue;
+                        }
+                        BriefImage::Staged(attachment) => attachment,
+                    };
+                    let uploaded = match &engine {
+                        Some(engine) => {
+                            crate::attachments::upload_attachment(
+                                engine,
+                                cx.background_executor(),
+                                host.as_deref(),
+                                &uuid::Uuid::new_v4().to_string(),
+                                &attachment,
+                                None,
+                            )
+                            .await
+                        }
+                        None => Err("Engine not connected.".to_owned()),
+                    };
+                    match uploaded {
+                        Ok(path) => paths.push(path),
+                        Err(error) => {
+                            tracing::warn!(%error, "brief image upload failed");
+                            let name = attachment.name.clone();
+                            this.update(cx, |detail, cx| {
+                                if let Some(edit) = detail.brief_edit.as_mut() {
+                                    edit.saving = false;
+                                    edit.error =
+                                        Some(format!("{name} couldn't upload; nothing was saved."));
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                            return;
+                        }
+                    }
+                }
+                // Uploaded images are saved from now on, so a retry after a
+                // lost answer sends this exact request again.
+                let kept = paths.clone();
+                this.update(cx, |detail, _| {
+                    if let Some(edit) = detail.brief_edit.as_mut() {
+                        edit.images = kept.into_iter().map(BriefImage::Saved).collect();
+                    }
+                })
+                .ok();
+                if paths != saved_images {
+                    request.changes.attachments = Some(paths);
+                }
+            }
             let result = match api.update(request).await {
                 Err(BoardCallError::Lost) => reconcile(&api, request_id).await,
                 other => other,
@@ -1450,6 +1575,7 @@ impl BoardDetail {
             Control(BoardControlRequest),
             Review(BoardReviewStartRequest),
             Archive(BoardArchiveRequest),
+            Delete(BoardDeleteRequest),
         }
         let call = match action {
             DetailAction::Start | DetailAction::Continue | DetailAction::MoveToReady => {
@@ -1482,7 +1608,13 @@ impl BoardDetail {
                 archived: action == DetailAction::Archive,
                 expected_revision: Some(revision),
             }),
+            DetailAction::Delete => Call::Delete(BoardDeleteRequest {
+                request_id: request_id.clone(),
+                work_item_id: work_item_id.clone(),
+                expected_revision: revision,
+            }),
         };
+        self.confirm_delete = false;
         self.action_task = Some(cx.spawn(async move |this, cx| {
             // (receipt to show, effect text)
             let result: Result<(Option<BoardMutationReceipt>, String), BoardCallError> = match call
@@ -1516,6 +1648,14 @@ impl BoardDetail {
                         (Some(receipt), text.to_owned())
                     })
                 }
+                Call::Delete(request) => api.delete(request).await.map(|receipt| {
+                    (
+                        Some(receipt),
+                        "Deleted. Its chats, files and GitHub issue are kept; its number is never \
+                         reused."
+                            .to_owned(),
+                    )
+                }),
             };
             let result = match result {
                 Err(BoardCallError::Lost) => {
@@ -1544,6 +1684,15 @@ impl BoardDetail {
             Ok((receipt, text)) => {
                 self.pending_action = None;
                 self.set_notice(NoticeTone::Success, text);
+                // A deleted ticket can't be read again: the board drops it
+                // and the drawer closes.
+                if let Some(receipt) = receipt.as_ref().filter(|receipt| receipt.item.deleted) {
+                    self.model
+                        .update(cx, |model, cx| model.apply_receipt(receipt, cx));
+                    cx.emit(BoardDetailEvent::Close);
+                    cx.notify();
+                    return;
+                }
                 match receipt {
                     Some(receipt) => self.apply_receipt(&receipt, cx),
                     None => self.reload(cx),
@@ -2280,6 +2429,309 @@ impl BoardDetail {
         card.into_any_element()
     }
 
+    /// Read the brief's images from the ticket's owning host into the
+    /// shared attachment cache (each read claimed once; an error retries on
+    /// a later paint after its backoff, as in chat).
+    fn load_brief_images(&mut self, cx: &mut Context<Self>) {
+        use crate::attachments::{
+            AttachmentKey, AttachmentLoadGuard, begin_load_for, read_attachment_image,
+            store_error_for, store_loaded_for,
+        };
+        let Some(detail) = self.ready() else {
+            return;
+        };
+        let owner = detail.view.item.owner_host_id.clone();
+        let paths = detail.view.item.attachments.clone();
+        let (engine, local) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.local_device_id.clone())
+        };
+        for path in paths {
+            let key = AttachmentKey::new(&owner, &path, None);
+            if !begin_load_for(&key) {
+                continue;
+            }
+            let Some(engine) = engine.clone() else {
+                store_error_for(&key);
+                continue;
+            };
+            // Relay through the owner only when it is another device.
+            let target = (local.as_deref() != Some(owner.as_str())).then(|| owner.clone());
+            let claim = AttachmentLoadGuard(key.clone());
+            let task_key = key.clone();
+            let task = cx.spawn(async move |this, cx| {
+                let _claim = claim;
+                match read_attachment_image(
+                    &engine,
+                    cx.background_executor(),
+                    target.as_deref(),
+                    &path,
+                    None,
+                )
+                .await
+                {
+                    Some(loaded) => store_loaded_for(&task_key, loaded.name.into(), loaded.image),
+                    None => store_error_for(&task_key),
+                }
+                this.update(cx, |detail, cx| {
+                    detail.image_loads.remove(&task_key);
+                    cx.notify();
+                })
+                .ok();
+            });
+            self.image_loads.insert(key, task);
+        }
+    }
+
+    /// The brief's images as the chat shows a message's: a wrapping strip
+    /// of thumbnails that open full size; a pulsing tile while one loads and
+    /// a dashed one when it can't be read.
+    fn render_brief_images(
+        &self,
+        detail: &BoardItemDetail,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use crate::attachments::{AttachmentKey, AttachmentSnapshot, attachment_snapshot_for};
+        const THUMB_W: f32 = 112.0;
+        const THUMB_H: f32 = 80.0;
+        let item = &detail.view.item;
+        if item.attachments.is_empty() {
+            return None;
+        }
+        let count = item.attachments.len();
+        self.probe.text("detail-brief-images", count.to_string());
+        let mut strip = div()
+            .id("detail-brief-images")
+            .role(gpui::Role::Group)
+            .aria_label(if count == 1 {
+                "1 image".to_string()
+            } else {
+                format!("{count} images")
+            })
+            .w_full()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(8.0));
+        for (index, path) in item.attachments.iter().enumerate() {
+            let name = path.rsplit('/').next().unwrap_or(path).to_string();
+            let frame = div()
+                .id(SharedString::from(format!("detail-brief-image-{index}")))
+                .relative()
+                .children(self.probe.bounds_el(format!("detail-brief-image-{index}")))
+                .flex_none()
+                .w(px(THUMB_W))
+                .h(px(THUMB_H))
+                .rounded(px(crate::theme::radius::MD))
+                .overflow_hidden();
+            let thumb =
+                match attachment_snapshot_for(&AttachmentKey::new(&item.owner_host_id, path, None))
+                {
+                    AttachmentSnapshot::Loaded(image) => {
+                        let preview = crate::attachments::PreviewImage::new(
+                            image.name.clone(),
+                            image.image.clone(),
+                        );
+                        let focus_ring = theme.focus_ring();
+                        frame
+                            .role(gpui::Role::Button)
+                            .aria_label(format!("Open image {}", image.name))
+                            .tab_index(0)
+                            .border_1()
+                            .border_color(crate::theme::hairline(0.11))
+                            .bg(crate::theme::ink(0.035))
+                            .cursor_pointer()
+                            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                preview.viewer.reset();
+                                this.image_preview = Some(preview.clone());
+                                window.focus(&this.image_preview_focus, cx);
+                                cx.notify();
+                            }))
+                            .child(
+                                // Explicit dims: the image keeps its own rounded
+                                // corners inside the frame's rectangular clip.
+                                gpui::img(image.image.clone())
+                                    .w(px(THUMB_W - 2.0))
+                                    .h(px(THUMB_H - 2.0))
+                                    .rounded(px(crate::theme::radius::MD))
+                                    .object_fit(gpui::ObjectFit::Cover),
+                            )
+                    }
+                    AttachmentSnapshot::Error { .. } => frame
+                        .role(gpui::Role::Image)
+                        .aria_label(format!("{name} could not be loaded"))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(crate::theme::hairline(0.14))
+                        .bg(crate::theme::ink(0.025))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            crate::icons::icon(crate::icons::DANGER_CIRCLE)
+                                .size(ui_rems(14.0))
+                                .text_color(theme.readable_muted(0.7)),
+                        ),
+                    AttachmentSnapshot::Loading => frame
+                        .role(gpui::Role::Image)
+                        .aria_label(format!("Loading {name}"))
+                        .border_1()
+                        .border_color(crate::theme::hairline(0.08))
+                        .bg(crate::theme::ink(0.055)),
+                };
+            strip = strip.child(thumb);
+        }
+        Some(strip.into_any_element())
+    }
+
+    /// Stage image files for the brief being edited (a drop or the picker);
+    /// anything that isn't a supported image says so in the editor.
+    fn add_brief_images(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let Some(edit) = self.brief_edit.as_mut() else {
+            return;
+        };
+        for path in paths {
+            match crate::attachments::stage_file(&path) {
+                Ok(staged) => edit.images.push(BriefImage::Staged(staged)),
+                Err(error) => edit.error = Some(error),
+            }
+        }
+        cx.notify();
+    }
+
+    /// The native image picker for the brief being edited.
+    fn pick_brief_images(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add".into()),
+        });
+        self.image_picker = Some(cx.spawn(async move |this, cx| {
+            let result = rx.await;
+            this.update(cx, |detail, cx| {
+                detail.image_picker = None;
+                if let Ok(Ok(Some(paths))) = result {
+                    detail.add_brief_images(paths, cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The brief editor's images: each thumbnail with its Remove control,
+    /// then Add image. Saving sends the list only when it changed.
+    fn render_brief_image_editor(
+        &self,
+        edit: &Edit,
+        owner: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::attachments::{AttachmentKey, AttachmentSnapshot, attachment_snapshot_for};
+        const THUMB_W: f32 = 112.0;
+        const THUMB_H: f32 = 80.0;
+        let mut strip = div()
+            .id("detail-brief-edit-images")
+            .role(gpui::Role::Group)
+            .aria_label("Brief images")
+            .w_full()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.0));
+        for (index, image) in edit.images.iter().enumerate() {
+            let (name, picture) = match image {
+                BriefImage::Saved(path) => {
+                    let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                    let picture =
+                        match attachment_snapshot_for(&AttachmentKey::new(owner, path, None)) {
+                            AttachmentSnapshot::Loaded(image) => Some(image.image),
+                            _ => None,
+                        };
+                    (name, picture)
+                }
+                BriefImage::Staged(staged) => (staged.name.clone(), Some(staged.image.clone())),
+            };
+            let remove_id = format!("detail-brief-image-remove-{index}");
+            let remove = button::icon_button(
+                SharedString::from(remove_id.clone()),
+                crate::icons::CLOSE,
+                ControlSize::Sm,
+                !edit.saving,
+                theme,
+            )
+            .aria_label(format!("Remove image {name}"))
+            .tooltip(crate::popover::text_tooltip("Remove image"))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+            .when(!edit.saving, |button| {
+                button.on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(edit) = this.brief_edit.as_mut()
+                        && index < edit.images.len()
+                    {
+                        edit.images.remove(index);
+                    }
+                    cx.notify();
+                }))
+            })
+            .children(self.probe.bounds_el(remove_id.clone()))
+            .absolute()
+            .top(px(4.0))
+            .right(px(4.0))
+            .rounded_full()
+            .bg(theme.bg.opacity(0.85));
+            let frame = div()
+                .id(SharedString::from(format!(
+                    "detail-brief-edit-image-{index}"
+                )))
+                .relative()
+                .flex_none()
+                .w(px(THUMB_W))
+                .h(px(THUMB_H))
+                .rounded(px(crate::theme::radius::MD))
+                .overflow_hidden()
+                .border_1()
+                .border_color(crate::theme::hairline(0.11))
+                .bg(crate::theme::ink(0.035));
+            let frame = match picture {
+                Some(picture) => frame.child(
+                    gpui::img(picture)
+                        .w(px(THUMB_W - 2.0))
+                        .h(px(THUMB_H - 2.0))
+                        .rounded(px(crate::theme::radius::MD))
+                        .object_fit(gpui::ObjectFit::Cover),
+                ),
+                None => frame,
+            };
+            strip = strip.child(frame.child(remove));
+        }
+        let add = self
+            .button(
+                "detail-brief-image-add",
+                "Add image",
+                ButtonKind::Ghost,
+                !edit.saving && self.image_picker.is_none(),
+                theme,
+            )
+            .child(button::glyph(crate::icons::PLUS, ControlSize::Sm))
+            .on_click(cx.listener(|this, _, _, cx| this.pick_brief_images(cx)));
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(6.0))
+            .child(strip.child(add))
+            .child(widgets::row_description(
+                theme,
+                "Drop images on the brief or add them here; they upload when you save.",
+            ))
+            .into_any_element()
+    }
+
     fn render_brief(
         &self,
         detail: &BoardItemDetail,
@@ -2332,6 +2784,12 @@ impl BoardDetail {
                             cx.stop_propagation();
                         }
                     }))
+                    // Images dropped anywhere on the brief editor join it
+                    // (the chat composer behind the drawer never gets them).
+                    .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                        cx.stop_propagation();
+                        this.add_brief_images(paths.paths().to_vec(), cx);
+                    }))
                     .child(widgets::row_description(theme, note));
                 if let Some(input) = edit.input.clone() {
                     let focus = input.read(cx).focus_handle(cx);
@@ -2351,6 +2809,12 @@ impl BoardDetail {
                             .children(self.probe.bounds_el("detail-brief-input")),
                     );
                 }
+                editor = editor.child(self.render_brief_image_editor(
+                    edit,
+                    &item.owner_host_id,
+                    theme,
+                    cx,
+                ));
                 editor = editor
                     .children(self.conflict_banner(EditTarget::Brief, edit, theme, cx))
                     .children(edit.error.as_ref().map(|error| {
@@ -2410,6 +2874,9 @@ impl BoardDetail {
                             .child(body),
                     ),
                 );
+                if let Some(images) = self.render_brief_images(detail, theme, cx) {
+                    card = card.child(widgets::card_row(theme, false).child(images));
+                }
                 let mut controls = widgets::row_block();
                 if view.actions.contains(&BoardAction::Edit) {
                     controls = controls.child(
@@ -2949,6 +3416,144 @@ impl BoardDetail {
         )
     }
 
+    /// Delete: permanent, so it asks first in place. The engine offers it
+    /// only for a settled ticket; a ticket in Ready or still working says
+    /// what to do first instead of offering a button that would be refused.
+    fn render_delete(
+        &self,
+        detail: &BoardItemDetail,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let view = &detail.view;
+        if view.item.deleted {
+            return None;
+        }
+        // The engine decides: Delete is offered only once nothing works on
+        // the ticket. Otherwise the row stays, disabled, saying what to
+        // settle first (a Done ticket is never told to move to Backlog).
+        let offered = view.actions.contains(&BoardAction::Delete);
+        let busy = self.action_task.is_some();
+        let key = view.item.key.clone();
+        let reason = if offered {
+            "Removes the ticket for good. There is no undo or restore."
+        } else if view.item.column == BoardColumn::Ready {
+            "Move it to Backlog first. A ticket in Ready can't be deleted, and any chat or \
+             review still working on it has to finish or be stopped."
+        } else {
+            "Something is still working on this ticket: a running or queued turn in its \
+             chats, background work, a review, or a chat that isn't available right now. Let \
+             it finish or stop it, then delete."
+        };
+        let mut row = widgets::card_row(theme, false).child(widgets::row_text(
+            theme,
+            "Delete ticket",
+            Some(reason.into()),
+        ));
+        if !self.confirm_delete || !offered {
+            row = row.child(
+                widgets::row_controls().child(
+                    self.button(
+                        "detail-action-delete-ask",
+                        "Delete…",
+                        ButtonKind::Ghost,
+                        offered && !busy,
+                        theme,
+                    )
+                    .child(button::glyph(
+                        crate::icons::TRASH_BIN_MINIMALISTIC,
+                        ControlSize::Sm,
+                    ))
+                    .when(offered && !busy, |button| {
+                        button.on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_delete = true;
+                            cx.notify();
+                        }))
+                    }),
+                ),
+            );
+            return Some(row.into_any_element());
+        }
+        let danger = theme.readable_tone(theme.danger_muted, 1.0);
+        let confirm = div()
+            .id("detail-delete-confirm")
+            .role(gpui::Role::Dialog)
+            .aria_label(format!("Delete {key} permanently?"))
+            .w_full()
+            .p(ui_rems(12.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(danger.opacity(0.35))
+            .bg(theme.fill(crate::theme::FillTier::Quaternary))
+            .flex()
+            .flex_col()
+            .gap(ui_rems(6.0))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.confirm_delete = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(widgets::row_title(
+                theme,
+                format!("Delete {key} permanently?"),
+            ))
+            .child(widgets::row_description(
+                theme,
+                format!(
+                    "The ticket leaves the board, search and every chat's related tickets. {key} \
+                     is never reused, and its history stays in the board's records."
+                ),
+            ))
+            .child(
+                widgets::row_description(
+                    theme,
+                    "Kept: its chats, files and Git branches, and any GitHub issue. Delete them \
+                     separately if you want them gone.",
+                )
+                .text_color(theme.text),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .mt(ui_rems(4.0))
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap(ui_rems(8.0))
+                    .child(
+                        self.button(
+                            "detail-delete-cancel",
+                            "Cancel",
+                            ButtonKind::Ghost,
+                            !busy,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_delete = false;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        self.button(
+                            "detail-action-delete",
+                            DetailAction::Delete.label(),
+                            ButtonKind::Danger,
+                            !busy,
+                            theme,
+                        )
+                        .when(!busy, |button| {
+                            button.on_click(cx.listener(|this, _, _, cx| {
+                                this.run_action(DetailAction::Delete, cx)
+                            }))
+                        }),
+                    ),
+            );
+        Some(row.child(confirm).into_any_element())
+    }
+
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_state(&self, window: &Window, cx: &App) -> serde_json::Value {
         let edit_state = |edit: &Option<Edit>| match edit {
@@ -2961,6 +3566,10 @@ impl BoardDetail {
                 "text": edit.input.as_ref().map(|input| input.read(cx).text().to_owned()),
                 "focused": edit.input.as_ref().map(|input| input.read(cx).focus_handle(cx).is_focused(window)),
                 "settings": edit.editor.as_ref().map(|editor| editor.read(cx).fixture_state(cx)),
+                "images": edit.images.iter().map(|image| match image {
+                    BriefImage::Saved(path) => serde_json::json!({ "saved": path }),
+                    BriefImage::Staged(staged) => serde_json::json!({ "staged": staged.name }),
+                }).collect::<Vec<_>>(),
             }),
         };
         let (loaded, detail) = match &self.loaded {
@@ -2995,6 +3604,23 @@ impl BoardDetail {
             },
             "actionInFlight": self.action_task.is_some(),
             "pendingAction": self.pending_action.as_ref().map(|(action, _)| action.key()),
+            "confirmDelete": self.confirm_delete,
+            "imagePreview": self.image_preview.as_ref().map(|preview| preview.name.to_string()),
+            "images": match &self.loaded {
+                Loaded::Ready(detail) => detail.view.item.attachments.iter().map(|path| {
+                    use crate::attachments::{AttachmentKey, AttachmentSnapshot, attachment_snapshot_for};
+                    let key = AttachmentKey::new(&detail.view.item.owner_host_id, path, None);
+                    serde_json::json!({
+                        "path": path,
+                        "state": match attachment_snapshot_for(&key) {
+                            AttachmentSnapshot::Loaded(_) => "loaded",
+                            AttachmentSnapshot::Loading => "loading",
+                            AttachmentSnapshot::Error { .. } => "error",
+                        },
+                    })
+                }).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            },
             "notice": self.notice.as_ref().map(|notice| serde_json::json!({
                 "tone": notice.tone.key(),
                 "text": notice.text,
@@ -3016,8 +3642,9 @@ async fn reconcile(
 }
 
 impl Render for BoardDetail {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        self.load_brief_images(cx);
         // The root tracks focus (a press anywhere focuses the drawer, so
         // Escape reaches it); the header stays put and only the body scrolls.
         let root = div()
@@ -3121,6 +3748,7 @@ impl Render for BoardDetail {
             .children(self.render_issues(&detail, &theme, cx))
             .children(self.render_dependencies(&detail, &theme, cx))
             .children(self.render_archive(&detail, &theme, cx))
+            .children(self.render_delete(&detail, &theme, cx))
             .children(self.probe.bounds_el("detail-body"));
         // The scroller fills a non-scrolling frame, whose bounds are the
         // visible body area (the probe there never moves with the content).
@@ -3130,6 +3758,25 @@ impl Render for BoardDetail {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .child(body);
+        // A brief image open full size: the chat's lightbox, closed by
+        // Escape, its button or the backdrop; the drawer keeps the keyboard.
+        let lightbox = self.image_preview.as_ref().map(|preview| {
+            let this = cx.entity().downgrade();
+            crate::attachments::lightbox(
+                window,
+                preview,
+                &self.image_preview_focus,
+                move |window, cx| {
+                    this.update(cx, |detail, cx| {
+                        detail.image_preview = None;
+                        window.focus(&detail.focus, cx);
+                        cx.notify();
+                    })
+                    .ok();
+                },
+                cx,
+            )
+        });
         root.child(header)
             .child(
                 div()
@@ -3140,6 +3787,7 @@ impl Render for BoardDetail {
                     .child(scroller)
                     .children(self.probe.bounds_el("detail-scroll")),
             )
+            .children(lightbox)
             .into_any_element()
     }
 }

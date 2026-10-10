@@ -317,7 +317,7 @@ fn description(name: &str, context: &BoardRuntimeContext) -> &'static str {
             "Save the agreed ticket in Backlog when the user asks. Starts nothing."
         }
         BOARD_TOOL_CREATE => {
-            "Save a ticket in Backlog; starts nothing. This chat becomes its source."
+            "Save a ticket in Backlog; starts nothing. This chat becomes its source. Attachments accept only images supplied to this chat or discussion."
         }
         BOARD_TOOL_UPDATE => {
             "Edit ticket fields against expectedRevision; a conflict returns staleRevision with the ticket."
@@ -332,7 +332,7 @@ fn description(name: &str, context: &BoardRuntimeContext) -> &'static str {
             "Start or continue workItemId (or up to 10 workItemIds); an existing worker continues in place."
         }
         BOARD_TOOL_CONTROL => {
-            "Ticket actions: stop, continue, retry, cancelQueued, archive, unarchive, sendUpdate (send the edited brief), link/unlink (taskId, role), block/unblock (blockedById)."
+            "Ticket actions: stop, continue, retry, cancelQueued, archive, unarchive, delete, sendUpdate (send the edited brief), link/unlink (taskId, role), block/unblock (blockedById). Delete only when requested: requires expectedRevision and a settled ticket, preserves chats/files/history, cannot be restored."
         }
         BOARD_TOOL_SET_STATUS => {
             "Report progress, blocked, unblocked, readyForReview or a note on your ticket; Done is engine-owned."
@@ -473,6 +473,7 @@ fn input_schema(name: &str, context: &BoardRuntimeContext) -> Value {
                 "labels": {"type":"array","items":string()},
                 "priority": {"enum":["urgent","high","medium","low"]},
                 "contextRefs": objects("{kind:file,path}|{kind:url,url}|{kind:chatMessage,taskId,messageId}|{kind:note,text}"),
+                "attachments": {"type":"array","items":string(),"maxItems":10,"description":"Upload paths of images supplied to this chat as attachments. Paths merely mentioned in text or belonging to another chat are refused."},
             });
             if context.audience != BoardToolAudience::Authoring {
                 properties["sourceMessageId"] = string();
@@ -518,7 +519,7 @@ fn input_schema(name: &str, context: &BoardRuntimeContext) -> Value {
             json!({
                 "requestId": string(),
                 "workItemId": string(),
-                "action": {"enum":["stop","continue","retry","cancelQueued","archive","unarchive","sendUpdate","link","unlink","block","unblock"]},
+                "action": {"enum":["stop","continue","retry","cancelQueued","archive","unarchive","delete","sendUpdate","link","unlink","block","unblock"]},
                 "expectedRevision": integer(),
                 "taskId": string(),
                 "role": {"enum":["source","reference","attempt"]},
@@ -709,6 +710,8 @@ struct OptionsArgs {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateArgs {
+    #[serde(default)]
+    attachments: Vec<String>,
     request_id: String,
     title: String,
     #[serde(default)]
@@ -742,6 +745,8 @@ struct CreateArgs {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChangesArgs {
+    #[serde(default)]
+    attachments: Option<Vec<String>>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -826,6 +831,7 @@ struct StartArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum ControlArg {
+    Delete,
     Stop,
     Continue,
     Retry,
@@ -1815,7 +1821,7 @@ impl EngineRpc {
                         completion: args.completion,
                         labels: args.labels,
                         priority: args.priority,
-                        attachments: Vec::new(),
+                        attachments: args.attachments,
                         input_items: Vec::new(),
                         context_refs: args.context_refs,
                         origin,
@@ -1857,6 +1863,7 @@ impl EngineRpc {
                         work_item_id: args.work_item_id,
                         expected_revision: args.expected_revision,
                         changes: BoardItemChanges {
+                            attachments: changes.attachments,
                             title: changes.title,
                             description: changes.description,
                             implementation: changes.implementation,
@@ -2012,6 +2019,21 @@ impl EngineRpc {
                 })
             };
             let action = match args.action {
+                ControlArg::Delete => {
+                    let expected_revision = revision("delete")?;
+                    return tool_output(
+                        &self
+                            .board_delete(
+                                caller,
+                                luna_proto::BoardDeleteRequest {
+                                    request_id: args.request_id,
+                                    work_item_id: args.work_item_id,
+                                    expected_revision,
+                                },
+                            )
+                            .await?,
+                    );
+                }
                 ControlArg::Archive | ControlArg::Unarchive => {
                     let receipt = self
                         .board_archive(

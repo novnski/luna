@@ -355,6 +355,10 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/automations.sql"),
     // v19 — project board tickets, receipts, journal and linked records.
     include_str!("migrations/board.sql"),
+    // v20 fences older writers from dropping deletion tombstones or allocating
+    // legacy binary ranks after the bounded-rank upgrade.
+    "ALTER TABLE board_items ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+     CREATE INDEX board_items_live_order ON board_items(owner_host_id,deleted,archived,project_id,column_order,rank,id);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -559,6 +563,7 @@ pub struct DocsStore {
     // Bumped after every committed board mutation so in-process watchers wake
     // without polling the journal.
     board_changes: tokio::sync::watch::Sender<u64>,
+    automation_changes: tokio::sync::watch::Sender<luna_proto::AutomationWatchFrame>,
     // Last field: release the path reservation after both connections close.
     _registration: OpenRegistration,
 }
@@ -625,6 +630,10 @@ impl DocsStore {
             failed_publications: Mutex::new(HashSet::new()),
             write_epoch,
             board_changes: tokio::sync::watch::channel(0).0,
+            automation_changes: tokio::sync::watch::channel(luna_proto::AutomationWatchFrame {
+                seq: 0,
+            })
+            .0,
             _registration: registration,
         })
     }
@@ -2565,6 +2574,35 @@ impl DocsStore {
         )?;
         Ok(statement
             .query_map(params![task_id], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Durable provenance for structured user uploads reaching a host's chat.
+    /// Never populated by parsing arbitrary text. Also protects the blob from
+    /// draft/queue cleanup after the queue row has been consumed.
+    pub fn record_chat_attachments(
+        &self,
+        device_id: &str,
+        chat_id: &str,
+        paths: &[String],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for path in paths {
+            tx.execute("INSERT OR IGNORE INTO attachment_owners(device_id,blob_path,owner_kind,owner_id,created_at) VALUES(?1,?2,'chat',?3,?4)", params![device_id, path, chat_id, now_ms()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn chat_attachments(
+        &self,
+        device_id: &str,
+        chat_id: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn();
+        let mut q = conn.prepare("SELECT blob_path FROM attachment_owners WHERE device_id=?1 AND owner_kind='chat' AND owner_id=?2 ORDER BY blob_path")?;
+        Ok(q.query_map(params![device_id, chat_id], |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?)
     }
 

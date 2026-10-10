@@ -267,6 +267,18 @@ impl Fixture {
     /// Write a plan, dispatch it to `chat`, wait for the turn to settle with
     /// no approval card, and return the fake CLI's results.
     pub async fn run_plan(&self, chat: &str, label: &str, plan: &[Value]) -> Value {
+        self.run_plan_inputs(chat, label, plan, None).await
+    }
+
+    /// When inputs are supplied, use the real durable UI send command so the
+    /// attachment test crosses upload -> chat -> private provider MCP.
+    pub async fn run_plan_inputs(
+        &self,
+        chat: &str,
+        label: &str,
+        plan: &[Value],
+        inputs: Option<(Vec<String>, String)>,
+    ) -> Value {
         let results = self
             .project_a
             .join(format!("{}{label}.json", self.provider.results_prefix));
@@ -279,19 +291,28 @@ impl Fixture {
         .unwrap();
         self.wait_idle(chat).await;
         let (_, mut events) = self.core.sessions.subscribe(chat, 0).unwrap();
-        self.core
-            .sessions
-            .dispatch(
-                chat,
-                self.provider.harness,
-                run_request(
-                    &format!("{}{label}", self.provider.plan_prompt),
-                    &self.project_a,
-                ),
-                Some(format!("board-tools-{label}")),
-            )
-            .await
-            .unwrap();
+        if let Some((attachments, extra_text)) = inputs {
+            let mut request = run_request(
+                &format!("{}{label}\n{extra_text}", self.provider.plan_prompt),
+                &self.project_a,
+            );
+            request.attachments = attachments;
+            self.rpc_ok("QueueCommand", json!({"chatId":chat,"command":{"kind":"run","request":request,"messageId":format!("board-tools-{label}")}})).await;
+        } else {
+            self.core
+                .sessions
+                .dispatch(
+                    chat,
+                    self.provider.harness,
+                    run_request(
+                        &format!("{}{label}", self.provider.plan_prompt),
+                        &self.project_a,
+                    ),
+                    Some(format!("board-tools-{label}")),
+                )
+                .await
+                .unwrap();
+        }
         let status = tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 match events.recv().await.unwrap().event {

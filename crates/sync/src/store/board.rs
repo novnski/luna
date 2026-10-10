@@ -12,7 +12,7 @@ use luna_proto::{
     BoardActor, BoardArchivedFilter, BoardColumn, BoardDependency, BoardExecutionIntent,
     BoardMutationReceipt, BoardPlacement, BoardProjectSummary, IssueReference, LaunchSnapshot,
     OutcomeReference, ReviewRun, TicketAuthoringSession, WorkItem, WorkItemEvent,
-    WorkItemEventKind, WorkItemTaskLink, pin_order_between,
+    WorkItemEventKind, WorkItemTaskLink,
 };
 
 /// Where a ticket lands within its column.
@@ -212,9 +212,9 @@ fn get_item(c: &Connection, id: &str) -> Result<Option<WorkItem>, StoreError> {
 
 fn write_item(c: &Connection, item: &WorkItem) -> Result<(), StoreError> {
     c.execute(
-        "INSERT INTO board_items(id,project_id,owner_host_id,number,key,column_name,column_order,archived,rank,revision,search_text,created_at_ms,updated_at_ms,record)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
-         ON CONFLICT(id) DO UPDATE SET column_name=excluded.column_name,column_order=excluded.column_order,archived=excluded.archived,rank=excluded.rank,revision=excluded.revision,search_text=excluded.search_text,updated_at_ms=excluded.updated_at_ms,record=excluded.record",
+        "INSERT INTO board_items(id,project_id,owner_host_id,number,key,column_name,column_order,archived,rank,revision,search_text,created_at_ms,updated_at_ms,record,deleted)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+         ON CONFLICT(id) DO UPDATE SET column_name=excluded.column_name,column_order=excluded.column_order,archived=excluded.archived,rank=excluded.rank,revision=excluded.revision,search_text=excluded.search_text,updated_at_ms=excluded.updated_at_ms,record=excluded.record,deleted=excluded.deleted",
         params![
             item.id,
             item.project_id,
@@ -230,9 +230,24 @@ fn write_item(c: &Connection, item: &WorkItem) -> Result<(), StoreError> {
             item.created_at_ms,
             item.updated_at_ms,
             json(item)?,
+            item.deleted,
         ],
     )
     .map_err(|e| constrained(e, "ticket number already allocated"))?;
+    // Historical launch snapshots can still reference earlier brief images.
+    // Keep ownership when edited/deleted so chat cleanup cannot unlink them.
+    for path in &item.attachments {
+        c.execute("INSERT OR IGNORE INTO attachment_owners(device_id,blob_path,owner_kind,owner_id,created_at) VALUES(?1,?2,'board',?3,?4)", params![item.owner_host_id, path, item.id, item.created_at_ms])?;
+    }
+    if item.deleted {
+        c.execute("UPDATE board_task_links SET active=0,record=CAST(json_set(CAST(record AS TEXT),'$.active',json('false'),'$.unlinkedAtMs',?2) AS BLOB) WHERE work_item_id=?1 AND active=1", params![item.id, item.updated_at_ms])?;
+        c.execute("UPDATE board_issue_refs SET active=0,record=CAST(json_set(CAST(record AS TEXT),'$.active',json('false')) AS BLOB) WHERE work_item_id=?1 AND active=1", [&item.id])?;
+        c.execute(
+            "DELETE FROM board_dependencies WHERE work_item_id=?1 OR blocked_by_id=?1",
+            [&item.id],
+        )?;
+        c.execute("UPDATE board_intents SET needs_reconcile=0,desired='backlog',record=CAST(json_set(CAST(record AS TEXT),'$.needsReconcile',json('false'),'$.desired','backlog') AS BLOB) WHERE work_item_id=?1", [&item.id])?;
+    }
     Ok(())
 }
 
@@ -244,7 +259,7 @@ fn column_ranks(
     skip: Option<&str>,
 ) -> Result<Vec<(String, String)>, StoreError> {
     let mut q = c.prepare(
-        "SELECT id,rank FROM board_items WHERE project_id=?1 AND column_order=?2 AND archived=0 ORDER BY rank,id",
+        "SELECT id,rank FROM board_items WHERE project_id=?1 AND column_order=?2 AND archived=0 AND deleted=0 ORDER BY rank,id",
     )?;
     let rows = q
         .query_map(params![project_id, column.order()], |r| {
@@ -257,10 +272,31 @@ fn column_ranks(
         .collect())
 }
 
-fn between(lower: Option<&str>, upper: Option<&str>) -> Result<String, StoreError> {
-    pin_order_between(lower, upper)
-        .or_else(|_| pin_order_between(lower, None))
-        .map_err(|e| StoreError::BoardConflict(format!("rank: {e}")))
+const RANK_MAX: u64 = (1 << 60) - 1;
+
+fn rank_value(rank: &str) -> Option<u64> {
+    (rank.len() == 16 && rank.starts_with('r'))
+        .then(|| u64::from_str_radix(&rank[1..], 16).ok())
+        .flatten()
+}
+
+/// Give every retained item space on both sides, preserving the exact legacy
+/// (rank,id) order, including archived tickets. Runs inside the caller's commit.
+fn compact_ranks(c: &Connection, project: &str, column: BoardColumn) -> Result<(), StoreError> {
+    let mut items: Vec<WorkItem> = query_records(
+        c,
+        "SELECT record FROM board_items WHERE project_id=?1 AND column_order=?2 AND deleted=0 ORDER BY rank,id",
+        params![project, column.order()],
+    )?;
+    let gap = RANK_MAX / (items.len() as u64 + 1);
+    if gap < 2 {
+        return Err(StoreError::BoardConflict("column has no rank space".into()));
+    }
+    for (index, item) in items.iter_mut().enumerate() {
+        item.rank = format!("r{:015x}", gap * (index as u64 + 1));
+        write_item(c, item)?;
+    }
+    Ok(())
 }
 
 /// A rank strictly between the requested neighbors, computed from the
@@ -272,7 +308,12 @@ fn place(
     moving: &str,
     placement: &BoardRankPlacement,
 ) -> Result<String, StoreError> {
-    let order = column_ranks(c, project_id, column, Some(moving))?;
+    let mut order = column_ranks(c, project_id, column, Some(moving))?;
+    let legacy: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM board_items WHERE project_id=?1 AND column_order=?2 AND deleted=0 AND (length(rank)!=16 OR substr(rank,1,1)!='r'))", params![project_id, column.order()], |r| r.get(0))?;
+    if legacy || order.iter().any(|(_, rank)| rank_value(rank).is_none()) {
+        compact_ranks(c, project_id, column)?;
+        order = column_ranks(c, project_id, column, Some(moving))?;
+    }
     let index_of = |id: &str| {
         order
             .iter()
@@ -304,7 +345,13 @@ fn place(
             )
         }
     };
-    between(lower, upper)
+    let low = lower.and_then(rank_value).unwrap_or(0);
+    let high = upper.and_then(rank_value).unwrap_or(RANK_MAX);
+    if high.saturating_sub(low) < 2 {
+        compact_ranks(c, project_id, column)?;
+        return place(c, project_id, column, moving, placement);
+    }
+    Ok(format!("r{:015x}", low + (high - low) / 2))
 }
 
 /// Allocate the next number for a project, creating its prefix row on the
@@ -361,8 +408,17 @@ fn allocate_number(
 }
 
 fn write_row(c: &Connection, row: &BoardRowWrite) -> Result<(), StoreError> {
+    let live = |id: &str| -> Result<(), StoreError> {
+        if get_item(c, id)?.is_none_or(|item| item.deleted) {
+            return Err(StoreError::BoardNotFound(id.into()));
+        }
+        Ok(())
+    };
     match row {
         BoardRowWrite::TaskLink(link) => {
+            if link.active {
+                live(&link.work_item_id)?;
+            }
             c.execute(
                 "INSERT INTO board_task_links(id,work_item_id,task_id,role,active,record) VALUES(?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(id) DO UPDATE SET active=excluded.active,role=excluded.role,record=excluded.record",
@@ -371,6 +427,9 @@ fn write_row(c: &Connection, row: &BoardRowWrite) -> Result<(), StoreError> {
             .map_err(|e| constrained(e, "the ticket already has a working chat, or the chat already works on another ticket"))?;
         }
         BoardRowWrite::IssueReference(issue) => {
+            if issue.active {
+                live(&issue.work_item_id)?;
+            }
             c.execute(
                 "INSERT INTO board_issue_refs(id,work_item_id,project_id,dedupe_key,active,record) VALUES(?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(id) DO UPDATE SET active=excluded.active,record=excluded.record",
@@ -470,6 +529,14 @@ fn write_row(c: &Connection, row: &BoardRowWrite) -> Result<(), StoreError> {
                     params![session_id, seq, entry],
                 )
                 .map_err(|e| constrained(e, "authoring entry already recorded"))?;
+                let value: serde_json::Value = serde_json::from_str(entry)?;
+                if value["role"] == "user"
+                    && let Some(paths) = value["attachments"].as_array()
+                {
+                    for path in paths.iter().filter_map(serde_json::Value::as_str) {
+                        c.execute("INSERT OR IGNORE INTO attachment_owners(device_id,blob_path,owner_kind,owner_id,created_at) SELECT owner_host_id,?2,'boardAuthoring',id,?3 FROM board_authoring_sessions WHERE id=?1", params![session_id, path, now_ms()])?;
+                    }
+                }
             }
         }
         BoardRowWrite::DeleteAuthoringSession { session_id } => {
@@ -483,6 +550,8 @@ fn write_row(c: &Connection, row: &BoardRowWrite) -> Result<(), StoreError> {
             )?;
         }
         BoardRowWrite::Dependency(dependency) => {
+            live(&dependency.work_item_id)?;
+            live(&dependency.blocked_by_id)?;
             c.execute(
                 "INSERT INTO board_dependencies(work_item_id,blocked_by_id,created_at_ms,record) VALUES(?1,?2,?3,?4)
                  ON CONFLICT(work_item_id,blocked_by_id) DO NOTHING",
@@ -579,7 +648,8 @@ impl DocsStore {
                 let mut item = *item;
                 let current = get_item(&tx, &item.id)?
                     .ok_or_else(|| StoreError::BoardNotFound(item.id.clone()))?;
-                if current.revision != expected_revision
+                if current.deleted
+                    || current.revision != expected_revision
                     || current.project_id != item.project_id
                     || current.key != item.key
                 {
@@ -590,6 +660,15 @@ impl DocsStore {
                 }
                 if let Some(placement) = placement {
                     item.rank = place(&tx, &item.project_id, item.column, &item.id, &placement)?;
+                } else {
+                    // Content edits never overwrite a concurrent rank-only move.
+                    item.rank = current.rank;
+                    if current.archived && !item.archived && rank_value(&item.rank).is_none() {
+                        compact_ranks(&tx, &item.project_id, item.column)?;
+                        item.rank = get_item(&tx, &item.id)?
+                            .ok_or_else(|| StoreError::BoardNotFound(item.id.clone()))?
+                            .rank;
+                    }
                 }
                 write_item(&tx, &item)?;
                 Some(item)
@@ -602,7 +681,7 @@ impl DocsStore {
             } => {
                 let mut item = get_item(&tx, &work_item_id)?
                     .ok_or_else(|| StoreError::BoardNotFound(work_item_id.clone()))?;
-                if item.archived {
+                if item.archived || item.deleted {
                     return Err(StoreError::BoardConflict(
                         "archived tickets cannot be reordered".into(),
                     ));
@@ -762,7 +841,7 @@ impl DocsStore {
         let after = query.after.as_ref();
         let sql = format!(
             "SELECT record FROM board_items WHERE owner_host_id=?1 AND (?2 IS NULL OR project_id=?2)
-             AND column_order IN ({columns}) AND {archived}
+             AND deleted=0 AND column_order IN ({columns}) AND {archived}
              AND (?3 IS NULL OR search_text LIKE ?3 ESCAPE '\\')
              AND (?4 IS NULL OR (project_id,column_order,rank,id) > (?4,?5,?6,?7))
              ORDER BY project_id,column_order,rank,id LIMIT ?8"
@@ -795,7 +874,7 @@ impl DocsStore {
                     sum(i.archived=0 AND i.column_order=0), sum(i.archived=0 AND i.column_order=1),
                     sum(i.archived=0 AND i.column_order=2), sum(i.archived=1),
                     (SELECT key_prefix FROM board_projects p WHERE p.project_id=i.project_id)
-             FROM board_items i WHERE i.owner_host_id=?1 AND (?2 IS NULL OR i.project_id=?2)
+             FROM board_items i WHERE i.owner_host_id=?1 AND i.deleted=0 AND (?2 IS NULL OR i.project_id=?2)
              GROUP BY i.project_id ORDER BY i.project_id LIMIT 1000",
         )?;
         let rows = q
@@ -984,6 +1063,11 @@ impl DocsStore {
             "SELECT record FROM board_review_runs WHERE work_item_id=?1 ORDER BY updated_at_ms DESC,id DESC LIMIT ?2",
             params![work_item_id, limit.clamp(1, 1001) as i64],
         )
+    }
+
+    /// Deletion admission must inspect every review, not only a history page.
+    pub fn board_has_active_review(&self, work_item_id: &str) -> Result<bool, StoreError> {
+        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM board_review_runs WHERE work_item_id=?1 AND state NOT IN ('completed','failed','cancelled','stale'))", [work_item_id], |r| r.get(0))?)
     }
 
     pub fn board_review_run(&self, id: &str) -> Result<Option<ReviewRun>, StoreError> {

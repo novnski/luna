@@ -53,6 +53,7 @@ pub enum WorkItemEventKind {
     },
     Archived,
     Unarchived,
+    Deleted,
     // ---- lifecycle (PB-1) ----
     Moved {
         from: BoardColumn,
@@ -172,6 +173,7 @@ impl WorkItemEventKind {
             Self::Reordered { .. } => "reordered",
             Self::Archived => "archived",
             Self::Unarchived => "unarchived",
+            Self::Deleted => "deleted",
             Self::Moved { .. } => "moved",
             Self::Completed { .. } => "completed",
             Self::Reopened { .. } => "reopened",

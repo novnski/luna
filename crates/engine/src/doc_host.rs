@@ -6354,6 +6354,7 @@ impl DocHost {
         let mut attachments = item.attachments.clone();
         self.resolve_input_attachments(&mut prompt, &mut attachments);
         if send == QueueSend::Steer {
+            self.remember_chat_attachments(chat_id, &attachments)?;
             match sessions
                 .steer_with_inputs_at_workspace_revision(
                     chat_id,
@@ -8184,6 +8185,7 @@ impl DocHost {
         // The live run's model is checked again by the adapter right before
         // it posts the turn (OpenCode image capability).
         crate::provider_inputs::admit(self.harness_for(chat_id), None, &attachments, input_items)?;
+        self.remember_chat_attachments(chat_id, &attachments)?;
         if self.held_until_turn_end(
             sessions,
             chat_id,
@@ -8369,6 +8371,27 @@ impl DocHost {
         })
     }
 
+    fn remember_chat_attachments(
+        &self,
+        chat_id: &str,
+        paths: &[String],
+    ) -> Result<(), EngineError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let Some(uploads) = self.inner.uploads.get() else {
+            return Ok(());
+        };
+        let paths: Vec<_> = paths
+            .iter()
+            .filter_map(|path| uploads.trusted_blob_path(path))
+            .collect();
+        self.inner
+            .store
+            .record_chat_attachments(&self.inner.config.device_id, chat_id, &paths)?;
+        Ok(())
+    }
+
     /// Every fresh harness dispatch crosses this boundary, including
     /// steer/input fallbacks and crash recovery. Capture immediately before
     /// dispatch so the conversation records the checkout the harness will
@@ -8383,6 +8406,7 @@ impl DocHost {
         message_id: Option<String>,
         original_w: u64,
     ) -> Result<String, EngineError> {
+        self.remember_chat_attachments(chat_id, &request.attachments)?;
         if let Some(workspace) = self.workspace()
             && let Some(context) = self.capture_source_context(&request.cwd).await
             && let Err(err) = workspace.set_chat_source_context(chat_id, &context)

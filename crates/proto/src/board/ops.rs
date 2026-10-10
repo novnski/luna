@@ -25,6 +25,7 @@ pub enum BoardOperation {
     Rank,
     Archive,
     Unarchive,
+    Delete,
     Move,
     Start,
     Control,
@@ -53,6 +54,7 @@ impl BoardOperation {
             Self::Rank => "rank",
             Self::Archive => "archive",
             Self::Unarchive => "unarchive",
+            Self::Delete => "delete",
             Self::Move => "move",
             Self::Start => "start",
             Self::Control => "control",
@@ -244,6 +246,9 @@ pub struct BoardItemChanges {
     pub priority: Option<Option<BoardPriority>>,
     #[serde(default)]
     pub context_refs: Option<Vec<BoardContextRef>>,
+    /// Replace brief images. Already-dispatched launch snapshots are immutable.
+    #[serde(default)]
+    pub attachments: Option<Vec<String>>,
 }
 
 impl BoardItemChanges {
@@ -274,6 +279,15 @@ pub struct BoardRankRequest {
     /// The neighbor that should end up directly below (None: bottom).
     #[serde(default)]
     pub before_id: Option<String>,
+}
+
+/// Permanently hide a settled ticket while retaining its number and audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoardDeleteRequest {
+    pub request_id: String,
+    pub work_item_id: String,
+    pub expected_revision: u64,
 }
 
 /// Archive hides; unarchive restores to the same column. Neither stops work

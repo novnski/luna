@@ -528,20 +528,24 @@ impl EngineRpc {
     /// Materialize a `newWorktree` child's checkout before its durable commit.
     /// Nothing is provisioned for other checkouts, invalid input, or a request
     /// whose creation command already has a receipt (a retry replays it).
-    async fn provision_child_checkout(
+    pub(super) async fn provision_child_checkout(
         &self,
         parent_id: &str,
         child_id: &str,
         request: &CreateChildThreadRequest,
+        draft: bool,
     ) -> Result<Option<ProvisionedChildWorktree>, crate::EngineError> {
         let Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }) =
             &request.checkout
         else {
             return Ok(None);
         };
-        validate_child_request(request).map_err(|error| {
-            crate::EngineError::Other(format!("Invalid child request: {error}"))
-        })?;
+        (if draft {
+            crate::cross_task_tools::validate_child_draft_worktree_request(request)
+        } else {
+            validate_child_request(request)
+        })
+        .map_err(|error| crate::EngineError::Other(format!("Invalid child request: {error}")))?;
         if self
             .store
             .task_command_receipt(&format!("child-create:{child_id}"))?
@@ -598,7 +602,7 @@ impl EngineRpc {
     /// gets the project's new-worktree setup (owned by the child, as the
     /// composer's WorktreeSpec path does); one whose child did not commit is
     /// removed, so a failed creation leaves no orphaned checkout.
-    async fn settle_child_provisioning(
+    pub(super) async fn settle_child_provisioning(
         &self,
         child_id: &str,
         provisioned: Option<ProvisionedChildWorktree>,
@@ -787,7 +791,7 @@ impl EngineRpc {
             .permission_mode
             .map(|_| ChildAccessGrant::CreationDialog);
         let provisioned = self
-            .provision_child_checkout(&parent_id, &child_id, &request)
+            .provision_child_checkout(&parent_id, &child_id, &request, false)
             .await
             .map_err(|error| RpcError::Failed(error.to_string()))?;
         let mut command = legacy_task_command(
@@ -862,7 +866,7 @@ impl EngineRpc {
             }
         }
         let provisioned = self
-            .provision_child_checkout(&authority.caller_task_id, &child_id, &request)
+            .provision_child_checkout(&authority.caller_task_id, &child_id, &request, false)
             .await
             .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
         let mut command = legacy_task_command(
@@ -935,7 +939,16 @@ impl EngineRpc {
             ));
         }
         (if draft {
-            crate::cross_task_tools::validate_child_tab_request(&request)
+            if self
+                .pending_child_worktrees
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(task_id)
+            {
+                crate::cross_task_tools::validate_child_draft_worktree_request(&request)
+            } else {
+                crate::cross_task_tools::validate_child_tab_request(&request)
+            }
         } else {
             validate_child_request(&request)
         })

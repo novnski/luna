@@ -83,6 +83,15 @@
 //! 20. After Save to Backlog the keyboard is lost: the field that held it
 //!     is gone and nothing in the receipt takes it, so Enter cannot open the
 //!     ticket (and Escape cannot reach the drawer).
+//! 21. (LUN-13) The drawer doesn't show the brief's saved image as a
+//!     thumbnail, the thumbnail doesn't open it full size, or Escape on the
+//!     full-size view closes the drawer too.
+//! 22. (LUN-13) Editing the brief can't remove a saved image or add a
+//!     dropped one, or Save doesn't upload it and replace the ticket's
+//!     images through the engine (BoardRead keeps the old path).
+//! 23. (LUN-12) Delete sends without asking, is offered on a running
+//!     ticket, or after confirming the ticket stays listed or readable, or
+//!     its drawer stays open.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-detail-fixture
@@ -768,6 +777,22 @@ const HEADER_CONTROLS: &[&str] = &[
     "detail-title-cancel",
 ];
 
+/// Options of the drawer's pop-up menus (`{trigger}-{index}`). A menu
+/// floats above the drawer, anchored to its trigger and kept inside the
+/// window: it isn't body content, so scrolling never moves it into view.
+const FLOATING_MENUS: &[&str] = &["detail-review-mode"];
+
+/// `name` is an option of an open floating menu: its trigger is painted and
+/// the name is the trigger's followed by an option index.
+fn floating_option(rb: &Value, name: &str) -> bool {
+    FLOATING_MENUS.iter().any(|menu| {
+        name.strip_prefix(menu)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+            && rect(rb, menu).is_some()
+    })
+}
+
 fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
     inner[0] >= outer[0] - 0.5
         && inner[1] >= outer[1] - 0.5
@@ -779,20 +804,48 @@ fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
 /// control in the detail's pinned header is always visible; one in its body
 /// must be inside the body's (non-scrolling) frame.
 async fn reveal(window: Window, cx: &mut AsyncApp, name: &str) -> anyhow::Result<[f32; 4]> {
+    let rb = surfaces(window, cx)?;
+    let target = rect(&rb, name).ok_or_else(|| anyhow!("{name} was not painted"))?;
+    // A floating menu option is pressed where it paints, as long as the
+    // whole option is inside the window (its anchor keeps it there); the
+    // press still hit-tests the real painted bounds.
+    if floating_option(&rb, name) {
+        let viewport = gpui::AnyWindowHandle::from(window).update(cx, |_, window, _| {
+            let size = window.viewport_size();
+            [0.0, 0.0, f32::from(size.width), f32::from(size.height)]
+        })?;
+        ensure!(
+            inside(target, viewport),
+            "{name} floats outside the window: option {target:?}, window {viewport:?}"
+        );
+        return Ok(target);
+    }
+    // Only the pinned header's own controls are always visible. A body
+    // control scrolled up under the header also paints inside the
+    // header's rectangle, but is clipped: it must be scrolled back.
+    if HEADER_CONTROLS.contains(&name)
+        && rect(&rb, "detail-header").is_some_and(|header| inside(target, header))
+    {
+        return Ok(target);
+    }
+    scroll_into_body(window, cx, name, |rb| rect(rb, name)).await
+}
+
+/// Wheel-scroll the drawer body until what `locate` finds (a probe rect or
+/// a picker chip's painted bounds) is fully inside the body's visible
+/// frame, so a press there hits it rather than clipped content.
+async fn scroll_into_body(
+    window: Window,
+    cx: &mut AsyncApp,
+    name: &str,
+    locate: impl Fn(&Value) -> Option<[f32; 4]>,
+) -> anyhow::Result<[f32; 4]> {
     let mut sign = 1.0_f32;
     let mut last: Option<f32> = None;
     for _ in 0..60 {
         let rb = surfaces(window, cx)?;
-        let target = rect(&rb, name).ok_or_else(|| anyhow!("{name} was not painted"))?;
+        let target = locate(&rb).ok_or_else(|| anyhow!("{name} was not painted"))?;
         let drawer = rect(&rb, "board-drawer").ok_or_else(|| anyhow!("no drawer painted"))?;
-        // Only the pinned header's own controls are always visible. A body
-        // control scrolled up under the header also paints inside the
-        // header's rectangle, but is clipped: it must be scrolled back.
-        if HEADER_CONTROLS.contains(&name)
-            && rect(&rb, "detail-header").is_some_and(|header| inside(target, header))
-        {
-            return Ok(target);
-        }
         let (top, bottom) = match rect(&rb, "detail-scroll") {
             Some(body) => (body[1] + 8.0, body[1] + body[3] - 8.0),
             None => (drawer[1] + 24.0, drawer[1] + drawer[3] - 24.0),
@@ -1550,6 +1603,13 @@ fn pickers_of<'a>(settings: &'a Value, profile: &str) -> &'a Value {
     &settings["pickers"][profile]
 }
 
+/// A picker chip's painted bounds (`[x, y, w, h]`), when it painted.
+fn chip_rect(pickers: &Value, chip: &str) -> Option<[f32; 4]> {
+    let rect = pickers["ui"]["chips"][chip].as_array()?;
+    let at = |i: usize| rect.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    (at(2) > 0.0).then(|| [at(0), at(1), at(2), at(3)])
+}
+
 fn chip_center(pickers: &Value, chip: &str) -> Option<(f32, f32)> {
     let rect = pickers["ui"]["chips"][chip].as_array()?;
     let at = |i: usize| rect.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
@@ -1569,8 +1629,18 @@ async fn open_picker(
     kind: &str,
 ) -> anyhow::Result<Value> {
     let rb = surfaces(window, cx)?;
-    let at = chip_center(pickers_of(settings(&rb), profile), chip)
+    let mut at = chip_center(pickers_of(settings(&rb), profile), chip)
         .ok_or_else(|| anyhow!("the {profile} {chip} picker was not painted"))?;
+    // In the detail drawer the chip is body content: scroll it into the
+    // body's visible frame first (content above it, such as the brief's
+    // images, can push it below the fold where a press hits nothing).
+    if rect(&rb, "detail-scroll").is_some() {
+        let bounds = scroll_into_body(window, cx, &format!("the {profile} {chip} chip"), |rb| {
+            chip_rect(pickers_of(settings(rb), profile), chip)
+        })
+        .await?;
+        at = center(bounds);
+    }
     click_at(window, cx, at).await?;
     wait_for(window, cx, &format!("the {profile} {kind} menu"), |rb| {
         pickers_of(settings(rb), profile)["ui"]["open"] == kind
@@ -2723,6 +2793,188 @@ async fn scenario(
     )?;
     run.keep("running-ticket", &rb);
     run.capture(window, cx, "d08-update-sent")?;
+
+    // 7b. LUN-13: the brief's image shows as a thumbnail (the chat's
+    //     attachment cache) and opens full size in the chat's lightbox;
+    //     Escape closes only the lightbox.
+    let rb = wait_for(window, cx, "the brief thumbnail", |rb| {
+        state_of(rb)["images"][0]["state"] == "loaded" && rect(rb, "detail-brief-image-0").is_some()
+    })
+    .await?;
+    run.check(
+        "brief-image-thumbnail",
+        json!({ "images": saved_attachments, "state": "loaded" }),
+        state_of(&rb)["images"].clone(),
+        state_of(&rb)["images"].as_array().is_some_and(|images| {
+            images.len() == saved_attachments.len()
+                && images
+                    .iter()
+                    .zip(&saved_attachments)
+                    .all(|(shown, saved)| shown["path"] == saved.as_str())
+        }),
+    )?;
+    click(window, cx, "detail-brief-image-0").await?;
+    let rb = wait_for(window, cx, "the full-size image", |rb| {
+        state_of(rb)["imagePreview"].is_string()
+    })
+    .await?;
+    run.capture(window, cx, "d08b-brief-image-lightbox")?;
+    run.keep("brief-image-lightbox", &rb);
+    key_press(window, cx, "escape").await?;
+    let rb = wait_for(window, cx, "the lightbox to close", |rb| {
+        state_of(rb)["imagePreview"].is_null()
+    })
+    .await?;
+    run.check(
+        "lightbox-escape-keeps-the-drawer",
+        json!({ "imagePreview": null, "surface": "detail" }),
+        json!({ "imagePreview": state_of(&rb)["imagePreview"], "surface": rb["surface"] }),
+        state_of(&rb)["imagePreview"].is_null() && rb["surface"] == "detail",
+    )?;
+
+    // 7c. LUN-13: editing the brief removes the saved image and adds a
+    //     dropped one; Save uploads it to the ticket's host and replaces the
+    //     ticket's images through the engine (a revision-tracked brief edit).
+    click(window, cx, "detail-edit-brief").await?;
+    wait_for(window, cx, "the brief editor with its image", |rb| {
+        state_of(rb)["edits"]["brief"]["images"]
+            .as_array()
+            .is_some_and(|images| images.len() == 1 && images[0]["saved"].is_string())
+    })
+    .await?;
+    click(window, cx, "detail-brief-image-remove-0").await?;
+    wait_for(window, cx, "the image removed from the edit", |rb| {
+        state_of(rb)["edits"]["brief"]["images"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    })
+    .await?;
+    let replacement = run.dir.join("brief-replacement.png");
+    let mut image = image::RgbaImage::new(20, 20);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        *pixel = image::Rgba([40, 90 + (y as u8) * 4, 160 + (x as u8) * 3, 255]);
+    }
+    image.save(&replacement)?;
+    let target = rect(&surfaces(window, cx)?, "detail-brief-input")
+        .ok_or_else(|| anyhow!("the brief editor was not painted"))?;
+    let at = point(px(target[0] + target[2] / 2.0), px(target[1] + 20.0));
+    for event in [
+        gpui::FileDropEvent::Entered {
+            position: at,
+            paths: gpui::ExternalPaths(vec![replacement.clone()].into()),
+        },
+        gpui::FileDropEvent::Pending { position: at },
+        gpui::FileDropEvent::Submit { position: at },
+    ] {
+        input(window, cx, PlatformInput::FileDrop(event))?;
+        draw(window, cx)?;
+        settle(cx, 80).await;
+    }
+    let rb = wait_for(window, cx, "the dropped image staged", |rb| {
+        state_of(rb)["edits"]["brief"]["images"]
+            .as_array()
+            .is_some_and(|images| images.len() == 1 && images[0]["staged"].is_string())
+    })
+    .await?;
+    run.capture(window, cx, "d08c-brief-images-edit")?;
+    run.keep("brief-images-edit", &rb);
+    let before_images = read_ticket(env, &manual_id).await?.view.item;
+    click(window, cx, "detail-brief-save").await?;
+    wait_for(window, cx, "the brief and images saved", |rb| {
+        state_of(rb)["edits"]["brief"].is_null()
+    })
+    .await?;
+    let after_images = read_ticket(env, &manual_id).await?.view.item;
+    run.check(
+        "brief-images-replaced-through-the-engine",
+        json!({ "removed": before_images.attachments, "added": "one new upload", "revision": format!("> {}", before_images.revision) }),
+        json!({ "attachments": after_images.attachments, "revision": after_images.revision }),
+        after_images.attachments.len() == 1
+            && !before_images.attachments.contains(&after_images.attachments[0])
+            && after_images.attachments[0].contains("uploads")
+            && after_images.revision > before_images.revision,
+    )?;
+    let rb = wait_for(window, cx, "the new thumbnail", |rb| {
+        state_of(rb)["images"][0]["path"] == after_images.attachments[0].as_str()
+            && state_of(rb)["images"][0]["state"] == "loaded"
+    })
+    .await?;
+    run.capture(window, cx, "d08d-brief-image-replaced")?;
+    run.keep("brief-image-replaced", &rb);
+    // A running ticket offers no Delete (the engine refuses it).
+    run.check(
+        "running-ticket-not-deletable",
+        json!({ "delete": false }),
+        detail_of(&rb)["actions"].clone(),
+        !detail_of(&rb)["actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| action == "delete")),
+    )?;
+
+    // 7d. LUN-12: Delete asks first, in place; confirming removes the
+    //     settled ticket for good, closes its drawer and drops its card.
+    let doomed: BoardMutationReceipt = rpc(
+        env,
+        methods::BOARD_CREATE,
+        json!({
+            "requestId": "fixture-delete-ticket",
+            "projectId": PROJECT,
+            "title": "throwaway ticket to delete",
+            "description": "Created to be deleted.",
+        }),
+    )
+    .await?;
+    open_detail(window, cx, &doomed.work_item_id)?;
+    wait_for(window, cx, "the deletable ticket", |rb| {
+        rb["surface"] == "detail"
+            && detail_of(rb)["item"]["id"] == doomed.work_item_id.as_str()
+            && rect(rb, "detail-action-delete-ask").is_some()
+    })
+    .await?;
+    click(window, cx, "detail-action-delete-ask").await?;
+    let rb = wait_for(window, cx, "the delete confirmation", |rb| {
+        state_of(rb)["confirmDelete"] == true && rect(rb, "detail-action-delete").is_some()
+    })
+    .await?;
+    // The confirmation opens under the row: scroll it into view so the
+    // capture shows what the person reads before confirming.
+    reveal(window, cx, "detail-action-delete").await?;
+    run.capture(window, cx, "d08e-delete-confirm")?;
+    let still_there = project_tickets(env)
+        .await?
+        .items
+        .iter()
+        .any(|view| view.item.id == doomed.work_item_id);
+    run.check(
+        "delete-asks-before-sending",
+        json!({ "confirm": true, "ticketStillExists": true }),
+        json!({ "confirm": state_of(&rb)["confirmDelete"], "ticketStillExists": still_there }),
+        state_of(&rb)["confirmDelete"] == true && still_there,
+    )?;
+    click(window, cx, "detail-action-delete").await?;
+    let rb = wait_for(window, cx, "the drawer to close after delete", |rb| {
+        rb["surface"] != "detail"
+    })
+    .await?;
+    let listed = project_tickets(env)
+        .await?
+        .items
+        .iter()
+        .any(|view| view.item.id == doomed.work_item_id);
+    let read_after = read_ticket(env, &doomed.work_item_id).await;
+    run.check(
+        "delete-removes-the-ticket",
+        json!({ "drawer": "closed", "listed": false, "readable": false }),
+        json!({
+            "surface": rb["surface"],
+            "listed": listed,
+            "read": read_after.as_ref().map(|detail| detail.view.item.deleted).map_err(|error| format!("{error:#}")),
+        }),
+        rb["surface"] != "detail"
+            && !listed
+            && !read_after.as_ref().is_ok_and(|detail| !detail.view.item.deleted),
+    )?;
+    run.capture(window, cx, "d08f-deleted")?;
 
     // 8. Evidence and review render from the engine's records.
     let created: BoardMutationReceipt = rpc(

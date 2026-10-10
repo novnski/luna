@@ -49,7 +49,7 @@ const CHUNK: usize = 64 * 1024;
 // v19 preserves the project board: tickets, key counters, receipts, the
 // event journal and every linked record (links, issues, launches, outcomes,
 // intents, review runs, authoring drafts and dependencies).
-const CURRENT_SCHEMA: i64 = 19;
+const CURRENT_SCHEMA: i64 = 20;
 
 // Serialized legacy labels are part of archive validation. The credentials/
 // directory, including the new device-local key, remains outside the allowlist.
@@ -1256,6 +1256,18 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
             return Err(BackupError::Invalid(
                 "database schema requires missing column task_execution_lineage.configuration"
                     .into(),
+            ));
+        }
+    }
+    if schema_version >= 20 {
+        let present: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('board_items') WHERE name='deleted')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !present {
+            return Err(BackupError::Invalid(
+                "database schema requires missing column board_items.deleted".into(),
             ));
         }
     }

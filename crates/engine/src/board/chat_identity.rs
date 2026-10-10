@@ -571,7 +571,8 @@ impl EngineRpc {
                         .map_err(board_store_error)?
                     {
                         Some(item)
-                            if item.owner_host_id == self.engine_info.device_id
+                            if !item.deleted
+                                && item.owner_host_id == self.engine_info.device_id
                                 && self
                                     .board_check_caller(caller, &item.project_id, BoardAccess::Read)
                                     .is_ok() =>
@@ -587,6 +588,7 @@ impl EngineRpc {
                     continue;
                 };
                 let badge = ChatTicketBadge {
+                    archived: item.archived,
                     task_id: task_id.clone(),
                     work_item_id: item.id.clone(),
                     key: item.key.clone(),

@@ -10,13 +10,13 @@ use luna_proto::{
 };
 use luna_proto::{
     BoardAction, BoardArchiveRequest, BoardChatRole, BoardColumn, BoardContextRef,
-    BoardCreateRequest, BoardEventPage, BoardEventsRequest, BoardExecutionIntent,
-    BoardExecutionProfile, BoardFieldRevisions, BoardItemChanges, BoardItemDetail, BoardItemOrigin,
-    BoardListPage, BoardListRequest, BoardNavigationTarget, BoardObservation, BoardOperation,
-    BoardPhase, BoardRankRequest, BoardReadRequest, BoardReceiptRequest, BoardReviewProfile,
-    BoardScope, BoardStatusReportKind, BoardUpdateRequest, BoardWatchFrame, BoardWatchRequest,
-    OriginalContainer, TaskLinkRole, WorkItem, WorkItemEvent, WorkItemEventKind, WorkItemTaskLink,
-    WorkItemView, WorkingChatSummary,
+    BoardCreateRequest, BoardDeleteRequest, BoardEventPage, BoardEventsRequest,
+    BoardExecutionIntent, BoardExecutionProfile, BoardFieldRevisions, BoardItemChanges,
+    BoardItemDetail, BoardItemOrigin, BoardListPage, BoardListRequest, BoardNavigationTarget,
+    BoardObservation, BoardOperation, BoardPhase, BoardRankRequest, BoardReadRequest,
+    BoardReceiptRequest, BoardReviewProfile, BoardScope, BoardStatusReportKind, BoardUpdateRequest,
+    BoardWatchFrame, BoardWatchRequest, OriginalContainer, TaskLinkRole, WorkItem, WorkItemEvent,
+    WorkItemEventKind, WorkItemTaskLink, WorkItemView, WorkingChatSummary,
 };
 use luna_sync::{
     BoardCommit, BoardEventQuery, BoardItemWrite, BoardListCursor, BoardListQuery,
@@ -250,6 +250,9 @@ fn changed_fields(changes: &BoardItemChanges) -> Vec<&'static str> {
     if changes.description.is_some() {
         fields.push("description");
     }
+    if changes.attachments.is_some() {
+        fields.push("attachments");
+    }
     if changes.implementation.is_some() {
         fields.push("implementation");
     }
@@ -281,6 +284,7 @@ fn field_revision(revisions: &BoardFieldRevisions, field: &str) -> u64 {
         "labels" => revisions.labels,
         "priority" => revisions.priority,
         "contextRefs" => revisions.context_refs,
+        "attachments" => revisions.attachments,
         _ => u64::MAX,
     }
 }
@@ -295,6 +299,7 @@ fn set_field_revision(revisions: &mut BoardFieldRevisions, field: &str, revision
         "labels" => revisions.labels = revision,
         "priority" => revisions.priority = revision,
         "contextRefs" => revisions.context_refs = revision,
+        "attachments" => revisions.attachments = revision,
         _ => {}
     }
 }
@@ -302,6 +307,12 @@ fn set_field_revision(revisions: &mut BoardFieldRevisions, field: &str, revision
 /// Apply validated changes; returns the fields whose value actually changed.
 fn apply_changes(item: &mut WorkItem, changes: BoardItemChanges) -> Vec<&'static str> {
     let mut changed = Vec::new();
+    if let Some(attachments) = changes.attachments
+        && attachments != item.attachments
+    {
+        item.attachments = attachments;
+        changed.push("attachments");
+    }
     if let Some(title) = changes.title
         && title != item.title
     {
@@ -358,6 +369,17 @@ impl EngineRpc {
 
     /// Load a ticket by id, or by human key on this host.
     pub(crate) fn board_load(&self, id_or_key: &str) -> BoardResult<WorkItem> {
+        let item = self.board_load_retained(id_or_key)?;
+        if item.deleted {
+            return Err(BoardError::NotFound {
+                work_item_id: id_or_key.into(),
+            });
+        }
+        Ok(item)
+    }
+
+    /// Audit-only lookup. Never use this to admit execution or live mutation.
+    fn board_load_retained(&self, id_or_key: &str) -> BoardResult<WorkItem> {
         if let Some(item) = self.store.board_item(id_or_key).map_err(storage)? {
             return Ok(item);
         }
@@ -543,6 +565,36 @@ impl EngineRpc {
         };
         let working_chat = observation.working_chat.clone().or(working_chat);
         let mut actions = vec![BoardAction::Edit];
+        if item.column != BoardColumn::Ready
+            && !self
+                .store
+                .board_has_active_review(&item.id)
+                .map_err(storage)?
+            && matches!(
+                observation.phase,
+                BoardPhase::NotStarted
+                    | BoardPhase::Idle
+                    | BoardPhase::Stopped
+                    | BoardPhase::Failed
+                    | BoardPhase::Complete
+            )
+            // Done describes the accepted result, but the preserved working
+            // chat may have a later user turn or queued/background work.
+            && !links.iter().filter(|link| matches!(link.role, TaskLinkRole::Working | TaskLinkRole::Reviewer)).any(|link| {
+                self.sessions.active_turn_id(&link.task_id).is_some()
+                    || self.sessions.turn_in_flight(&link.task_id)
+                    || self.sessions.has_live_background_work(&link.task_id)
+                    || match self.workspace.chat(&link.task_id) {
+                        Ok(None) => false,
+                        Ok(Some(chat)) if chat.device_id == self.engine_info.device_id => self.doc_host.open(&link.task_id)
+                            .ok().and_then(|handle| handle.doc().read_queue().ok())
+                            .is_none_or(|queue| !queue.is_empty()),
+                        _ => true,
+                    }
+            })
+        {
+            actions.push(BoardAction::Delete);
+        }
         if item.archived {
             actions.push(BoardAction::Unarchive);
         } else {
@@ -802,6 +854,7 @@ impl EngineRpc {
         let context_refs = clean_context_refs(&request.context_refs)?;
         let (attachments, input_items) =
             self.board_clean_brief_inputs(&request.attachments, &request.input_items)?;
+        self.board_authorize_attachments(caller, &attachments, &[])?;
         let now = crate::now_ms();
         let actor = caller.actor();
         let item = WorkItem {
@@ -816,6 +869,7 @@ impl EngineRpc {
             brief_revision: 1,
             column: BoardColumn::Backlog,
             archived: false,
+            deleted: false,
             rank: String::new(),
             revision: 1,
             field_revisions: BoardFieldRevisions {
@@ -827,6 +881,7 @@ impl EngineRpc {
                 labels: 1,
                 priority: 1,
                 context_refs: 1,
+                attachments: 1,
             },
             implementation,
             review,
@@ -879,6 +934,107 @@ impl EngineRpc {
 
     // ---- RPC/tool operations ----
 
+    /// An agent can reuse actual user inputs of its bound chat/discussion, not
+    /// another upload it found by guessing a path or reading a text trailer.
+    fn board_authorize_attachments(
+        &self,
+        caller: &BoardCaller,
+        paths: &[String],
+        existing: &[String],
+    ) -> BoardResult<()> {
+        if paths.iter().all(|p| existing.contains(p)) {
+            return Ok(());
+        }
+        let mut allowed: HashSet<String> = existing.iter().cloned().collect();
+        match caller {
+            BoardCaller::User { .. } | BoardCaller::Engine { .. } => return Ok(()),
+            BoardCaller::Agent { task_id, .. } => {
+                allowed.extend(
+                    self.store
+                        .chat_attachments(&self.engine_info.device_id, task_id)
+                        .map_err(storage)?,
+                );
+                // Legacy sends already have structured attachments in the
+                // immutable command ledger. Read those without trusting prose.
+                let handle = self.doc_host.open(task_id).map_err(storage)?;
+                for mut command in handle.doc().read_commands().map_err(storage)? {
+                    if !matches!(
+                        command.status,
+                        luna_doc::SessionCommandStatus::Pending
+                            | luna_doc::SessionCommandStatus::Applied
+                    ) {
+                        continue;
+                    }
+                    // A replicated row alone is not proof of a user upload:
+                    // match its immutable payload to this host's local grant.
+                    // The grant predates the terminal status projection.
+                    command.status = luna_doc::SessionCommandStatus::Pending;
+                    command.resolution = None;
+                    let hash = crate::doc_host::executable_row_hash(&command).map_err(storage)?;
+                    if self
+                        .store
+                        .local_executable_hash(
+                            task_id,
+                            luna_sync::LocalExecutableKind::Command,
+                            &command.id,
+                        )
+                        .map_err(storage)?
+                        .as_deref()
+                        != Some(hash.as_str())
+                    {
+                        continue;
+                    }
+                    let inputs = match command.payload {
+                        luna_doc::SessionCommandPayload::Run { request, .. } => request.attachments,
+                        luna_doc::SessionCommandPayload::Steer { attachments, .. } => attachments,
+                        _ => Vec::new(),
+                    };
+                    allowed.extend(
+                        inputs
+                            .iter()
+                            .filter_map(|p| self.uploads.trusted_blob_path(p)),
+                    );
+                }
+            }
+            BoardCaller::Authoring { session_id, .. } => {
+                let mut before = None;
+                loop {
+                    let entries = self
+                        .store
+                        .board_authoring_entries(session_id, before, 100)
+                        .map_err(storage)?;
+                    if entries.is_empty() {
+                        break;
+                    }
+                    before = entries.last().map(|(seq, _)| *seq);
+                    for (_, entry) in entries {
+                        let entry: Value = serde_json::from_str(&entry).map_err(storage)?;
+                        if entry["role"] == "user"
+                            && let Some(images) = entry["attachments"].as_array()
+                        {
+                            allowed.extend(
+                                images
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .filter_map(|p| self.uploads.trusted_blob_path(p)),
+                            );
+                        }
+                    }
+                    if paths.iter().all(|p| allowed.contains(p)) {
+                        break;
+                    }
+                }
+            }
+        }
+        if paths.iter().any(|p| !allowed.contains(p)) {
+            return Err(BoardError::invalid(
+                "attachments",
+                "Use images supplied to this chat or ticket discussion as attachments; file paths mentioned in text and other chats' uploads are not authorized.",
+            ));
+        }
+        Ok(())
+    }
+
     /// A brief's images and `@`/`$` selections: only this host's own
     /// uploads (never an arbitrary path), bounded like a chat message's.
     pub(crate) fn board_clean_brief_inputs(
@@ -903,7 +1059,7 @@ impl EngineRpc {
         let attachments = attachments
             .iter()
             .map(|path| {
-                self.uploads.owned_blob_path(path).ok_or_else(|| {
+                self.uploads.trusted_blob_path(path).ok_or_else(|| {
                     BoardError::invalid("attachments", "attach images uploaded to this host")
                 })
             })
@@ -1164,9 +1320,15 @@ impl EngineRpc {
         if let Some(refs) = &changes.context_refs {
             changes.context_refs = Some(clean_context_refs(refs)?);
         }
+        if let Some(paths) = &changes.attachments {
+            changes.attachments = Some(self.board_clean_brief_inputs(paths, &[])?.0);
+        }
         let requested = changed_fields(&changes);
         for attempt in 0..MERGE_ATTEMPTS {
             let current = self.board_item_for(caller, &request.work_item_id, BoardAccess::Write)?;
+            if let Some(paths) = &changes.attachments {
+                self.board_authorize_attachments(caller, paths, &current.attachments)?;
+            }
             if request.expected_revision > current.revision {
                 return Err(BoardError::invalid(
                     "expectedRevision",
@@ -1205,7 +1367,7 @@ impl EngineRpc {
                 }
                 if changed
                     .iter()
-                    .any(|field| matches!(*field, "title" | "description"))
+                    .any(|field| matches!(*field, "title" | "description" | "attachments"))
                 {
                     item.brief_revision += 1;
                 }
@@ -1395,6 +1557,60 @@ impl EngineRpc {
         .ok_or_else(|| storage("archive returned no receipt"))
     }
 
+    /// Permanent deletion is a settled lifecycle operation, never an implicit
+    /// Stop, chat deletion or external issue mutation.
+    pub(crate) async fn board_delete(
+        &self,
+        caller: &BoardCaller,
+        request: BoardDeleteRequest,
+    ) -> BoardResult<BoardMutationReceipt> {
+        let request_id = caller.normalized_request_id(&request.request_id)?;
+        let mut payload = request.clone();
+        payload.request_id.clear();
+        let hash = payload_hash(BoardOperation::Delete, &payload)?;
+        if let Some(receipt) = self.board_replay(&request_id, &hash)? {
+            return Ok(receipt);
+        }
+        let current = self.board_item_for(caller, &request.work_item_id, BoardAccess::Write)?;
+        let _gate = self.board_lifecycle_gate(&current.id).await;
+        if let Some(receipt) = self.board_replay(&request_id, &hash)? {
+            return Ok(receipt);
+        }
+        let mut item = self.board_item_for(caller, &current.id, BoardAccess::Write)?;
+        if request.expected_revision != item.revision {
+            return Err(BoardError::StaleRevision {
+                work_item_id: item.id.clone(),
+                expected: request.expected_revision,
+                current: Box::new(self.board_view(item)?),
+            });
+        }
+        let view = self.board_view(item.clone())?;
+        if !view.actions.contains(&BoardAction::Delete) {
+            return Err(BoardError::Busy { reason: "Finish or stop the ticket's active and queued chat work and reviews before deleting it. Move Ready tickets to Backlog first.".into() });
+        }
+        let expected_revision = item.revision;
+        item.deleted = true;
+        item.archived = true;
+        item.revision += 1;
+        item.updated_at_ms = crate::now_ms();
+        item.updated_by = caller.actor();
+        let receipt = self.board_receipt_template(caller, BoardOperation::Delete, &item);
+        self.board_commit(BoardCommit {
+            request_id,
+            payload_hash: hash,
+            committed_at_ms: item.updated_at_ms,
+            item: BoardItemWrite::Replace {
+                expected_revision,
+                item: Box::new(item),
+                placement: None,
+            },
+            rows: Vec::new(),
+            event: Some((WorkItemEventKind::Deleted, true)),
+            receipt: Some(receipt),
+        })?
+        .ok_or_else(|| storage("delete returned no receipt"))
+    }
+
     /// Reconcile an uncertain mutation by its original key.
     pub(crate) fn board_get_receipt(
         &self,
@@ -1415,17 +1631,25 @@ impl EngineRpc {
         caller: &BoardCaller,
         request: BoardEventsRequest,
     ) -> BoardResult<BoardEventPage> {
-        let project_id = match &request.work_item_id {
-            Some(id) => Some(
-                self.board_item_for(caller, id, BoardAccess::Read)?
-                    .project_id,
-            ),
+        let retained = request
+            .work_item_id
+            .as_deref()
+            .map(|id| self.board_load_retained(id))
+            .transpose()?;
+        let project_id = match &retained {
+            Some(item) => {
+                self.board_check_caller(caller, &item.project_id, BoardAccess::Read)?;
+                if item.owner_host_id != self.engine_info.device_id {
+                    return Err(BoardError::WrongHost {
+                        project_id: item.project_id.clone(),
+                        owner_host_id: item.owner_host_id.clone(),
+                    });
+                }
+                Some(item.project_id.clone())
+            }
             None => self.board_scope_project(caller, &request.scope)?,
         };
-        let work_item_id = match &request.work_item_id {
-            Some(id) => Some(self.board_load(id)?.id),
-            None => None,
-        };
+        let work_item_id = retained.map(|item| item.id);
         let limit = request
             .limit
             .map_or(EVENTS_DEFAULT, |limit| limit as usize)

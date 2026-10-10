@@ -52,6 +52,36 @@ impl Shell {
         panel.update(cx, |panel, cx| panel.focus_automation(id, edit, cx));
     }
 
+    /// A new frame: what the last one mounted becomes the previous frame's.
+    pub(super) fn automations_frame_begin(&mut self) {
+        self.automations_mounted = [self.automations_mounted[1], [false; 2]];
+    }
+
+    /// The panel a frame mounts for `scope`. A panel that existed but was
+    /// not mounted by the previous frame (its page or surface was hidden,
+    /// and an agent or another surface may have changed automations since)
+    /// re-reads before it shows rows again.
+    pub(super) fn automations_outlet(
+        &mut self,
+        scope: AutomationScope,
+        settings: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<AutomationsPanel> {
+        let slot = usize::from(settings);
+        let existed = if settings {
+            self.automations_settings.is_some()
+        } else {
+            self.automations_conversation.is_some()
+        };
+        let panel = self.automations_panel(scope, settings, cx);
+        let hidden = !self.automations_mounted[0][slot];
+        self.automations_mounted[1][slot] = true;
+        if existed && hidden {
+            panel.update(cx, |panel, cx| panel.reveal(cx));
+        }
+        panel
+    }
+
     /// The panel for `scope`, created on first use. The right pane's panel
     /// follows the active conversation; `settings` selects the app-wide one.
     pub(super) fn automations_panel(

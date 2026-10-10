@@ -26,15 +26,20 @@ pub struct WorkItem {
     pub title: String,
     /// The editable brief. Frozen copies live in [`super::LaunchSnapshot`].
     pub description: String,
-    /// Increments only when title or description changes. Launch snapshots
+    /// Increments when title, description or attachments change. Launch snapshots
     /// and instructions cite it ("brief revision 3").
     pub brief_revision: u32,
     pub column: BoardColumn,
     /// Hidden from the default board; links, history and work are kept and
     /// archiving neither stops work nor touches an external issue.
     pub archived: bool,
+    /// Permanent tombstone. Keys and audit history remain reserved; ordinary
+    /// reads and all live projections exclude this item.
+    #[serde(default)]
+    pub deleted: bool,
     /// Dense order key within (project, column): lower sorts first; ties by
-    /// id. Uses [`crate::pin_order_between`] keys. Reordering never changes
+    /// id. The owning store allocates bounded keys and compacts legacy ranks
+    /// transactionally without changing their relative order. Reordering never changes
     /// [`Self::revision`] and has no execution effect.
     pub rank: String,
     /// Monotonic record revision (1 on create). Every content, workflow or
@@ -94,6 +99,7 @@ pub struct BoardFieldRevisions {
     pub labels: u64,
     pub priority: u64,
     pub context_refs: u64,
+    pub attachments: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,6 +429,7 @@ pub enum BoardAttentionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BoardAction {
+    Delete,
     Edit,
     Start,
     Continue,

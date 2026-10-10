@@ -83,9 +83,14 @@ fn badge_tooltip(badge: &ChatTicketBadge) -> (SharedString, SharedString) {
     (title, detail.into())
 }
 
-/// The workflow-status words: column, then the engine-observed phase.
+/// The workflow-status words: column, then the engine-observed phase, and
+/// "Archived" for a working chat whose ticket was archived.
 pub(crate) fn status_text(badge: &ChatTicketBadge) -> String {
-    format!("{} · {}", badge.column.label(), badge.phase.label())
+    let mut text = format!("{} · {}", badge.column.label(), badge.phase.label());
+    if badge.archived {
+        text.push_str(" · Archived");
+    }
+    text
 }
 
 fn column_glyph(column: BoardColumn) -> &'static str {

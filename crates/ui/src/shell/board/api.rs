@@ -7,22 +7,22 @@ use luna_proto::{
     BoardAuthoringSendRequest, BoardAuthoringSessionRequest, BoardAuthoringStartRequest,
     BoardChatBadges, BoardChatBadgesRequest, BoardChatCreated, BoardChatIdentityRequest,
     BoardControlReceipt, BoardControlRequest, BoardConvertChatRequest, BoardConvertReceipt,
-    BoardCreateMainChatRequest, BoardCreateRequest, BoardCreateSideChatRequest, BoardError,
-    BoardEventPage, BoardEventsRequest, BoardExecutionOptions, BoardExecutionOptionsRequest,
-    BoardIssueCommentsRequest, BoardIssueDetailRequest, BoardIssueImportReceipt,
-    BoardIssueImportRequest, BoardIssueLinkRequest, BoardIssueSearchRequest, BoardIssueSources,
-    BoardIssueSourcesRequest, BoardIssueUnlinkRequest, BoardIssueWritebackPreviewRequest,
-    BoardIssueWritebackRequest, BoardItemDetail, BoardLinkChatRequest, BoardListPage,
-    BoardListRequest, BoardMoveReceipt, BoardMoveRequest, BoardMutationReceipt,
-    BoardNavigationRequest, BoardNavigationTarget, BoardOutcomes, BoardOutcomesRequest,
-    BoardRankRequest, BoardReadRequest, BoardReceiptRequest, BoardResolveSettingsRequest,
-    BoardResolvedSettings, BoardReviewCancelRequest, BoardReviewStartRequest, BoardReviewStatus,
-    BoardReviewStatusRequest, BoardReviewSubmitRequest, BoardSendUpdateReceipt,
-    BoardSendUpdateRequest, BoardSetDependencyRequest, BoardSetStatusRequest,
-    BoardStartBatchReceipt, BoardStartBatchRequest, BoardStartReceipt, BoardStartRequest,
-    BoardUpdateRequest, BoardWatchRequest, CanonicalChatIdentity, IssueCommentPage, IssueDetail,
-    IssueSearchPage, IssueWritebackPreview, IssueWritebackReceipt, ReviewRunReceipt,
-    TicketAuthoringSession,
+    BoardCreateMainChatRequest, BoardCreateRequest, BoardCreateSideChatRequest, BoardDeleteRequest,
+    BoardError, BoardEventPage, BoardEventsRequest, BoardExecutionOptions,
+    BoardExecutionOptionsRequest, BoardIssueCommentsRequest, BoardIssueDetailRequest,
+    BoardIssueImportReceipt, BoardIssueImportRequest, BoardIssueLinkRequest,
+    BoardIssueSearchRequest, BoardIssueSources, BoardIssueSourcesRequest, BoardIssueUnlinkRequest,
+    BoardIssueWritebackPreviewRequest, BoardIssueWritebackRequest, BoardItemDetail,
+    BoardLinkChatRequest, BoardListPage, BoardListRequest, BoardMoveReceipt, BoardMoveRequest,
+    BoardMutationReceipt, BoardNavigationRequest, BoardNavigationTarget, BoardOutcomes,
+    BoardOutcomesRequest, BoardRankRequest, BoardReadRequest, BoardReceiptRequest,
+    BoardResolveSettingsRequest, BoardResolvedSettings, BoardReviewCancelRequest,
+    BoardReviewStartRequest, BoardReviewStatus, BoardReviewStatusRequest, BoardReviewSubmitRequest,
+    BoardSendUpdateReceipt, BoardSendUpdateRequest, BoardSetDependencyRequest,
+    BoardSetStatusRequest, BoardStartBatchReceipt, BoardStartBatchRequest, BoardStartReceipt,
+    BoardStartRequest, BoardUpdateRequest, BoardWatchRequest, CanonicalChatIdentity,
+    IssueCommentPage, IssueDetail, IssueSearchPage, IssueWritebackPreview, IssueWritebackReceipt,
+    ReviewRunReceipt, TicketAuthoringSession,
 };
 use luna_rpc::{RpcError, RpcSubscription, methods};
 
@@ -167,6 +167,7 @@ board_calls! {
     update(BoardUpdateRequest) -> BoardMutationReceipt = BOARD_UPDATE;
     rank(BoardRankRequest) -> BoardMutationReceipt = BOARD_RANK;
     archive(BoardArchiveRequest) -> BoardMutationReceipt = BOARD_ARCHIVE;
+    delete(BoardDeleteRequest) -> BoardMutationReceipt = BOARD_DELETE;
     events(BoardEventsRequest) -> BoardEventPage = BOARD_EVENTS;
     /// Reconcile a lost mutation by its original request id.
     receipt(BoardReceiptRequest) -> Option<BoardMutationReceipt> = BOARD_GET_RECEIPT;

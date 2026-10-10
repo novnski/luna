@@ -331,6 +331,15 @@ impl Uploads {
             .then(|| resolved.to_string_lossy().to_string())
     }
 
+    /// Resolve an image from this profile or an explicitly imported upload
+    /// root. Unlike general attachment reads, this never accepts workspace
+    /// paths. Imported chat images retain their original immutable references.
+    pub fn trusted_blob_path(&self, path: &str) -> Option<String> {
+        self.inspect(path, &[])
+            .ok()
+            .map(|file| file.resolved.to_string_lossy().into_owned())
+    }
+
     /// Read one 45KB chunk of an attachment. `extra_roots` are the workspace's
     /// known chat cwds — together with the uploads dir they form the path jail.
     pub fn read_chunk(

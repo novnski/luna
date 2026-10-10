@@ -385,6 +385,7 @@ impl EngineRpc {
         key: &str,
         title: Option<&str>,
         config: ChatConfig,
+        checkout: Option<&luna_proto::BoardCheckoutChoice>,
     ) -> BoardResult<()> {
         let main_config = main.config.as_ref().ok_or_else(|| {
             BoardError::invalid(
@@ -405,9 +406,21 @@ impl EngineRpc {
             cwd: None,
             report_results: false,
             continue_parent: false,
-            checkout: None,
+            checkout: checkout.and_then(|choice| match choice {
+                luna_proto::BoardCheckoutChoice::Current => None,
+                luna_proto::BoardCheckoutChoice::NewWorktree { branch, base } => {
+                    Some(luna_proto::ChildCheckoutRequest::NewWorktree {
+                        branch: branch.clone(),
+                        base: base.clone(),
+                    })
+                }
+            }),
             permission_mode: None,
         };
+        let provisioned = self
+            .provision_child_checkout(&main.id, task_id, &request, true)
+            .await
+            .map_err(storage)?;
         let mut command = legacy_task_command(
             task_id.to_owned(),
             TaskCommandIntent::CreateChildChat {
@@ -420,12 +433,11 @@ impl EngineRpc {
         );
         command.command_id = format!("child-create:{task_id}");
         command.actor_id = "luna-board:side-chat".into();
-        let receipt = self
-            .execute_task_command(command, true)
-            .await
-            .map_err(|error| BoardError::Unavailable {
-                reason: format!("Side chat creation did not complete: {error}"),
-            })?;
+        let receipt = self.execute_task_command(command, true).await;
+        self.settle_child_provisioning(task_id, provisioned).await;
+        let receipt = receipt.map_err(|error| BoardError::Unavailable {
+            reason: format!("Side chat creation did not complete: {error}"),
+        })?;
         if receipt.status != CommandReceiptStatus::Applied {
             return Err(BoardError::Unavailable {
                 reason: format!(
@@ -738,6 +750,9 @@ impl EngineRpc {
                         &request_id,
                         wanted_title.as_deref(),
                         config,
+                        profile
+                            .as_ref()
+                            .and_then(|profile| profile.checkout.as_ref()),
                     )
                     .await?;
                 }
@@ -1023,6 +1038,59 @@ impl EngineRpc {
                 request_id: request_id.clone(),
                 created_at_ms: crate::now_ms(),
             })?;
+            // Resolve the chosen checkout before the chat's durable creation.
+            // Previously the profile's checkout was discarded with its model
+            // settings, so a requested isolated worker ran in the project root.
+            let source = from
+                .as_ref()
+                .filter(|chat| chat.space_id.as_deref() == Some(space.id.as_str()));
+            let mut cwd = source
+                .and_then(|chat| chat.cwd.clone())
+                .unwrap_or_else(|| space.path.clone());
+            let mut branch = source.and_then(|chat| chat.branch.clone());
+            let new_worktree = if let Some(luna_proto::BoardCheckoutChoice::NewWorktree {
+                branch: requested_branch,
+                base,
+            }) = profile
+                .as_ref()
+                .and_then(|profile| profile.checkout.as_ref())
+            {
+                let repo = std::path::Path::new(&space.path);
+                if !self.repos.is_repo(repo).await {
+                    return Err(BoardError::invalid(
+                        "execution.checkout",
+                        "New worktree requires a Git project.",
+                    ));
+                }
+                let base = match base {
+                    Some(base) => base.clone(),
+                    None => self
+                        .repos
+                        .head_sha(std::path::Path::new(&cwd))
+                        .await
+                        .map_err(storage)?
+                        .ok_or_else(|| {
+                            BoardError::invalid(
+                                "execution.checkout",
+                                "The source checkout has no commit to branch from.",
+                            )
+                        })?,
+                };
+                let name = format!("board-{}", &chat_id[..8]);
+                let branch_name = requested_branch
+                    .clone()
+                    .unwrap_or_else(|| format!("luna/{name}"));
+                let (worktree, _) = self
+                    .repos
+                    .provision_child_worktree(repo, &name, &branch_name, &base)
+                    .await
+                    .map_err(storage)?;
+                cwd = worktree.path;
+                branch = Some(worktree.branch);
+                true
+            } else {
+                false
+            };
             // Cmd+N: an ordinary project chat with no lineage at all.
             let mut command = legacy_task_command(
                 chat_id.clone(),
@@ -1031,8 +1099,8 @@ impl EngineRpc {
                     space_id: Some(space.id.clone()),
                     device_id: None,
                     config: Some(config),
-                    branch: None,
-                    cwd: None,
+                    branch,
+                    cwd: Some(cwd.clone()),
                     lineage: TaskLineage::default(),
                 },
             );
@@ -1054,6 +1122,12 @@ impl EngineRpc {
                             .map_or("no reason recorded", |reason| reason.message.as_str())
                     ),
                 });
+            }
+            if new_worktree
+                && let Some(commands) = &self.project_commands
+                && let Err(error) = commands.setup_new_worktree(&chat_id, &cwd).await
+            {
+                tracing::warn!(%chat_id, %error, "board worktree setup did not start");
             }
         }
         let wanted_title = ticket.as_ref().map(|item| item.title.clone()).or(title);

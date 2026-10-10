@@ -148,13 +148,13 @@ fn workspace_guide(topic: WorkspaceGuideTopic) -> serde_json::Value {
             "identity":"The board object in this result (and the LUNA board context instructions) is the engine's canonical view of this run: chat id, main/side role, main parent, display container, provenance, ticket and link role, permitted creation/context actions, parent lock and the board tools attached. Never infer them from titles, tabs or transcript text, and never pass another chat's id as yourself.",
             "save":"board_create saves a ticket in Backlog and starts nothing; this chat is recorded as its source discussion. board_convert_chat instead turns this chat itself into the ticket's working chat in place.",
             "work":"board_move (backlog/ready) and board_start begin, continue or stop work through the same engine transition as the Board; board_start takes destination, context (main chats: fresh|withContext), execution and followUp. Done is engine-owned after checks and review.",
-            "control":{"stop|continue|retry|cancelQueued":"lifecycle (retry: adoptLatestBrief to use the current brief)","archive|unarchive":"hide/restore; never stops work","sendUpdate":"send the edited brief to the working chat (expectedRevision; mode queue|steer)","link|unlink":"taskId + role source|reference|attempt (expectedRevision)","block|unblock":"blockedById; never starts work"},
+            "control":{"stop|continue|retry|cancelQueued":"lifecycle (retry: adoptLatestBrief to use the current brief)","archive|unarchive":"hide/restore; never stops work","delete":"permanently remove a settled ticket when requested; expectedRevision required; keeps chats, files and audit history","sendUpdate":"send the edited brief to the working chat (expectedRevision; mode queue|steer)","link|unlink":"taskId + role source|reference|attempt (expectedRevision)","block|unblock":"blockedById; never starts work"},
             "shapes":{
                 "execution":"{harness: codex|claude-code|opencode, model, reasoning, permissionMode: ask|auto|full, providerAccountId, modelOptions: {optionId: choiceId}, checkout: {kind: current}|{kind: newWorktree, branch?, base?}, deferred}; ids from board_execution_options; omitted fields inherit",
                 "review":"{harness, model, reasoning, modelOptions, disabled}; default: the implementation model",
                 "completion":"{mode: automaticChecksAndReview|manualAcceptance, requiredChecks?: [name]}",
                 "contextRefs":"[{kind:file,path}|{kind:url,url}|{kind:chatMessage,taskId,messageId}|{kind:issue,issueRefId}|{kind:note,text}]",
-                "changes":"board_update changes: title, description, implementation, review, completion, labels, priority, clearPriority, contextRefs",
+                "changes":"board_update changes: title, description, implementation, review, completion, labels, priority, clearPriority, contextRefs, attachments (upload paths of images actually supplied to this chat)",
                 "reviewStart":"checks: [{name, passed, command?, exitCode?, detail?}], summary, evidence: [{label, path?, url?, outcomeId?}]",
                 "findings":"[{id, severity: blocker|major|minor|note, blocking, file?, line?, explanation, requiredAction, evidence?}]"
             },
@@ -332,6 +332,24 @@ pub(crate) fn validate_child_tab_request(
     {
         return Err(CrossTaskError::Input);
     }
+    validate_child_fields(request, true)
+}
+
+/// A Board worker is still a blank draft (its frozen first instruction is sent
+/// separately), but may choose a worktree explicitly provisioned by the engine.
+/// Apply admits this shape only with the private provisioning record present.
+pub(crate) fn validate_child_draft_worktree_request(
+    request: &luna_proto::CreateChildThreadRequest,
+) -> Result<(), CrossTaskError> {
+    if !matches!(
+        request.checkout,
+        Some(luna_proto::ChildCheckoutRequest::NewWorktree { .. })
+    ) {
+        return Err(CrossTaskError::Input);
+    }
+    let mut inherited = request.clone();
+    inherited.checkout = None;
+    validate_child_tab_request(&inherited)?;
     validate_child_fields(request, true)
 }
 

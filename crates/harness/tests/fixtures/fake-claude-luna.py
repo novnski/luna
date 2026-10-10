@@ -56,7 +56,8 @@ def emit(frame):
 first = sys.stdin.readline()
 if not first:
     sys.exit(1)
-prompt = json.loads(first)["message"]["content"]
+input_content = json.loads(first)["message"]["content"]
+prompt = input_content
 if isinstance(prompt, list):
     prompt = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict))
 
@@ -331,7 +332,7 @@ def plan(label):
     plan_path = os.path.join(CWD, f".luna-claude-plan-{label}.json")
     with open(plan_path) as source:
         calls = json.load(source)
-    results = {"attachment": attachment_evidence(), "systemPrompt": flag_value("--append-system-prompt")}
+    results = {"attachment": attachment_evidence(), "systemPrompt": flag_value("--append-system-prompt"), "inputContent": input_content}
     hs = handshake()
     LISTED_TOOLS.extend(hs["tools"])
     results["handshake"] = hs
@@ -373,6 +374,8 @@ else:
     if thread:
         with open(os.path.join(CWD, f".luna-claude-turn-{thread}.txt"), "w") as out:
             out.write(flag_value("--append-system-prompt") or "")
+        with open(os.path.join(CWD, f".luna-claude-turn-{thread}.input.json"), "w") as out:
+            json.dump(input_content, out)
     init_frame()
     assistant_text("ok")
     result_frame("ok")

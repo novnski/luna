@@ -2,6 +2,14 @@
 use crate::{ChatConfig, HarnessId, PermissionMode, ReasoningLevel};
 use serde::{Deserialize, Serialize};
 
+/// Invalidate cached automation definitions and history after an owner commit.
+/// Initial snapshot is emitted on subscribe. Sequence resets with the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationWatchFrame {
+    pub seq: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",

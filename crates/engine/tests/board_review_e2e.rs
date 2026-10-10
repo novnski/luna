@@ -59,6 +59,8 @@
 //!     missed by the stale-review guard even though the file size is stable.
 //! 14. Checks for the old binary contents survive a fresh review, or Git's
 //!     collapsed untracked-directory listing hides new nested source files.
+//! 15. LUN-12: a Done ticket is deletable while its preserved working chat
+//!     has a later live user turn, because the Done phase masks runtime work.
 //!
 //! Every scenario writes a JSON manifest (steps, expected/observed, SHA-256
 //! of snapshots) under `target/qa/board/review/`.
@@ -1345,6 +1347,44 @@ async fn main_ticket_codex_reviewed_by_claude_repairs_seeded_defect_then_cleans_
             && rig.chat(&reviewer).archived,
         json!(transcript.len()),
     );
+    let chat = worker.clone();
+    let settled = rig
+        .wait_detail(&id, "settled and deletable", |detail| {
+            detail["view"]["actions"]
+                .as_array()
+                .is_some_and(|actions| actions.contains(&json!("delete")))
+        })
+        .await;
+    let fence = rig
+        .ok("GetTaskCommandSnapshot", json!({"taskId":chat}))
+        .await["snapshot"]
+        .clone();
+    let sent = rig.ok("ExecuteTaskCommand", json!({"commandId":"later-human-work","taskId":chat,"expectedTaskRevision":fence["taskRevision"],"expectedBindingGeneration":fence["bindingGeneration"],"intent":{"kind":"queueMessage","messageId":"later-human-message","text":"A later human request after the ticket was completed."}})).await;
+    assert!(
+        sent["status"] == "applied" || sent["status"] == "pending",
+        "later human send was refused: {sent}"
+    );
+    let later = rig
+        .turn("later human work", |turn| {
+            turn.prompt.contains("A later human request")
+        })
+        .await;
+    let refused = rig.call("BoardDelete", json!({"requestId":"delete-completed-ticket","workItemId":id,"expectedRevision":settled["view"]["item"]["revision"]})).await;
+    assert!(
+        refused.is_err(),
+        "Done must not hide a live worker from deletion admission: {refused:?}"
+    );
+    later.finish();
+    rig.wait_idle(&chat).await;
+    let settled = rig
+        .wait_detail(&id, "deletable after later work ends", |detail| {
+            detail["view"]["actions"]
+                .as_array()
+                .is_some_and(|actions| actions.contains(&json!("delete")))
+        })
+        .await;
+    let deleted = rig.ok("BoardDelete", json!({"requestId":"delete-completed-ticket","workItemId":id,"expectedRevision":settled["view"]["item"]["revision"]})).await;
+    rig.evidence.step("settled deletion keeps the later chat and its history", json!({"deleted":true,"archived":false,"history":true}), json!({"deleted":deleted["item"]["deleted"],"archived":rig.chat(&chat).archived,"history":rig.transcript(&chat).iter().any(|entry|entry.id=="later-human-message")}), Some(&deleted));
     rig.evidence.write();
 }
 

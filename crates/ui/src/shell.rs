@@ -2373,6 +2373,10 @@ pub struct Shell {
     /// with the subscription that routes "Open conversation".
     automations_conversation: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
     automations_settings: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
+    /// Which automations panels (`[conversation, settings]`) the previous
+    /// and the current frame mounted: a panel mounted again after a frame
+    /// without it was hidden and revalidates its rows.
+    automations_mounted: [[bool; 2]; 2],
     /// The Board page, created on first open.
     board_page: Option<Entity<board::BoardPage>>,
     /// Ticket identity on chat surfaces: badges, roles, receipts, Go to
@@ -2944,6 +2948,7 @@ impl Shell {
             child_chat_events: None,
             automations_conversation: None,
             automations_settings: None,
+            automations_mounted: Default::default(),
             board_page: None,
             board_chat: Default::default(),
             pane_composers,
@@ -5435,7 +5440,7 @@ impl Shell {
             // the sidebar's project filter, like the Board's.
             SidebarPage::Automations => {
                 let scope = self.automations_page_scope();
-                self.automations_panel(scope, true, cx).into_any_element()
+                self.automations_outlet(scope, true, cx).into_any_element()
             }
             SidebarPage::Board => self.board_page(cx).into_any_element(),
         }
@@ -5841,7 +5846,7 @@ impl Shell {
             // project filter.
             SettingsSection::Automations => {
                 let scope = self.automations_page_scope();
-                self.automations_panel(scope, true, cx).into_any_element()
+                self.automations_outlet(scope, true, cx).into_any_element()
             }
             SettingsSection::Usage => self.render_usage_page(cx),
             SettingsSection::Updates => {
@@ -13906,7 +13911,7 @@ impl Shell {
                 RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
                 RightSurface::Automations if self.right_pane_open(cx) => {
                     let scope = self.automations_conversation_scope(cx);
-                    self.automations_panel(scope, false, cx).into_any_element()
+                    self.automations_outlet(scope, false, cx).into_any_element()
                 }
                 RightSurface::RelatedChats if self.right_pane_open(cx) => {
                     self.render_related_chats(cx)
@@ -15642,6 +15647,7 @@ impl Render for Shell {
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
         self.sync_restored_page(cx);
+        self.automations_frame_begin();
         self.sync_execution_focus(cx);
         self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)

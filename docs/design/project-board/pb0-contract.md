@@ -3,6 +3,25 @@
 **Status:** authoritative engineering contract for PB-0 through PB-3 (including PB-1R); PB-4 stays
 deferred. Written 2026-10-08 on branch `board/pb0-foundation` from `main` 424e3e48.
 
+**2026-10-10 compatibility amendment (LUN-11/12/13):** v20 adds the indexed
+`board_items.deleted` tombstone and prevents older writers from erasing deletion
+state or allocating legacy ranks. This supersedes the original no-new-migration
+rule for these fixes. Board ranks are fixed-width `r` plus 15 hexadecimal digits;
+the owning transaction compacts a column in its existing `(rank,id)` order when
+legacy keys or exhausted gaps require it. Reorders and compaction preserve content
+revisions. `BoardDelete` (`board_control` action `delete`) requires an exact
+revision and settled Backlog/Done work, retires active links and dependency edges,
+and preserves the number, chats, files, external issues and audit history. There
+is no un-delete; ordinary reads, lists, counts and badges omit tombstones, while
+events and original mutation receipts remain readable. Archived source tickets
+are excluded from the chat banner; an archived worker keeps its identity badge.
+Brief attachments are an editable revision-tracked field and are delivered to
+new working chats, including explicitly selected worktrees. Agent attachment
+paths must belong to structured inputs of their bound chat/discussion or already
+belong to the ticket; prose-only and other chats' upload paths are refused.
+Upload ownership and backup validation protect those bytes. Board remains
+owner-local as described in §2.3; this amendment adds no replication protocol.
+
 **Product source:** [`docs/pending-tasks/devin-project-board/`](../../pending-tasks/devin-project-board/README.md)
 (README confirmed decisions, `chat-model.md`, `board-lifecycle.md`, `automatic-review.md`,
 `ticket-authoring.md`, `proposal.md`). Product decisions there are final; this document only decides
@@ -155,7 +174,7 @@ after an uncertain result; reconcile with `BoardGetReceipt { requestId }`.
 | --- | --- | --- |
 | `WorkItem.revision` | ticket | +1 on every content, workflow, archive or link mutation; **not** on rank-only reorders |
 | `WorkItem.field_revisions.*` | ticket | Item revision at which each editable field last changed |
-| `WorkItem.brief_revision` | ticket | +1 only when title or description changes; launch snapshots and instructions cite it |
+| `WorkItem.brief_revision` | ticket | +1 when title, description or attachments change; launch snapshots and instructions cite it |
 | `BoardExecutionIntent.version` | intent row | CAS version (+1 per write) |
 | `BoardExecutionIntent.intent_revision` | intent | +1 per accepted move; callbacks with an older revision are ignored |
 | `BoardExecutionIntent.execution_generation` | intent | +1 per admitted execution (first start, continuation, retry); Stop/review/Done tie to one generation |

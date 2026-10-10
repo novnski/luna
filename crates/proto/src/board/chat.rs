@@ -446,6 +446,8 @@ pub struct BoardLegacyMigrationReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatTicketBadge {
+    #[serde(default)]
+    pub archived: bool,
     pub task_id: String,
     pub work_item_id: String,
     pub key: String,

@@ -237,6 +237,13 @@ pub(crate) struct ChatBoardUi {
     badges_unavailable: bool,
     fetch: Option<Task<()>>,
     dirty: bool,
+    /// The number of the latest badge read started; a receipt is stamped
+    /// with it, so only a snapshot read after the receipt can retire it.
+    read_seq: u64,
+    receipt_stamps: HashMap<(String, String), u64>,
+    /// Tickets this session saw deleted: nothing brings them back to a
+    /// strip, not even a create receipt answered late.
+    deleted: HashSet<String>,
     identities: HashMap<String, CanonicalChatIdentity>,
     identity_fetches: HashMap<String, Task<()>>,
     identity_failed: HashSet<String>,
@@ -318,6 +325,13 @@ impl ChatBoardUi {
     }
 
     fn push_receipt(&mut self, task_id: &str, receipt: ChatReceipt) {
+        if let Some(work_item_id) = &receipt.work_item_id {
+            if self.deleted.contains(work_item_id) {
+                return;
+            }
+            self.receipt_stamps
+                .insert((task_id.to_string(), work_item_id.clone()), self.read_seq);
+        }
         let list = self.receipts.entry(task_id.to_string()).or_default();
         list.retain(|existing| {
             existing.work_item_id.is_none() || existing.work_item_id != receipt.work_item_id
@@ -333,7 +347,12 @@ impl ChatBoardUi {
         }
     }
 
-    fn install(&mut self, badges: Vec<ChatTicketBadge>, related: Vec<ChatTicketBadge>) {
+    /// Install a full snapshot from badge read `read`, and retire the ticket
+    /// receipts it proves stale: one recorded before that read started
+    /// whose ticket no chat shows any more (deleted, or archived as a
+    /// related ticket, even when the journal event was missed). Hand-off
+    /// receipts and receipts without a ticket stay.
+    fn install(&mut self, badges: Vec<ChatTicketBadge>, related: Vec<ChatTicketBadge>, read: u64) {
         let mut by_chat: HashMap<String, ChatTicketBadge> = HashMap::new();
         let mut extra = Vec::new();
         for badge in badges {
@@ -352,7 +371,13 @@ impl ChatBoardUi {
             }
         }
         let mut related_by_chat: HashMap<String, Vec<ChatTicketBadge>> = HashMap::new();
-        for badge in related.into_iter().chain(extra) {
+        // An archived ticket is no longer related work: it leaves the source
+        // chat's banner and its count (a working chat keeps its own badge).
+        for badge in related
+            .into_iter()
+            .chain(extra)
+            .filter(|badge| !badge.archived)
+        {
             // A chat's own working or reviewer ticket is never also
             // "related" to it.
             if by_chat
@@ -369,6 +394,37 @@ impl ChatBoardUi {
                 list.push(badge);
             }
         }
+        let deleted = &self.deleted;
+        for list in related_by_chat.values_mut() {
+            list.retain(|badge| !deleted.contains(&badge.work_item_id));
+        }
+        let visible: HashSet<&str> = by_chat
+            .values()
+            .chain(related_by_chat.values().flatten())
+            .map(|badge| badge.work_item_id.as_str())
+            .collect();
+        let stamps = &self.receipt_stamps;
+        for (task_id, receipts) in self.receipts.iter_mut() {
+            receipts.retain(|receipt| match (&receipt.kind, &receipt.work_item_id) {
+                // A hand-off's new chat may not be listed yet; it isn't a
+                // related-ticket row either.
+                (ReceiptKind::HandedOff { .. }, _) | (_, None) => true,
+                (_, Some(work_item_id)) => {
+                    visible.contains(work_item_id.as_str())
+                        || stamps
+                            .get(&(task_id.clone(), work_item_id.clone()))
+                            .is_some_and(|stamp| *stamp >= read)
+                }
+            });
+        }
+        let kept = &self.receipts;
+        self.receipt_stamps.retain(|(task_id, work_item_id), _| {
+            kept.get(task_id).is_some_and(|receipts| {
+                receipts
+                    .iter()
+                    .any(|receipt| receipt.work_item_id.as_ref() == Some(work_item_id))
+            })
+        });
         self.badges = by_chat;
         self.related = related_by_chat;
         self.badges_unavailable = false;
@@ -461,6 +517,28 @@ impl Shell {
     fn board_chat_model_event(&mut self, event: &BoardModelEvent, cx: &mut Context<Self>) {
         match event {
             BoardModelEvent::Events(events) => {
+                // An archived or deleted ticket leaves every chat's strip at
+                // once, including this session's own receipts for it (the
+                // badge read that follows drops its related row).
+                for event in events {
+                    if matches!(event.kind, luna_proto::WorkItemEventKind::Deleted) {
+                        self.board_chat.deleted.insert(event.work_item_id.clone());
+                    }
+                    if matches!(
+                        event.kind,
+                        luna_proto::WorkItemEventKind::Archived
+                            | luna_proto::WorkItemEventKind::Deleted
+                    ) {
+                        for receipts in self.board_chat.receipts.values_mut() {
+                            receipts.retain(|receipt| {
+                                receipt.work_item_id.as_deref() != Some(event.work_item_id.as_str())
+                            });
+                        }
+                        for related in self.board_chat.related.values_mut() {
+                            related.retain(|badge| badge.work_item_id != event.work_item_id);
+                        }
+                    }
+                }
                 // Any committed board change can add, move or rename a badge:
                 // re-read them, and the identities (purpose) lazily.
                 self.board_chat.identities.clear();
@@ -555,6 +633,8 @@ impl Shell {
             .iter()
             .map(|chat| chat.id.clone())
             .collect();
+        self.board_chat.read_seq += 1;
+        let read = self.board_chat.read_seq;
         self.board_chat.fetch = Some(cx.spawn(async move |this, cx| {
             let mut badges = Vec::new();
             let mut related = Vec::new();
@@ -577,7 +657,7 @@ impl Shell {
                 }
             }
             this.update(cx, |shell, cx| {
-                shell.board_chat_install(generation, badges, related, failure, cx)
+                shell.board_chat_install(generation, read, badges, related, failure, cx)
             })
             .ok();
         }));
@@ -586,6 +666,7 @@ impl Shell {
     fn board_chat_install(
         &mut self,
         generation: u64,
+        read: u64,
         badges: Vec<ChatTicketBadge>,
         related: Vec<ChatTicketBadge>,
         failure: Option<BoardCallError>,
@@ -596,8 +677,15 @@ impl Shell {
             self.board_chat_refresh(cx);
             return;
         }
+        // A board change landed while this read was in flight: its answer
+        // may predate it (an archived or deleted ticket still listed), so
+        // it is dropped and read again rather than shown for a moment.
+        if std::mem::take(&mut self.board_chat.dirty) {
+            self.board_chat_refresh(cx);
+            return;
+        }
         match failure {
-            None => self.board_chat.install(badges, related),
+            None => self.board_chat.install(badges, related, read),
             Some(error) if board_unavailable(&error) => {
                 self.board_chat.badges.clear();
                 self.board_chat.related.clear();
@@ -606,9 +694,6 @@ impl Shell {
             // A transient failure keeps what was shown; the next board or
             // chat change reads again.
             Some(error) => tracing::debug!(error = %error.message(), "board badges read failed"),
-        }
-        if std::mem::take(&mut self.board_chat.dirty) {
-            self.board_chat_refresh(cx);
         }
         cx.notify();
     }

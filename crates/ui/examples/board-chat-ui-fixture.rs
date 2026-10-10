@@ -43,6 +43,10 @@
 //!     for a ticket chat.
 //! 12. Palette ticket entries resolve by title instead of the stable ticket
 //!     and chat IDs.
+//! 13. (LUN-12) A source chat's strip keeps an archived or deleted ticket
+//!     (its related row, this session's receipt or the "N more" count), or
+//!     only drops it after the chat is reopened; an unarchived one doesn't
+//!     come back.
 //!
 //! Every engine step that a sibling slice owns (conversion, side chat
 //! creation, review start, navigation) is the real engine operation; on a
@@ -445,6 +449,28 @@ async fn wait_for(
         }
     }
     anyhow::bail!("timed out waiting for {what}: {}", last["board"])
+}
+
+/// LUN-12: the tickets `chat`'s strip shows (its receipts' tickets, then the
+/// engine's related tickets), by work item id, without repeats.
+fn strip_tickets(rb: &Value, chat: &str) -> Vec<String> {
+    let of = |list: &str, items: &str| -> Vec<String> {
+        rb["board"][list]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["taskId"] == chat)
+            .flat_map(|entry| entry[items].as_array().cloned().unwrap_or_default())
+            .filter_map(|item| item["workItemId"].as_str().map(str::to_string))
+            .collect()
+    };
+    let mut shown = of("receipts", "receipts");
+    for id in of("related", "tickets") {
+        if !shown.contains(&id) {
+            shown.push(id);
+        }
+    }
+    shown
 }
 
 /// One engine RPC on the engine's runtime (the fixture's own readback of
@@ -1594,6 +1620,139 @@ async fn scenario(
             .first()
             .is_some_and(|label| label.contains(&key_side)),
     );
+
+    // f13. LUN-12 (board-automation-ticket-fixes): the source chat's strip
+    // follows its tickets live. Three tickets created from SOURCE; one is
+    // archived by the engine (as an agent's board_control does) and leaves
+    // the strip and its count without reopening the chat, comes back when
+    // unarchived, and a deleted one is gone for good. Before the fix the
+    // archived tickets kept counting ("8 more related tickets").
+    click_row(window, cx, SOURCE).await?;
+    wait_for(window, cx, 80, "SOURCE's workbench again", |rb| {
+        rb["workbench"]["main"] == SOURCE && rb["workbench"]["loaded"] == true
+    })
+    .await?;
+    for round in 0..2 {
+        let before = strip_tickets(&readback(window, cx)?, SOURCE).len();
+        right_click_row(window, cx, SOURCE).await?;
+        click_board(
+            window,
+            cx,
+            &format!("menu:chat:create-ticket:{SOURCE}"),
+            MouseButton::Left,
+        )
+        .await?;
+        wait_for(window, cx, 40, "the create dialog", |rb| {
+            rb["board"]["dialog"]["kind"] == "CreateTicket"
+        })
+        .await?;
+        click_board(window, cx, "dialog:primary", MouseButton::Left).await?;
+        wait_for(
+            window,
+            cx,
+            150,
+            &format!("related ticket {}", round + 2),
+            |rb| strip_tickets(rb, SOURCE).len() > before,
+        )
+        .await?;
+    }
+    let three = readback(window, cx)?;
+    let tickets = strip_tickets(&three, SOURCE);
+    run.capture(window, cx, "f13-related-three")?;
+    run.snapshot("rb-13-related-three", &three)?;
+    let item_revision = |detail: &Value| detail["view"]["item"]["revision"].as_u64().unwrap_or(0);
+    if tickets.len() < 3 {
+        run.check(
+            "lun12-related-created",
+            "three tickets created from SOURCE are its related tickets",
+            json!(tickets),
+            false,
+        );
+    } else {
+        let archived = tickets[0].clone();
+        rpc(
+            runtime,
+            engine,
+            methods::BOARD_ARCHIVE,
+            json!({ "requestId": "lun12-archive", "workItemId": archived, "archived": true }),
+        )
+        .await?;
+        let dropped = wait_for(
+            window,
+            cx,
+            60,
+            "the strip drops the archived ticket",
+            |rb| {
+                let shown = strip_tickets(rb, SOURCE);
+                shown.len() == tickets.len() - 1 && !shown.contains(&archived)
+            },
+        )
+        .await;
+        run.capture(window, cx, "f13-related-archived")?;
+        run.check(
+            "lun12-archive-leaves-strip",
+            "archiving a related ticket removes it from the source chat's strip and count at once",
+            json!({ "archived": archived, "before": tickets, "after": dropped.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
+            dropped.is_ok(),
+        );
+        rpc(
+            runtime,
+            engine,
+            methods::BOARD_ARCHIVE,
+            json!({ "requestId": "lun12-unarchive", "workItemId": archived, "archived": false }),
+        )
+        .await?;
+        let restored = wait_for(
+            window,
+            cx,
+            60,
+            "the strip brings the unarchived ticket back",
+            |rb| strip_tickets(rb, SOURCE).contains(&archived),
+        )
+        .await;
+        run.check(
+            "lun12-unarchive-returns",
+            "unarchiving brings the ticket back to the strip",
+            json!({ "after": restored.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
+            restored.is_ok(),
+        );
+        let deleted = tickets[1].clone();
+        let detail = rpc(
+            runtime,
+            engine,
+            methods::BOARD_READ,
+            json!({ "workItemId": deleted }),
+        )
+        .await?;
+        let delete = rpc(
+            runtime,
+            engine,
+            methods::BOARD_DELETE,
+            json!({ "requestId": "lun12-delete", "workItemId": deleted, "expectedRevision": item_revision(&detail) }),
+        )
+        .await;
+        let gone = match &delete {
+            Ok(_) => wait_for(window, cx, 60, "the strip drops the deleted ticket", |rb| {
+                !strip_tickets(rb, SOURCE).contains(&deleted)
+            })
+            .await
+            .map_err(|error| format!("{error:#}")),
+            Err(error) => Err(format!("{error:#}")),
+        };
+        run.capture(window, cx, "f13-related-deleted")?;
+        if let Ok(rb) = &gone {
+            run.snapshot("rb-13-related-deleted", rb)?;
+        }
+        run.check(
+            "lun12-delete-leaves-strip",
+            "a deleted ticket leaves every chat's strip and the badge read",
+            json!({ "deleted": deleted, "receipt": delete.as_ref().ok(), "after": gone.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(error)) }),
+            gone.is_ok()
+                && delete
+                    .as_ref()
+                    .is_ok_and(|receipt| receipt["item"]["deleted"] == true),
+        );
+    }
 
     // No reattach control anywhere this run drew.
     let offending: Vec<&String> = words

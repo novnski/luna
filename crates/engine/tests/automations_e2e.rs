@@ -167,6 +167,56 @@ fn evidence(name: &str, v: Value) {
         .unwrap();
     }
 }
+/// LUN-2: definition commits are visible to an already-subscribed UI immediately,
+/// including deletion and scheduler changes, with a fresh initial frame.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_fix_automation_watch_observes_commits_and_scheduler() {
+    let root = tempfile::tempdir().unwrap();
+    let e = core(root.path(), Arc::new(Mutex::new(vec![])));
+    let c = luna_rpc::memory_client(e.rpc_service());
+    create(&c, &e).await;
+    let mut watch = c.subscribe("WatchAutomations", json!({})).await.unwrap();
+    let initial = tokio::time::timeout(Duration::from_secs(3), watch.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let saved = mutate(
+        &c,
+        save(&e, "watch", "watch", json!({"kind":"once","atMs":NOW+1000})),
+    )
+    .await;
+    let first = tokio::time::timeout(Duration::from_secs(3), watch.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first["seq"].as_u64().unwrap() > initial["seq"].as_u64().unwrap());
+    e.rpc_service()
+        .automation_tick_at(NOW + 1000)
+        .await
+        .unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(3), watch.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(second["seq"].as_u64().unwrap() > first["seq"].as_u64().unwrap());
+    let _ = settle(&e, &c, "watch").await;
+    let live = call(&c, "ListAutomations", json!({"automationId":"watch"})).await;
+    let revision = live["items"][0]["revision"].clone();
+    let deleted = mutate(&c, json!({"requestId":"watch-delete","automationId":"watch","ownerHostId":e.device_id,"expectedRevision":revision,"operation":{"kind":"delete"}})).await;
+    assert_eq!(deleted["record"]["deleted"], true);
+    let mut fresh = c.subscribe("WatchAutomations", json!({})).await.unwrap();
+    let latest = tokio::time::timeout(Duration::from_secs(3), fresh.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(latest["seq"].as_u64().unwrap() > second["seq"].as_u64().unwrap());
+    evidence(
+        "ticket-fix-automation-watch",
+        json!({"initial":initial,"created":first,"scheduler":second,"deleted":latest,"saveReceipt":saved,"deleteReceipt":deleted}),
+    );
+    e.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_occurrence_two_consumers_duplicate_mutation_and_restart() {
     let root = tempfile::tempdir().unwrap();
