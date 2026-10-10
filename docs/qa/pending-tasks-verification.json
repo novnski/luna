@@ -1,0 +1,85 @@
+{
+  "date": "2026-10-11",
+  "scope": "Repository task catalog and local cooperative agent queue; no app runtime changes",
+  "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
+  "e2e": {
+    "ok": true,
+    "exit_code": 0,
+    "cases": [
+      "honest active-scope progress; read-only next does not reserve",
+      "cross-worktree atomic claim; resource-prefix conflicts and dependency/session exclusion",
+      "criterion evidence, progress, handoff, blocked work, stale-token fencing and completion gates",
+      "expired claims block duplication; evidenced recovery creates fresh authority",
+      "new-task intake and aliases; stale-worktree fencing; sync preserves progress and active claims",
+      "catalog update cannot rewrite live contracts",
+      "concurrent future intake preserves both additions and existing acceptance",
+      "catalog rejects cycle",
+      "catalog rejects missing dependency",
+      "catalog rejects duplicate alias",
+      "catalog rejects source escape",
+      "catalog rejects bad milestone",
+      "portable restart keeps acceptance/history and strips live authority; rejects corrupt or destructive restore",
+      "explicit deferred/blocked/cancelled lifecycle and criterion invalidation"
+    ],
+    "command_count": 74,
+    "repo": "/private/tmp/luna-pending-tasks-e2e-20261011-04/repo",
+    "peer": "/private/tmp/luna-pending-tasks-e2e-20261011-04/peer",
+    "command": "python3 scripts/qa-pending-tasks.py --output /private/tmp/luna-pending-tasks-e2e-20261011-04",
+    "artifact_directory": "/private/tmp/luna-pending-tasks-e2e-20261011-04",
+    "artifact_hashes": {
+      "commands.json": "340295bf5673c51d502fc7266aaa56d6acf546c34edd1eca66827c7a8d845b23",
+      "result.json": "461747d184f919736a2aae4806a13054651abaf7365f08445e163b382e0b7d94"
+    }
+  },
+  "checks": {
+    "python_compile": "passed",
+    "ruff_correctness_and_unused_imports": "passed E9,F63,F7,F82,F401",
+    "catalog_validation": "passed: 66 entries, 9 groups",
+    "new_document_links": "passed: five queue documents",
+    "workflow_yaml": "parsed; queue-e2e job present",
+    "diff_whitespace": "passed"
+  },
+  "source_hashes": {
+    "scripts/pending_tasks.py": "4e5654244435750285776b0f02aabaa42d2e7e600a35e8803e915d5b66db452f",
+    "scripts/qa-pending-tasks.py": "96096a0a1e3576efd131f9290b998646af3865733da4332be1440be3eda8d095",
+    "docs/pending-tasks/catalog.json": "32b13b3fa3b240c99dcf6b8c8f54cce20747743be58a70a3d0676a8f4b14bab2"
+  },
+  "limits": [
+    "Requires agents to claim, heartbeat and checkpoint; does not detect unregistered work automatically",
+    "Shared local state across linked worktrees; no implicit multi-host coordination",
+    "Saved reports are checkpoints; live ownership comes from CLI",
+    "No Rust build or app refresh needed for this repository tooling change"
+  ],
+  "external_blocker_readback": {
+    "date": "2026-10-11",
+    "repository": "novnski/luna",
+    "private": true,
+    "release_list_empty": true,
+    "commands": [
+      [
+        "gh",
+        "api",
+        "repos/novnski/luna",
+        "--jq",
+        "{full_name,private,default_branch}"
+      ],
+      [
+        "gh",
+        "api",
+        "repos/novnski/luna/releases?per_page=1",
+        "--jq",
+        "{visible_release_count_on_first_page:length}"
+      ]
+    ]
+  },
+  "cleanup": {
+    "disposable_repositories_worktrees_and_fixture_stores_removed": [
+      "/private/tmp/luna-pending-tasks-e2e-20261011-01",
+      "/private/tmp/luna-pending-tasks-e2e-20261011-02",
+      "/private/tmp/luna-pending-tasks-e2e-20261011-03",
+      "/private/tmp/luna-pending-tasks-e2e-20261011-04"
+    ],
+    "evidence_files_preserved": true,
+    "primary_app_data_and_build_cache_preserved": true
+  }
+}

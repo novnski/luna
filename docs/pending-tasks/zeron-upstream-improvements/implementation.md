@@ -1,6 +1,6 @@
 # Pending implementation tasks and E2E acceptance
 
-All five tasks are **not started** at the recorded source cut. Rebase the [evidence](research.md) against current main and active plans first. Do not cherry-pick an entire upstream commit: LUNA's engine guards, provider adapters, transcript identities, Board and workbench have diverged.
+All five tasks were **not started at the recorded source cut**. Use [the shared queue](../README.md) for live claims/status and rebase the [evidence](research.md) against current main and active plans first. Do not cherry-pick an entire upstream commit: LUNA's engine guards, provider adapters, transcript identities, Board and workbench have diverged.
 
 For future implementation, record the failure contract and author meaningful E2E scenarios before production code, through the repository's [test-audit gate](../../../.codex/skills/test-audit/SKILL.md). Reuse an existing strongest-boundary suite where possible. Do not add unit tests after implementation or expose test-only production seams. Retain a repeatable artifact containing source SHA, commands, configuration, expected/actual state and evidence hashes. Synthetic peer scenarios verify deterministic failures; required native/live journeys establish the user-facing behavior. Follow the QA app isolation and graceful-quit rules in [AGENTS.md](../../../AGENTS.md).
 

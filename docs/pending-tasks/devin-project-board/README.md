@@ -1,5 +1,8 @@
 # Project board, ticket chats, and unified Side chats
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: PB-0/1/1R/2/3 are shipped references; SW-10/SW-12 own current supervision/verification; PB-4A/B/C/D remain Deferred. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status:** PB-0 through PB-3, including PB-1R, implemented on 2026-10-09. Only PB-4 (feature groups, more trackers, dependency-driven automation) remains open. The engineering contract is [pb0-contract.md](../../design/project-board/pb0-contract.md).
 
 **Verification (2026-10-09):**

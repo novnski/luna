@@ -1,16 +1,64 @@
-# Pending tasks
+# Shared pending task queue
 
-- [Useful Zeron changes: snapshots, registry growth, checklist, file navigation and workspace search](zeron-upstream-improvements/README.md): five pending desktop improvements from the 2026-10-11 upstream review; excludes shipped capabilities and work already owned by other plans.
+Ask an agent: **“Pick up the next pending task and work on it.”** The root
+[AGENTS.md](../../AGENTS.md) routes that request through the atomic queue.
 
-- [T3 remote/mobile: source research and LUNA gap plan](t3-remote-mobile/README.md): ten-agent audit of connections, native mobile features and current LUNA; detailed gaps, implementation tasks and future E2E, supplementing Control this Mac without changing direct-only V1.
+```sh
+python3 scripts/pending_tasks.py status
+python3 scripts/pending_tasks.py claim --owner '<agent name>' --session '<actual chat or run ID>'
+```
 
-- [LUNA-only workflows: prioritized migration plan](luna-only-workflows/README.md): pending coordination and implementation plan based on retained Codex/Claude usage; reuses existing HTML/MCP Apps/search work and shipped Board/automation fixes, with explicit task dependencies and E2E switching gates.
-- [Control this Mac from a paired phone](control-this-mac/README.md): plan only; no part of M0–M4 is implemented.
-- [Complete a two-version macOS GitHub Release updater trial](github-release-updater-two-version-trial.md): blocked while the repository is private and has no published Releases.
-- [Agent workspace ideas from T3, Conductor, super.engineering and BB](agent-workspace-app-research/README.md): research; most of its fifteen opportunities are not started.
-- [Interactive HTML replies, MCP Apps, and conversation search](interactive-chat-surfaces/README.md): implementation plan only; HTML replies must work through Codex, Claude Code and OpenCode, with a shared isolated renderer, capability-based MCP Apps support, and find within the selected conversation.
-- [Project board, ticket chats, and unified Side chats](devin-project-board/README.md): PB-0–PB-3 and PB-1R are implemented (Board below Automations, ticket chats, Side chats, reviewer side chats, Discuss with AI, GitHub issues); only PB-4 (feature groups, more trackers, dependency automation) remains.
+The agent receives one eligible ticket with its full specifications, previous
+work, acceptance criteria and claim token. Unfinished eligible work comes
+first. Owned/conflicting tasks, unmet dependencies and explicit blockers are
+skipped. `next` previews; `claim` reserves. Future agents must register their
+claims for the coordination tools to see them.
 
-Completed tasks were removed on 2026-10-08: Codex feature parity, agent-created child threads, Claude Code parity research and the orchestrator V2/BB research. Recover any of them with `git show be17717e:docs/pending-tasks/<path>`. OpenCode feature parity was removed on 2026-10-09: its adapter and live E2E rounds are merged, its OC-18 certification is not pursued, and remote use of OpenCode moves to Control this Mac (`git show 2abe004b:docs/pending-tasks/opencode-feature-parity/<path>`).
+Start with [the agent workflow](WORKFLOW.md), [how the work fits together](ORGANIZATION.md),
+and [the saved progress report](progress.md). [catalog.json](catalog.json)
+contains the contracts; `status` reads live ownership across linked worktrees.
+The report is a dated checkpoint. [templates/task.json](templates/task.json)
+and `add` admit new tasks without losing progress.
 
-Claude's [two-writer resume protection](../reference/claude-code-advanced-certification.md) passed live verification in the 2026-10-08 audit. Its native workflow lanes remain intentionally deferred; LUNA will build its own workflows later.
+## Initial scope, 11 October 2026
+
+| State | Entries | Meaning |
+| --- | ---: | --- |
+| Ready | 35 | Concrete specified work; dependencies/resources determine eligibility. |
+| Blocked | 1 | Real updater trial awaiting its recorded external prerequisites. |
+| Deferred | 25 | Later client extensions, optional journeys and research ideas awaiting bounded scope decisions. |
+| Done references | 5 | Shipped PB-0/1/1R/2/3; excluded from active progress. |
+
+**36 active-scope tasks, 0% accepted completion at setup.** Progress measures
+evidenced acceptance criteria, not estimated time. The default first ticket is
+**SW-00**, the current capability/ownership baseline. Later status comes from
+the live CLI and generated checkpoint, not these initial counts.
+
+## Detailed specifications
+
+| Source package | Queue ownership |
+| --- | --- |
+| [LUNA-only workflows](luna-only-workflows/README.md) | SW-00–SW-16: integration, operations, transcript/recovery, helper and switching journeys; consumes shared feature owners. |
+| [Interactive surfaces](interactive-chat-surfaces/README.md) | IC-0–IC-6: shared storage/renderer, all-provider HTML, MCP Apps, conversation Find and integrated acceptance. |
+| [Useful Zeron changes](zeron-upstream-improvements/README.md) | ZI-01–ZI-05: bounded snapshots/registry, current checklist, typed file navigation and workspace text search. |
+| [Control this Mac](control-this-mac/README.md) + [T3 remote/mobile audit](t3-remote-mobile/README.md) | One RM-00–RM-13 chain. M0–M4 derive from RM-00–RM-07; later extensions remain deferred. |
+| [Agent workspace research](agent-workspace-app-research/README.md) | Fifteen audit-first AW opportunities; AW-13 maps to PB-4A and AW-14 to PB-4D. |
+| [Project Board](devin-project-board/README.md) | Five shipped references; PB-4A/B/C/D deferred for grouping, trackers, templates and bounded workflows. |
+| [Actual updater trial](github-release-updater-two-version-trial.md) | UP-01, blocked until fresh evidence satisfies access/release prerequisites. |
+
+Specifications retain their stable folders, research and evidence. Resource
+reservations prevent overlapping implementation; the graph avoids duplicate
+work across packages. The queue is local repository tooling and has separate
+ownership from LUNA's runtime Board. See the workflow for portable checkpoints,
+safe recovery and the local/multi-host coordination boundary.
+
+## Historical work
+
+Completed parity/orchestrator specifications were removed on 2026-10-08;
+recover them with `git show be17717e:docs/pending-tasks/<path>`. OpenCode parity
+was removed on 2026-10-09; its adapter/live E2Es are merged, OC-18 is not pursued,
+and remote OpenCode work belongs to the remote chain
+(`git show 2abe004b:docs/pending-tasks/opencode-feature-parity/<path>`).
+Claude's [two-writer protection](../reference/claude-code-advanced-certification.md)
+has retained live verification. Native Claude workflow lanes remain deferred,
+and the cancelled Plan/Build workflow is not revived by this catalog.

@@ -1,5 +1,8 @@
 # Interactive HTML replies, MCP Apps, and conversation search
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: IC-0–IC-6. SW-07/SW-09/SW-14 consume the shared contracts and acceptance; they do not own another renderer or app bridge. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status:** pending; plan only. No phase has been implemented or runtime-certified by this document.
 
 **Requested:** 2026-10-10, Europe/Bucharest. Build interactive HTML replies across Codex, Claude Code and OpenCode, add MCP Apps hosting, and add find within the current conversation.
@@ -53,7 +56,7 @@ Not included: an artifact library, document collaboration, editable revision his
 
 ## Completion tracking
 
-All phases below start **not started**. Change status only with links to code and retained evidence, preserving the distinction between offline protocol evidence and live/pixel evidence.
+All phases below were **not started at the planning baseline**. Record live status through the shared queue with code and retained evidence; this table defines ownership and dependencies. Preserve the distinction between offline protocol evidence and live/pixel evidence.
 
 | Phase | Deliverable | Depends on |
 | --- | --- | --- |

@@ -1,5 +1,8 @@
 # Control this Mac from a paired phone
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: one RM-00–RM-07 chain for M0–M4, jointly specified here and in the T3 audit. Milestones are derived, not duplicate tickets. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status:** Implementation plan prepared on 1 October 2026. No remote host, mobile migration, network configuration, or feature acceptance described here has been implemented by this planning task.
 
 LUNA should let its owner open Settings → Connections → Control this Mac, enable connections, select Add, and scan a QR code with the LUNA iPhone app. The phone then follows and controls the same projects and threads that run on this Mac. The Mac owns execution, provider credentials, task storage, permissions, and accepted commands. The phone is a client, not another execution host.

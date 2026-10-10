@@ -1,0 +1,48 @@
+name: Repository task queue
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/pending_tasks.py'
+      - 'scripts/qa-pending-tasks.py'
+      - 'docs/pending-tasks/**'
+      - 'docs/qa/pending-tasks.md'
+      - '.github/workflows/pending-tasks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/pending_tasks.py'
+      - 'scripts/qa-pending-tasks.py'
+      - 'docs/pending-tasks/**'
+      - 'docs/qa/pending-tasks.md'
+      - '.github/workflows/pending-tasks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  queue-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate catalog and compile tooling
+        run: |
+          python3 -m py_compile scripts/pending_tasks.py scripts/qa-pending-tasks.py
+          python3 scripts/pending_tasks.py validate
+      - name: Concurrent agents and recovery E2E
+        run: python3 scripts/qa-pending-tasks.py --output "$RUNNER_TEMP/pending-tasks-e2e"
+      - name: Retain command/readback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pending-tasks-e2e
+          path: |
+            ${{ runner.temp }}/pending-tasks-e2e/result.json
+            ${{ runner.temp }}/pending-tasks-e2e/commands.json
+            ${{ runner.temp }}/pending-tasks-e2e/sha256.json
+          if-no-files-found: warn

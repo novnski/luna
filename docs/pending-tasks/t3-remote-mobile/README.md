@@ -1,5 +1,8 @@
 # T3 remote and mobile research for LUNA
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: RM-00–RM-13. This package supplements Control this Mac; the catalog derives M0–M4 from the same RM tickets. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status:** source research complete; implementation pending. Prepared on 11 October 2026, Europe/Bucharest. This package implements no remote feature and certifies no running mobile or host deployment.
 
 T3's main advantage is an environment-centered remote product: the machine runs agents and owns files, terminals and durable work; native mobile, browser and desktop clients send scoped commands and follow authoritative state through a common client runtime. LUNA already has many of the backend pieces and an iOS transcript client. Its main missing connection is a complete direct, paired-Mac product with host-admitted task operations and the phone screens that expose existing host capabilities.

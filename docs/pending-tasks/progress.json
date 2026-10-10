@@ -1,0 +1,1519 @@
+{
+  "schema_version": 1,
+  "catalog_hash": "78ed17c997b05daac13147058607a4e3b698277651eacfafb437a4cff5b365f6",
+  "created_at": 1791674104.61664,
+  "summary": {
+    "counts": {
+      "blocked": 1,
+      "cancelled": 0,
+      "deferred": 25,
+      "done": 5,
+      "in_progress": 0,
+      "paused": 0,
+      "ready": 35,
+      "review": 0
+    },
+    "groups": [
+      {
+        "id": "integration",
+        "title": "Provider access, effective tools and skills",
+        "tasks": 4,
+        "done": 0,
+        "remaining": 4,
+        "accepted_units": 0,
+        "total_units": 16,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "transcript",
+        "title": "Transcript trust, recovery and current checklist",
+        "tasks": 3,
+        "done": 0,
+        "remaining": 3,
+        "accepted_units": 0,
+        "total_units": 12,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "artifacts",
+        "title": "Shared visual artifacts, HTML and MCP Apps",
+        "tasks": 8,
+        "done": 0,
+        "remaining": 8,
+        "accepted_units": 0,
+        "total_units": 29,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "navigation",
+        "title": "Find, source navigation and context migration",
+        "tasks": 4,
+        "done": 0,
+        "remaining": 4,
+        "accepted_units": 0,
+        "total_units": 15,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "workspace",
+        "title": "Workspace performance, settings and run/review UX",
+        "tasks": 2,
+        "done": 0,
+        "remaining": 2,
+        "accepted_units": 0,
+        "total_units": 8,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "orchestration",
+        "title": "Board, helper supervision and future workflows",
+        "tasks": 2,
+        "done": 0,
+        "remaining": 2,
+        "accepted_units": 0,
+        "total_units": 8,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "remote",
+        "milestones": {
+          "M0": [
+            "RM-00"
+          ],
+          "M1": [
+            "RM-01",
+            "RM-02"
+          ],
+          "M2": [
+            "RM-03"
+          ],
+          "M3": [
+            "RM-04",
+            "RM-05",
+            "RM-06"
+          ],
+          "M4": [
+            "RM-07"
+          ]
+        },
+        "title": "One direct paired-Mac product",
+        "tasks": 8,
+        "done": 0,
+        "remaining": 8,
+        "accepted_units": 0,
+        "total_units": 31,
+        "acceptance_percent": 0.0,
+        "milestone_status": {
+          "M0": {
+            "done": false,
+            "members": [
+              "RM-00"
+            ]
+          },
+          "M1": {
+            "done": false,
+            "members": [
+              "RM-01",
+              "RM-02"
+            ]
+          },
+          "M2": {
+            "done": false,
+            "members": [
+              "RM-03"
+            ]
+          },
+          "M3": {
+            "done": false,
+            "members": [
+              "RM-04",
+              "RM-05",
+              "RM-06"
+            ]
+          },
+          "M4": {
+            "done": false,
+            "members": [
+              "RM-07"
+            ]
+          }
+        }
+      },
+      {
+        "id": "operations",
+        "title": "Real operations and local recurrence",
+        "tasks": 3,
+        "done": 0,
+        "remaining": 3,
+        "accepted_units": 0,
+        "total_units": 12,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      },
+      {
+        "id": "release",
+        "title": "Integrated acceptance and release verification",
+        "tasks": 2,
+        "done": 0,
+        "remaining": 2,
+        "accepted_units": 0,
+        "total_units": 7,
+        "acceptance_percent": 0.0,
+        "milestone_status": {}
+      }
+    ],
+    "expired_claims": [],
+    "active_scope": {
+      "tasks": 36,
+      "done": 0,
+      "remaining": 36,
+      "accepted_units": 0,
+      "total_units": 138,
+      "acceptance_percent": 0.0
+    },
+    "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
+    "next": [
+      "SW-00",
+      "RM-00",
+      "IC-0",
+      "ZI-01",
+      "ZI-03",
+      "ZI-04",
+      "ZI-05"
+    ]
+  },
+  "tasks": [
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-00",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9583218
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958406
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-02",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958435
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-03",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958459
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-04",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9584792
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-05",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958495
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-06",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958512
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-07",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958526
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-08",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958542
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-09",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.95856
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-10",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958577
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-11",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958591
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-12",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958604
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-13",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958617
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-14",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9586308
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-15",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958646
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-16",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9586601
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-0",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958674
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-1",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958687
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-2",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958699
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-3",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958712
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-4",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9587278
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-5",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958743
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IC-6",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9587579
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958771
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-02",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958787
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-03",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9587991
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-04",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9588149
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-05",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.95883
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-00",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958842
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958855
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-02",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958873
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-03",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958892
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-04",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958909
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-05",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958922
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-06",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9589381
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-07",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958954
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-08",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.958972
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-09",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9589891
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-10",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959004
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-11",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959021
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-12",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959033
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-13",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9590452
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959059
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-02",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9590762
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-03",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959088
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-04",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959109
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-05",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959122
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-06",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959136
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-07",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9591522
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-08",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959168
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-09",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9591858
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-10",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959202
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-11",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959218
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-12",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959233
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-15",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9592488
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "PB-4A",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959265
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "PB-4B",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.95928
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "PB-4C",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959293
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "PB-4D",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959309
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {
+        "delivered": {
+          "at": null,
+          "evidence": [
+            {
+              "baseline": "2026-10-09 documented acceptance",
+              "ref": "docs/pending-tasks/devin-project-board/README.md"
+            },
+            {
+              "ref": "docs/design/project-board/pb0-contract.md"
+            }
+          ],
+          "note": "Documented shipped baseline; not recertified by queue setup"
+        }
+      },
+      "id": "PB-0",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "done",
+      "updated_at": 1791673834.959327
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {
+        "delivered": {
+          "at": null,
+          "evidence": [
+            {
+              "baseline": "2026-10-09 documented acceptance",
+              "ref": "docs/pending-tasks/devin-project-board/README.md"
+            },
+            {
+              "ref": "docs/design/project-board/pb0-contract.md"
+            }
+          ],
+          "note": "Documented shipped baseline; not recertified by queue setup"
+        }
+      },
+      "id": "PB-1",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "done",
+      "updated_at": 1791673834.95935
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {
+        "delivered": {
+          "at": null,
+          "evidence": [
+            {
+              "baseline": "2026-10-09 documented acceptance",
+              "ref": "docs/pending-tasks/devin-project-board/README.md"
+            },
+            {
+              "ref": "docs/design/project-board/pb0-contract.md"
+            }
+          ],
+          "note": "Documented shipped baseline; not recertified by queue setup"
+        }
+      },
+      "id": "PB-1R",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "done",
+      "updated_at": 1791673834.959363
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {
+        "delivered": {
+          "at": null,
+          "evidence": [
+            {
+              "baseline": "2026-10-09 documented acceptance",
+              "ref": "docs/pending-tasks/devin-project-board/README.md"
+            },
+            {
+              "ref": "docs/design/project-board/pb0-contract.md"
+            }
+          ],
+          "note": "Documented shipped baseline; not recertified by queue setup"
+        }
+      },
+      "id": "PB-2",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "done",
+      "updated_at": 1791673834.959378
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {
+        "delivered": {
+          "at": null,
+          "evidence": [
+            {
+              "baseline": "2026-10-09 documented acceptance",
+              "ref": "docs/pending-tasks/devin-project-board/README.md"
+            },
+            {
+              "ref": "docs/design/project-board/pb0-contract.md"
+            }
+          ],
+          "note": "Documented shipped baseline; not recertified by queue setup"
+        }
+      },
+      "id": "PB-3",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "done",
+      "updated_at": 1791673834.9593961
+    },
+    {
+      "attempts": 0,
+      "blocker": "Planning record says intended clients cannot anonymously access this private repository and no published Releases exist. Revalidate access/assets before unblocking; queue setup did not publish releases or change visibility.",
+      "checks": {},
+      "id": "UP-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "blocked",
+      "updated_at": 1791673834.9594119
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "task": "SW-00",
+      "at": 1791673834.9583948,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 2,
+      "task": "SW-01",
+      "at": 1791673834.958432,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 3,
+      "task": "SW-02",
+      "at": 1791673834.958456,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 4,
+      "task": "SW-03",
+      "at": 1791673834.9584699,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 5,
+      "task": "SW-04",
+      "at": 1791673834.958493,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 6,
+      "task": "SW-05",
+      "at": 1791673834.9585102,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 7,
+      "task": "SW-06",
+      "at": 1791673834.958524,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 8,
+      "task": "SW-07",
+      "at": 1791673834.95854,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 9,
+      "task": "SW-08",
+      "at": 1791673834.958557,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 10,
+      "task": "SW-09",
+      "at": 1791673834.958575,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 11,
+      "task": "SW-10",
+      "at": 1791673834.9585888,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 12,
+      "task": "SW-11",
+      "at": 1791673834.958602,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 13,
+      "task": "SW-12",
+      "at": 1791673834.958615,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 14,
+      "task": "SW-13",
+      "at": 1791673834.9586291,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 15,
+      "task": "SW-14",
+      "at": 1791673834.958643,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 16,
+      "task": "SW-15",
+      "at": 1791673834.958657,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 17,
+      "task": "SW-16",
+      "at": 1791673834.9586718,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 18,
+      "task": "IC-0",
+      "at": 1791673834.958685,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 19,
+      "task": "IC-1",
+      "at": 1791673834.9586968,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 20,
+      "task": "IC-2",
+      "at": 1791673834.95871,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 21,
+      "task": "IC-3",
+      "at": 1791673834.958726,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 22,
+      "task": "IC-4",
+      "at": 1791673834.958741,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 23,
+      "task": "IC-5",
+      "at": 1791673834.9587562,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 24,
+      "task": "IC-6",
+      "at": 1791673834.9587688,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 25,
+      "task": "ZI-01",
+      "at": 1791673834.958781,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 26,
+      "task": "ZI-02",
+      "at": 1791673834.958797,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 27,
+      "task": "ZI-03",
+      "at": 1791673834.958813,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 28,
+      "task": "ZI-04",
+      "at": 1791673834.958827,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 29,
+      "task": "ZI-05",
+      "at": 1791673834.9588401,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 30,
+      "task": "RM-00",
+      "at": 1791673834.958853,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 31,
+      "task": "RM-01",
+      "at": 1791673834.9588711,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 32,
+      "task": "RM-02",
+      "at": 1791673834.95889,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 33,
+      "task": "RM-03",
+      "at": 1791673834.9589062,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 34,
+      "task": "RM-04",
+      "at": 1791673834.95892,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 35,
+      "task": "RM-05",
+      "at": 1791673834.958936,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 36,
+      "task": "RM-06",
+      "at": 1791673834.958952,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 37,
+      "task": "RM-07",
+      "at": 1791673834.95897,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 38,
+      "task": "RM-08",
+      "at": 1791673834.958987,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 39,
+      "task": "RM-09",
+      "at": 1791673834.959002,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 40,
+      "task": "RM-10",
+      "at": 1791673834.959018,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 41,
+      "task": "RM-11",
+      "at": 1791673834.959031,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 42,
+      "task": "RM-12",
+      "at": 1791673834.959043,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 43,
+      "task": "RM-13",
+      "at": 1791673834.9590569,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 44,
+      "task": "AW-01",
+      "at": 1791673834.959073,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 45,
+      "task": "AW-02",
+      "at": 1791673834.9590862,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 46,
+      "task": "AW-03",
+      "at": 1791673834.959102,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 47,
+      "task": "AW-04",
+      "at": 1791673834.9591198,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 48,
+      "task": "AW-05",
+      "at": 1791673834.9591339,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 49,
+      "task": "AW-06",
+      "at": 1791673834.95915,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 50,
+      "task": "AW-07",
+      "at": 1791673834.959166,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 51,
+      "task": "AW-08",
+      "at": 1791673834.959184,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 52,
+      "task": "AW-09",
+      "at": 1791673834.9592,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 53,
+      "task": "AW-10",
+      "at": 1791673834.959216,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 54,
+      "task": "AW-11",
+      "at": 1791673834.959231,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 55,
+      "task": "AW-12",
+      "at": 1791673834.959247,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 56,
+      "task": "AW-15",
+      "at": 1791673834.959263,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 57,
+      "task": "PB-4A",
+      "at": 1791673834.959278,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 58,
+      "task": "PB-4B",
+      "at": 1791673834.959291,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 59,
+      "task": "PB-4C",
+      "at": 1791673834.959307,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 60,
+      "task": "PB-4D",
+      "at": 1791673834.959324,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 61,
+      "task": "PB-0",
+      "at": 1791673834.959347,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 62,
+      "task": "PB-1",
+      "at": 1791673834.95936,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 63,
+      "task": "PB-1R",
+      "at": 1791673834.9593759,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 64,
+      "task": "PB-2",
+      "at": 1791673834.959393,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 65,
+      "task": "PB-3",
+      "at": 1791673834.95941,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    },
+    {
+      "seq": 66,
+      "task": "UP-01",
+      "at": 1791673834.959431,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 1
+      }
+    }
+  ]
+}

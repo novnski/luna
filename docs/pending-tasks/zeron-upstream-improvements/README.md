@@ -1,5 +1,8 @@
 # Useful Zeron changes for LUNA
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: ZI-01–ZI-05. Shared normalization, transcript, file and workspace areas are reserved through the cross-feature catalog. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status: pending; research and implementation specifications only.** Reviewed on **2026-10-11, Europe/Bucharest**. No runtime feature was implemented or certified in this task.
 
 The local Zeron checkout was advanced from `b42fc2b8fbf247dd92796c2917f277535cea91ac` (v0.2.101) to official upstream `40091d469aa8a3f1ab1ec7cb404957b742940278` (v0.2.111). The range contains **78 commits, 70 excluding merges**, and changes 476 files. Its newest commit is dated 2026-10-10. The `novnski/zeron` fork remote still pointed at the earlier baseline; fetching that fork alone would have missed these changes. The clean local `main` was fast-forwarded directly from `zeronsh/zeron`; the fork remote was not pushed or reconfigured.

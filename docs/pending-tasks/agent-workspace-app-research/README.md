@@ -1,5 +1,8 @@
 # Agent workspace apps: what LUNA should borrow
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: AW-01–AW-15, with AW-13 → PB-4A and AW-14 → PB-4D. Research ideas start Deferred and require current-source/native triage. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 Research date: **2026-10-04** (Europe/Bucharest).
 
 **Recommendation:** combine T3's settings and attention clarity, Conductor's setup/run/review continuity, super.engineering's workbench and action routing, and BB's explicit orchestration controls. Keep LUNA's native, local-first foundation.

@@ -1,0 +1,20 @@
+{
+  "id": "NEW-01",
+  "title": "Replace with one bounded outcome",
+  "group": "workspace",
+  "priority": 2,
+  "order": 1000,
+  "status": "deferred",
+  "aliases": [],
+  "depends_on": [],
+  "resources": ["engine/replace-with-owning-area"],
+  "sources": ["docs/pending-tasks/replace-with-feature/implementation.md"],
+  "outcome": "Describe what the user can do when this ticket is complete.",
+  "resume": "Read the specification, inspect current main and any retained work, then run the named first step.",
+  "criteria": [
+    {"id": "contract", "text": "Record the current failure and ownership contract before implementation.", "weight": 1},
+    {"id": "behavior", "text": "Replace with an observable behavior and credible regression at its strongest real boundary.", "weight": 1},
+    {"id": "verification", "text": "Retain required E2E command, exit code, independent readback and artifact hashes.", "weight": 1},
+    {"id": "handoff", "text": "Complete applicable build, lint/format, review, app handoff and verified main delivery; checkpoint the exact result and limitations.", "weight": 1}
+  ]
+}

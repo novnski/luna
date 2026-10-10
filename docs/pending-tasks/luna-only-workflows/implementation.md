@@ -1,6 +1,6 @@
 # Implementation tasks
 
-All tasks are **not started**. Dependencies/priorities are authoritative in [README](README.md#priorities-dependencies-and-task-ledger). Production owners below are existing integration points; inspect their crate manifests and current code before editing. Do not add new modules solely because the list spans several owners.
+All tasks were **not started at the planning baseline**. Live claims/status and reconciled dependencies belong to [the shared queue](../README.md); the [original ledger](README.md#priorities-dependencies-and-task-ledger) records this package's contract. Production owners below are existing integration points; inspect their crate manifests and current code before editing. Do not add new modules solely because the list spans several owners.
 
 Each task closes with its named [acceptance scenarios](verification.md), a retained artifact manifest and an updated ledger. If baseline behavior passes, record verification and avoid a needless implementation change. A failing regression must first demonstrate the intended failure at its strongest boundary. The four-field test-audit authoring gate applies before any new/changed test; no post-implementation unit tests or test-only production seams.
 

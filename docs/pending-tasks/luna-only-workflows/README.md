@@ -1,5 +1,8 @@
 # LUNA-only workflows: prioritized implementation plan
 
+**Shared tracking:** [queue and current status](../README.md) · [agent workflow](../WORKFLOW.md).
+Queue ownership: SW-00–SW-16. Preserve linked implementation owners across IC, ZI, Board and the remote chain. Status statements below describe the planning/delivery baseline; use the CLI for live claims and progress.
+
 **Status:** pending. This package defines tasks and acceptance gates; it does not claim that they have been implemented or tested.
 
 **Requested:** 2026-10-10, Europe/Bucharest. **Planning baseline:** `06ea5cd56ad1c5874921413b020a54f3cedb0c27`. Recheck current source and provider capabilities in SW-00 before implementation.
@@ -33,7 +36,7 @@ This is a coordinating backlog. An external owner below keeps its implementation
 
 ## Priorities, dependencies and task ledger
 
-Every SW task starts **not started**. External implemented components above retain their delivered status. Update a task only with a code/evidence link and the relevant E2E result; a verification-only task can close without a code change when current behavior passes.
+Every SW task was **not started at this planning baseline**. Live tracking now belongs to the shared queue. External implemented components above retain their delivered status. Record accepted criteria only with code/evidence and the relevant E2E result; a verification-only task can close without a code change when current behavior passes.
 
 | Task | Priority | Deliverable | Depends on |
 | --- | --- | --- | --- |

@@ -1,6 +1,6 @@
 # Implementation phases
 
-Every phase is **not started**. Existing files below are integration owners; new filenames are proposals. Inspect the relevant crate manifest and current owner before changing it. Prefer a small coherent implementation over introducing every proposed module mechanically.
+Every phase was **not started at the planning baseline**. Live phase status and claims now belong to [the shared queue](../README.md); use it before implementation. Existing files below are integration owners; new filenames are proposals. Inspect the relevant crate manifest and current owner before changing it. Prefer a small coherent implementation over introducing every proposed module mechanically.
 
 ## IC-0 — establish capability and failure contracts
 

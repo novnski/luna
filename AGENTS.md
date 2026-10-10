@@ -4,6 +4,19 @@ Follow the parent workspace instructions. Work from this repository root, read `
 
 After completing a feature and its required checks, follow [the commit-and-push skill](.codex/skills/commit-and-push/SKILL.md) to clean up task artifacts, commit all feature changes, merge into `main` if needed, and push and verify `origin/main`. Honor an explicit user request to stop earlier.
 
+## Repository pending tasks
+
+For requests to pick up, resume, organize or add pending work, use the shared
+[task queue](docs/pending-tasks/README.md) and its
+[agent workflow](docs/pending-tasks/WORKFLOW.md). Claim atomically through
+`python3 scripts/pending_tasks.py claim --owner <agent-name> --session <actual-chat-or-run-id>`
+before implementation; inspect prior work and linked specifications. Respect
+dependency/code-area reservations, heartbeat active work, checkpoint evidenced
+criteria, and pause/block unfinished work with a useful resume note. Do not
+treat a stale Markdown status or expired lease as permission to duplicate work.
+New tasks use the catalog intake path; repository queue status and LUNA Board
+runtime status have separate owners.
+
 ## Tests
 
 Write, change, review and sweep tests through [the test-audit skill](.codex/skills/test-audit/SKILL.md); it is the default way to test in this repository. Every new or changed test passes its authoring gate: it names the behavior and the credible regression it catches, has one owner at the strongest real boundary (prefer end-to-end and integration suites), and needs no test-only production seam. Use its campaign mode ([CAMPAIGN.md](.codex/skills/test-audit/CAMPAIGN.md)) for whole-crate sweeps. Codex finds the skill through `.agents/skills` and Claude Code through `.claude/skills`; both link to `.codex/skills`.

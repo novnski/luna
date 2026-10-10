@@ -1,6 +1,9 @@
 # Complete a two-version macOS GitHub Release updater trial
 
-**Status:** Pending; rechecked on 2026-10-08. The repository is private and has no published Releases, so the app cannot yet fetch a release anonymously.
+**Shared tracking:** UP-01 in [the queue](README.md), initially Blocked.
+Use [the agent workflow](WORKFLOW.md) and fresh prerequisite readback before unblocking; the status below is the retained planning baseline.
+
+**Status:** Blocked; rechecked on 2026-10-11 using the repository and Releases GitHub API through `gh`. The repository is private and the Releases list is empty, so the app cannot yet fetch a release anonymously. The readback is recorded in [queue verification](../qa/pending-tasks-verification.json).
 
 The [local updater QA](../qa/update-e2e/README.md) passed signed-manifest checks, bundle replacement, and a Settings > Updates restart. Its fixtures changed the plist version and marker while reusing one compiled executable. They do not establish that a newly compiled version reports its new version after restart or that the GitHub Release download path works end to end.
 

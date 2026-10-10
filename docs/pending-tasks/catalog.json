@@ -1,0 +1,3038 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "inventory_date": "2026-10-11",
+  "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
+  "groups": [
+    {
+      "id": "integration",
+      "title": "Provider access, effective tools and skills"
+    },
+    {
+      "id": "transcript",
+      "title": "Transcript trust, recovery and current checklist"
+    },
+    {
+      "id": "artifacts",
+      "title": "Shared visual artifacts, HTML and MCP Apps"
+    },
+    {
+      "id": "navigation",
+      "title": "Find, source navigation and context migration"
+    },
+    {
+      "id": "workspace",
+      "title": "Workspace performance, settings and run/review UX"
+    },
+    {
+      "id": "orchestration",
+      "title": "Board, helper supervision and future workflows"
+    },
+    {
+      "id": "remote",
+      "title": "One direct paired-Mac product",
+      "milestones": {
+        "M0": [
+          "RM-00"
+        ],
+        "M1": [
+          "RM-01",
+          "RM-02"
+        ],
+        "M2": [
+          "RM-03"
+        ],
+        "M3": [
+          "RM-04",
+          "RM-05",
+          "RM-06"
+        ],
+        "M4": [
+          "RM-07"
+        ]
+      }
+    },
+    {
+      "id": "operations",
+      "title": "Real operations and local recurrence"
+    },
+    {
+      "id": "release",
+      "title": "Integrated acceptance and release verification"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "SW-00",
+      "title": "Rebase shared capability, ownership and acceptance baseline",
+      "group": "integration",
+      "priority": 0,
+      "order": 0,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "planning/provider-baseline"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Establish the actual workflows, provider/mode contracts and one implementation/test owner per shared requirement, including the IC-0 artifact boundary.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "baseline",
+          "text": "Record current SHA, installed schemas, selected modes/accounts/platforms and fresh/resumed session delivery facts (E01).",
+          "weight": 1
+        },
+        {
+          "id": "ownership",
+          "text": "Map required/optional journeys to existing strongest-boundary suites and register only current gaps.",
+          "weight": 1
+        },
+        {
+          "id": "contract",
+          "text": "Record failures, exact helper controls and shared media/reference decisions with IC-0; do not implement speculative adapters.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-01",
+      "title": "Expose effective per-chat tool and skill inventory",
+      "group": "integration",
+      "priority": 0,
+      "order": 1,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "harness/extensions",
+        "ui/integrations"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Inventory shows configured, attached, callable and verified distinctions for the exact live session without weakening permission modes.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Inventory carries provider/account/host/project/mode, generation, provenance and native vs guidance-only distinctions.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Existing picker/settings show accurate capability, stale evidence and remediation; drafts and selected identity survive revalidation.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E01 actual allowed/denied calls match inventory through fresh/resumed/mode-change sessions.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-02",
+      "title": "Deliver scoped Claude MCP access in Ask/Auto",
+      "group": "integration",
+      "priority": 0,
+      "order": 2,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00",
+        "SW-01"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "engine/permissions",
+        "harness/extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Selected existing Executor/provider connections work in intended restricted Claude modes while native confinement and exact call authority remain effective.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Use SW-00 installed wire evidence to choose scoped native configuration or the existing narrow LUNA bridge.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Preserve saved credentials/policies, parent/machine ceilings and exact approval/call/result identity; no unrestricted probe execution.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E02/E05 and E04 real read pass in required modes; Auto eligibility is separately proven or explicitly blocked.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-03",
+      "title": "Deliver approved skills in intended permission modes",
+      "group": "integration",
+      "priority": 0,
+      "order": 3,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00",
+        "SW-01"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "harness/extensions",
+        "ui/integrations"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Required recurring skills retain revision/scope and real tool usability, with accurate guidance-only or unavailable labels.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Reuse current skill resolution, reviewed identity/revision and scope precedence.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Fresh/resumed sessions deliver approved native or guidance-only content without hooks, grants or execution selection changes.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E03 proves observable skill-guided work and refusal of unavailable or changed identities in selected modes.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-04",
+      "title": "Certify Moralis evidence-to-draft and guarded action journey",
+      "group": "operations",
+      "priority": 0,
+      "order": 4,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-02",
+        "SW-03"
+      ],
+      "resources": [
+        "qa/operations"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Both primary providers finish a current evidence-backed investigation and customer-safe draft in LUNA; mutations are tested only on a disposable authorized fixture.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "reads",
+          "text": "E04 retains exact live support/account/infra evidence, query times and origin links through existing Executor tools.",
+          "weight": 1
+        },
+        {
+          "id": "draft",
+          "text": "Both intended providers produce a grounded readable/resumable customer draft or technical handoff.",
+          "weight": 1
+        },
+        {
+          "id": "guard",
+          "text": "E05 proves consent, one fixture mutation and independent receipt/readback around restart and unknown delivery; no production send is implied.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-05",
+      "title": "Close currently reproducible transcript and identity gaps",
+      "group": "transcript",
+      "priority": 0,
+      "order": 5,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00"
+      ],
+      "resources": [
+        "harness/normalization",
+        "engine/transcript",
+        "doc/parts",
+        "ui/transcript"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Current ordinary transcripts preserve provider chronology, part/run identity and scroll position through late tool/child results without masking defects in the UI.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "reproduce",
+          "text": "Inspect current timeline suites and reproduce any uncovered adapter/journal/document/row failure on current main before a fix.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Repair the losing owner while preserving distinct messages, full-output privacy limits and stable row identity.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E06 covers actual live/native long transcript and off-screen/late-result behavior at its strongest existing boundary; passing baselines close as verification.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-06",
+      "title": "Certify native long-session steering and recovery",
+      "group": "transcript",
+      "priority": 0,
+      "order": 6,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-05"
+      ],
+      "resources": [
+        "engine/commands",
+        "engine/recovery",
+        "ui/transcript"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Follow-up, steer, question, stop/restart, fork and rewind retain exact identities and trustworthy outcomes in real Codex/Claude sessions.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "receipts",
+          "text": "E07/E08 correlate provider inputs, durable command receipts, journal/document and visible rows.",
+          "weight": 1
+        },
+        {
+          "id": "recovery",
+          "text": "Same-task restart and explicit fresh handoff preserve model/mode/source context without treating queued as completed.",
+          "weight": 1
+        },
+        {
+          "id": "native",
+          "text": "Native E06 and long-session completion/input races pass, or a reproduced gap is fixed at the existing owner.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-07",
+      "title": "Certify the complete visual artifact iteration journey",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 7,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-01",
+        "IC-3"
+      ],
+      "resources": [
+        "qa/visual-journey"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md",
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Real Codex/Claude preview, inspect, publish, interact, revise, restart and export using the IC implementation; no second renderer or storage.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "consume",
+          "text": "Link IC H01-H09 evidence and preserve IC's required three-provider scope.",
+          "weight": 1
+        },
+        {
+          "id": "journey",
+          "text": "E11 demonstrates a real iterative visual workflow and immutable new references across main/side/Board placement.",
+          "weight": 1
+        },
+        {
+          "id": "restart",
+          "text": "Published work reopens and exports with truthful platform/provider limitations.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-08",
+      "title": "Bind browser/native computer use to exact targets",
+      "group": "operations",
+      "priority": 1,
+      "order": 8,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-01",
+        "SW-02",
+        "SW-09"
+      ],
+      "resources": [
+        "ui/browser",
+        "ui/attachments",
+        "qa/computer-use"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Configured browser/native control keeps explicit target identity and returns readable evidence through the original Executor connection.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "target",
+          "text": "Reuse actual tool capability and OS grants; verify harmless read of the selected session/window/tab.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Actions/captures keep identity despite focus changes, closure or OS revocation; no fabricated pixels or silent retargeting.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E10/E11 include one actual browser interaction and one required native inspection with independent readback.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-09",
+      "title": "Present authorized visual tool results through shared references",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 9,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00",
+        "IC-0"
+      ],
+      "resources": [
+        "engine/assets",
+        "harness/normalization",
+        "doc/parts",
+        "ui/transcript",
+        "ui/attachments"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md",
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md"
+      ],
+      "outcome": "Returned screenshots/media become readable owner-scoped lazy evidence using the IC-0 reference boundary and existing host assets/journal.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "wire",
+          "text": "Capture actual selected tool/provider result shapes and decide the shared storage/presentation contract with IC-0.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Typed lazy visual references preserve authorization, privacy/omission rules, origin and truthful unavailable states.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E09 proves real readable capture, cross-task refusal, restart and owner removal; metadata-only fallback cannot certify absent pixels.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-10",
+      "title": "Complete scoped helper supervision",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 10,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-01",
+        "SW-06"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "engine/commands",
+        "ui/activity"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Existing create/read/send/wait and Board lifecycle gain only a proven missing scoped stop/readback operation.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Exact task/run/host, authorization, ancestry and permission ceilings are specified against the existing control API.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Stop distinguishes admission, terminal confirmation, completion race and offline unknown without stopping unrelated work.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E12/E13 retain true helper terminal readback, late-result origin and intact unrelated drafts/views.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-11",
+      "title": "Migrate skills, history and general-work context",
+      "group": "navigation",
+      "priority": 1,
+      "order": 11,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-03",
+        "IC-5"
+      ],
+      "resources": [
+        "engine/history",
+        "ui/history",
+        "ui/integrations"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Sanitized prior work can be found, opened and handed off using existing import/global search plus IC-5 Find; credentials and authority stay with their owners.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "migration",
+          "text": "Existing skill/import paths retain revision/provider/source/time/archive attribution and explicit unavailable history.",
+          "weight": 1
+        },
+        {
+          "id": "journey",
+          "text": "E03/E14 finds the right old task, branch/context and an off-screen body passage through IC-5, then makes an explicit fresh handoff.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "General-work setup uses current host/folder/project boundaries without new broad grants or persistence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-12",
+      "title": "Verify shipped Board and automation corrections",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 12,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-00"
+      ],
+      "resources": [
+        "qa/board-automation"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Replay existing LUN-1/2/11/12/13 on current build; passing behavior closes this verification task without reimplementation.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "baseline",
+          "text": "Read the shipped fix package and current owner evidence before opening any new bug.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E15 proves editor/status freshness, safe ticket deletion, Board counts/banners and same-chat image reference reuse.",
+          "weight": 1
+        },
+        {
+          "id": "disposition",
+          "text": "Link current passing evidence or a demonstrated scoped correction under the existing owner; retain original ticket history.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-13",
+      "title": "Certify local recurrence and host lifecycle",
+      "group": "operations",
+      "priority": 1,
+      "order": 13,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-01",
+        "SW-04"
+      ],
+      "resources": [
+        "qa/automations"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Current-chat and project follow-ups actually execute, retain identity and survive update/delete/sleep/restart according to existing scheduler policy.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "runs",
+          "text": "E16 retains two real occurrences for each selected destination with provider/mode/tools/notifications and receipts.",
+          "weight": 1
+        },
+        {
+          "id": "lifecycle",
+          "text": "Update/delete and due-slot sleep/restart show documented missed-slot and in-flight policy without duplicate writes.",
+          "weight": 1
+        },
+        {
+          "id": "failure",
+          "text": "Tool/auth failure produces accurate history and attention/unknown state; saved schedules are not execution proof.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-14",
+      "title": "Certify one additional connected-app workflow",
+      "group": "artifacts",
+      "priority": 2,
+      "order": 14,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "SW-02",
+        "SW-09",
+        "IC-4"
+      ],
+      "resources": [
+        "qa/connected-apps"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Once selected as useful, one real document/sheet/slide/app journey consumes IC-4 with exact original-connection capability and write grants.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "selection",
+          "text": "Record the real needed journey and supported native app/provider operations; make it required only by explicit switching decision.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E17 consumes IC A01-A07 read/render, confirmed and declined write, stale-session refusal and original ownership evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-15",
+      "title": "Decide desktop switching readiness from integrated evidence",
+      "group": "release",
+      "priority": 1,
+      "order": 15,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "SW-04",
+        "SW-06",
+        "SW-07",
+        "SW-08",
+        "SW-09",
+        "SW-10",
+        "SW-11",
+        "SW-12",
+        "SW-13"
+      ],
+      "resources": [
+        "qa/switching-release"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Required representative workflows finish in LUNA on actual intended providers/modes after restart, with every remaining escape or blocker recorded.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "assemble",
+          "text": "Assemble required E04 and E06-E16 evidence once; include promoted optional tasks only when required by the recorded decision.",
+          "weight": 1
+        },
+        {
+          "id": "journeys",
+          "text": "E19 replays actual required journeys after engine/app restart and records pass/fail/blocked per provider/platform.",
+          "weight": 1
+        },
+        {
+          "id": "decision",
+          "text": "Document precise escape reasons, limitations and evidence-backed readiness; no source-count/checkbox parity claim.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "SW-16",
+      "title": "Decide optional voice, paired phone and offline requirements",
+      "group": "remote",
+      "priority": 2,
+      "order": 16,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "SW-00"
+      ],
+      "resources": [
+        "planning/optional-clients"
+      ],
+      "sources": [
+        "docs/pending-tasks/luna-only-workflows/README.md",
+        "docs/pending-tasks/luna-only-workflows/implementation.md",
+        "docs/pending-tasks/luna-only-workflows/verification.md"
+      ],
+      "outcome": "Determine which journey is optional or a switching blocker; consume direct-Mac milestones or scope a separate design rather than auto-building voice/cloud execution.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "E18 records actual dictation/live-voice/phone/offline requirement and required vs optional classification.",
+          "weight": 1
+        },
+        {
+          "id": "ownership",
+          "text": "Selected implementation links the canonical remote/voice/host owner and acceptance without a duplicate transport or scheduler.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-0",
+      "title": "Prove shared artifacts, provider and Find contracts",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 17,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "planning/artifacts",
+        "ui/browser"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Installed schemas, immutable reference/storage/isolation/compatibility contract, live operations and native renderer/search feasibility are demonstrated.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "wire",
+          "text": "Record all three provider schemas and actual callable HTML/live MCP app operations, including precise unsupported capabilities.",
+          "weight": 1
+        },
+        {
+          "id": "shared",
+          "text": "Settle shared image/artifact identity, host reads, privacy, fork/deletion and older-reader behavior with SW-00/SW-09.",
+          "weight": 1
+        },
+        {
+          "id": "prototype",
+          "text": "Native isolated document, clipping/focus/scroll/performance and complete-history Find feasibility pass recorded failure probes.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-1",
+      "title": "Build one immutable artifact service and isolated renderer",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 18,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-0"
+      ],
+      "resources": [
+        "engine/assets",
+        "doc/parts",
+        "ui/browser"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "One owner-scoped immutable artifact service and isolated offline renderer survive restart, deletion/fork/retry and denied access.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "service",
+          "text": "Bound publication references, atomic storage, idempotency, authorized retrieval/export and shared-byte lifetime.",
+          "weight": 1
+        },
+        {
+          "id": "renderer",
+          "text": "Separate offline storage/network/navigation policy and native placement/focus/keyboard/event lifecycles.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Owning H01-H09 contracts prove persistence/compatibility and malicious cross-task/path/network denial with native viewport evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-2",
+      "title": "Deliver HTML preview/publish in all three providers",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 19,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-1"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "engine/assets",
+        "harness/extensions",
+        "harness/normalization"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Codex, Claude and OpenCode actually call html_preview/html_render through the existing authority and result paths.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivery",
+          "text": "All three callable bridges retain generation, permission, cancellation/idempotency and bounded preview diagnostics/image metadata.",
+          "weight": 1
+        },
+        {
+          "id": "live",
+          "text": "Real fresh/resumed Codex, Claude and OpenCode preview/publish round trips render durable interactive documents, with pixels/console evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-3",
+      "title": "Connect durable inline visuals to native transcript lifecycle",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 20,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-1",
+        "IC-2"
+      ],
+      "resources": [
+        "ui/transcript",
+        "doc/parts"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Stable original tool rows show interactive visuals, controls and readable fallbacks through scrolling, themes, splits, restart and ownership changes.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "projection",
+          "text": "Stable part/artifact keys, collapse/expand/source/export, lazy errors and draft/focus preservation use one native view owner.",
+          "weight": 1
+        },
+        {
+          "id": "lifecycle",
+          "text": "Restart/archive/main/side/Board/fork/rollback/delete and authorized second-device retrieval settle correctly.",
+          "weight": 1
+        },
+        {
+          "id": "native",
+          "text": "Actual chart interactions, theme/width changes, overlays and long virtualized scroll pass native evidence gates.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-4",
+      "title": "Host live MCP Apps on their original session",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 21,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-1",
+        "IC-3"
+      ],
+      "resources": [
+        "engine/runtime-tools",
+        "engine/assets",
+        "harness/extensions",
+        "ui/browser"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Real Codex MCP Apps render and interact through negotiated original server/session authority; other providers advertise verified capabilities.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "bridge",
+          "text": "Exact server/tool/view/session generations, typed operations, bounded captures, context delivery and teardown enforce grants and stale-call refusal.",
+          "weight": 1
+        },
+        {
+          "id": "live",
+          "text": "A01-A07 real Codex/server read, confirmed/declined mutation and exactly-once explicit message round trips pass; unsupported providers are accurately labeled.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-5",
+      "title": "Find and highlight text throughout selected conversation",
+      "group": "navigation",
+      "priority": 1,
+      "order": 22,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-0"
+      ],
+      "resources": [
+        "ui/transcript",
+        "ui/markdown"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "Find reaches complete authorized message bodies beyond mounted rows with stable Markdown/Unicode mapping during streaming and rollback.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Focused Find routes and display-text/range maps preserve ordinary browser/file/palette Find and exclude secret/private/app DOM contents.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Off-thread complete-history search, stable match navigation, necessary folds, cancellation and truthful partial history.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "S01-S06 native off-screen/Unicode/formatting/stream/rollback and measured performance evidence pass; integrate artifact summaries at IC-6.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IC-6",
+      "title": "Complete HTML, MCP Apps and Find integrated acceptance",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 23,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-2",
+        "IC-3",
+        "IC-4",
+        "IC-5"
+      ],
+      "resources": [
+        "qa/interactive-release"
+      ],
+      "sources": [
+        "docs/pending-tasks/interactive-chat-surfaces/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/design.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/interactive-chat-surfaces/verification.md"
+      ],
+      "outcome": "The whole IC package passes required three-provider HTML, Codex MCP Apps, native Find and lifecycle evidence with a verified app/main delivery.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "integration",
+          "text": "Find includes permitted artifact titles/summaries after IC-3 and works while views are mounted; no app DOM/source indexing.",
+          "weight": 1
+        },
+        {
+          "id": "evidence",
+          "text": "Run owned H/A/S scenarios and live/native acceptance, retain hashed logs/readbacks/pixels and precise other-platform capabilities.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ZI-01",
+      "title": "Isolate and bound Latest turn snapshots",
+      "group": "workspace",
+      "priority": 1,
+      "order": 24,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/diffs"
+      ],
+      "sources": [
+        "docs/pending-tasks/zeron-upstream-improvements/README.md",
+        "docs/pending-tasks/zeron-upstream-improvements/research.md",
+        "docs/pending-tasks/zeron-upstream-improvements/implementation.md"
+      ],
+      "outcome": "Agent snapshots never pollute the checkout Git object database or index; bounds and partial/unavailable results are honest.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define owned object stores, checkout/common-dir resolution, reader lifetime, consistent omissions and cancellation budgets from measured repos.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Capture/diff share absolute private object context; tracked state/index/refs stay intact and stale generations cannot publish.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Disposable ordinary/unborn/worktree and large/hanging/cancel/crash E2Es match independent Git oracle and preserve object/index manifests.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ZI-02",
+      "title": "Bound workspace registry history without losing offline intent",
+      "group": "workspace",
+      "priority": 1,
+      "order": 25,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "ZI-01"
+      ],
+      "resources": [
+        "doc/registry",
+        "engine/registry"
+      ],
+      "sources": [
+        "docs/pending-tasks/zeron-upstream-improvements/README.md",
+        "docs/pending-tasks/zeron-upstream-improvements/research.md",
+        "docs/pending-tasks/zeron-upstream-improvements/implementation.md"
+      ],
+      "outcome": "Local profiles retain current state without unbounded ack history while offline synced profiles preserve convergence and notifications.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Record local vs offline-sync identity, migration, ack/notification and snapshot failure contracts.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Existing registry protocol and guarded persistence bound local history without dropping needed offline operations.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Measured real registry growth/restart and reconnect/tombstone/notification failures pass with canonical state hashes.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ZI-03",
+      "title": "Preserve and show the actual current provider checklist",
+      "group": "transcript",
+      "priority": 2,
+      "order": 26,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "harness/normalization",
+        "doc/parts",
+        "ui/transcript",
+        "ui/composer"
+      ],
+      "sources": [
+        "docs/pending-tasks/zeron-upstream-improvements/README.md",
+        "docs/pending-tasks/zeron-upstream-improvements/research.md",
+        "docs/pending-tasks/zeron-upstream-improvements/implementation.md"
+      ],
+      "outcome": "Codex/Claude active/pending/completed checklist state survives folding/restart and appears as a compact read-only selected-chat summary.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "wire",
+          "text": "Rebase actual Codex/Claude and supported OpenCode 2 events; additive status keeps legacy done compatibility without guessing native sources.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "One durable fold and current-list projection handle empty updates, late child/turn frames and compact draft-safe composer summary.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Real Codex/Claude event-to-row/native update, navigation/restart/stop/IME/reduced-motion E2E retains exact owner and no stale spinner.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ZI-04",
+      "title": "Open typed tool files in the owning Files surface",
+      "group": "navigation",
+      "priority": 2,
+      "order": 27,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/transcript",
+        "ui/files"
+      ],
+      "sources": [
+        "docs/pending-tasks/zeron-upstream-improvements/README.md",
+        "docs/pending-tasks/zeron-upstream-improvements/research.md",
+        "docs/pending-tasks/zeron-upstream-improvements/implementation.md"
+      ],
+      "outcome": "Typed file badges open exact original chat/host files in existing tabs without altering tool expansion, queued drafts or path authority.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivery",
+          "text": "One labeled keyboard/click activation reuses current root resolver, tab dedup and unsaved-editor handling.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Real read/write/multifile badges in main/side/Board/local/remote chats preserve exact content hashes and refuse deleted/escaping/unsupported paths.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ZI-05",
+      "title": "Search checkout text and open the exact matching line",
+      "group": "navigation",
+      "priority": 2,
+      "order": 28,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/workspace-files",
+        "ui/files",
+        "ui/palette"
+      ],
+      "sources": [
+        "docs/pending-tasks/zeron-upstream-improvements/README.md",
+        "docs/pending-tasks/zeron-upstream-improvements/research.md",
+        "docs/pending-tasks/zeron-upstream-improvements/implementation.md"
+      ],
+      "outcome": "Bounded owning-host literal source search reports partial/offline status and opens correct line/range without indexing unrelated scopes.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Specify authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets using representative repos.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Existing host service and Files/palette mode fence query/root/host generations, cancel bounded scans and validate changed matches before navigation.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Independent literal oracle, Unicode/remote/late/cancel/limits/deleted/denied cases and actual native editor line selection retain hashes/performance.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-00",
+      "title": "Prove direct host boundary and physical native vertical slice",
+      "group": "remote",
+      "priority": 0,
+      "order": 29,
+      "status": "ready",
+      "aliases": [
+        "M0"
+      ],
+      "depends_on": [],
+      "resources": [
+        "planning/remote",
+        "remote/prototype"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M0 inventory, reviewed authority/wire/native contracts and harmless pinned-TLS physical-iPhone prototype are complete.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Rebase both remote plans and lane audits; preserve approved direct-only local-profile Rust/native direction and map endpoints/scopes/receipts/failures.",
+          "weight": 1
+        },
+        {
+          "id": "physical",
+          "text": "Actual phone LAN read verifies host identity/pin and wrong-identity failures; native transport callback feeds owned core.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-01",
+      "title": "Build headed direct gateway and scoped host authority",
+      "group": "remote",
+      "priority": 0,
+      "order": 30,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-00"
+      ],
+      "resources": [
+        "engine/commands",
+        "engine/profile",
+        "rpc/remote",
+        "remote/gateway"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Headed app hosts bounded HTTPS/WS with exact paired principal, typed operation admission, profile-owned TLS and revoke/disable barriers.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "authority",
+          "text": "Existing remote store/service gains explicit scoped method+intent+target checks, durable migration and denial-before-teardown.",
+          "weight": 1
+        },
+        {
+          "id": "gateway",
+          "text": "One existing engine/profile owner supplies bounded listener/TLS/identity/enable lifecycle without exposing owner IPC.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-02-RP-06/RP-19 pass process/port/TLS/authorization readback, stale/revoked/corrupt store refusals and local-work preservation.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-02",
+      "title": "Deliver desktop Connections and native phone pairing",
+      "group": "remote",
+      "priority": 0,
+      "order": 31,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-01"
+      ],
+      "resources": [
+        "ui/connections",
+        "ios/connections",
+        "remote/pairing"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Control this Mac enable/Add QR/manual/refresh/revoke UI pairs the actual phone with scoped Keychain session and honest route status.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "desktop",
+          "text": "Connections distinguishes registry from authority, host ready/phone authenticated/route proven, keep-awake preference and last actual connection.",
+          "weight": 1
+        },
+        {
+          "id": "phone",
+          "text": "Native camera/manual pairing validates host/profile/pin before redemption; secure device-only session and re-pair state preserve owned identity/data.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Physical pairing/restart, expired/replayed code, wrong host/pin, OS refusal, lost reply and forget-vs-revoke pass.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-03",
+      "title": "Stream authoritative host tasks into one native client runtime",
+      "group": "remote",
+      "priority": 0,
+      "order": 32,
+      "status": "ready",
+      "aliases": [
+        "M2"
+      ],
+      "depends_on": [
+        "RM-01",
+        "RM-02"
+      ],
+      "resources": [
+        "remote/projections",
+        "ios/transcript",
+        "client/runtime"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M2 phone shows real host tasks and bounded incremental history with authenticated reconnect, cursor repair and explicit stale cache.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "projections",
+          "text": "Host/profile/task revisions and snapshot+cursor distinguish cheap registry and detailed history, capabilities and freshness.",
+          "weight": 1
+        },
+        {
+          "id": "client",
+          "text": "One Rust core plus native transport/lifecycle adapters bound host-keyed cache/queues and reject stale generations.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Actual Mac-to-phone long transcript, background/network/restart/snapshot repair retain exact rows and drafts with honest offline state.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-04",
+      "title": "Admit remote task commands and reconcile uncertain delivery",
+      "group": "remote",
+      "priority": 0,
+      "order": 33,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-03"
+      ],
+      "resources": [
+        "engine/commands",
+        "rpc/remote",
+        "client/runtime"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Phone task lifecycle/send/queue/steer/stop uses exact host grants and durable idempotent receipts, never executable synced rows.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "admission",
+          "text": "Typed authenticated principal/target/variant/revision binds stable request ID and payload before provider work.",
+          "weight": 1
+        },
+        {
+          "id": "outbox",
+          "text": "Same ID/payload returns original receipt; changed payload fails; lost reply queries outcome without silent fresh-ID resend.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-10-RP-15/RP-20 races show single execution, correct queue/offline semantics and supported provider-specific controls.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-05",
+      "title": "Expose actual provider policy, questions and approvals on phone",
+      "group": "remote",
+      "priority": 0,
+      "order": 34,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-04"
+      ],
+      "resources": [
+        "engine/permissions",
+        "rpc/remote",
+        "ios/interactions"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M3 phone choices reflect real host capability and exact outstanding questions/approvals while credentials remain on Mac.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "capability",
+          "text": "Host catalogs and requested/effective permission modes replace misleading static/legacy phone policy.",
+          "weight": 1
+        },
+        {
+          "id": "interactions",
+          "text": "Question/approval IDs/revisions/command/grants reject changed/stale/revoked/replayed responses through existing provider boundary.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-16-RP-18 use actual provider-facing allowed/denied question and approval flows after reconnect.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-06",
+      "title": "Add task-owned phone attachments, files and checkout diffs",
+      "group": "remote",
+      "priority": 1,
+      "order": 35,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-04"
+      ],
+      "resources": [
+        "engine/assets",
+        "engine/workspace-files",
+        "ios/files"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M3/M4 bounded uploads and read-only host files/diffs retain exact content/checkout identity and task-specific grants.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "upload",
+          "text": "Hash/cancel/retry/lost-reply staging and authorized media retrieval reuse existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "files",
+          "text": "Tree/search/preview/generated media and revision diff refuse traversal/symlink/ignored/private/wrong-task/large output bypass.",
+          "weight": 1
+        },
+        {
+          "id": "physical",
+          "text": "Physical phone upload/media/file/diff E2E retains hashes and exact revision. Consume shipped IC or ZI capabilities only if advertised; defer rich HTML rather than blocking basic V1.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-07",
+      "title": "Accept the complete native direct-Mac first release",
+      "group": "remote",
+      "priority": 1,
+      "order": 36,
+      "status": "ready",
+      "aliases": [
+        "M4"
+      ],
+      "depends_on": [
+        "RM-02",
+        "RM-03",
+        "RM-04",
+        "RM-05",
+        "RM-06"
+      ],
+      "resources": [
+        "ios/transcript",
+        "ui/power",
+        "remote/gateway",
+        "qa/remote-release"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M4 and the full M0-M4 feature pass physical native rendering/lifecycle and actual direct nearby/cellular route evidence without undeclared relays.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "native",
+          "text": "Owned native rendering migration proves stable long transcript/keyboard/dynamic-type/AX behavior with measured budgets.",
+          "weight": 1
+        },
+        {
+          "id": "availability",
+          "text": "Shared power reasons, external-power opt-in, enable/disable/sleep/wake/graceful quit accurately report host availability.",
+          "weight": 1
+        },
+        {
+          "id": "physical",
+          "text": "All applicable RP-01-RP-26 and M0-M4 gates plus actual physical cellular direct ingress pass; NAT/external setup blockers remain explicit.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-08",
+      "title": "Add separately granted native phone terminal",
+      "group": "remote",
+      "priority": 2,
+      "order": 37,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-07"
+      ],
+      "resources": [
+        "terminal/host",
+        "ios/terminal"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Later phone terminal consumes existing scoped backend with exact session lifetime, bounded stream, keys/resize/reconnect and read-only mode.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Choose explicit terminal grants, session lifetime/revoke/privacy and bounded history without another backend.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-27 proves real stream/input/reconnect/close and intact unrelated processes.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-09",
+      "title": "Expose guarded phone Git and broader thread lifecycle",
+      "group": "remote",
+      "priority": 2,
+      "order": 38,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-06"
+      ],
+      "resources": [
+        "engine/git",
+        "ios/git"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Later branch/worktree/fork/rewind/review/commit/push/PR controls retain host checkout identity and explicit sensitive grants.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Rebase existing desktop/Board owners and distinguish local diff/comment-to-agent from hosted PR review.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-28-RP-30 retain actual selected-file commits/remote state, race/refusal/draft/destructive confirmation evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-10",
+      "title": "Expose explicitly owned browser/device/integration remote sessions",
+      "group": "remote",
+      "priority": 2,
+      "order": 39,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-07"
+      ],
+      "resources": [
+        "remote/interactive",
+        "ios/browser"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Later bounded remote sessions specify ownership, capture/input/privacy/OS grants and consume IC app contracts without generic desktop-sharing assumptions.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Review grants, acquire/release, transfer, privacy and exact session authority before implementation.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-31/RP-32 exercise actual granted host sessions and refusals; no duplicate renderer/connection.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-11",
+      "title": "Add scoped phone operations and administration views",
+      "group": "remote",
+      "priority": 2,
+      "order": 40,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-04",
+        "RM-05"
+      ],
+      "resources": [
+        "ios/operations",
+        "engine/administration"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Later phone scheduler/settings/usage/provider/update views reuse host owners with stronger administration policy and safe reconnect.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Select read projections before mutations and define sensitive scopes/update-restart/outbox/profile boundaries.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "RP-33-RP-35 prove real host operations, permissions and lifecycle; local phone cleanup cannot delete host data.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-12",
+      "title": "Decide and deliver optional awareness, voice and extensions",
+      "group": "remote",
+      "priority": 2,
+      "order": 41,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-07",
+        "SW-16"
+      ],
+      "resources": [
+        "planning/awareness",
+        "ios/extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "Optional push/voice/share/widget features have explicit owned services, platform/signing/privacy/dedup decisions separate from direct V1.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "Record chosen requirements and service/platform/locale/signing/account/retention boundaries; no implicit APNs/cloud scope.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected RP-36-RP-38 pass actual native/platform acceptance with expired/stale/retry/dedup states.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "RM-13",
+      "title": "Decide optional routes, multi-host and additional clients",
+      "group": "remote",
+      "priority": 2,
+      "order": 42,
+      "status": "deferred",
+      "aliases": [
+        "M5"
+      ],
+      "depends_on": [
+        "RM-07",
+        "SW-16"
+      ],
+      "resources": [
+        "planning/remote-clients",
+        "remote/routes"
+      ],
+      "sources": [
+        "docs/pending-tasks/control-this-mac/README.md",
+        "docs/pending-tasks/control-this-mac/implementation-plan.md",
+        "docs/pending-tasks/control-this-mac/feature-parity.md",
+        "docs/pending-tasks/control-this-mac/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+      ],
+      "outcome": "M5 extensions are separately chosen programs preserving host authority across browser/Android/tailnet/SSH/cloud routes.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "Choose actual client/transport scope and define identity/TLS/credentials/lifecycle/operations/cost constraints.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected RP-39-RP-41 pass real route/client and denial tests; source feasibility is not hosted deployment proof.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-01",
+      "title": "Searchable scoped settings, provenance and reset",
+      "group": "navigation",
+      "priority": 1,
+      "order": 43,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/settings"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "One metadata registry discovers existing settings and exact rows with scope/source/reset; no second settings persistence.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-02",
+      "title": "Task context header and useful startup/empty state",
+      "group": "workspace",
+      "priority": 1,
+      "order": 44,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/shell",
+        "ui/composer"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Refine currently shipped context/startup receipt and project-aware starters only where current source/native review proves gaps.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-03",
+      "title": "Attention presentation and source navigation",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 45,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/activity"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Refine existing needs-input/running/ready/history/read rules without a second inbox or notification-based permission decisions.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-04",
+      "title": "Visible project commands, run state and actual service URLs",
+      "group": "workspace",
+      "priority": 1,
+      "order": 46,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/project-commands"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Expose current durable setup/run/stop/retry owners and actual port/URL receipts without another runner.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-05",
+      "title": "Small model loadout and action-class routes",
+      "group": "workspace",
+      "priority": 1,
+      "order": 47,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/defaults",
+        "ui/harnesses"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Extend existing favorites/default/title/reviewer selection only for demonstrated session/writing/review routes with provenance and unchanged grants.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-06",
+      "title": "Named Focus, Build and Review layout presets",
+      "group": "workspace",
+      "priority": 1,
+      "order": 48,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/layout"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Reuse shipped pane/workbench layout machinery for named task restoration and calm focus while preserving drafts/identity/AX.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-07",
+      "title": "Fresh next Git/review action with a reason",
+      "group": "workspace",
+      "priority": 2,
+      "order": 49,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/git",
+        "ui/changes"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Existing Git/PR surfaces recommend the next valid action from current local/forge state and revalidate before any mutation.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-08",
+      "title": "Transcript and composer presentation preferences",
+      "group": "transcript",
+      "priority": 2,
+      "order": 50,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "ZI-03"
+      ],
+      "resources": [
+        "ui/transcript",
+        "ui/composer",
+        "ui/settings"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Audit current expansion/streaming/paste/docking and then add only useful draft-safe readability controls.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-09",
+      "title": "Read-only diagnostics and owned storage accounting",
+      "group": "workspace",
+      "priority": 1,
+      "order": 51,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/diagnostics",
+        "ui/settings"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Surface process/connection/version/resource/errors and artifact storage from existing owners; cleanup remains a separate reviewed action.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-10",
+      "title": "Host capacity and recovery controls",
+      "group": "orchestration",
+      "priority": 2,
+      "order": 52,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/admission",
+        "ui/activity"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Existing host admission/retry exposes bounded capacity, waiting reason and cancellable recovery without replay of unknown delivery.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-11",
+      "title": "Portable project configuration with personal overrides",
+      "group": "workspace",
+      "priority": 2,
+      "order": 53,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/project-config",
+        "ui/project-commands"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Define schema/precedence/ownership/trust before extending device-local actions; changed discovered commands never autoexecute.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-12",
+      "title": "Selected-element visual feedback and annotation attachments",
+      "group": "artifacts",
+      "priority": 2,
+      "order": 54,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "SW-08",
+        "SW-09"
+      ],
+      "resources": [
+        "ui/browser",
+        "ui/attachments"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Consume exact-target SW-08 and shared visual SW-09 evidence, then add only missing selection/annotation-to-draft behavior.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "AW-15",
+      "title": "Optional floating task companion",
+      "group": "workspace",
+      "priority": 3,
+      "order": 55,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "ui/windows"
+      ],
+      "sources": [
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "An explicitly selected task's compact window reflects exact source/host state without another workflow or automatic retargeting.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "rebase",
+          "text": "Triage every corresponding opportunity/settings row against current main, shipped design/reference evidence and real native behavior; preserve existing owners.",
+          "weight": 1
+        },
+        {
+          "id": "scope",
+          "text": "Record a bounded current gap/failure/acceptance contract and explicit required vs optional follow-ups before implementation; passing existing behavior needs no rebuild.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Selected settings/workspace E2E scenarios retain actual scope/provenance/native/draft/refusal evidence with no duplicate subsystem.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "PB-4A",
+      "title": "Feature groups and related-repository acceptance",
+      "group": "orchestration",
+      "priority": 2,
+      "order": 56,
+      "status": "deferred",
+      "aliases": [
+        "AW-13"
+      ],
+      "depends_on": [],
+      "resources": [
+        "engine/board",
+        "ui/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md",
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "One later feature-group concept relates tickets/repositories with shared acceptance while preserving each checkout, worker and review owner.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "Define local feature grouping versus optional related-repository scope; preserve Space identity and obtain architecture scope before implementation.",
+          "weight": 1
+        },
+        {
+          "id": "contract",
+          "text": "Child completion cannot satisfy parent acceptance automatically; aggregate dependency/review results without implicit worktrees or cross-repo grants.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Native/engine feature group E2E preserves per-repo status/source/branch and unmet integration gates.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "PB-4B",
+      "title": "Add only selected extra tracker integrations",
+      "group": "orchestration",
+      "priority": 2,
+      "order": 57,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board",
+        "engine/tracker"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "One selected additional tracker extends the Board provenance/admission/writeback model with existing Executor ownership.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "Select actual tracker and read/import/writeback scope before registering anything.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Real authorized import/freshness/duplicate/source/conflict and confirmed writeback receipts pass without copied credentials.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "PB-4C",
+      "title": "Reusable ticket and action templates",
+      "group": "orchestration",
+      "priority": 2,
+      "order": 58,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board",
+        "ui/board",
+        "engine/defaults"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md",
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "Later reviewed templates reuse Board authoring and existing action instructions with explicit execution settings and trust.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Select useful templates, version/provenance/override/trust rules and distinguish instructions from executable skills/commands.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Save/apply/change template E2E retains draft identity/settings and creates no worker or grant before deliberate start.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "PB-4D",
+      "title": "Bounded dependency dispatch and durable workflow stages",
+      "group": "orchestration",
+      "priority": 2,
+      "order": 59,
+      "status": "deferred",
+      "aliases": [
+        "AW-14"
+      ],
+      "depends_on": [
+        "AW-10",
+        "SW-10",
+        "SW-13"
+      ],
+      "resources": [
+        "engine/board",
+        "engine/admission",
+        "engine/automations"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md",
+        "docs/pending-tasks/agent-workspace-app-research/README.md",
+        "docs/pending-tasks/agent-workspace-app-research/luna-opportunities.md",
+        "docs/pending-tasks/agent-workspace-app-research/settings-analysis.md",
+        "docs/pending-tasks/agent-workspace-app-research/product-findings.md"
+      ],
+      "outcome": "One later workflow extends Board dependencies and current scheduler/admission for explicitly requested bounded research/review stages before coding pipelines.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "decision",
+          "text": "Define stages/output contracts/worker/call budgets/permission inheritance/completion and resume semantics; AW-14 and PB dispatch share this owner.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Use current Board/scheduler/journals plus AW-10 admission; never auto-start merely because a dependency completes.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "Read-only first workflow proves restart/stop/unknown delivery/idempotency and independent stage outputs before wider execution.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "PB-0",
+      "title": "Shipped Board baseline: PB-0",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 60,
+      "status": "done",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "Retained reference to the shipped Board contract; not an implementation queue item.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivered",
+          "text": "Documented Board engine/headless/native/live acceptance is retained in the canonical README and shipped contract.",
+          "weight": 1
+        }
+      ],
+      "kind": "reference",
+      "baseline_evidence": [
+        {
+          "ref": "docs/pending-tasks/devin-project-board/README.md",
+          "baseline": "2026-10-09 documented acceptance"
+        },
+        {
+          "ref": "docs/design/project-board/pb0-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "PB-1",
+      "title": "Shipped Board baseline: PB-1",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 61,
+      "status": "done",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "Retained reference to the shipped Board contract; not an implementation queue item.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivered",
+          "text": "Documented Board engine/headless/native/live acceptance is retained in the canonical README and shipped contract.",
+          "weight": 1
+        }
+      ],
+      "kind": "reference",
+      "baseline_evidence": [
+        {
+          "ref": "docs/pending-tasks/devin-project-board/README.md",
+          "baseline": "2026-10-09 documented acceptance"
+        },
+        {
+          "ref": "docs/design/project-board/pb0-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "PB-1R",
+      "title": "Shipped Board baseline: PB-1R",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 62,
+      "status": "done",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "Retained reference to the shipped Board contract; not an implementation queue item.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivered",
+          "text": "Documented Board engine/headless/native/live acceptance is retained in the canonical README and shipped contract.",
+          "weight": 1
+        }
+      ],
+      "kind": "reference",
+      "baseline_evidence": [
+        {
+          "ref": "docs/pending-tasks/devin-project-board/README.md",
+          "baseline": "2026-10-09 documented acceptance"
+        },
+        {
+          "ref": "docs/design/project-board/pb0-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "PB-2",
+      "title": "Shipped Board baseline: PB-2",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 63,
+      "status": "done",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "Retained reference to the shipped Board contract; not an implementation queue item.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivered",
+          "text": "Documented Board engine/headless/native/live acceptance is retained in the canonical README and shipped contract.",
+          "weight": 1
+        }
+      ],
+      "kind": "reference",
+      "baseline_evidence": [
+        {
+          "ref": "docs/pending-tasks/devin-project-board/README.md",
+          "baseline": "2026-10-09 documented acceptance"
+        },
+        {
+          "ref": "docs/design/project-board/pb0-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "PB-3",
+      "title": "Shipped Board baseline: PB-3",
+      "group": "orchestration",
+      "priority": 1,
+      "order": 64,
+      "status": "done",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "engine/board"
+      ],
+      "sources": [
+        "docs/pending-tasks/devin-project-board/README.md",
+        "docs/pending-tasks/devin-project-board/proposal.md",
+        "docs/pending-tasks/devin-project-board/automatic-review.md",
+        "docs/pending-tasks/devin-project-board/chat-model.md"
+      ],
+      "outcome": "Retained reference to the shipped Board contract; not an implementation queue item.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "delivered",
+          "text": "Documented Board engine/headless/native/live acceptance is retained in the canonical README and shipped contract.",
+          "weight": 1
+        }
+      ],
+      "kind": "reference",
+      "baseline_evidence": [
+        {
+          "ref": "docs/pending-tasks/devin-project-board/README.md",
+          "baseline": "2026-10-09 documented acceptance"
+        },
+        {
+          "ref": "docs/design/project-board/pb0-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "UP-01",
+      "title": "Run an actual two-version GitHub Release updater trial",
+      "group": "release",
+      "priority": 2,
+      "order": 65,
+      "status": "blocked",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "qa/updater"
+      ],
+      "sources": [
+        "docs/pending-tasks/github-release-updater-two-version-trial.md"
+      ],
+      "outcome": "Distinct compiled macOS releases update through the real client download/relaunch route with exact version/process/IPC/signature and asset hashes.",
+      "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "criteria": [
+        {
+          "id": "access",
+          "text": "Recheck actual repository/release access; required older/newer published assets are accessible to intended clients.",
+          "weight": 1
+        },
+        {
+          "id": "trial",
+          "text": "Older installed isolated app checks/downloads/restarts to a separately compiled source version; executable/plist/bundle/process/IPC/signature all agree.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Retain commands, exit codes, evidence hashes and limitations; update the queue, complete required delivery and verified main/app handoff when runtime code changed.",
+          "weight": 1
+        }
+      ],
+      "blocker": "Planning record says intended clients cannot anonymously access this private repository and no published Releases exist. Revalidate access/assets before unblocking; queue setup did not publish releases or change visibility."
+    }
+  ]
+}
