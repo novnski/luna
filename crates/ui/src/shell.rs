@@ -3837,7 +3837,7 @@ impl Shell {
                     )
                 }),
                 RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
-                RightSurface::RelatedChats => Some((*surface, "Related chats".into(), false, None)),
+                RightSurface::RelatedChats => Some((*surface, "Related".into(), false, None)),
                 RightSurface::Automations => Some((*surface, "Automations".into(), false, None)),
                 RightSurface::Picker => None,
             })
@@ -14073,12 +14073,22 @@ impl Shell {
             .map(|(_, notice)| notice.clone());
         let text = theme.text;
         let muted = theme.text_muted;
-        let related_count = self.active_related_chat_count(cx);
-        let related_label: SharedString = match related_count {
-            0 => "Related chats".into(),
-            1 => "Related chats, 1 open".into(),
-            count => format!("Related chats, {count} open").into(),
+        // Related holds the chat's related chats and the related tickets of
+        // the conversation focused in it (a side chat's tab included).
+        let related_chats = self.active_related_chat_count(cx);
+        let related_tickets = if self.active_chat.is_empty() {
+            0
+        } else {
+            let owner = self.related_tickets_owner(cx);
+            self.board_chat.related(&owner).len()
         };
+        let related_count = related_chats + related_tickets;
+        let related_label: SharedString = format!(
+            "Related: chats and tickets, {related_chats} open chat{}, {related_tickets} ticket{}",
+            if related_chats == 1 { "" } else { "s" },
+            if related_tickets == 1 { "" } else { "s" },
+        )
+        .into();
         let badge_tone = theme.text_muted;
         let badge_text = theme.readable_tone(badge_tone, 0.85);
         let row = |id: &'static str, icon_path: &'static str, title: &'static str| {
@@ -14159,35 +14169,38 @@ impl Shell {
                                 .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
-                            row(
-                                "surface-card-related-chats",
-                                icons::DIALOG_2,
-                                "Related chats",
-                            )
-                            .aria_label(related_label)
-                            .child(div().flex_1())
-                            .when(related_count > 0, |row| {
-                                row.child(
+                            row("surface-card-related-chats", icons::DIALOG_2, "Related")
+                                .aria_label(related_label)
+                                // What it holds, so tickets are found there too.
+                                .child(
                                     div()
-                                        .h(px(18.0))
-                                        .min_w(px(18.0))
-                                        .px(px(6.0))
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .bg(badge_tone.opacity(0.12))
                                         .text_size(crate::typography::ui_rems(11.0))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(badge_text)
-                                        .child(related_count.to_string()),
+                                        .text_color(theme.readable_faint(0.9))
+                                        .child("Chats and tickets"),
                                 )
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.add_work_surface(RightSurface::RelatedChats, cx)
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
+                                .child(div().flex_1())
+                                .when(related_count > 0, |row| {
+                                    row.child(
+                                        div()
+                                            .h(px(18.0))
+                                            .min_w(px(18.0))
+                                            .px(px(6.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .bg(badge_tone.opacity(0.12))
+                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(badge_text)
+                                            .child(related_count.to_string()),
+                                    )
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.add_work_surface(RightSurface::RelatedChats, cx)
+                                }))
+                                .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
                             row(
@@ -14778,7 +14791,7 @@ impl Shell {
                                 popover::menu_row(&theme, false, "right-plus-related-chats")
                                     .id("right-plus-related-chats-row")
                                     .role(gpui::Role::Button)
-                                    .aria_label("Related chats")
+                                    .aria_label("Related: chats and tickets")
                                     .tab_index(0)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.add_work_surface(RightSurface::RelatedChats, cx);
@@ -14790,7 +14803,7 @@ impl Shell {
                                             .size(px(13.0))
                                             .text_color(theme.text_muted),
                                     )
-                                    .child("Related chats"),
+                                    .child("Related"),
                             )
                             .child(
                                 popover::menu_row(&theme, false, "right-plus-automations")

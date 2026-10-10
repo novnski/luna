@@ -5,10 +5,159 @@ app slots, commits or primary-data writes. Codex owns builds/QA/Git.
 
 ## Edit window
 
-- State: **IDLE — final. Build/test slot returned to Codex (2026-10-10).** No
-  Claude process running, no further writes.
+- State: **FINAL — verified, IDLE (related tickets incl. focused side
+  chats).** No Claude writes; Codex owns final native readback,
+  `verification.md` and commit/push. Side-chat proof
+  (`target/qa/related-tickets-sidebar-2026-10-10/`): `side-before/
+  manifest.json` 31 checks with the one expected failure
+  (`focused-side-chat-tickets`); `side-final/manifest.json` 31/31 PASS;
+  `related-chats-final` PASS; luna-ui `--tests` check PASS (20.10 s), build
+  52.33 s, Clippy PASS; `f12b-side-tickets.png` inspected by Codex (side-
+  owned ticket, contextual heading, chat library preserved). No remaining
+  side-chat limitation: a focused side chat's related tickets are listed
+  (and counted) in the right sidebar under its own heading, and the main
+  chat's return when its tab is focused.
 - Freeze rule: when Codex announces a build, Claude stops editing and sets
   this line to FROZEN until Codex reopens it.
+
+## Related tickets → right sidebar (correction after `dfba2f00`)
+
+User: five large "Related ticket" banners above the source conversation are
+pointless; related tickets belong in the right sidebar. Evidence root:
+`target/qa/related-tickets-sidebar-2026-10-10/`. Backend contract unchanged
+(`BoardChatBadges.related`, `archived`, deleted omitted; watch refresh).
+
+Where: the existing right-pane **Related chats** surface
+(`shell/related_chats.rs`), which already follows the selected chat
+(`active_chat`). A compact **Tickets** section leads its list: one dense row
+per active related ticket (glyph · `KEY` · title · column/phase), deduplicated
+(engine related ∪ this session's Created receipts, minus the chat's own
+working/reviewer ticket, minus archived/deleted), no prose or per-row
+buttons; the row itself opens the exact ticket (`chat_open_ticket`). The
+picker row "Related chats" counts tickets too. The pane never opens or takes
+focus when tickets arrive.
+
+Main conversation strip (`chat_badges/render.rs`): keeps only real identity
+(working `Ticket KEY` + status control, `Reviewer · KEY`); no related rows,
+no "N more", no Created/Converted/Hand-off receipts (their transient
+sidebar notice stays). Receipt data stays as the source of immediate rows
+and its reconciliation is unchanged.
+
+Files (6): `chat_badges/render.rs`, `chat_badges.rs` (merged ticket list
+helper), `chat_badges/dialogs.rs` (stop pushing receipts that have no
+remaining surface), `related_chats.rs` (section + empty state + probes via
+the existing `board_probe_child`/`board_mark`), `shell.rs` (picker count),
+`board-chat-ui-fixture.rs` (E2E owner). No new QA-only seams: probe labels
+use the existing board probe; the fixture opens the pane through the
+existing `fixture_open_surface("related")`.
+
+Probe contract the fixture asserts (written first):
+- row bounds `related-ticket:{chat}:{workItemId}`; section bounds
+  `related-tickets:{chat}`; list viewport `related-chats-viewport`;
+- mark `strip:{chat}` never contains "Related ticket", "more related" or
+  "Created"; no `receipt-open:`/`receipt-goto:` bounds in any frame.
+
+Label (user follow-up): the picker row and the pane's tab/title read
+**Related** with the description "Chats and tickets" (internal
+`RightSurface::RelatedChats`, settings and readback keys unchanged). No
+fixture asserts the old label text (only comments mention it).
+
+Pre-fix run (Codex): `scripts/cargo.sh build --locked -p luna-ui --features
+appshots-fixture --example board-chat-ui-fixture`, then
+`target/debug/examples/board-chat-ui-fixture
+target/qa/related-tickets-sidebar-2026-10-10/ui-before`. Expected on
+`dfba2f00`: `no-related-tickets-in-conversation` fails (Created receipt +
+related rows in `strip:SOURCE`), `related-ticket-in-right-sidebar` and
+`related-row-opens-ticket` fail (no `related-ticket:*` bounds),
+`conversation-unobstructed`, `all-related-tickets-reachable`,
+`related-follows-selection`, `lun12-*-sidebar` fail; `create-ticket-from-chat`,
+`create-keeps-the-pane-and-focus` and the earlier stages pass. Missing rows
+are recorded, not fatal, so one run reports them all.
+
+Implementation (uncompiled):
+- `chat_badges/render.rs`: the conversation strip renders only the chat's
+  own identity row (working `Ticket KEY` + status control, or `Reviewer ·
+  KEY`); `render_board_receipt`, `render_board_related`, `receipt_row` and
+  `RECEIPTS_SHOWN` are gone.
+- `chat_badges.rs`: session receipts (`ChatReceipt`, `ReceiptKind`,
+  `receipts`, stamps, `read_seq`, `push/dismiss_receipt`) removed — they had
+  no surface left. A created ticket is inserted into `related` at once (as
+  before); the dirty-read discard keeps an in-flight older snapshot from
+  dropping it; Archived/Deleted events and the `deleted` set still remove
+  rows live; snapshot install still filters archived/deleted.
+- `chat_badges/dialogs.rs`: Created/Converted/Hand-off no longer push
+  receipts (their transient sidebar notices stay); `DialogOutcome::HandedOff`
+  drops its unused title; a create answered after a delete is not listed.
+- `chat_badges/fixture.rs`: readback drops `receipts` (existing QA readback).
+- `related_chats.rs`: `render_related_tickets` leads the list: header
+  "Tickets (N)" (sidebar section header) and one 30 pt row per ticket
+  (ticket glyph · KEY · title · column or phase), the row a button opening
+  `chat_open_ticket`, accessible "Open ticket KEY: title. Column · Phase",
+  and a hover `ControlTooltip` ("KEY · full title", detail "Column ·
+  Phase") for titles truncated in a narrow pane.
+  The empty state shows only with no chats and no tickets. The list sits in
+  a non-scrolling frame probed as `related-chats-viewport`; rows/section
+  use `board_probe_child`/`board_mark` (existing probe). Title "Related ·
+  {chat}".
+- `shell.rs`: tab title "Related"; picker row "Related" + "Chats and
+  tickets", count = open related chats + related tickets, accessible label
+  names both; right-pane + menu row "Related".
+- Fixture: `strip_tickets` now reads only `board.related` (receipts are
+  gone).
+
+After-run repair (fixture only): `lun12-archive/delete-leaves-sidebar`
+failed on stale probe bounds, not the product — in the failing frame the
+archived `wi-f57…` row kept bounds at y 122, the slot `wi-98d…` had moved
+into, while the section was 156 pt (header + 4 rows) and
+`f13-related-archived.png` shows 4 rows. `wait_for` polls without clearing
+the probe. New `wait_fresh` clears the probe and draws before every poll;
+f13's painted-row waits (all rows, back to SOURCE, archive drop, unarchive
+restore, delete drop) use it. Assertions unchanged.
+
+Focused side chat tickets (required follow-up; tests first):
+- Plan: the Tickets section and the picker's ticket count resolve their
+  owner from the focused conversation (`workbench_execution_focus`, else
+  the selected main chat). The Related list's chats keep MAIN's library
+  (unchanged). When the owner isn't the list's main chat the section reads
+  "Tickets · {side chat title} (N)" and marks
+  `related-tickets-context:{owner}`. Row accessible title uses
+  `single_line`. Probe labels key rows by the owner:
+  `related-ticket:{owner}:{id}`, section `related-tickets:{owner}`.
+- Fixture f12b (failure case 21), after f12's Go to chat leaves the side
+  tab focused in MAIN's workbench: Create ticket from the side tab's menu
+  (`menu:tab:create-ticket:{side}`, real dialog + engine); open Related;
+  `focused-side-chat-tickets`: the side chat's rows (= its related data),
+  mark `Tickets N`, a context mark naming it, no MAIN rows, nothing in the
+  conversation. Focus MAIN's tab: `focused-main-chat-tickets`: no side
+  rows, MAIN's rows equal MAIN's related data, no side context mark.
+- Expected before-fail on the current tree: `focused-side-chat-tickets`
+  fails (the section follows MAIN, no context mark); everything else
+  passes.
+- Before-fail (Codex): `side-before/manifest.json` 31 checks, only
+  `focused-side-chat-tickets` failed (side ticket in data, no rows/count/
+  context painted).
+- Implementation (uncompiled): `related_chats.rs` adds
+  `related_tickets_owner()` = `workbench_execution_focus()` else the
+  selected main chat; `render_related_tickets(owner, parent)` lists the
+  owner's tickets, keys row/section ids and probe labels by the owner, and
+  when owner ≠ list main names it: header "Tickets · {chat} (N)", group
+  label "Related tickets of {chat}, N", mark
+  `related-tickets-context:{owner}`. Row accessible title now
+  `single_line`. `shell.rs` picker ticket count uses the same owner. The
+  Related chat library (parent, sections, side-chat button) is unchanged.
+
+Failure cases (board-chat-ui-fixture f11/f13, before implementation):
+14. A related ticket or creation receipt paints in/above the main
+    conversation (strip marks or `receipt-*` bounds).
+15. Creating a ticket opens the right pane or moves focus.
+16. In the right sidebar's Related chats, a related ticket is missing, listed
+    twice, or paints outside the pane (left of the conversation's composer).
+17. With 5+ related tickets any is hidden behind "N more" or unreachable by
+    scrolling the list.
+18. Selecting another chat keeps SOURCE's tickets; returning doesn't restore.
+19. A row doesn't open that exact ticket on the Board.
+20. Archive/delete doesn't remove the row (and unarchive doesn't restore it)
+    without reopening.
 
 ## Plan
 

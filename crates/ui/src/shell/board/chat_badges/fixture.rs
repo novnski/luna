@@ -109,15 +109,6 @@ impl Shell {
                 "taskId": chat,
                 "tickets": list.iter().map(badge_json).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
-            "receipts": ui.receipts.iter().map(|(chat, list)| json!({
-                "taskId": chat,
-                "receipts": list.iter().map(|receipt| json!({
-                    "kind": format!("{:?}", receipt.kind),
-                    "workItemId": receipt.work_item_id,
-                    "key": receipt.key,
-                    "title": receipt.title,
-                })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
             "identities": ui.identities.iter().map(|(id, identity)| (id.clone(), json!({
                 "role": identity.role.as_str(),
                 "mainParentId": identity.main_parent_id,

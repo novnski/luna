@@ -19,7 +19,7 @@ use luna_proto::{
 };
 
 use super::super::api::BoardCallError;
-use super::{ChatReceipt, ReceiptKind, new_request_id};
+use super::new_request_id;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons::{self, icon};
 use crate::interaction::HoverFill as _;
@@ -343,13 +343,13 @@ impl Shell {
                         project_id,
                         from_task_id: Some(chat_id.clone()),
                         handoff_brief: Some(body),
-                        title: Some(title.clone()),
+                        title: Some(title),
                         start,
                         ticket: None,
                         execution: None,
                     })
                     .await
-                    .map(|created| DialogOutcome::HandedOff(Box::new(created), title)),
+                    .map(|created| DialogOutcome::HandedOff(Box::new(created))),
             };
             this.update(cx, |shell, cx| {
                 shell.board_dialog_finished(generation, chat_id, harness, outcome, cx)
@@ -405,16 +405,6 @@ impl Shell {
                         self.board_chat
                             .identities
                             .insert(chat_id.clone(), receipt.identity.clone());
-                        self.board_chat.push_receipt(
-                            &chat_id,
-                            ChatReceipt {
-                                kind: ReceiptKind::Converted,
-                                work_item_id: Some(mutation.work_item_id.clone()),
-                                key: Some(mutation.key.clone()),
-                                title: mutation.item.title.clone(),
-                                column: Some(mutation.column),
-                            },
-                        );
                         if let Some(model) = self.board_chat.model.clone() {
                             model.update(cx, |model, cx| model.apply_receipt(mutation, cx));
                         }
@@ -424,10 +414,15 @@ impl Shell {
                         )));
                     }
                     DialogOutcome::Created(receipt) => {
+                        // The engine's answer lists the ticket in this chat's
+                        // Related list at once (the right sidebar; nothing in
+                        // the conversation), unless it was deleted meanwhile.
+                        let deleted = self.board_chat.deleted.contains(&receipt.work_item_id);
                         let related = self.board_chat.related.entry(chat_id.clone()).or_default();
-                        if !related
-                            .iter()
-                            .any(|badge| badge.work_item_id == receipt.work_item_id)
+                        if !deleted
+                            && !related
+                                .iter()
+                                .any(|badge| badge.work_item_id == receipt.work_item_id)
                         {
                             related.push(ChatTicketBadge {
                                 archived: false,
@@ -441,21 +436,12 @@ impl Shell {
                                 harness: None,
                             });
                         }
-                        self.board_chat.push_receipt(
-                            &chat_id,
-                            ChatReceipt {
-                                kind: ReceiptKind::Created,
-                                work_item_id: Some(receipt.work_item_id.clone()),
-                                key: Some(receipt.key.clone()),
-                                title: receipt.item.title.clone(),
-                                column: Some(receipt.column),
-                            },
-                        );
                         if let Some(model) = self.board_chat.model.clone() {
                             model.update(cx, |model, cx| model.apply_receipt(&receipt, cx));
                         }
-                        // Confirm the receipt against a snapshot read after it:
-                        // archived or deleted meanwhile, it retires there.
+                        // Confirm the row against a snapshot read after it (a
+                        // read already in flight is discarded and repeated):
+                        // archived or deleted meanwhile, it leaves there.
                         self.board_chat_refresh(cx);
                         self.sidebar_notice = Some(SidebarNotice::transient_status(format!(
                             "{} saved to {}. No chat was created.",
@@ -463,21 +449,8 @@ impl Shell {
                             receipt.column.label()
                         )));
                     }
-                    DialogOutcome::HandedOff(created, title) => {
+                    DialogOutcome::HandedOff(created) => {
                         let started = created.launch != luna_proto::BoardChatLaunchState::Created;
-                        self.board_chat.push_receipt(
-                            &chat_id,
-                            ChatReceipt {
-                                kind: ReceiptKind::HandedOff {
-                                    task_id: created.task_id.clone(),
-                                    started,
-                                },
-                                work_item_id: created.work_item_id.clone(),
-                                key: None,
-                                title,
-                                column: None,
-                            },
-                        );
                         if started {
                             self.board_open_navigation(created.navigation, cx);
                         } else {
@@ -996,5 +969,5 @@ impl Shell {
 enum DialogOutcome {
     Converted(Box<luna_proto::BoardConvertReceipt>),
     Created(Box<luna_proto::BoardMutationReceipt>),
-    HandedOff(Box<luna_proto::BoardChatCreated>, String),
+    HandedOff(Box<luna_proto::BoardChatCreated>),
 }

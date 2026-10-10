@@ -23,7 +23,7 @@
 //! 4. A reviewer side chat shows the working `Ticket` badge (or none)
 //!    instead of a distinct `Reviewer · KEY` badge with its own glyph.
 //! 5. A source discussion (a ticket created from it) shows the working
-//!    badge instead of a "Related ticket" receipt with Open ticket.
+//!    badge instead of listing the ticket as related (right sidebar).
 //! 6. A main chat's creation chooser lacks Side chat Fresh / With context or
 //!    still names "New thread or side chat"; a side chat's creation offers
 //!    With context, Fork, a nested side chat, or anything beyond New side
@@ -35,7 +35,7 @@
 //!    ID, sends a prompt, or does not propose the chat's current title; the
 //!    badge does not appear from the engine's answer.
 //! 9. Create ticket from this chat adds a chat (UI or engine count), gives
-//!    the source the working badge, or shows no receipt with Open ticket.
+//!    the source the working badge, or doesn't relate the ticket to it.
 //! 10. Go to chat after the side chat's tab was closed (and another chat
 //!     selected) relaunches or resends it, promotes or reparents it, opens
 //!     it outside its main chat's workbench, or selects the wrong tab.
@@ -43,10 +43,25 @@
 //!     for a ticket chat.
 //! 12. Palette ticket entries resolve by title instead of the stable ticket
 //!     and chat IDs.
-//! 13. (LUN-12) A source chat's strip keeps an archived or deleted ticket
-//!     (its related row, this session's receipt or the "N more" count), or
-//!     only drops it after the chat is reopened; an unarchived one doesn't
-//!     come back.
+//! 13. (LUN-12) A source chat's related tickets keep an archived or deleted
+//!     ticket, or only drop it after the chat is reopened; an unarchived one
+//!     doesn't come back.
+//! 14. A related ticket, "N more related tickets" or a creation receipt
+//!     paints in or above the conversation (related tickets live in the
+//!     right sidebar only).
+//! 15. Creating a ticket opens or switches the right pane, or moves focus.
+//! 16. In the right sidebar's Related list a related ticket is missing,
+//!     listed twice, or paints outside the pane (left of the composer).
+//! 17. With five or more related tickets one is hidden behind "N more" or
+//!     can't be scrolled into the list's view.
+//! 18. Selecting another chat keeps SOURCE's ticket rows, or returning to
+//!     SOURCE doesn't restore them.
+//! 19. A ticket row doesn't open that exact ticket on the Board.
+//! 20. Archiving or deleting a related ticket doesn't remove its row live
+//!     (or unarchiving doesn't restore it).
+//! 21. With a side chat's tab focused, its related tickets aren't in the
+//!     right sidebar (or MAIN's are shown instead, or nothing names the side
+//!     chat); focusing MAIN's tab keeps the side chat's rows.
 //!
 //! Every engine step that a sibling slice owns (conversion, side chat
 //! creation, review start, navigation) is the real engine operation; on a
@@ -263,6 +278,7 @@ fn readback(window: Win, cx: &mut AsyncApp) -> anyhow::Result<Value> {
             "workbench": shell.fixture_workbench_readback(cx),
             "sidebar": shell.fixture_sidebar_sections_readback(cx),
             "chooser": shell.fixture_chooser_readback(cx),
+            "frame": shell.fixture_frame_readback(cx),
         })
     })
 }
@@ -451,21 +467,135 @@ async fn wait_for(
     anyhow::bail!("timed out waiting for {what}: {}", last["board"])
 }
 
-/// LUN-12: the tickets `chat`'s strip shows (its receipts' tickets, then the
-/// engine's related tickets), by work item id, without repeats.
-fn strip_tickets(rb: &Value, chat: &str) -> Vec<String> {
-    let of = |list: &str, items: &str| -> Vec<String> {
-        rb["board"][list]
-            .as_array()
+/// A board probe label's painted bounds as `[x, y, w, h]`.
+fn board_rect(rb: &Value, label: &str) -> Option<[f32; 4]> {
+    let found = &rb["board"]["bounds"][label];
+    let num = |key: &str| found[key].as_f64().map(|value| value as f32);
+    Some([num("x")?, num("y")?, num("w")?, num("h")?])
+}
+
+/// Related tickets → right sidebar: the tickets whose rows the right
+/// sidebar's Related chats list painted for `chat` (by work item id, in
+/// paint order of their labels).
+fn painted_tickets(rb: &Value, chat: &str) -> Vec<String> {
+    let prefix = format!("related-ticket:{chat}:");
+    rb["board"]["bounds"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(label, _)| label.strip_prefix(&prefix).map(str::to_string))
+        .collect()
+}
+
+/// Anything ticket-related the conversation itself painted for `chat`:
+/// related rows, "N more", creation receipts or their buttons. Must stay
+/// empty: related tickets live in the right sidebar only.
+fn conversation_ticket_noise(rb: &Value, chat: &str) -> Vec<String> {
+    let mut noise: Vec<String> = marks(rb, &format!("strip:{chat}"))
+        .into_iter()
+        .filter(|text| {
+            text.starts_with("Related ticket")
+                || text.contains("more related")
+                || text.starts_with("Created ")
+                || text.starts_with("Converted")
+                || text.starts_with("Handed off")
+        })
+        .collect();
+    noise.extend(
+        rb["board"]["bounds"]
+            .as_object()
             .into_iter()
             .flatten()
-            .filter(|entry| entry["taskId"] == chat)
-            .flat_map(|entry| entry[items].as_array().cloned().unwrap_or_default())
-            .filter_map(|item| item["workItemId"].as_str().map(str::to_string))
-            .collect()
-    };
-    let mut shown = of("receipts", "receipts");
-    for id in of("related", "tickets") {
+            .map(|(label, _)| label.clone())
+            .filter(|label| {
+                label.starts_with("receipt-open:") || label.starts_with("receipt-goto:")
+            }),
+    );
+    noise
+}
+
+/// Draw fresh frames with a cleared probe, then read back (only what paints
+/// now counts).
+async fn fresh_readback(window: Win, cx: &mut AsyncApp) -> anyhow::Result<Value> {
+    window.update(cx, |shell, _, _| shell.fixture_board_chat_probe_clear())?;
+    frames(window, cx, 150).await?;
+    readback(window, cx)
+}
+
+/// [`wait_for`] on current-frame bounds only: each poll clears the probe
+/// and draws before reading, so a row that stopped painting (an archived or
+/// deleted ticket) can't linger as last frame's bounds.
+async fn wait_fresh(
+    window: Win,
+    cx: &mut AsyncApp,
+    tries: usize,
+    what: &str,
+    done: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Value> {
+    let mut last = Value::Null;
+    for _ in 0..tries {
+        last = fresh_readback(window, cx).await?;
+        if done(&last) {
+            return Ok(last);
+        }
+    }
+    anyhow::bail!("timed out waiting for {what}: {}", last["board"])
+}
+
+/// Scroll the right sidebar's Related list until `label`'s row is fully
+/// inside the list's visible frame (`related-chats-viewport`); its bounds
+/// there, or `None` when it never gets there.
+async fn reveal_related(
+    window: Win,
+    cx: &mut AsyncApp,
+    label: &str,
+) -> anyhow::Result<Option<[f32; 4]>> {
+    for _ in 0..40 {
+        let rb = fresh_readback(window, cx).await?;
+        let (Some(row), Some(view)) = (
+            board_rect(&rb, label),
+            board_rect(&rb, "related-chats-viewport"),
+        ) else {
+            return Ok(None);
+        };
+        if row[1] >= view[1] - 0.5 && row[1] + row[3] <= view[1] + view[3] + 0.5 {
+            return Ok(Some(row));
+        }
+        // Content moves up for a negative delta (scrolling down).
+        let dy = if row[1] < view[1] {
+            (view[1] - row[1]).min(200.0)
+        } else {
+            -(row[1] + row[3] - view[1] - view[3]).min(200.0)
+        };
+        let at = (view[0] + view[2] / 2.0, view[1] + view[3] / 2.0);
+        hover_at(window, cx, at.0, at.1)?;
+        input(
+            window,
+            cx,
+            PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                position: point(px(at.0), px(at.1)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(dy))),
+                modifiers: Default::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            }),
+        )?;
+    }
+    Ok(None)
+}
+
+/// LUN-12: `chat`'s active related tickets as the UI holds them (the
+/// engine's badge read plus a just-created ticket), by work item id,
+/// without repeats. What the right sidebar paints is [`painted_tickets`].
+fn strip_tickets(rb: &Value, chat: &str) -> Vec<String> {
+    let mut shown = Vec::new();
+    for id in rb["board"]["related"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["taskId"] == chat)
+        .flat_map(|entry| entry["tickets"].as_array().cloned().unwrap_or_default())
+        .filter_map(|item| item["workItemId"].as_str().map(str::to_string))
+    {
         if !shown.contains(&id) {
             shown.push(id);
         }
@@ -800,7 +930,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 let _ = std::fs::write(
                     output.join("board-chat-ui.pass"),
-                    "PASS: headless production Shell on a real in-process engine; working chat header badge + separate status control (no Done), sidebar row and side-chat tab badges with accessible labels, a distinct Reviewer badge, a Related-ticket receipt on the source discussion, main Side chat Fresh/With context vs side New side chat/Hand off only (no fork), convert in place (same chat id, nothing sent), create ticket from chat (no chat added), Go to chat after closing the side tab selects the exact side chat in its main chat's workbench, and no reattach controls\n",
+                    "PASS: headless production Shell on a real in-process engine; working chat header badge + separate status control (no Done), sidebar row and side-chat tab badges with accessible labels, a distinct Reviewer badge, related tickets only in the right sidebar (none in the conversation), main Side chat Fresh/With context vs side New side chat/Hand off only (no fork), convert in place (same chat id, nothing sent), create ticket from chat (no chat added), Go to chat after closing the side tab selects the exact side chat in its main chat's workbench, and no reattach controls\n",
                 );
                 let _ = window.update(cx, |_, window, _| window.remove_window());
                 cx.update(|cx| cx.quit());
@@ -1427,7 +1557,11 @@ async fn scenario(
         ),
     }
 
-    // f11. Create ticket from SOURCE: a receipt, no chat, no working badge.
+    // f11. Create ticket from SOURCE: no chat, no working badge, and nothing
+    // ticket-related painted in the conversation itself (failure case 14).
+    // The pane stays as it was and keeps nobody's focus (15); the ticket is
+    // a row of the right sidebar's Related chats once the user opens it
+    // (16), and that row opens the exact ticket (19).
     click_row(window, cx, SOURCE).await?;
     wait_for(window, cx, 80, "SOURCE's workbench", |rb| {
         rb["workbench"]["main"] == SOURCE && rb["workbench"]["loaded"] == true
@@ -1435,6 +1569,7 @@ async fn scenario(
     .await?;
     let chats_before = cx.update(|cx| state.read(cx).chats.len());
     let engine_chats_before = engine_chat_count(core);
+    let before_create = fresh_readback(window, cx).await?;
     right_click_row(window, cx, SOURCE).await?;
     click_board(
         window,
@@ -1448,67 +1583,129 @@ async fn scenario(
     })
     .await?;
     click_board(window, cx, "dialog:primary", MouseButton::Left).await?;
-    let receipt = wait_for(window, cx, 150, "SOURCE's receipt", |rb| {
-        rb["board"]["bounds"].as_object().is_some_and(|bounds| {
-            bounds
-                .keys()
-                .any(|label| label.starts_with(&format!("receipt-open:{SOURCE}:")))
-        })
+    wait_for(window, cx, 150, "SOURCE's created ticket", |rb| {
+        !strip_tickets(rb, SOURCE).is_empty() && rb["board"]["dialog"].is_null()
     })
     .await?;
-    frames(window, cx, 300).await?;
-    let receipt = readback(window, cx).unwrap_or(receipt);
-    run.capture(window, cx, "f11-source-receipt")?;
-    run.snapshot("rb-11-source-receipt", &receipt)?;
-    let open_label = receipt["board"]["bounds"]
-        .as_object()
-        .and_then(|bounds| {
-            bounds
-                .keys()
-                .find(|label| label.starts_with(&format!("receipt-open:{SOURCE}:")))
-                .cloned()
-        })
+    let created = fresh_readback(window, cx).await?;
+    run.capture(window, cx, "f11-source-created")?;
+    run.snapshot("rb-11-source-created", &created)?;
+    let ticket_source = strip_tickets(&created, SOURCE)
+        .first()
+        .cloned()
         .unwrap_or_default();
-    let ticket_source = open_label
-        .rsplit(':')
-        .next()
-        .unwrap_or_default()
-        .to_string();
     let engine_source = engine_badges(runtime, engine, &[SOURCE]).await?;
     run.check(
         "create-ticket-from-chat",
-        "a receipt with Open ticket; no working badge on the source; no chat added (UI or engine)",
+        "the ticket is saved and related to SOURCE; no working badge on the source; no chat added (UI or engine)",
         json!({
-            "strip": marks(&receipt, &format!("strip:{SOURCE}")),
+            "ticket": ticket_source,
             "engine": engine_source,
             "uiChats": [chats_before, cx.update(|cx| state.read(cx).chats.len())],
             "engineChats": [engine_chats_before, engine_chat_count(core)],
         }),
-        badge(&receipt, SOURCE).is_none()
-            && board_bounds(&receipt, &format!("header-ticket:{SOURCE}")).is_none()
+        !ticket_source.is_empty()
+            && badge(&created, SOURCE).is_none()
+            && board_bounds(&created, &format!("header-ticket:{SOURCE}")).is_none()
             && !engine_source["badges"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .any(|badge| badge["taskId"] == SOURCE)
             && cx.update(|cx| state.read(cx).chats.len()) == chats_before
-            && engine_chat_count(core) == engine_chats_before
-            && marks(&receipt, &format!("strip:{SOURCE}"))
-                .iter()
-                .any(|text| text.starts_with("Created ")),
+            && engine_chat_count(core) == engine_chats_before,
     );
-    audit(&mut words, &receipt);
-    click_board(window, cx, &open_label, MouseButton::Left).await?;
-    let opened = wait_for(window, cx, 40, "the created ticket on the Board", |rb| {
-        rb["board"]["route"] == "page:board"
-    })
-    .await?;
+    let noise = conversation_ticket_noise(&created, SOURCE);
     run.check(
-        "receipt-opens-ticket",
-        "Open ticket on the receipt opens that ticket by id",
-        json!({ "selected": opened["board"]["boardSelectedItem"], "ticket": ticket_source }),
-        opened["board"]["boardSelectedItem"] == ticket_source.as_str() && !ticket_source.is_empty(),
+        "no-related-tickets-in-conversation",
+        "nothing ticket-related paints in or above SOURCE's conversation: no related rows, no \"N more\", no creation receipt",
+        json!({ "noise": noise, "strip": marks(&created, &format!("strip:{SOURCE}")) }),
+        noise.is_empty(),
     );
+    run.check(
+        "create-keeps-the-pane-and-focus",
+        "creating a ticket neither opens nor switches the right pane and leaves SOURCE focused",
+        json!({
+            "rightOpen": [before_create["frame"]["rightOpen"], created["frame"]["rightOpen"]],
+            "rightActive": [before_create["frame"]["rightActive"], created["frame"]["rightActive"]],
+            "focused": created["workbench"]["focusedChat"],
+        }),
+        before_create["frame"]["rightOpen"] == created["frame"]["rightOpen"]
+            && before_create["frame"]["rightActive"] == created["frame"]["rightActive"]
+            && created["workbench"]["focusedChat"] == before_create["workbench"]["focusedChat"],
+    );
+    audit(&mut words, &created);
+    // The user opens the right sidebar's Related chats for SOURCE.
+    window.update(cx, |shell, window, cx| {
+        shell.fixture_open_surface("related", window, cx)
+    })?;
+    let row_label = format!("related-ticket:{SOURCE}:{ticket_source}");
+    let listed = wait_for(
+        window,
+        cx,
+        80,
+        "SOURCE's ticket in the right sidebar",
+        |rb| board_rect(rb, &row_label).is_some(),
+    )
+    .await;
+    let listed = match listed {
+        Ok(_) => fresh_readback(window, cx).await?,
+        Err(error) => {
+            run.check(
+                "related-ticket-in-right-sidebar",
+                "SOURCE's ticket is a row of the right sidebar's Related chats",
+                json!(format!("{error:#}")),
+                false,
+            );
+            readback(window, cx)?
+        }
+    };
+    run.capture(window, cx, "f11-related-sidebar")?;
+    run.snapshot("rb-11-related-sidebar", &listed)?;
+    let composer = window.update(cx, |shell, _, cx| {
+        shell.fixture_composer_surface(SOURCE, cx)
+    })?;
+    let row = board_rect(&listed, &row_label);
+    run.check(
+        "related-ticket-in-right-sidebar",
+        "SOURCE's ticket is one row of the right sidebar (right of the conversation's composer), and still nothing in the conversation",
+        json!({
+            "row": row,
+            "composer": composer,
+            "painted": painted_tickets(&listed, SOURCE),
+            "rightActive": listed["frame"]["rightActive"],
+            "noise": conversation_ticket_noise(&listed, SOURCE),
+        }),
+        matches!((row, composer), (Some(row), Some(composer)) if row[0] >= composer[0] + composer[2] - 0.5)
+            && painted_tickets(&listed, SOURCE) == [ticket_source.clone()]
+            && listed["frame"]["rightActive"] == "RelatedChats"
+            && conversation_ticket_noise(&listed, SOURCE).is_empty(),
+    );
+    audit(&mut words, &listed);
+    // A missing row is recorded (not fatal) so a pre-fix run reports every
+    // failure case of this stage.
+    if row.is_some() {
+        click_board(window, cx, &row_label, MouseButton::Left).await?;
+        let opened = wait_for(window, cx, 40, "the created ticket on the Board", |rb| {
+            rb["board"]["route"] == "page:board"
+        })
+        .await?;
+        run.check(
+            "related-row-opens-ticket",
+            "the right sidebar's row opens that ticket by id",
+            json!({ "selected": opened["board"]["boardSelectedItem"], "ticket": ticket_source }),
+            opened["board"]["boardSelectedItem"] == ticket_source.as_str()
+                && !ticket_source.is_empty(),
+        );
+    } else {
+        run.check(
+            "related-row-opens-ticket",
+            "the right sidebar's row opens that ticket by id",
+            json!({ "row": null, "ticket": ticket_source }),
+            false,
+        );
+    }
+    window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
 
     // f12. Go to chat after closing the side chat's tab, from elsewhere.
     click_row(window, cx, MAIN).await?;
@@ -1621,18 +1818,141 @@ async fn scenario(
             .is_some_and(|label| label.contains(&key_side)),
     );
 
-    // f13. LUN-12 (board-automation-ticket-fixes): the source chat's strip
-    // follows its tickets live. Three tickets created from SOURCE; one is
-    // archived by the engine (as an agent's board_control does) and leaves
-    // the strip and its count without reopening the chat, comes back when
-    // unarchived, and a deleted one is gone for good. Before the fix the
-    // archived tickets kept counting ("8 more related tickets").
+    // f12b. Related tickets of a focused side chat (failure case 21): the
+    // conversation strips list no tickets anywhere, so a ticket created from
+    // a side chat must be found in the right sidebar while that side tab is
+    // focused. Its Tickets section names the side chat (the Related list's
+    // chats stay MAIN's library); focusing MAIN's tab drops the side chat's
+    // rows and shows MAIN's own related tickets again.
+    let at = tab_center(&readback(window, cx)?, &side)
+        .ok_or_else(|| anyhow::anyhow!("the side chat's tab is not painted"))?;
+    click_at(window, cx, at, MouseButton::Left).await?;
+    wait_for(
+        window,
+        cx,
+        60,
+        "the side tab focused in MAIN's workbench",
+        |rb| rb["workbench"]["main"] == MAIN && rb["workbench"]["focusedChat"] == side.as_str(),
+    )
+    .await?;
+    let side_before = strip_tickets(&readback(window, cx)?, &side);
+    let at = tab_center(&readback(window, cx)?, &side).expect("painted above");
+    click_at(window, cx, at, MouseButton::Right).await?;
+    click_board(
+        window,
+        cx,
+        &format!("menu:tab:create-ticket:{side}"),
+        MouseButton::Left,
+    )
+    .await?;
+    wait_for(
+        window,
+        cx,
+        40,
+        "the create dialog from the side tab",
+        |rb| rb["board"]["dialog"]["kind"] == "CreateTicket",
+    )
+    .await?;
+    click_board(window, cx, "dialog:primary", MouseButton::Left).await?;
+    let made = wait_for(window, cx, 150, "the side chat's related ticket", |rb| {
+        strip_tickets(rb, &side).len() > side_before.len() && rb["board"]["dialog"].is_null()
+    })
+    .await?;
+    let side_ticket = strip_tickets(&made, &side)
+        .into_iter()
+        .find(|id| !side_before.contains(id))
+        .unwrap_or_default();
+    window.update(cx, |shell, window, cx| {
+        shell.fixture_open_surface("related", window, cx)
+    })?;
+    let side_row = format!("related-ticket:{side}:{side_ticket}");
+    let side_list = wait_fresh(
+        window,
+        cx,
+        60,
+        "the side chat's ticket in the right sidebar",
+        |rb| board_rect(rb, &side_row).is_some(),
+    )
+    .await;
+    let side_list = match side_list {
+        Ok(rb) => rb,
+        Err(_) => fresh_readback(window, cx).await?,
+    };
+    run.capture(window, cx, "f12b-side-tickets")?;
+    run.snapshot("rb-12b-side-tickets", &side_list)?;
+    let side_rows = painted_tickets(&side_list, &side);
+    let side_count = marks(&side_list, &format!("related-tickets:{side}"));
+    let side_context = marks(&side_list, &format!("related-tickets-context:{side}"));
+    run.check(
+        "focused-side-chat-tickets",
+        "with the side tab focused, the right sidebar lists the side chat's related tickets (its count, a label naming the side chat), not MAIN's",
+        json!({
+            "ticket": side_ticket,
+            "rows": side_rows,
+            "count": side_count,
+            "context": side_context,
+            "mainRows": painted_tickets(&side_list, MAIN),
+            "focused": side_list["workbench"]["focusedChat"],
+            "noise": conversation_ticket_noise(&side_list, &side),
+        }),
+        !side_ticket.is_empty()
+            && side_rows.contains(&side_ticket)
+            && side_rows.len() == strip_tickets(&side_list, &side).len()
+            && side_count.first().map(String::as_str)
+                == Some(format!("Tickets {}", side_rows.len()).as_str())
+            && !side_context.is_empty()
+            && painted_tickets(&side_list, MAIN).is_empty()
+            && side_list["workbench"]["focusedChat"] == side.as_str()
+            && conversation_ticket_noise(&side_list, &side).is_empty(),
+    );
+    let at = tab_center(&readback(window, cx)?, MAIN)
+        .ok_or_else(|| anyhow::anyhow!("MAIN's tab is not painted"))?;
+    click_at(window, cx, at, MouseButton::Left).await?;
+    let main_list = wait_fresh(window, cx, 60, "MAIN focused again", |rb| {
+        rb["workbench"]["focusedChat"] == MAIN && painted_tickets(rb, &side).is_empty()
+    })
+    .await;
+    let main_list = match main_list {
+        Ok(rb) => rb,
+        Err(_) => fresh_readback(window, cx).await?,
+    };
+    run.capture(window, cx, "f12b-main-tickets")?;
+    let mut main_rows = painted_tickets(&main_list, MAIN);
+    let mut main_data = strip_tickets(&main_list, MAIN);
+    main_rows.sort();
+    main_data.sort();
+    run.check(
+        "focused-main-chat-tickets",
+        "focusing MAIN's tab drops the side chat's rows and lists exactly MAIN's own related tickets, with no side-chat label",
+        json!({
+            "sideRows": painted_tickets(&main_list, &side),
+            "mainRows": main_rows,
+            "mainData": main_data,
+            "sideContext": marks(&main_list, &format!("related-tickets-context:{side}")),
+            "focused": main_list["workbench"]["focusedChat"],
+        }),
+        main_list["workbench"]["focusedChat"] == MAIN
+            && painted_tickets(&main_list, &side).is_empty()
+            && main_rows == main_data
+            && marks(&main_list, &format!("related-tickets-context:{side}")).is_empty(),
+    );
+    window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
+
+    // f13. Related tickets live in the right sidebar (failure cases 16-20),
+    // with LUN-12's live updates. SOURCE gets five or more related tickets
+    // (one from f11 plus four more): every one is a row of the right
+    // sidebar's Related list, reachable by scrolling it, never behind "N
+    // more" (17); selecting another chat drops SOURCE's rows and returning
+    // restores them (18); archiving one removes its row at once, unarchiving
+    // restores it, and a deleted one is gone for good (20). Nothing of it
+    // ever paints in the conversation (14). Before the fix these were three
+    // banners above the conversation plus "2 more related tickets".
     click_row(window, cx, SOURCE).await?;
     wait_for(window, cx, 80, "SOURCE's workbench again", |rb| {
         rb["workbench"]["main"] == SOURCE && rb["workbench"]["loaded"] == true
     })
     .await?;
-    for round in 0..2 {
+    for round in 0..4 {
         let before = strip_tickets(&readback(window, cx)?, SOURCE).len();
         right_click_row(window, cx, SOURCE).await?;
         click_board(
@@ -1656,15 +1976,87 @@ async fn scenario(
         )
         .await?;
     }
-    let three = readback(window, cx)?;
-    let tickets = strip_tickets(&three, SOURCE);
-    run.capture(window, cx, "f13-related-three")?;
-    run.snapshot("rb-13-related-three", &three)?;
+    // Every created ticket is related to SOURCE (engine and this session).
+    let quiet = fresh_readback(window, cx).await?;
+    let tickets = strip_tickets(&quiet, SOURCE);
+    run.capture(window, cx, "f13-conversation-unobstructed")?;
+    run.check(
+        "conversation-unobstructed",
+        "with the right sidebar closed, five related tickets paint nothing in or above SOURCE's conversation",
+        json!({
+            "tickets": tickets,
+            "rightOpen": quiet["frame"]["rightOpen"],
+            "noise": conversation_ticket_noise(&quiet, SOURCE),
+        }),
+        tickets.len() >= 5
+            && quiet["frame"]["rightOpen"] == false
+            && conversation_ticket_noise(&quiet, SOURCE).is_empty(),
+    );
+    window.update(cx, |shell, window, cx| {
+        shell.fixture_open_surface("related", window, cx)
+    })?;
+    let five = wait_fresh(
+        window,
+        cx,
+        80,
+        "SOURCE's tickets in the right sidebar",
+        |rb| {
+            tickets
+                .iter()
+                .all(|id| board_rect(rb, &format!("related-ticket:{SOURCE}:{id}")).is_some())
+        },
+    )
+    .await
+    .unwrap_or(readback(window, cx)?);
+    run.capture(window, cx, "f13-related-sidebar")?;
+    run.snapshot("rb-13-related-sidebar", &five)?;
+    // Each row scrolled into the list's viewport, then checked there.
+    let mut reached = Vec::new();
+    for id in &tickets {
+        let label = format!("related-ticket:{SOURCE}:{id}");
+        reached.push(json!({ "ticket": id, "row": reveal_related(window, cx, &label).await? }));
+    }
+    let painted = painted_tickets(&fresh_readback(window, cx).await?, SOURCE);
+    let mut unique = painted.clone();
+    unique.sort();
+    unique.dedup();
+    run.check(
+        "all-related-tickets-reachable",
+        "every related ticket is exactly one row of the right sidebar, each reachable by scrolling, none behind \"N more\"",
+        json!({ "tickets": tickets, "painted": painted, "reached": reached }),
+        reached.iter().all(|row| !row["row"].is_null())
+            && unique.len() == painted.len()
+            && tickets.iter().all(|id| painted.contains(id))
+            && painted.len() == tickets.len(),
+    );
+    // Selection: another chat's Related list never shows SOURCE's tickets.
+    click_row(window, cx, OTHER).await?;
+    wait_for(window, cx, 80, "OTHER selected", |rb| {
+        rb["board"]["selectedChat"] == OTHER
+    })
+    .await?;
+    let other = fresh_readback(window, cx).await?;
+    run.capture(window, cx, "f13-other-selected")?;
+    click_row(window, cx, SOURCE).await?;
+    let back = wait_fresh(window, cx, 80, "SOURCE's rows again", |rb| {
+        rb["board"]["selectedChat"] == SOURCE && painted_tickets(rb, SOURCE).len() == tickets.len()
+    })
+    .await;
+    run.check(
+        "related-follows-selection",
+        "selecting another chat drops SOURCE's rows from the right sidebar; selecting SOURCE again restores them",
+        json!({
+            "other": painted_tickets(&other, SOURCE),
+            "otherActive": other["frame"]["rightActive"],
+            "back": back.as_ref().map(|rb| json!(painted_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))),
+        }),
+        painted_tickets(&other, SOURCE).is_empty() && back.is_ok(),
+    );
     let item_revision = |detail: &Value| detail["view"]["item"]["revision"].as_u64().unwrap_or(0);
     if tickets.len() < 3 {
         run.check(
             "lun12-related-created",
-            "three tickets created from SOURCE are its related tickets",
+            "the tickets created from SOURCE are its related tickets",
             json!(tickets),
             false,
         );
@@ -1677,22 +2069,22 @@ async fn scenario(
             json!({ "requestId": "lun12-archive", "workItemId": archived, "archived": true }),
         )
         .await?;
-        let dropped = wait_for(
+        let dropped = wait_fresh(
             window,
             cx,
             60,
-            "the strip drops the archived ticket",
+            "the sidebar drops the archived ticket",
             |rb| {
-                let shown = strip_tickets(rb, SOURCE);
+                let shown = painted_tickets(rb, SOURCE);
                 shown.len() == tickets.len() - 1 && !shown.contains(&archived)
             },
         )
         .await;
         run.capture(window, cx, "f13-related-archived")?;
         run.check(
-            "lun12-archive-leaves-strip",
-            "archiving a related ticket removes it from the source chat's strip and count at once",
-            json!({ "archived": archived, "before": tickets, "after": dropped.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
+            "lun12-archive-leaves-sidebar",
+            "archiving a related ticket removes its right-sidebar row at once, without reopening the chat",
+            json!({ "archived": archived, "before": tickets, "after": dropped.as_ref().map(|rb| json!(painted_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
             dropped.is_ok(),
         );
         rpc(
@@ -1702,18 +2094,18 @@ async fn scenario(
             json!({ "requestId": "lun12-unarchive", "workItemId": archived, "archived": false }),
         )
         .await?;
-        let restored = wait_for(
+        let restored = wait_fresh(
             window,
             cx,
             60,
-            "the strip brings the unarchived ticket back",
-            |rb| strip_tickets(rb, SOURCE).contains(&archived),
+            "the sidebar brings the unarchived ticket back",
+            |rb| painted_tickets(rb, SOURCE).contains(&archived),
         )
         .await;
         run.check(
             "lun12-unarchive-returns",
-            "unarchiving brings the ticket back to the strip",
-            json!({ "after": restored.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
+            "unarchiving brings the ticket's row back",
+            json!({ "after": restored.as_ref().map(|rb| json!(painted_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(format!("{error:#}"))) }),
             restored.is_ok(),
         );
         let deleted = tickets[1].clone();
@@ -1732,9 +2124,16 @@ async fn scenario(
         )
         .await;
         let gone = match &delete {
-            Ok(_) => wait_for(window, cx, 60, "the strip drops the deleted ticket", |rb| {
-                !strip_tickets(rb, SOURCE).contains(&deleted)
-            })
+            Ok(_) => wait_fresh(
+                window,
+                cx,
+                60,
+                "the sidebar drops the deleted ticket",
+                |rb| {
+                    !painted_tickets(rb, SOURCE).contains(&deleted)
+                        && !strip_tickets(rb, SOURCE).contains(&deleted)
+                },
+            )
             .await
             .map_err(|error| format!("{error:#}")),
             Err(error) => Err(format!("{error:#}")),
@@ -1743,16 +2142,24 @@ async fn scenario(
         if let Ok(rb) = &gone {
             run.snapshot("rb-13-related-deleted", rb)?;
         }
+        let after = fresh_readback(window, cx).await?;
         run.check(
-            "lun12-delete-leaves-strip",
-            "a deleted ticket leaves every chat's strip and the badge read",
-            json!({ "deleted": deleted, "receipt": delete.as_ref().ok(), "after": gone.as_ref().map(|rb| json!(strip_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(error)) }),
+            "lun12-delete-leaves-sidebar",
+            "a deleted ticket leaves the right sidebar and the badge read; nothing ever painted in the conversation",
+            json!({
+                "deleted": deleted,
+                "receipt": delete.as_ref().ok(),
+                "after": gone.as_ref().map(|rb| json!(painted_tickets(rb, SOURCE))).unwrap_or_else(|error| json!(error)),
+                "noise": conversation_ticket_noise(&after, SOURCE),
+            }),
             gone.is_ok()
                 && delete
                     .as_ref()
-                    .is_ok_and(|receipt| receipt["item"]["deleted"] == true),
+                    .is_ok_and(|receipt| receipt["item"]["deleted"] == true)
+                && conversation_ticket_noise(&after, SOURCE).is_empty(),
         );
     }
+    window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
 
     // No reattach control anywhere this run drew.
     let offending: Vec<&String> = words

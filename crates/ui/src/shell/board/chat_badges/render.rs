@@ -1,4 +1,5 @@
-//! Badges, the working chat's header strip, receipts and menu rows.
+//! Badges, the working chat's header strip and menu rows. Related tickets
+//! are rows of the right sidebar's Related list (`shell/related_chats.rs`).
 //!
 //! Every badge carries its meaning in a glyph and words (`Ticket LUN-42`,
 //! `Reviewer · LUN-42`), with an accessible label and a tooltip naming the
@@ -8,20 +9,15 @@ use gpui::{
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
     prelude::FluentBuilder as _, px,
 };
-use luna_proto::{
-    BoardChatRole, BoardColumn, BoardNavigationRequest, ChatTicketBadge, TaskLinkRole,
-};
+use luna_proto::{BoardChatRole, BoardColumn, ChatTicketBadge, TaskLinkRole};
 
 use super::dialogs::DialogKind;
-use super::{ChatBoardPurpose, ReceiptKind, StatusMenu, harness_label};
+use super::{ChatBoardPurpose, StatusMenu, harness_label};
 use crate::icons::{self, icon};
 use crate::interaction::HoverFill as _;
 use crate::popover;
 use crate::shell::Shell;
 use crate::theme::Theme;
-
-/// The most related-ticket receipts one chat strip lists.
-const RECEIPTS_SHOWN: usize = 3;
 
 /// `Ticket LUN-42` or `Reviewer · LUN-42`.
 pub(crate) fn badge_text(badge: &ChatTicketBadge) -> String {
@@ -269,9 +265,9 @@ impl Shell {
     }
 
     /// The chat's board strip, under its tab strip: the working chat's
-    /// `Ticket KEY` badge and workflow-status control, a reviewer's
-    /// `Reviewer · KEY`, then the receipts of tickets related to it.
-    /// `None` (nothing drawn) for a chat with no board relationship.
+    /// `Ticket KEY` badge and workflow-status control, or a reviewer's
+    /// `Reviewer · KEY`. `None` (nothing drawn) for any other chat,
+    /// including one with related tickets (the right sidebar lists them).
     pub(in crate::shell) fn render_board_chat_strip(
         &mut self,
         chat_id: Option<&str>,
@@ -294,54 +290,13 @@ impl Shell {
                     .ok();
             });
         }
+        // Only the chat's own identity paints here. Its related tickets are
+        // rows of the right sidebar's Related list, never part of the
+        // conversation (a source chat with five tickets stays unobstructed).
         let chat_id = chat_id?.to_string();
-        let badge = self.board_chat.badge(&chat_id).cloned();
-        let related: Vec<ChatTicketBadge> = self.board_chat.related(&chat_id).to_vec();
-        let receipts = self.board_chat.receipts(&chat_id).to_vec();
-        if badge.is_none() && related.is_empty() && receipts.is_empty() {
-            return None;
-        }
+        let badge = self.board_chat.badge(&chat_id).cloned()?;
         let mut texts = Vec::new();
-        let mut rows: Vec<AnyElement> = Vec::new();
-        if let Some(badge) = badge.as_ref() {
-            rows.push(self.render_board_header_row(&chat_id, badge, theme, &mut texts, cx));
-        }
-        // Receipts of this session's actions, then the engine's related
-        // tickets not already covered by one.
-        for (index, receipt) in receipts.iter().enumerate() {
-            rows.push(self.render_board_receipt(&chat_id, index, receipt, theme, &mut texts, cx));
-        }
-        let covered: Vec<String> = receipts
-            .iter()
-            .filter_map(|receipt| receipt.work_item_id.clone())
-            .chain(badge.iter().map(|badge| badge.work_item_id.clone()))
-            .collect();
-        let related: Vec<ChatTicketBadge> = related
-            .into_iter()
-            .filter(|related| !covered.contains(&related.work_item_id))
-            .collect();
-        let hidden = related.len().saturating_sub(RECEIPTS_SHOWN);
-        for related in related.iter().take(RECEIPTS_SHOWN) {
-            rows.push(self.render_board_related(&chat_id, related, theme, &mut texts, cx));
-        }
-        if hidden > 0 {
-            let more = format!(
-                "{hidden} more related ticket{}",
-                if hidden == 1 { "" } else { "s" }
-            );
-            texts.push(more.clone());
-            rows.push(
-                div()
-                    .px(crate::typography::ui_rems(12.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.readable_muted(0.6))
-                    .child(SharedString::from(more))
-                    .into_any_element(),
-            );
-        }
-        if rows.is_empty() {
-            return None;
-        }
+        let row = self.render_board_header_row(&chat_id, &badge, theme, &mut texts, cx);
         let label = format!("strip:{chat_id}");
         self.board_mark(|| label.clone(), || texts);
         Some(
@@ -353,11 +308,10 @@ impl Shell {
                 .flex_none()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
                 .py(px(6.0))
                 .border_b_1()
                 .border_color(theme.hairline(0.06))
-                .children(rows)
+                .child(row)
                 .relative()
                 .children(self.board_probe_child(|| label.clone()))
                 .into_any_element(),
@@ -514,277 +468,6 @@ impl Shell {
                     .text_color(theme.readable_muted(0.6))
                     .child(SharedString::from(location)),
             )
-            .into_any_element()
-    }
-
-    /// A receipt for an action taken in this chat this session.
-    fn render_board_receipt(
-        &mut self,
-        chat_id: &str,
-        index: usize,
-        receipt: &super::ChatReceipt,
-        theme: &Theme,
-        texts: &mut Vec<String>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let key = receipt.key.clone().unwrap_or_else(|| "Ticket".into());
-        let (headline, detail) = match &receipt.kind {
-            ReceiptKind::Created => (
-                format!(
-                    "Created {key} in {} · {}",
-                    receipt.column.unwrap_or_default().label(),
-                    receipt.title
-                ),
-                "Saved from this chat. No chat was created and nothing started.".to_string(),
-            ),
-            ReceiptKind::Converted => (
-                format!("Converted to {key} · {}", receipt.title),
-                "Same chat, history, provider and placement. Nothing was sent again.".to_string(),
-            ),
-            ReceiptKind::HandedOff { started, .. } => (
-                format!("Handed off to “{}”", receipt.title),
-                if *started {
-                    "A new main chat started with the written brief. This side chat stays here."
-                        .to_string()
-                } else {
-                    "A new main chat is ready with the written brief. This side chat stays here."
-                        .to_string()
-                },
-            ),
-        };
-        texts.push(headline.clone());
-        let slot = receipt
-            .work_item_id
-            .clone()
-            .unwrap_or_else(|| format!("receipt-{index}"));
-        let label = format!("receipt:{chat_id}:{slot}");
-        let open = match (&receipt.kind, receipt.work_item_id.clone()) {
-            (ReceiptKind::HandedOff { task_id, .. }, _) => {
-                let task = task_id.clone();
-                let open_label = format!("receipt-open:{chat_id}:{slot}");
-                texts.push("Open chat".into());
-                Some(
-                    strip_button(
-                        format!("board-receipt-open-{chat_id}-{index}"),
-                        "Open chat",
-                        Some(icons::ARROW_UP_RIGHT),
-                        theme,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.board_go_to_chat(
-                            BoardNavigationRequest {
-                                work_item_id: None,
-                                task_id: Some(task.clone()),
-                            },
-                            cx,
-                        );
-                    }))
-                    .children(self.board_probe_child(|| open_label.clone()))
-                    .into_any_element(),
-                )
-            }
-            (_, Some(work_item_id)) => {
-                let open_label = format!("receipt-open:{chat_id}:{slot}");
-                texts.push("Open ticket".into());
-                Some(
-                    strip_button(
-                        format!("board-receipt-open-{chat_id}-{index}"),
-                        "Open ticket",
-                        Some(icons::CHAT_TICKET),
-                        theme,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.chat_open_ticket(work_item_id.clone(), cx);
-                    }))
-                    .children(self.board_probe_child(|| open_label.clone()))
-                    .into_any_element(),
-                )
-            }
-            _ => None,
-        };
-        let dismiss_chat = chat_id.to_string();
-        let dismiss = div()
-            .id(SharedString::from(format!(
-                "board-receipt-dismiss-{chat_id}-{index}"
-            )))
-            .role(gpui::Role::Button)
-            .aria_label("Dismiss receipt")
-            .size(px(crate::surface_chrome::CONTROL_S))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(crate::surface_chrome::RADIUS_S))
-            .cursor_pointer()
-            .hover_wash(format!("board-receipt-dismiss-{chat_id}-{index}"))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.board_chat.dismiss_receipt(&dismiss_chat, index);
-                cx.notify();
-            }))
-            .child(
-                icon(icons::CLOSE)
-                    .size(px(crate::surface_chrome::ICON_S))
-                    .text_color(theme.text_muted),
-            );
-        self.receipt_row(
-            format!("board-receipt-{chat_id}-{index}"),
-            match receipt.kind {
-                ReceiptKind::HandedOff { .. } => icons::ARROW_UP_RIGHT,
-                _ => icons::CHAT_TICKET,
-            },
-            headline,
-            detail,
-            open.into_iter()
-                .chain([dismiss.into_any_element()])
-                .collect(),
-            label,
-            theme,
-        )
-    }
-
-    /// A ticket created from (or referencing) this chat: a "Related
-    /// ticket" receipt, never the working badge.
-    fn render_board_related(
-        &mut self,
-        chat_id: &str,
-        related: &ChatTicketBadge,
-        theme: &Theme,
-        texts: &mut Vec<String>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let headline = format!("Related ticket · {} · {}", related.key, related.title);
-        texts.push(headline.clone());
-        let detail = format!(
-            "{}. {} · {}",
-            match related.role {
-                TaskLinkRole::Source => "Created from this chat; this is not its working chat",
-                _ => "Mentioned here; this is not its working chat",
-            },
-            related.column.label(),
-            related.phase.label()
-        );
-        let work_item_id = related.work_item_id.clone();
-        let slot = related.work_item_id.clone();
-        let open_label = format!("receipt-open:{chat_id}:{slot}");
-        texts.push("Open ticket".into());
-        let open = strip_button(
-            format!("board-related-open-{chat_id}-{slot}"),
-            "Open ticket",
-            Some(icons::CHAT_TICKET),
-            theme,
-        )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            cx.stop_propagation();
-            this.chat_open_ticket(work_item_id.clone(), cx);
-        }))
-        .children(self.board_probe_child(|| open_label.clone()))
-        .into_any_element();
-        // Go to chat, when the ticket has a working chat somewhere.
-        let has_chat = self
-            .board_chat
-            .working_chat_of(&related.work_item_id)
-            .is_some()
-            || self.board_chat.model().is_some_and(|model| {
-                model
-                    .read(cx)
-                    .item(&related.work_item_id)
-                    .is_some_and(|view| view.working_chat.is_some())
-            });
-        let go = has_chat.then(|| {
-            let work_item_id = related.work_item_id.clone();
-            let go_label = format!("receipt-goto:{chat_id}:{slot}");
-            texts.push("Go to chat".into());
-            strip_button(
-                format!("board-related-goto-{chat_id}-{slot}"),
-                "Go to chat",
-                Some(icons::ARROW_UP_RIGHT),
-                theme,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.board_go_to_chat(
-                    BoardNavigationRequest {
-                        work_item_id: Some(work_item_id.clone()),
-                        task_id: None,
-                    },
-                    cx,
-                );
-            }))
-            .children(self.board_probe_child(|| go_label.clone()))
-            .into_any_element()
-        });
-        self.receipt_row(
-            format!("board-related-{chat_id}-{slot}"),
-            icons::CHAT_TICKET,
-            headline,
-            detail,
-            [open].into_iter().chain(go).collect(),
-            format!("receipt:{chat_id}:{slot}"),
-            theme,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn receipt_row(
-        &self,
-        id: String,
-        glyph: &'static str,
-        headline: String,
-        detail: String,
-        actions: Vec<AnyElement>,
-        label: String,
-        theme: &Theme,
-    ) -> AnyElement {
-        div()
-            .id(SharedString::from(id))
-            .role(gpui::Role::Group)
-            .aria_label(SharedString::from(format!("{headline}. {detail}")))
-            .mx(crate::typography::ui_rems(12.0))
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.hairline(0.08))
-            .bg(theme.fill(crate::theme::FillTier::Quaternary))
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                icon(glyph)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.readable_muted(0.8)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text.opacity(0.9))
-                            .child(SharedString::from(headline)),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.readable_muted(0.6))
-                            .child(SharedString::from(detail)),
-                    ),
-            )
-            .children(actions)
-            .relative()
-            .children(self.board_probe_child(|| label.clone()))
             .into_any_element()
     }
 

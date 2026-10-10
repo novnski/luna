@@ -1,4 +1,7 @@
-//! Related chats: one right-pane list of the chats a conversation spawned.
+//! Related (chats and tickets): one right-pane list for the selected
+//! conversation. Its related tickets lead as a compact Tickets section (one
+//! row each, opening that ticket); the conversation itself never lists them.
+//! Then the chats it spawned.
 //!
 //! Both are **Side chats** to the user (one vocabulary, Board A10); the row
 //! says how each started:
@@ -681,6 +684,12 @@ impl Shell {
             }
         }
         let sections = self.render_related_sections("related", by_section, &theme, cx);
+        // Related tickets lead the list: the conversation itself never
+        // shows them. They belong to the conversation actually focused (a
+        // side chat's tab in the workbench, else this main chat); the chats
+        // below stay this main chat's library.
+        let owner = self.related_tickets_owner(cx);
+        let tickets = self.render_related_tickets(&owner, &parent, &theme, cx);
 
         // While a create is unresolved the header retries that same request;
         // a genuinely new side chat is the notice's explicit choice below.
@@ -713,7 +722,7 @@ impl Shell {
         .into_any_element();
         let header = self.render_related_list_header(
             "related-chats",
-            format!("Related chats · {parent_title}").into(),
+            format!("Related · {parent_title}").into(),
             vec![new],
             &theme,
             cx,
@@ -826,18 +835,201 @@ impl Shell {
                     ),
             );
         }
-        if empty && side.error.is_none() && !side.busy {
+        if empty && tickets.is_none() && side.error.is_none() && !side.busy {
             list = list.child(self.render_related_empty(&theme, cx));
         }
-        list = list.children(sections);
+        list = list.children(tickets).children(sections);
+        // The list's visible frame (it scrolls inside it).
+        let viewport = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(list)
+            .children(self.board_probe_child(|| "related-chats-viewport".to_string()));
         div()
             .size_full()
             .flex()
             .flex_col()
             .text_color(theme.text)
             .child(header)
-            .child(list)
+            .child(viewport)
             .into_any_element()
+    }
+
+    /// Whose related tickets the Related pane lists: the conversation
+    /// focused in the workbench (a side chat's tab included), else the
+    /// selected main chat.
+    pub(super) fn related_tickets_owner(&self, cx: &App) -> String {
+        self.workbench_execution_focus(cx)
+            .unwrap_or_else(|| self.active_chat.clone())
+    }
+
+    /// The Related list's Tickets section for `owner` (the focused
+    /// conversation; `parent` is the list's main chat): one dense row per
+    /// active related ticket (`KEY` · title · where it stands), the row
+    /// itself opening that exact ticket. The engine's related tickets,
+    /// already without the chat's own working or reviewer ticket and
+    /// without archived or deleted ones; a just-created ticket is listed at
+    /// once. A side chat's tickets name it in the header, so they aren't
+    /// read as the main chat's. `None` when the chat has none.
+    fn render_related_tickets(
+        &mut self,
+        owner: &str,
+        parent: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let tickets: Vec<luna_proto::ChatTicketBadge> = self.board_chat.related(owner).to_vec();
+        if tickets.is_empty() {
+            return None;
+        }
+        let count = tickets.len();
+        let mut keys = Vec::with_capacity(count + 1);
+        keys.push(format!("Tickets {count}"));
+        let context = (owner != parent).then(|| {
+            self.state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| chat.id == owner)
+                .and_then(|chat| chat.title.as_deref())
+                .map(transcript::single_line)
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "Side chat".into())
+        });
+        let heading: SharedString = match &context {
+            Some(chat) => format!("Tickets · {chat} ({count})").into(),
+            None => format!("Tickets ({count})").into(),
+        };
+        if let Some(chat) = context.clone() {
+            let context_label = format!("related-tickets-context:{owner}");
+            self.board_mark(|| context_label, || vec![chat]);
+        }
+        let header = spaces::sidebar_disclosure_header(
+            SharedString::from(format!("related-section-tickets-{owner}")),
+            theme,
+            heading,
+            div().into_any_element(),
+        )
+        .cursor(gpui::CursorStyle::Arrow);
+        let mut rows = div().w_full().flex().flex_col().pt(px(4.0));
+        for ticket in tickets {
+            keys.push(ticket.key.clone());
+            let status = super::board::chat_badges::render::status_text(&ticket);
+            // Dense: where it stands in one word or two; the full status is
+            // the accessible label.
+            let short: SharedString = match ticket.phase {
+                luna_proto::BoardPhase::NotStarted | luna_proto::BoardPhase::Unknown => {
+                    ticket.column.label().into()
+                }
+                phase => phase.label().into(),
+            };
+            let row_id = format!("related-ticket-{owner}-{}", ticket.work_item_id);
+            let label = format!("related-ticket:{owner}:{}", ticket.work_item_id);
+            let work_item_id = ticket.work_item_id.clone();
+            // The title truncates in a narrow pane: the pointer gets the
+            // whole of it, as the accessible label does.
+            let tip_title: SharedString = format!(
+                "{} · {}",
+                ticket.key,
+                transcript::single_line(&ticket.title)
+            )
+            .into();
+            let tip_detail: SharedString = status.clone().into();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(row_id.clone()))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(format!(
+                        "Open ticket {}: {}. {status}",
+                        ticket.key,
+                        transcript::single_line(&ticket.title)
+                    )))
+                    .tab_index(0)
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .h(crate::typography::ui_rems(30.0))
+                    .px(px(Theme::SPACE_SM))
+                    .rounded(px(crate::theme::radius::SM))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(crate::typography::ui_rems(8.0))
+                    .cursor_pointer()
+                    .hover_wash(SharedString::from(row_id))
+                    .tooltip(move |_, cx| {
+                        crate::pickers::ControlTooltip::view(
+                            tip_title.clone(),
+                            Some(tip_detail.clone()),
+                            cx,
+                        )
+                    })
+                    .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+                    .focus_visible({
+                        let ring = theme.focus_ring();
+                        move |style| crate::theme::focus_ring(style, ring)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.chat_open_ticket(work_item_id.clone(), cx);
+                    }))
+                    .on_key_down(crate::swallow_activation_key)
+                    .child(
+                        icon(icons::CHAT_TICKET)
+                            .size(crate::typography::ui_rems(13.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(11.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.readable_muted(0.9))
+                            .child(SharedString::from(ticket.key.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(12.5))
+                            .text_color(theme.text)
+                            .child(SharedString::from(transcript::single_line(&ticket.title))),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.readable_muted(0.75))
+                            .child(short),
+                    )
+                    .children(self.board_probe_child(|| label.clone())),
+            );
+        }
+        let section_label = format!("related-tickets:{owner}");
+        self.board_mark(|| section_label.clone(), || keys);
+        Some(
+            div()
+                .id(SharedString::from(format!("related-tickets-{owner}")))
+                .role(gpui::Role::Group)
+                .aria_label(SharedString::from(match &context {
+                    Some(chat) => format!("Related tickets of {chat}, {count}"),
+                    None => format!("Related tickets, {count}"),
+                }))
+                .relative()
+                .w_full()
+                .pt(px(4.0))
+                .flex()
+                .flex_col()
+                .child(header)
+                .child(rows)
+                .children(self.board_probe_child(|| section_label.clone()))
+                .into_any_element(),
+        )
     }
 
     /// Nothing related yet: say what each kind is, and offer the one the

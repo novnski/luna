@@ -5,16 +5,18 @@
 //! - **Badges** (`BoardChatBadges`): a ticket's working chat shows
 //!   `Ticket LUN-42` in its header (with a separate workflow-status control)
 //!   and a compact key on its sidebar row, side-chat tab and side-chat list
-//!   row; a temporary reviewer shows `Reviewer · LUN-42`; a source discussion
-//!   gets a "Related ticket" receipt, never the working badge. Meaning is
-//!   carried by a glyph and text, never by colour alone.
+//!   row; a temporary reviewer shows `Reviewer · LUN-42`. A source
+//!   discussion's tickets are its related tickets: rows of the right
+//!   sidebar's Related list, never anything in the conversation, never the
+//!   working badge. Meaning is carried by a glyph and text, never by colour
+//!   alone.
 //! - **Roles** (`BoardChatIdentity`): a main chat offers Side chat (Fresh or
 //!   With context); a side chat offers only New side chat (a fresh sibling
 //!   under the same main chat) and Hand off to a new main chat. Until the
 //!   engine's identity loads, the published lineage stands in
 //!   ([`local_role`]); the engine validates every creation either way.
 //! - **Go to chat** ([`Shell::board_go_to_chat`], [`Shell::board_open_navigation`]):
-//!   the entry point Board cards, the detail drawer, receipts, Activity and
+//!   the entry point Board cards, the detail drawer, Activity and
 //!   the palette call. It reopens a view of the exact chat (a main chat, or
 //!   its main chat's workbench with the exact side chat selected, its tab
 //!   reopened if it was closed) and never relaunches, resends, promotes or
@@ -181,26 +183,6 @@ pub(crate) struct ChatRoleInfo {
     pub parent_unavailable: bool,
 }
 
-/// One receipt shown in a chat for a board action taken there.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ReceiptKind {
-    /// Create ticket from this chat: saved only, no chat was created.
-    Created,
-    /// Convert this chat to a ticket: this chat is its working chat now.
-    Converted,
-    /// Hand off to a new main chat: a distinct chat with a written brief.
-    HandedOff { task_id: String, started: bool },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ChatReceipt {
-    pub kind: ReceiptKind,
-    pub work_item_id: Option<String>,
-    pub key: Option<String>,
-    pub title: String,
-    pub column: Option<BoardColumn>,
-}
-
 /// A Go to chat waiting for its main chat's workbench.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingReveal {
@@ -230,19 +212,16 @@ pub(crate) struct ChatBoardUi {
     fingerprint: u64,
     /// Working and reviewer badges by chat id.
     badges: HashMap<String, ChatTicketBadge>,
-    /// Source/reference tickets by chat id ("Related ticket" receipts).
+    /// Source/reference tickets by chat id: the right sidebar's Related
+    /// list, never the conversation itself.
     related: HashMap<String, Vec<ChatTicketBadge>>,
     /// The engine does not serve badges (older engine, or a slice that has
     /// not landed): nothing is shown until the board changes.
     badges_unavailable: bool,
     fetch: Option<Task<()>>,
     dirty: bool,
-    /// The number of the latest badge read started; a receipt is stamped
-    /// with it, so only a snapshot read after the receipt can retire it.
-    read_seq: u64,
-    receipt_stamps: HashMap<(String, String), u64>,
     /// Tickets this session saw deleted: nothing brings them back to a
-    /// strip, not even a create receipt answered late.
+    /// Related list, not even a create answered late.
     deleted: HashSet<String>,
     identities: HashMap<String, CanonicalChatIdentity>,
     identity_fetches: HashMap<String, Task<()>>,
@@ -253,8 +232,6 @@ pub(crate) struct ChatBoardUi {
     activity: Vec<WorkItemEvent>,
     activity_loaded: bool,
     activity_fetch: Option<Task<()>>,
-    /// Receipts of actions taken in each chat this session.
-    receipts: HashMap<String, Vec<ChatReceipt>>,
     reveal: Option<PendingReveal>,
     /// A Go to chat waiting for its chat rows to publish.
     awaiting: Option<(BoardNavigationTarget, Instant)>,
@@ -304,10 +281,6 @@ impl ChatBoardUi {
         self.related.get(task_id).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    pub(crate) fn receipts(&self, task_id: &str) -> &[ChatReceipt] {
-        self.receipts.get(task_id).map(Vec::as_slice).unwrap_or(&[])
-    }
-
     pub(crate) fn model(&self) -> Option<&Entity<BoardModel>> {
         self.model.as_ref()
     }
@@ -324,41 +297,16 @@ impl ChatBoardUi {
             .map(|badge| badge.task_id.as_str())
     }
 
-    fn push_receipt(&mut self, task_id: &str, receipt: ChatReceipt) {
-        if let Some(work_item_id) = &receipt.work_item_id {
-            if self.deleted.contains(work_item_id) {
-                return;
-            }
-            self.receipt_stamps
-                .insert((task_id.to_string(), work_item_id.clone()), self.read_seq);
-        }
-        let list = self.receipts.entry(task_id.to_string()).or_default();
-        list.retain(|existing| {
-            existing.work_item_id.is_none() || existing.work_item_id != receipt.work_item_id
-        });
-        list.push(receipt);
-    }
-
-    pub(crate) fn dismiss_receipt(&mut self, task_id: &str, index: usize) {
-        if let Some(list) = self.receipts.get_mut(task_id)
-            && index < list.len()
-        {
-            list.remove(index);
-        }
-    }
-
-    /// Install a full snapshot from badge read `read`, and retire the ticket
-    /// receipts it proves stale: one recorded before that read started
-    /// whose ticket no chat shows any more (deleted, or archived as a
-    /// related ticket, even when the journal event was missed). Hand-off
-    /// receipts and receipts without a ticket stay.
-    fn install(&mut self, badges: Vec<ChatTicketBadge>, related: Vec<ChatTicketBadge>, read: u64) {
+    /// Install a full snapshot: working and reviewer identity by chat, and
+    /// each chat's active related tickets (archived and deleted ones never
+    /// listed, even when their journal event was missed).
+    fn install(&mut self, badges: Vec<ChatTicketBadge>, related: Vec<ChatTicketBadge>) {
         let mut by_chat: HashMap<String, ChatTicketBadge> = HashMap::new();
         let mut extra = Vec::new();
         for badge in badges {
             match badge.role {
                 // Only a working or reviewer link is identity; anything else
-                // the engine lists is a relationship, shown as a receipt.
+                // the engine lists is a relationship (a Related row).
                 TaskLinkRole::Working | TaskLinkRole::Reviewer => {
                     let replace = by_chat.get(&badge.task_id).is_none_or(|current| {
                         current.role != TaskLinkRole::Working && badge.role == TaskLinkRole::Working
@@ -371,8 +319,8 @@ impl ChatBoardUi {
             }
         }
         let mut related_by_chat: HashMap<String, Vec<ChatTicketBadge>> = HashMap::new();
-        // An archived ticket is no longer related work: it leaves the source
-        // chat's banner and its count (a working chat keeps its own badge).
+        // An archived ticket is no longer related work: it leaves the
+        // Related list and its count (a working chat keeps its own badge).
         for badge in related
             .into_iter()
             .chain(extra)
@@ -398,33 +346,6 @@ impl ChatBoardUi {
         for list in related_by_chat.values_mut() {
             list.retain(|badge| !deleted.contains(&badge.work_item_id));
         }
-        let visible: HashSet<&str> = by_chat
-            .values()
-            .chain(related_by_chat.values().flatten())
-            .map(|badge| badge.work_item_id.as_str())
-            .collect();
-        let stamps = &self.receipt_stamps;
-        for (task_id, receipts) in self.receipts.iter_mut() {
-            receipts.retain(|receipt| match (&receipt.kind, &receipt.work_item_id) {
-                // A hand-off's new chat may not be listed yet; it isn't a
-                // related-ticket row either.
-                (ReceiptKind::HandedOff { .. }, _) | (_, None) => true,
-                (_, Some(work_item_id)) => {
-                    visible.contains(work_item_id.as_str())
-                        || stamps
-                            .get(&(task_id.clone(), work_item_id.clone()))
-                            .is_some_and(|stamp| *stamp >= read)
-                }
-            });
-        }
-        let kept = &self.receipts;
-        self.receipt_stamps.retain(|(task_id, work_item_id), _| {
-            kept.get(task_id).is_some_and(|receipts| {
-                receipts
-                    .iter()
-                    .any(|receipt| receipt.work_item_id.as_ref() == Some(work_item_id))
-            })
-        });
         self.badges = by_chat;
         self.related = related_by_chat;
         self.badges_unavailable = false;
@@ -517,9 +438,8 @@ impl Shell {
     fn board_chat_model_event(&mut self, event: &BoardModelEvent, cx: &mut Context<Self>) {
         match event {
             BoardModelEvent::Events(events) => {
-                // An archived or deleted ticket leaves every chat's strip at
-                // once, including this session's own receipts for it (the
-                // badge read that follows drops its related row).
+                // An archived or deleted ticket leaves every chat's Related
+                // list at once (the badge read that follows confirms it).
                 for event in events {
                     if matches!(event.kind, luna_proto::WorkItemEventKind::Deleted) {
                         self.board_chat.deleted.insert(event.work_item_id.clone());
@@ -529,11 +449,6 @@ impl Shell {
                         luna_proto::WorkItemEventKind::Archived
                             | luna_proto::WorkItemEventKind::Deleted
                     ) {
-                        for receipts in self.board_chat.receipts.values_mut() {
-                            receipts.retain(|receipt| {
-                                receipt.work_item_id.as_deref() != Some(event.work_item_id.as_str())
-                            });
-                        }
                         for related in self.board_chat.related.values_mut() {
                             related.retain(|badge| badge.work_item_id != event.work_item_id);
                         }
@@ -633,8 +548,6 @@ impl Shell {
             .iter()
             .map(|chat| chat.id.clone())
             .collect();
-        self.board_chat.read_seq += 1;
-        let read = self.board_chat.read_seq;
         self.board_chat.fetch = Some(cx.spawn(async move |this, cx| {
             let mut badges = Vec::new();
             let mut related = Vec::new();
@@ -657,7 +570,7 @@ impl Shell {
                 }
             }
             this.update(cx, |shell, cx| {
-                shell.board_chat_install(generation, read, badges, related, failure, cx)
+                shell.board_chat_install(generation, badges, related, failure, cx)
             })
             .ok();
         }));
@@ -666,7 +579,6 @@ impl Shell {
     fn board_chat_install(
         &mut self,
         generation: u64,
-        read: u64,
         badges: Vec<ChatTicketBadge>,
         related: Vec<ChatTicketBadge>,
         failure: Option<BoardCallError>,
@@ -685,7 +597,7 @@ impl Shell {
             return;
         }
         match failure {
-            None => self.board_chat.install(badges, related, read),
+            None => self.board_chat.install(badges, related),
             Some(error) if board_unavailable(&error) => {
                 self.board_chat.badges.clear();
                 self.board_chat.related.clear();

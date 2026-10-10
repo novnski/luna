@@ -117,3 +117,61 @@ one at a time with distinct absolute evidence directories. Restore the primary
 app with `scripts/run-macos-dev.sh --refresh`, then verify its process, port and
 signature. The retained `verify-primary.mjs` is read-only by default; its sole
 optional mutation is the exact original screenshot attachment already completed.
+
+## Follow-up: related tickets belong in the right sidebar
+
+The user rejected the remaining five-ticket banner after `dfba2f00`. Related
+tickets now appear only in the right sidebar's **Related** surface, in a compact
+**Tickets** section. Each row opens its exact ticket; truncated titles have full
+hover text. Tickets follow the focused main or side chat; a side chat's section
+names that conversation, while the related-chat library keeps its existing owner.
+The conversation retains only its own working/reviewer identity.
+Persistent creation/conversion/hand-off receipts and their unused state were
+removed. Creating a ticket keeps the pane and focus unchanged, and archive/delete
+updates remove rows and counts without reopening the chat.
+
+Claude Desktop implemented the UI; Codex verified the backend, reviewed the
+change, ran checks and refreshed the primary app. The existing `BoardChatBadges`
+snapshot and Board event watch supply all related tickets, archived flags and updates;
+no backend or storage change was needed for this correction.
+
+Evidence root: `target/qa/related-tickets-sidebar-2026-10-10/`.
+
+- `before/manifest.json`: the new rendered checks failed against the old UI,
+  including an actual creation receipt above the conversation and missing sidebar
+  rows. The production code was unchanged during this baseline run.
+- `side-before/manifest.json`: the focused-side-chat case failed before its fix;
+  the ticket existed, but its sidebar row was missing. All 30 other checks passed.
+- `side-final/manifest.json` and `side-final/board-chat-ui.pass`: **31 checks passed**,
+  covering clear conversation space, five accessible sidebar rows, exact-ticket
+  navigation, main/side focus changes, preserved identity and live archive/delete.
+  The fixture clears its paint probe before each removal check so old coordinates
+  cannot masquerade as rows still on screen.
+- `related-chats-final/related-chats.pass`: existing sidebar navigation, drag, pin,
+  settle/archive and side-chat behavior passed.
+- `backend-e2e.log`: existing archive/delete/idempotency/restart regression passed.
+  `backend-live-before.json` and `backend-live-complete.json` are read-only checks of
+  the actual five active/eight archived tickets and retained original image.
+- UI test targets compile; formatting and Clippy pass. The 356 existing Clippy
+  diagnostics include none on changed lines (`clippy-complete-summary.json`).
+- Final primary LUNA Dev refresh took **49 seconds**. Exact bundle process **15487**,
+  IPC port **59777**, and strict deep code-signature validation passed.
+  Native screenshots and AX readbacks confirm the original conversation has no
+  banners, the Related sidebar lists LUN-1/2/11/12/13, and its LUN-12 row opens the
+  correct ticket. `native-complete-closed` and `native-complete-related` captures
+  and AX files verify the final build; the app was left on the source chat with
+  the sidebar closed.
+
+Repeat with no other Luna GUI running and separate absolute evidence directories:
+
+```sh
+CARGO_INCREMENTAL=0 scripts/cargo.sh build --locked -p luna-ui \
+  --features appshots-fixture --example board-chat-ui-fixture \
+  --example related-chats-fixture
+target/debug/examples/board-chat-ui-fixture "$PWD/target/qa/sidebar-repeat/chat"
+target/debug/examples/related-chats-fixture "$PWD/target/qa/sidebar-repeat/related"
+CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine \
+  --test board_store_e2e \
+  ticket_fix_delete_and_archive_remove_related_badges_without_losing_history \
+  -- --exact
+```
