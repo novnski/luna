@@ -1,5 +1,6 @@
 # Pending tasks
 
+- [LUNA-only workflows: prioritized migration plan](luna-only-workflows/README.md): pending coordination and implementation plan based on retained Codex/Claude usage; reuses existing HTML/MCP Apps/search work and shipped Board/automation fixes, with explicit task dependencies and E2E switching gates.
 - [Control this Mac from a paired phone](control-this-mac/README.md): plan only; no part of M0–M4 is implemented.
 - [Complete a two-version macOS GitHub Release updater trial](github-release-updater-two-version-trial.md): blocked while the repository is private and has no published Releases.
 - [Agent workspace ideas from T3, Conductor, super.engineering and BB](agent-workspace-app-research/README.md): research; most of its fifteen opportunities are not started.
