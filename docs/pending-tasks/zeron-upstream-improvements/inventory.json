@@ -1,0 +1,1038 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-11",
+  "timezone": "Europe/Bucharest",
+  "status": "research_only_pending_implementation",
+  "zeron": {
+    "origin": "git@github.com:novnski/zeron.git",
+    "official_upstream": "git@github.com:zeronsh/zeron.git",
+    "before": "b42fc2b8fbf247dd92796c2917f277535cea91ac",
+    "after": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+    "before_version": "0.2.101",
+    "after_version": "0.2.111",
+    "commit_count": 78,
+    "non_merge_commit_count": 70,
+    "changed_file_count": 476,
+    "insertions": 101368,
+    "deletions": 10908,
+    "local_checkout_fast_forwarded": true,
+    "fork_remote_pushed": false
+  },
+  "luna": {
+    "source_revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+    "matched_origin_main_before_documentation": true
+  },
+  "selected_tasks": [
+    {
+      "id": "ZI-01",
+      "status": "not_started",
+      "priority": "P1",
+      "commit": "037f4c10d67a38175b2386e776aba54355b4e941",
+      "source_refs": [
+        "L01",
+        "L02",
+        "L03",
+        "Z01"
+      ]
+    },
+    {
+      "id": "ZI-02",
+      "status": "not_started",
+      "priority": "P1",
+      "commit": "8646bde07e31e280dd3f7b887b465857e19527d7",
+      "source_refs": [
+        "L04",
+        "L05",
+        "L06",
+        "Z02",
+        "Z03"
+      ]
+    },
+    {
+      "id": "ZI-03",
+      "status": "not_started",
+      "priority": "P2",
+      "commit": "1f7b74a7fc97b0ca1d0379e77141075d73db8adf",
+      "source_refs": [
+        "L07",
+        "L08",
+        "L09",
+        "L10",
+        "Z04",
+        "Z05",
+        "Z06"
+      ]
+    },
+    {
+      "id": "ZI-04",
+      "status": "not_started",
+      "priority": "P2",
+      "commit": "1074bc540b995d6b7e5a6fa5431f1a2420df8d91",
+      "source_refs": [
+        "L11",
+        "L12"
+      ]
+    },
+    {
+      "id": "ZI-05",
+      "status": "not_started",
+      "priority": "P2",
+      "commit": "3487b507fa8920ab829339f3e3ad72a4bdb45036",
+      "source_refs": [
+        "L15",
+        "L16",
+        "Z09",
+        "Z10"
+      ]
+    }
+  ],
+  "review_limits": [
+    "All commit subjects cataloged; focused production source/patch review by capability family, not every added line.",
+    "No native Zeron run or benchmark.",
+    "No LUNA runtime implementation or feature E2E certification.",
+    "Upstream reported resource improvements are not LUNA measurements."
+  ],
+  "controlled_git_probe": {
+    "kind": "controlled_git_mechanism_probe",
+    "limitation": "Replays the Git commands visible in source; does not invoke Luna engine or establish runtime performance.",
+    "result": {
+      "luna_current_mechanism": {
+        "captures": 3,
+        "new_checkout_object_files": 6,
+        "real_index_unchanged": true,
+        "working_tree_status": "?? scratch.txt",
+        "distinct_trees": 3
+      },
+      "isolated_store": {
+        "captures": 3,
+        "new_checkout_object_files": 0,
+        "real_index_unchanged": true,
+        "working_tree_status": "?? scratch.txt",
+        "distinct_trees": 3
+      }
+    },
+    "fixture_cleanup": "TemporaryDirectory removed both disposable repositories, indexes and isolated stores."
+  },
+  "commit_group_counts": {
+    "account_model_identity_maintenance": 1,
+    "attachments_existing_owners_or_maintenance": 2,
+    "ci_or_verification_maintenance": 13,
+    "input_preview_maintenance_no_established_gap": 2,
+    "mcp_existing_capability": 1,
+    "merge_wrapper": 8,
+    "mermaid_already_implemented": 1,
+    "picker_sidebar_presentation_no_new_workflow": 13,
+    "queue_or_supervision_existing_owners": 2,
+    "readme_only": 3,
+    "release_only": 10,
+    "remote_existing_owners": 2,
+    "repository_grouping_need_unestablished": 2,
+    "review_existing_owner_or_unestablished_board_need": 3,
+    "runtime_existing_owner": 2,
+    "selected_checklist": 1,
+    "selected_file_navigation": 1,
+    "selected_registry": 1,
+    "selected_snapshot": 1,
+    "selected_workspace_text_search": 1,
+    "voice_existing_conditional_owners": 3,
+    "windows_or_visual_results_existing_owner": 2,
+    "workbench_independent_luna_design": 3
+  },
+  "source_refs": [
+    {
+      "id": "L01",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/engine/src/diff_sync.rs",
+      "line": 275,
+      "sha256": "55d226b93dee424078480485d66da0fad6db6ea44203e25b72cc0c53eb45b027",
+      "note": "turn-start capture; failed captures retain the prior entry",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/engine/src/diff_sync.rs#L275"
+    },
+    {
+      "id": "L02",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/engine/src/diff_sync.rs",
+      "line": 1414,
+      "sha256": "55d226b93dee424078480485d66da0fad6db6ea44203e25b72cc0c53eb45b027",
+      "note": "temporary index without isolated objects or whole-capture timeout",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/engine/src/diff_sync.rs#L1414"
+    },
+    {
+      "id": "L03",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/engine/src/diff_sync.rs",
+      "line": 1461,
+      "sha256": "55d226b93dee424078480485d66da0fad6db6ea44203e25b72cc0c53eb45b027",
+      "note": "Latest turn captures another working tree",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/engine/src/diff_sync.rs#L1461"
+    },
+    {
+      "id": "L04",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/doc/src/registry.rs",
+      "line": 339,
+      "sha256": "5c412ae296586624ee0a559ee2ca982d6c49b5ef7bbc131dba271535a5c5289b",
+      "note": "registry pending batch retention",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/doc/src/registry.rs#L339"
+    },
+    {
+      "id": "L05",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/doc/src/registry.rs",
+      "line": 586,
+      "sha256": "5c412ae296586624ee0a559ee2ca982d6c49b5ef7bbc131dba271535a5c5289b",
+      "note": "per-write enqueue with per-batch cap, no local folding/coalescing",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/doc/src/registry.rs#L586"
+    },
+    {
+      "id": "L06",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/engine/src/workspace_host.rs",
+      "line": 152,
+      "sha256": "7dfa264fc5e01fed090895009a699b1e5793c75e7da83dbdb854ee016e262987",
+      "note": "profile configuration lacks permanently-local registry mode",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/engine/src/workspace_host.rs#L152"
+    },
+    {
+      "id": "L07",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/proto/src/agent.rs",
+      "line": 779,
+      "sha256": "1a0ca2c7b670edee7e6219cf278e3d03cbb1b92063103256c7702c033b37cce7",
+      "note": "TodoItem has only text and done",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/proto/src/agent.rs#L779"
+    },
+    {
+      "id": "L08",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/harness/src/claude/normalize.rs",
+      "line": 138,
+      "sha256": "38e6f04fcce33ff1518383336fefd3dccc644e15c7cda7b1d2218e9f64c597f2",
+      "note": "TodoWrite preserves completion but loses active step",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/harness/src/claude/normalize.rs#L138"
+    },
+    {
+      "id": "L09",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/harness/src/codex/mod.rs",
+      "line": 2050,
+      "sha256": "8d7da6bba16af0942c2718259c6104142e591b71ad7acfcc3f8f0adae4ed258e",
+      "note": "parent notification dispatcher lacks a plan-update consumer",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/harness/src/codex/mod.rs#L2050"
+    },
+    {
+      "id": "L10",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/harness/src/opencode/tools.rs",
+      "line": 1,
+      "sha256": "c9fdbc72fbdc65a76c6d9f5b75caba5f8e94ace2bf485d8c4f2ffaf482293484",
+      "note": "OpenCode 2 tool vocabulary; old todowrite is not native parity",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/harness/src/opencode/tools.rs#L1"
+    },
+    {
+      "id": "L11",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/ui/src/transcript.rs",
+      "line": 10263,
+      "sha256": "562b0c4ccc0bb08f9533ca1ed6b7a5e6638573436b2d7411a1c10654cf5b1849",
+      "note": "typed tool header paths and inert file badges",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/ui/src/transcript.rs#L10263"
+    },
+    {
+      "id": "L12",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/ui/src/shell.rs",
+      "line": 4448,
+      "sha256": "f13e416c651cb87c9e70a7d8f9cf0e32a1a7a0fc33bc3531598791028fa7455e",
+      "note": "existing owning-chat workspace-file link route",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/ui/src/shell.rs#L4448"
+    },
+    {
+      "id": "L13",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/ui/src/transcript/diagrams.rs",
+      "line": 1,
+      "sha256": "2a37fc4b270456e2daa15d246dff2abbfe8be566bf69883fbc99f8701966b10f",
+      "note": "native chat Mermaid already implemented",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/ui/src/transcript/diagrams.rs#L1"
+    },
+    {
+      "id": "L14",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/ui/src/changes/pull_requests.rs",
+      "line": 1,
+      "sha256": "521f68c4a8930c5425f71142d3cdb62c6e26d47b8bcb36f5b7419695626b43cb",
+      "note": "existing Git-card PR surface",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/ui/src/changes/pull_requests.rs#L1"
+    },
+    {
+      "id": "Z01",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/engine/src/diff_sync/turn_snapshot.rs",
+      "line": 1,
+      "sha256": "fb529789b9d748948caec98322c5b477b0eb9bbf1da340e56420c14bb79750e8",
+      "note": "isolated snapshot object store, lifetime and budgets",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/engine/src/diff_sync/turn_snapshot.rs#L1"
+    },
+    {
+      "id": "Z02",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/doc/src/registry.rs",
+      "line": 1,
+      "sha256": "6dc00d42cfd1ce95b1623628b9293a2a4b79ea836acf2e69c896db1969437d9a",
+      "note": "local folding and equivalent unsent-tail coalescing",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/doc/src/registry.rs#L1"
+    },
+    {
+      "id": "Z03",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/engine/src/workspace_host.rs",
+      "line": 141,
+      "sha256": "83908ac15ae280c4d5cfd443ed12b7e809e05866fb5105de0543248ac533805a",
+      "note": "explicit immutable local-only profile capability",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/engine/src/workspace_host.rs#L141"
+    },
+    {
+      "id": "Z04",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/harness/src/codex/normalize.rs",
+      "line": 204,
+      "sha256": "5466eb4cc1eddf281ac408365a636a62e221fad0edd8fe3c2d16fcc0abaa3902",
+      "note": "native Codex plan updates",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/harness/src/codex/normalize.rs#L204"
+    },
+    {
+      "id": "Z05",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/ui/src/todo_panel.rs",
+      "line": 34,
+      "sha256": "e2b3f6dd721fa452bfe1e742eb784e262c3bf1c144b49c0314c9bf96017aba71",
+      "note": "newest selected-chat checklist projection",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/ui/src/todo_panel.rs#L34"
+    },
+    {
+      "id": "Z06",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "docs/todo-panel.md",
+      "line": 1,
+      "sha256": "ff9e7571badadc41b9fadb1e5943cbe7a4675a09f06a808592b977d74f84124c",
+      "note": "checklist semantics, provider/version limits and presentation",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/docs/todo-panel.md#L1"
+    },
+    {
+      "id": "Z07",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "docs/reference/desktop-dictation.md",
+      "line": 1,
+      "sha256": "3b39d5ab599978eed40028118ead49d2dd0444338104b14dd202708c9b63e5c8",
+      "note": "local dictation capabilities and runtime cost",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/docs/reference/desktop-dictation.md#L1"
+    },
+    {
+      "id": "Z08",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "docs/remote-send-delivery.md",
+      "line": 1,
+      "sha256": "70211f85242cc835dea979295d530e449b3fdfbfd9edcd0fb1c5ef5050746fd7",
+      "note": "cloud remote wake/outbox contract",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/docs/remote-send-delivery.md#L1"
+    },
+    {
+      "id": "L15",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/engine/src/workspace_files.rs",
+      "line": 1093,
+      "sha256": "c5d3d15efb02d4353d5e4b280e504d45c3cd4438da00890db737def001117aa5",
+      "note": "workspace search currently matches file names and paths",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/engine/src/workspace_files.rs#L1093"
+    },
+    {
+      "id": "L16",
+      "repository": "luna",
+      "revision": "c85fed541461b7aad62df2bfd495e7059e36d3f1",
+      "path": "crates/ui/src/shell/command_palette.rs",
+      "line": 1,
+      "sha256": "1f5cda0ef2366f2deb32ac3e5f023cf760a755b52c5e5cb7680695a9a3902501",
+      "note": "recorded-content search is conversation/activity search",
+      "url": "https://github.com/novnski/luna/blob/c85fed541461b7aad62df2bfd495e7059e36d3f1/crates/ui/src/shell/command_palette.rs#L1"
+    },
+    {
+      "id": "Z09",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "crates/engine/src/workspace_search.rs",
+      "line": 1,
+      "sha256": "b0cce744511de35ef45c3c18a789a973afdb59f59e707c949903af13a6ca845d",
+      "note": "bounded workspace name/content search",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/crates/engine/src/workspace_search.rs#L1"
+    },
+    {
+      "id": "Z10",
+      "repository": "zeron",
+      "revision": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "path": "docs/performance-workspace-search.md",
+      "line": 1,
+      "sha256": "d5130b541ceb5db6032d206ea306527b789b7cb8472417d3ae728a5036aa8337",
+      "note": "upstream indexing measurements, limits and dependency costs",
+      "url": "https://github.com/zeronsh/zeron/blob/40091d469aa8a3f1ab1ec7cb404957b742940278/docs/performance-workspace-search.md#L1"
+    }
+  ],
+  "commits": [
+    {
+      "sha": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+      "authored_at": "2026-10-10T15:12:01-07:00",
+      "committed_at": "2026-10-10T15:12:01-07:00",
+      "subject": "Bump version to v0.2.111",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/40091d469aa8a3f1ab1ec7cb404957b742940278"
+    },
+    {
+      "sha": "3487b507fa8920ab829339f3e3ad72a4bdb45036",
+      "authored_at": "2026-10-10T19:11:35-03:00",
+      "committed_at": "2026-10-10T15:11:35-07:00",
+      "subject": "Unified workspace search on fff, content search, and a tabbed cmd+K palette (#856)",
+      "group": "selected_workspace_text_search",
+      "url": "https://github.com/zeronsh/zeron/commit/3487b507fa8920ab829339f3e3ad72a4bdb45036"
+    },
+    {
+      "sha": "ec28627ce2e28304d01751d3462302ce7fd3d57a",
+      "authored_at": "2026-10-10T19:08:33Z",
+      "committed_at": "2026-10-10T19:08:33Z",
+      "subject": "Bump version to v0.2.110",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/ec28627ce2e28304d01751d3462302ce7fd3d57a"
+    },
+    {
+      "sha": "73051ec7198088f28d49bfdfdd159179387a0e4e",
+      "authored_at": "2026-10-10T12:05:41-07:00",
+      "committed_at": "2026-10-10T12:05:41-07:00",
+      "subject": "Engine: fall back to the fetch URL when a remote's push URL is disabled (#863)",
+      "group": "review_existing_owner_or_unestablished_board_need",
+      "url": "https://github.com/zeronsh/zeron/commit/73051ec7198088f28d49bfdfdd159179387a0e4e"
+    },
+    {
+      "sha": "6774a37a03ad473732566f056f7ba6c00297e4f6",
+      "authored_at": "2026-10-10T12:01:54-07:00",
+      "committed_at": "2026-10-10T12:01:54-07:00",
+      "subject": "Titlebar: frame-style session card toggle and folder-tree explorer toggle",
+      "group": "workbench_independent_luna_design",
+      "url": "https://github.com/zeronsh/zeron/commit/6774a37a03ad473732566f056f7ba6c00297e4f6"
+    },
+    {
+      "sha": "dace1a8ce515be33a0d14d59fc56d65d57f7fe06",
+      "authored_at": "2026-10-10T20:58:50+02:00",
+      "committed_at": "2026-10-10T11:58:50-07:00",
+      "subject": "Panels: content columns share the width, continuous transitions (#677)",
+      "group": "workbench_independent_luna_design",
+      "url": "https://github.com/zeronsh/zeron/commit/dace1a8ce515be33a0d14d59fc56d65d57f7fe06"
+    },
+    {
+      "sha": "ac4acbc21fd6f7cf7977e6bb7816385b8a7d98bb",
+      "authored_at": "2026-10-10T11:19:56-07:00",
+      "committed_at": "2026-10-10T11:19:56-07:00",
+      "subject": "Session card: project, device, side chats and actions behind one toggle",
+      "group": "workbench_independent_luna_design",
+      "url": "https://github.com/zeronsh/zeron/commit/ac4acbc21fd6f7cf7977e6bb7816385b8a7d98bb"
+    },
+    {
+      "sha": "d84ef73af667dde3cc1c8ec72ec0041112f48203",
+      "authored_at": "2026-10-10T10:28:37-07:00",
+      "committed_at": "2026-10-10T10:28:37-07:00",
+      "subject": "Drop focus rings from the pull request views",
+      "group": "review_existing_owner_or_unestablished_board_need",
+      "url": "https://github.com/zeronsh/zeron/commit/d84ef73af667dde3cc1c8ec72ec0041112f48203"
+    },
+    {
+      "sha": "9e17e401710412adca91fe485886d65aa2d7e3eb",
+      "authored_at": "2026-10-10T07:46:33-07:00",
+      "committed_at": "2026-10-10T07:46:33-07:00",
+      "subject": "Bump version to v0.2.109",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/9e17e401710412adca91fe485886d65aa2d7e3eb"
+    },
+    {
+      "sha": "ae19fe31b1e3bd06da0e6bfe08600e5e2e94d196",
+      "authored_at": "2026-10-10T07:09:35-07:00",
+      "committed_at": "2026-10-10T07:09:35-07:00",
+      "subject": "Widen the sidebar minimum so its options button fits beside the titlebar controls",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/ae19fe31b1e3bd06da0e6bfe08600e5e2e94d196"
+    },
+    {
+      "sha": "344436efb28298a8b122ad1a970aff6be3880524",
+      "authored_at": "2026-10-10T01:52:12-07:00",
+      "committed_at": "2026-10-10T01:52:12-07:00",
+      "subject": "Bump version to v0.2.108",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/344436efb28298a8b122ad1a970aff6be3880524"
+    },
+    {
+      "sha": "a408a81402e6ce1cafce8b39d3da6cde2e877ac1",
+      "authored_at": "2026-10-10T01:31:10-07:00",
+      "committed_at": "2026-10-10T01:31:10-07:00",
+      "subject": "Sonner-style toasts, a nested Copy menu, and picker-style repository menu",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/a408a81402e6ce1cafce8b39d3da6cde2e877ac1"
+    },
+    {
+      "sha": "05f5f2bff482539824394bd88aad0991ebffb8ea",
+      "authored_at": "2026-10-10T00:55:35-07:00",
+      "committed_at": "2026-10-10T00:55:35-07:00",
+      "subject": "Drop the ellipsis from New project in project menus",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/05f5f2bff482539824394bd88aad0991ebffb8ea"
+    },
+    {
+      "sha": "672cc1444b8d7c51ff6b82c661c0757d650fd105",
+      "authored_at": "2026-10-10T00:47:44-07:00",
+      "committed_at": "2026-10-10T00:47:44-07:00",
+      "subject": "Searchable popovers, ordered sidebar sections, and titlebar sidebar options",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/672cc1444b8d7c51ff6b82c661c0757d650fd105"
+    },
+    {
+      "sha": "b65b47536727c92e2a4f8b8c1aeaa683bf4b0abe",
+      "authored_at": "2026-10-09T20:26:48-07:00",
+      "committed_at": "2026-10-09T20:26:48-07:00",
+      "subject": "Queue polish, and drag a chat from the sidebar to mention it (#855)",
+      "group": "queue_or_supervision_existing_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/b65b47536727c92e2a4f8b8c1aeaa683bf4b0abe"
+    },
+    {
+      "sha": "afca583c12db7ca315b0429445106b6de73ba02c",
+      "authored_at": "2026-10-10T00:13:55+02:00",
+      "committed_at": "2026-10-09T15:13:55-07:00",
+      "subject": "Add a repository-scoped PR board and native inspection (#484)",
+      "group": "review_existing_owner_or_unestablished_board_need",
+      "url": "https://github.com/zeronsh/zeron/commit/afca583c12db7ca315b0429445106b6de73ba02c"
+    },
+    {
+      "sha": "1074bc540b995d6b7e5a6fa5431f1a2420df8d91",
+      "authored_at": "2026-10-08T18:07:01-07:00",
+      "committed_at": "2026-10-08T18:07:01-07:00",
+      "subject": "Open tool-call files in the files panel, and in the default editor (#522)",
+      "group": "selected_file_navigation",
+      "url": "https://github.com/zeronsh/zeron/commit/1074bc540b995d6b7e5a6fa5431f1a2420df8d91"
+    },
+    {
+      "sha": "0c4835d2b73aa632b7b4d626ee0826a25ec1c9b9",
+      "authored_at": "2026-10-08T12:02:52-07:00",
+      "committed_at": "2026-10-08T12:02:52-07:00",
+      "subject": "Explorer: group finished subagents, show running counts (#647)",
+      "group": "queue_or_supervision_existing_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/0c4835d2b73aa632b7b4d626ee0826a25ec1c9b9"
+    },
+    {
+      "sha": "e799aecc16c863b987839a626574f7a0339d4275",
+      "authored_at": "2026-10-08T11:24:36-07:00",
+      "committed_at": "2026-10-08T11:24:36-07:00",
+      "subject": "Fix remote sends stranded by mobile suspension and lost host wakes (#777)",
+      "group": "remote_existing_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/e799aecc16c863b987839a626574f7a0339d4275"
+    },
+    {
+      "sha": "565b49c527fb738704f217b897f9ba3aee575285",
+      "authored_at": "2026-10-08T09:58:44-07:00",
+      "committed_at": "2026-10-08T09:58:44-07:00",
+      "subject": "Bump version to v0.2.107",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/565b49c527fb738704f217b897f9ba3aee575285"
+    },
+    {
+      "sha": "91fd851c7c676e1d50d526340f64b7963f548fb6",
+      "authored_at": "2026-10-08T09:57:31-07:00",
+      "committed_at": "2026-10-08T09:57:31-07:00",
+      "subject": "Harden Claude/Codex adapters: no early \"done\", Stop kills, sends never do (#748)",
+      "group": "runtime_existing_owner",
+      "url": "https://github.com/zeronsh/zeron/commit/91fd851c7c676e1d50d526340f64b7963f548fb6"
+    },
+    {
+      "sha": "037f4c10d67a38175b2386e776aba54355b4e941",
+      "authored_at": "2026-10-08T00:02:26-07:00",
+      "committed_at": "2026-10-08T00:02:26-07:00",
+      "subject": "Engine: keep turn snapshots out of the checkout's object database (#820)",
+      "group": "selected_snapshot",
+      "url": "https://github.com/zeronsh/zeron/commit/037f4c10d67a38175b2386e776aba54355b4e941"
+    },
+    {
+      "sha": "e5466c533616d6466c6bd5a0b60cfacb7b9422ef",
+      "authored_at": "2026-10-07T23:06:18-07:00",
+      "committed_at": "2026-10-07T23:06:18-07:00",
+      "subject": "Windows browser, image previews in tool calls, selectable tool output (#813)",
+      "group": "windows_or_visual_results_existing_owner",
+      "url": "https://github.com/zeronsh/zeron/commit/e5466c533616d6466c6bd5a0b60cfacb7b9422ef"
+    },
+    {
+      "sha": "8646bde07e31e280dd3f7b887b465857e19527d7",
+      "authored_at": "2026-10-08T10:30:43+05:30",
+      "committed_at": "2026-10-07T22:00:43-07:00",
+      "subject": "Cut startup memory from ~700 MB to ~200 MB on large local profiles (#818)",
+      "group": "selected_registry",
+      "url": "https://github.com/zeronsh/zeron/commit/8646bde07e31e280dd3f7b887b465857e19527d7"
+    },
+    {
+      "sha": "916cb1ccb1342c2061963a5f6ecf5c977ba46f2c",
+      "authored_at": "2026-10-07T12:21:19-07:00",
+      "committed_at": "2026-10-07T12:21:19-07:00",
+      "subject": "Bump version to v0.2.106",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/916cb1ccb1342c2061963a5f6ecf5c977ba46f2c"
+    },
+    {
+      "sha": "8930cd10360ea7919765050216be908d9b6bf5bb",
+      "authored_at": "2026-10-07T16:20:01-03:00",
+      "committed_at": "2026-10-07T12:20:01-07:00",
+      "subject": "Fix voice helper compatibility with Codex 0.161 (#834)",
+      "group": "voice_existing_conditional_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/8930cd10360ea7919765050216be908d9b6bf5bb"
+    },
+    {
+      "sha": "970f41fa7b930b27328efca05249f61bb3bea483",
+      "authored_at": "2026-10-07T11:37:23-07:00",
+      "committed_at": "2026-10-07T11:37:23-07:00",
+      "subject": "Fold dated Claude snapshot IDs into curated model rows (#835)",
+      "group": "account_model_identity_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/970f41fa7b930b27328efca05249f61bb3bea483"
+    },
+    {
+      "sha": "9e83ceea2b92f3627c39f5db2403cb487dad6c54",
+      "authored_at": "2026-10-06T23:47:45-07:00",
+      "committed_at": "2026-10-06T23:47:45-07:00",
+      "subject": "Bump version to v0.2.105",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/9e83ceea2b92f3627c39f5db2403cb487dad6c54"
+    },
+    {
+      "sha": "4a5fb8b4438196aed3249e4efae1291d39100932",
+      "authored_at": "2026-10-07T03:47:32-03:00",
+      "committed_at": "2026-10-06T23:47:32-07:00",
+      "subject": "Internal session plumbing and packaging cleanup (#819)",
+      "group": "voice_existing_conditional_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/4a5fb8b4438196aed3249e4efae1291d39100932"
+    },
+    {
+      "sha": "8e6da95908ee536012dba4f3268ca4bd87fe602b",
+      "authored_at": "2026-10-06T23:57:12-03:00",
+      "committed_at": "2026-10-06T19:57:12-07:00",
+      "subject": "Fix iOS showing fixture conversations when a session fails to open (#826)",
+      "group": "remote_existing_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/8e6da95908ee536012dba4f3268ca4bd87fe602b"
+    },
+    {
+      "sha": "d5c1cdc124c8d403eb0a11e94a8dae4a381fc958",
+      "authored_at": "2026-10-06T04:27:22-03:00",
+      "committed_at": "2026-10-06T00:27:22-07:00",
+      "subject": "Pin chip padding to Geist so insets don't follow the UI font (#816)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/d5c1cdc124c8d403eb0a11e94a8dae4a381fc958"
+    },
+    {
+      "sha": "3d4bfd11b042948beb628fe8d5587ebe43b46035",
+      "authored_at": "2026-10-05T13:44:32-07:00",
+      "committed_at": "2026-10-05T13:44:32-07:00",
+      "subject": "Unify the sidebar project filter by repository identity (#811)",
+      "group": "repository_grouping_need_unestablished",
+      "url": "https://github.com/zeronsh/zeron/commit/3d4bfd11b042948beb628fe8d5587ebe43b46035"
+    },
+    {
+      "sha": "c8eb7524e06d8483c2c9054a8180b61e19256a74",
+      "authored_at": "2026-10-05T18:56:01Z",
+      "committed_at": "2026-10-05T18:56:01Z",
+      "subject": "README: replace broken DeepWiki badge with a text link",
+      "group": "readme_only",
+      "url": "https://github.com/zeronsh/zeron/commit/c8eb7524e06d8483c2c9054a8180b61e19256a74"
+    },
+    {
+      "sha": "9ac03a54b36eddc43941d355d5723adb8357b494",
+      "authored_at": "2026-10-05T18:49:26Z",
+      "committed_at": "2026-10-05T18:49:26Z",
+      "subject": "Add Korean and Japanese READMEs",
+      "group": "readme_only",
+      "url": "https://github.com/zeronsh/zeron/commit/9ac03a54b36eddc43941d355d5723adb8357b494"
+    },
+    {
+      "sha": "16d42a6352ee82de838cd65e294dd8d4be79d96d",
+      "authored_at": "2026-10-05T18:46:21Z",
+      "committed_at": "2026-10-05T18:46:21Z",
+      "subject": "Simplify README and refresh its screenshot",
+      "group": "readme_only",
+      "url": "https://github.com/zeronsh/zeron/commit/16d42a6352ee82de838cd65e294dd8d4be79d96d"
+    },
+    {
+      "sha": "3ef98ec2a3bd0b8b7e2ddb544072790a85f20a56",
+      "authored_at": "2026-10-05T11:34:03-07:00",
+      "committed_at": "2026-10-05T11:34:03-07:00",
+      "subject": "Bump version to v0.2.104",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/3ef98ec2a3bd0b8b7e2ddb544072790a85f20a56"
+    },
+    {
+      "sha": "73bd3c8429b48e73edc62a9b201fe13f1b50b6c9",
+      "authored_at": "2026-10-05T15:33:45-03:00",
+      "committed_at": "2026-10-05T11:33:45-07:00",
+      "subject": "Composer: mention images and files as chips (#775)",
+      "group": "attachments_existing_owners_or_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/73bd3c8429b48e73edc62a9b201fe13f1b50b6c9"
+    },
+    {
+      "sha": "9b3773082a8171cd29387b07f2a2b92a48c6ad0b",
+      "authored_at": "2026-10-05T07:45:09Z",
+      "committed_at": "2026-10-05T07:45:09Z",
+      "subject": "Bump version to v0.2.103",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/9b3773082a8171cd29387b07f2a2b92a48c6ad0b"
+    },
+    {
+      "sha": "dbb639be372157a66603e2f0462d3702d3d33503",
+      "authored_at": "2026-10-05T00:44:41-07:00",
+      "committed_at": "2026-10-05T00:44:41-07:00",
+      "subject": "Group projects by git identity, plus Zeron Icons and rolling labels (#799)",
+      "group": "repository_grouping_need_unestablished",
+      "url": "https://github.com/zeronsh/zeron/commit/dbb639be372157a66603e2f0462d3702d3d33503"
+    },
+    {
+      "sha": "9e1a11158b0626237c814f4bd36f5948483ed797",
+      "authored_at": "2026-10-03T02:55:54-03:00",
+      "committed_at": "2026-10-02T22:55:54-07:00",
+      "subject": "Render Mermaid diagrams in chat replies (#760)",
+      "group": "mermaid_already_implemented",
+      "url": "https://github.com/zeronsh/zeron/commit/9e1a11158b0626237c814f4bd36f5948483ed797"
+    },
+    {
+      "sha": "e2a7706fac45ff2cc2a742b841036e2d93dcad5d",
+      "authored_at": "2026-10-03T02:46:39-03:00",
+      "committed_at": "2026-10-02T22:46:39-07:00",
+      "subject": "Add per-project new chat button and archive tooltip to the sidebar (#737)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/e2a7706fac45ff2cc2a742b841036e2d93dcad5d"
+    },
+    {
+      "sha": "f9a4a18bedf71513a2abc0dbdf608b4bea5499e1",
+      "authored_at": "2026-10-03T02:46:34-03:00",
+      "committed_at": "2026-10-02T22:46:34-07:00",
+      "subject": "Convert BMP attachments to PNG so agents can read them (#739)",
+      "group": "attachments_existing_owners_or_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/f9a4a18bedf71513a2abc0dbdf608b4bea5499e1"
+    },
+    {
+      "sha": "edac0d7d9d58c294ab81e8ff088a7ef0a43d4bba",
+      "authored_at": "2026-10-03T02:46:29-03:00",
+      "committed_at": "2026-10-02T22:46:29-07:00",
+      "subject": "Fix Windows drive paths in the project folder picker (#727)",
+      "group": "windows_or_visual_results_existing_owner",
+      "url": "https://github.com/zeronsh/zeron/commit/edac0d7d9d58c294ab81e8ff088a7ef0a43d4bba"
+    },
+    {
+      "sha": "e96eccb1aab3bf63fc475f5e85d2935736940cc9",
+      "authored_at": "2026-10-02T22:46:24-07:00",
+      "committed_at": "2026-10-02T22:46:24-07:00",
+      "subject": "Keep activity loaders pulsing with system reduced motion (#754)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/e96eccb1aab3bf63fc475f5e85d2935736940cc9"
+    },
+    {
+      "sha": "612df5126130c3117c80eb24483fec56fbd9bed3",
+      "authored_at": "2026-10-02T22:46:18-07:00",
+      "committed_at": "2026-10-02T22:46:18-07:00",
+      "subject": "fix(preview): leave authentication callback listeners unprobed (#763)",
+      "group": "input_preview_maintenance_no_established_gap",
+      "url": "https://github.com/zeronsh/zeron/commit/612df5126130c3117c80eb24483fec56fbd9bed3"
+    },
+    {
+      "sha": "2a884777a5a399c126c25fc6f5bd77c306a62983",
+      "authored_at": "2026-10-02T22:46:12-07:00",
+      "committed_at": "2026-10-02T22:46:12-07:00",
+      "subject": "Fix Shift+Backspace in composer and palette inputs (#757)",
+      "group": "input_preview_maintenance_no_established_gap",
+      "url": "https://github.com/zeronsh/zeron/commit/2a884777a5a399c126c25fc6f5bd77c306a62983"
+    },
+    {
+      "sha": "1c83cda221bd18a3b55ea49e5b25ec2c148955bc",
+      "authored_at": "2026-10-02T17:05:24-07:00",
+      "committed_at": "2026-10-02T17:05:24-07:00",
+      "subject": "Merge pull request #751 from jsgrrchg/zeron/inline-thread-rename-implementation",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/1c83cda221bd18a3b55ea49e5b25ec2c148955bc"
+    },
+    {
+      "sha": "69e64ef56075ce87c83710060b4d86b4f71b6ac9",
+      "authored_at": "2026-10-02T16:36:14-07:00",
+      "committed_at": "2026-10-02T16:36:14-07:00",
+      "subject": "Merge pull request #750 from zeronsh/ci/pin-actions",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/69e64ef56075ce87c83710060b4d86b4f71b6ac9"
+    },
+    {
+      "sha": "46bedeca053887b60b960c925e39b9bc56230e51",
+      "authored_at": "2026-10-02T16:21:25-07:00",
+      "committed_at": "2026-10-02T16:21:25-07:00",
+      "subject": "Test the inline rename in both full and compact sidebar rows",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/46bedeca053887b60b960c925e39b9bc56230e51"
+    },
+    {
+      "sha": "c78bb1c106fd5da84b428728a1c807af5e5b29ee",
+      "authored_at": "2026-10-02T20:13:47-03:00",
+      "committed_at": "2026-10-02T20:13:47-03:00",
+      "subject": "Rename threads and side chats inline instead of in a dialog",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/c78bb1c106fd5da84b428728a1c807af5e5b29ee"
+    },
+    {
+      "sha": "56dc5ff3a360a4b83f48f7ed134b8c26a2e812fc",
+      "authored_at": "2026-10-02T16:04:12-07:00",
+      "committed_at": "2026-10-02T16:04:12-07:00",
+      "subject": "CI: pin every action to a commit SHA, keep pins current with Dependabot",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/56dc5ff3a360a4b83f48f7ed134b8c26a2e812fc"
+    },
+    {
+      "sha": "67a1c1e39cac210c54d494c970d49b9cd8279a7e",
+      "authored_at": "2026-10-02T16:03:43-07:00",
+      "committed_at": "2026-10-02T16:03:43-07:00",
+      "subject": "Merge pull request #695 from katulevskiy/ci-macos-fast",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/67a1c1e39cac210c54d494c970d49b9cd8279a7e"
+    },
+    {
+      "sha": "e94c49ad89a85920d8d2c94bb60d8b55a643cebd",
+      "authored_at": "2026-10-02T15:30:01-07:00",
+      "committed_at": "2026-10-02T15:30:01-07:00",
+      "subject": "Fix compact model picker browsing across providers (#749)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/e94c49ad89a85920d8d2c94bb60d8b55a643cebd"
+    },
+    {
+      "sha": "55f5ed4c8d14024744d2a9e6e1f8448990740532",
+      "authored_at": "2026-10-02T15:17:47-07:00",
+      "committed_at": "2026-10-02T15:17:47-07:00",
+      "subject": "CI(macos): give macos-native the old job's 45 minute limit",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/55f5ed4c8d14024744d2a9e6e1f8448990740532"
+    },
+    {
+      "sha": "1f7b74a7fc97b0ca1d0379e77141075d73db8adf",
+      "authored_at": "2026-10-02T14:39:30-07:00",
+      "committed_at": "2026-10-02T14:39:30-07:00",
+      "subject": "Todo: dedicated panel for the agent's checklist (#707)",
+      "group": "selected_checklist",
+      "url": "https://github.com/zeronsh/zeron/commit/1f7b74a7fc97b0ca1d0379e77141075d73db8adf"
+    },
+    {
+      "sha": "542febc10b3d944cbd17e315a273a1cedc8c1290",
+      "authored_at": "2026-10-02T16:45:24-04:00",
+      "committed_at": "2026-10-02T13:45:24-07:00",
+      "subject": "Toggle fast mode with F in the compact model picker (#745)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/542febc10b3d944cbd17e315a273a1cedc8c1290"
+    },
+    {
+      "sha": "c14d45796c601763fc902bc6c40e5a2d724f8949",
+      "authored_at": "2026-10-02T16:44:53-04:00",
+      "committed_at": "2026-10-02T13:44:53-07:00",
+      "subject": "Let the composer's session branch label use free width and fade on overflow (#744)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/c14d45796c601763fc902bc6c40e5a2d724f8949"
+    },
+    {
+      "sha": "01832f2cac72af4818bf0dcd9c6525c5dde5c4a0",
+      "authored_at": "2026-10-02T17:02:48-03:00",
+      "committed_at": "2026-10-02T13:02:48-07:00",
+      "subject": "MCP: create standalone sessions on a selected device and project (#706)",
+      "group": "mcp_existing_capability",
+      "url": "https://github.com/zeronsh/zeron/commit/01832f2cac72af4818bf0dcd9c6525c5dde5c4a0"
+    },
+    {
+      "sha": "9782693b8561ff2764c8e38c16644d65a1b5bb31",
+      "authored_at": "2026-10-02T13:56:08-03:00",
+      "committed_at": "2026-10-02T09:56:08-07:00",
+      "subject": "Scope composer mic and attach hover fades per instance (#740)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/9782693b8561ff2764c8e38c16644d65a1b5bb31"
+    },
+    {
+      "sha": "64ad6f6ef03a8282c1847329804542f014c97d54",
+      "authored_at": "2026-10-02T01:58:10-07:00",
+      "committed_at": "2026-10-02T01:58:10-07:00",
+      "subject": "Bump version to v0.2.102",
+      "group": "release_only",
+      "url": "https://github.com/zeronsh/zeron/commit/64ad6f6ef03a8282c1847329804542f014c97d54"
+    },
+    {
+      "sha": "ae4181f517001ae151191d7bcab64c5651ea6320",
+      "authored_at": "2026-10-02T01:56:52-07:00",
+      "committed_at": "2026-10-02T01:56:52-07:00",
+      "subject": "Fix the compact panel's model name; test settings survive navigation (#721)",
+      "group": "picker_sidebar_presentation_no_new_workflow",
+      "url": "https://github.com/zeronsh/zeron/commit/ae4181f517001ae151191d7bcab64c5651ea6320"
+    },
+    {
+      "sha": "80b946b153e431f8e3fdd7a99faf81b23c77706c",
+      "authored_at": "2026-10-02T00:16:51+02:00",
+      "committed_at": "2026-10-01T15:16:51-07:00",
+      "subject": "Add opt-in on-device dictation to the desktop composer (#591)",
+      "group": "voice_existing_conditional_owners",
+      "url": "https://github.com/zeronsh/zeron/commit/80b946b153e431f8e3fdd7a99faf81b23c77706c"
+    },
+    {
+      "sha": "27480d99b9b75d31d01832248bec3f898bd64dcc",
+      "authored_at": "2026-10-01T13:29:41-07:00",
+      "committed_at": "2026-10-01T13:29:41-07:00",
+      "subject": "OpenCode 2.x: fix instant \"Run failed\" (cold version probe), show start failures (#686)",
+      "group": "runtime_existing_owner",
+      "url": "https://github.com/zeronsh/zeron/commit/27480d99b9b75d31d01832248bec3f898bd64dcc"
+    },
+    {
+      "sha": "0f7ae6f427fc485220a846be93fc92c2b3bc55c3",
+      "authored_at": "2026-10-01T13:18:51-07:00",
+      "committed_at": "2026-10-01T13:18:51-07:00",
+      "subject": "Merge pull request #694 from katulevskiy/ci-linux-fast",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/0f7ae6f427fc485220a846be93fc92c2b3bc55c3"
+    },
+    {
+      "sha": "a5c00e0b507a7f520bc40be4dd8e15dcedd2141e",
+      "authored_at": "2026-10-01T13:00:33-07:00",
+      "committed_at": "2026-10-01T13:00:33-07:00",
+      "subject": "CI(macos): run the macOS jobs on macos-latest, as before",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/a5c00e0b507a7f520bc40be4dd8e15dcedd2141e"
+    },
+    {
+      "sha": "7aed43b472ef3fbed1cb9d8e74c5fe6c5bc0cd15",
+      "authored_at": "2026-10-01T12:09:05-07:00",
+      "committed_at": "2026-10-01T12:09:05-07:00",
+      "subject": "CI(macos): run CoreText tests on macOS, drop /etc/hosts patch, harden nextest download",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/7aed43b472ef3fbed1cb9d8e74c5fe6c5bc0cd15"
+    },
+    {
+      "sha": "2249a11296935e8907162be58c268151e0748b24",
+      "authored_at": "2026-10-01T12:08:23-07:00",
+      "committed_at": "2026-10-01T12:08:23-07:00",
+      "subject": "Merge ci-linux-fast (#694) into ci-macos-fast",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/2249a11296935e8907162be58c268151e0748b24"
+    },
+    {
+      "sha": "5d5d935991d3a659a5bba25f004874d41a74e7ae",
+      "authored_at": "2026-10-01T12:07:48-07:00",
+      "committed_at": "2026-10-01T12:07:48-07:00",
+      "subject": "CI: cover cursor paths in ui-tests, verify nextest after cache restore, nightly release-profile run",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/5d5d935991d3a659a5bba25f004874d41a74e7ae"
+    },
+    {
+      "sha": "b7404fbd8e366aafccb193c8d6f5b2befe1d2e94",
+      "authored_at": "2026-10-01T12:06:50-07:00",
+      "committed_at": "2026-10-01T12:06:50-07:00",
+      "subject": "Merge remote-tracking branch 'origin/main' into pr-694",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/b7404fbd8e366aafccb193c8d6f5b2befe1d2e94"
+    },
+    {
+      "sha": "7a472fce41b6a834da87b460e189adb05eacf3d4",
+      "authored_at": "2026-10-01T12:06:27-07:00",
+      "committed_at": "2026-10-01T12:06:27-07:00",
+      "subject": "Merge pull request #693 from katulevskiy/ci-windows-fast",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/7a472fce41b6a834da87b460e189adb05eacf3d4"
+    },
+    {
+      "sha": "cff6a9e174bbc5e6ee2da264d7acd52684016824",
+      "authored_at": "2026-10-01T12:06:15-07:00",
+      "committed_at": "2026-10-01T12:06:15-07:00",
+      "subject": "Merge pull request #692 from katulevskiy/ci-seed-rust-cache",
+      "group": "merge_wrapper",
+      "url": "https://github.com/zeronsh/zeron/commit/cff6a9e174bbc5e6ee2da264d7acd52684016824"
+    },
+    {
+      "sha": "878307a3d685a216e4100324be939a75c03eef65",
+      "authored_at": "2026-09-30T17:37:33-07:00",
+      "committed_at": "2026-09-30T17:37:33-07:00",
+      "subject": "CI: run Linux tests with nextest on a dev profile and one shared build",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/878307a3d685a216e4100324be939a75c03eef65"
+    },
+    {
+      "sha": "9cb1de50f580abe6a081c11c9e8921319aebd783",
+      "authored_at": "2026-09-30T17:37:33-07:00",
+      "committed_at": "2026-09-30T17:37:33-07:00",
+      "subject": "CI: add Linux test helpers (setup action, nextest, apt with retries)",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/9cb1de50f580abe6a081c11c9e8921319aebd783"
+    },
+    {
+      "sha": "c168ba5b4589352877ad5450168860a1ad308a26",
+      "authored_at": "2026-09-30T17:12:22-07:00",
+      "committed_at": "2026-09-30T17:12:22-07:00",
+      "subject": "windows: run the crate suites as two parallel jobs",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/c168ba5b4589352877ad5450168860a1ad308a26"
+    },
+    {
+      "sha": "c286d118b48f592b4e1252802f7ff10c788caecd",
+      "authored_at": "2026-09-30T16:36:54-07:00",
+      "committed_at": "2026-09-30T16:36:54-07:00",
+      "subject": "CI: remove the macOS jobs from ui-tests and preview-tests",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/c286d118b48f592b4e1252802f7ff10c788caecd"
+    },
+    {
+      "sha": "52a3481dc5339fb628015857d25a1b4f403f421d",
+      "authored_at": "2026-09-30T16:36:54-07:00",
+      "committed_at": "2026-09-30T16:36:54-07:00",
+      "subject": "CI: add a macOS workflow with one compile and parallel jobs",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/52a3481dc5339fb628015857d25a1b4f403f421d"
+    },
+    {
+      "sha": "f4abe69b8805294b96e47606642914319662caa2",
+      "authored_at": "2026-09-30T16:35:50-07:00",
+      "committed_at": "2026-09-30T16:35:50-07:00",
+      "subject": "CI: run Windows tests in three parallel jobs on a cheaper profile",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/f4abe69b8805294b96e47606642914319662caa2"
+    },
+    {
+      "sha": "710b06ff854e2bb0e54ec5795e3d665a78923bcf",
+      "authored_at": "2026-09-30T16:33:28-07:00",
+      "committed_at": "2026-09-30T16:33:28-07:00",
+      "subject": "CI: seed the Rust cache from main and stop cancelling main runs",
+      "group": "ci_or_verification_maintenance",
+      "url": "https://github.com/zeronsh/zeron/commit/710b06ff854e2bb0e54ec5795e3d665a78923bcf"
+    }
+  ],
+  "documentation_validation": {
+    "markdown_files": 3,
+    "relative_links_checked": 48,
+    "upstream_commit_or_source_links_checked": 10,
+    "pinned_source_hashes_checked": 26,
+    "commits_classified": 78,
+    "failures": 0,
+    "runtime_build_or_e2e_run": false
+  }
+}

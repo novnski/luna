@@ -1,5 +1,7 @@
 # Pending tasks
 
+- [Useful Zeron changes: snapshots, registry growth, checklist, file navigation and workspace search](zeron-upstream-improvements/README.md): five pending desktop improvements from the 2026-10-11 upstream review; excludes shipped capabilities and work already owned by other plans.
+
 - [T3 remote/mobile: source research and LUNA gap plan](t3-remote-mobile/README.md): ten-agent audit of connections, native mobile features and current LUNA; detailed gaps, implementation tasks and future E2E, supplementing Control this Mac without changing direct-only V1.
 
 - [LUNA-only workflows: prioritized migration plan](luna-only-workflows/README.md): pending coordination and implementation plan based on retained Codex/Claude usage; reuses existing HTML/MCP Apps/search work and shipped Board/automation fixes, with explicit task dependencies and E2E switching gates.
