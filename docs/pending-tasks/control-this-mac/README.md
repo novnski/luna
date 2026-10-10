@@ -121,3 +121,7 @@ The first release includes M0–M4. Pairing-only or read-only milestones are dev
 Useful source references are [Zeron's native rewrite](https://github.com/novnski/zeron/blob/b42fc2b8fbf247dd92796c2917f277535cea91ac/docs/mobile-rewrite.md), [its mobile crate](https://github.com/novnski/zeron/blob/b42fc2b8fbf247dd92796c2917f277535cea91ac/crates/mobile/Cargo.toml), [T3 direct authentication](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/docs/internals/environment-auth.md), [T3 direct pairing](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/docs/user/remote-access.md), and [BB's browser model](https://github.com/get-bb/bb/blob/2573ad5e85835dc1c90aa33795e6dba52ef5aa92/docs/multiple-devices.md).
 
 Recheck these contracts before implementation. Source review and supplied screenshots establish the design baseline; they are not fresh mobile, reachability, performance, or remote execution acceptance evidence.
+
+## T3 remote/mobile research supplement
+
+The [11 October 2026 research package](../t3-remote-mobile/README.md) audits pinned T3 and current LUNA source with ten agents. Its [gap matrix](../t3-remote-mobile/gap-matrix.md), [RM tasks](../t3-remote-mobile/implementation-plan.md), and [expanded E2E scenarios](../t3-remote-mobile/validation-plan.md) supplement this plan. This package remains the owner of M0–M4, the existing native stack direction, and direct-only/no-relay V1. The research implements no milestone and certifies no live phone control.

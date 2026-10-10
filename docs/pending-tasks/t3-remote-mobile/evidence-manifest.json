@@ -1,0 +1,6581 @@
+{
+  "research_date": "2026-10-11",
+  "timezone": "Europe/Bucharest",
+  "kind": "source-research-and-pending-specification",
+  "baseline": {
+    "luna_sha": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+    "t3_sha": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+    "t3_original_checkout_sha": "50647de0143e68fde051eb1a0ccf4fe63f9947b2",
+    "t3_mobile_source_version": "2.0.0",
+    "public_ios_listing_version": "1.4.1",
+    "public_ios_minimum": "iOS/iPadOS18",
+    "nightly_mobile_beta_required": true
+  },
+  "public_checks": [
+    {
+      "url": "https://t3.codes/download",
+      "observed": "iOS/iPadOS and Android store links"
+    },
+    {
+      "url": "https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824",
+      "observed": "listing,1.4.1,iOS/iPadOS18"
+    },
+    {
+      "url": "https://play.google.com/store/apps/details?id=com.t3tools.t3code",
+      "observed": "listing opened; no installed binary verification"
+    }
+  ],
+  "agents": [
+    {
+      "lane": 1,
+      "report": "01-architecture.md"
+    },
+    {
+      "lane": 2,
+      "report": "02-auth.md"
+    },
+    {
+      "lane": 3,
+      "report": "03-transports.md"
+    },
+    {
+      "lane": 4,
+      "report": "04-mobile-runtime.md"
+    },
+    {
+      "lane": 5,
+      "report": "05-mobile-workflows.md"
+    },
+    {
+      "lane": 6,
+      "report": "06-mobile-tools.md"
+    },
+    {
+      "lane": 7,
+      "report": "07-mobile-platform.md"
+    },
+    {
+      "lane": 8,
+      "report": "08-luna-backend.md"
+    },
+    {
+      "lane": 9,
+      "report": "09-luna-mobile.md"
+    },
+    {
+      "lane": 10,
+      "report": "10-independent-review.md"
+    }
+  ],
+  "checks": {
+    "source_permalink_occurrences": 676,
+    "source_counts": {
+      "pingdotgg/t3code": 610,
+      "novnski/luna": 66
+    },
+    "unique_cited_source_files": 219,
+    "local_link_occurrences": 50,
+    "markdown_documents": 16,
+    "errors": [],
+    "runtime_tests_executed": false,
+    "native_build_executed": false,
+    "independent_semantic_review": "completed with no blocking contradiction; see10-independent-review.md",
+    "read_only_verifier_command": "agent-python docs/pending-tasks/t3-remote-mobile/verify-evidence.py",
+    "read_only_git_object_verifier_exit_code": 0,
+    "gap_matrix_capability_rows": 66,
+    "implementation_tasks": 14,
+    "proposed_e2e_journeys": 41
+  },
+  "source_files": [
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c55f42d36e535b134e3b1be1fc3ddd3f5315199d6352d2e5078fcc577d78ed68",
+      "lines": 126
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c437f2171ff2106bdfd3bcd936aedc006364db65b75d802a599344a1ad0f7903",
+      "lines": 102
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e73906bcb19fcf0dddfcf1fdaccccaf6ed7950e649491e01fa62a7ba1a20e143",
+      "lines": 176
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/runtime.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5a386cee58b53ee8a54aafb6fe9a640cb2465005b5d67b4327f145de0bf44704",
+      "lines": 60
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/threads.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f83ae70984aad7690282b9a9f46b319dad9342cfc451842f255e5722543530e5",
+      "lines": 49
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-thread-outbox-drain.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "8604ff9baec4380d28e04a813f4b3c0831b02b884cda9a6a4a76ebfb3ca91e15",
+      "lines": 1387
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a844c0b974b4ba69e868a22718bfc4cf0fae44cd7f28dc2d7270dd5c482649d1",
+      "lines": 489
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5cd88ec5248704f35f7b98fa41f65cb62a26b71eda3c449a07876a814327560c",
+      "lines": 1103
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "cd069364c552a08d3bbd274b20398f7e27e53e8c91ab78d2a040a64770835a8e",
+      "lines": 452
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1630ed4ea04e8344695942cd062405687351dc81aeda269e6bb849870c487196",
+      "lines": 3241
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "29802b2662b4e69977097971236fb43e58f788c759f1e378e965b46ffc4d064a",
+      "lines": 287
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c45a8e0aa7eaa91bb8bcc1f7ac1eb84f2af469891509d32c06b837a314b27f64",
+      "lines": 11488
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EventSink.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3b5748c845af78b2150c5f84265991891073c02ef42d7981111b39c4b80211f6",
+      "lines": 900
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "306a3a84a92db2a4a6a61cd333d91b78ee9fcdeb9c519dcd829fb85dd88e51f8",
+      "lines": 875
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threads.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a6103a2ea4df9c839485dcbd58f32206f0bb10ab2c66552bbb037d47755be856",
+      "lines": 979
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "205746a02299f6feaaf679d099157b561629a9d6c1eef62a88f68f0aff993d93",
+      "lines": 87
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/desktop/src/app/DesktopApp.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "dea094c45cc607e8d94ec9e5af402a1f645a7e5ed60af44f2b3c2a48332c52aa",
+      "lines": 371
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/DesktopBackendConfiguration.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "606d52f838904d45cc70718a458d0ca8967f5e715b53abcf880c1ea072a0f5b7",
+      "lines": 996
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/DesktopBackendPool.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "971613d81212723848ace31c709259ca3a1eb8780354ba74da504dcd02d3d8fd",
+      "lines": 476
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/server.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c0e793fa14cbd849dcb5271b8f31c53625fc44507311c8db10a6229e4a17dab5",
+      "lines": 70
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7db915f8a25dbb9f9a12de657f0311957d6162ede721c9ccce203b57a6a35625",
+      "lines": 346
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/service.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "b1cd37fca9735728d63498df7776572f1a3a2947c416592c73a7340e62280a0c",
+      "lines": 299
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/serviceLauncher.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f334eb8b4d1b074262c32cd9115ab5b992d804c10bf8d30a1320cbfbcaa2bd65",
+      "lines": 637
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/background-service.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5f66d57b3ea918a5d3521e7fc68adf8491402972c253ef619f4d0879f55d5908",
+      "lines": 97
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "69f44a813f5a88e2d74551b9ccba15eec70a530a033763ab6ede037e3351ca26",
+      "lines": 297
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "04b31ec3184639d90370cca013785a3fa117696b91c4d1039a0603d346801b5d",
+      "lines": 291
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0d49b84198640f2480fe9b2a13dc45a32f5d8fab75551acac4e4b157bd1673e0",
+      "lines": 1187
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "51b36e344fecf4de5a15a4c13e76b978e945a46ff8731e3a0aee61630e638adb",
+      "lines": 205
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "21c55147fe04c263bf995789b260397b1f3c1b3c1de9f707797c4f154d82d65e",
+      "lines": 559
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "33c8cec561d88583371766673e9f997bab1d12e4dd79c82e49ac760c4a594adc",
+      "lines": 323
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "2bac1d649ecae3042626ddda5bf54e34f074f3759cbab35781a3ab42a479c716",
+      "lines": 1044
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/contracts/src/environment.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e987b570e330996c1cad3c41619ea1a03e3e6397655d265f11451bb2249b75bd",
+      "lines": 284
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/compatibility.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "98dff3234752676f63a05cea94420fdb55d718bebfd5cfb5a7b03c853f2ea256",
+      "lines": 42
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6b4c36368736a5e52c9876bbe021a20347f2796ed3ac955350a133b722eeb18a",
+      "lines": 405
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/ThreadMessageIntake.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "2f2ffea142cd6456461d96903ab520c2a81d7d62055ce497f92776744fcf1281",
+      "lines": 240
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "d066ecd8fb875213d1c48935052da2c99c81331471c48cff3c4fb3be7573aadf",
+      "lines": 502
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9bbf704b08da1944bafcd494df1302ab68d945e210ded7c22efec3376a1405c2",
+      "lines": 125
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e6a83e2d67fbc0f4276f35929ba0aa6aea36f2131ea992e336ab6de9e9276112",
+      "lines": 325
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/storage.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "61917aa64c440978bf3ea28656d56041f5ea8a541ea231ff2f39d39aad2fc568",
+      "lines": 160
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7c2973055c17e6b975bb68b277032b2a45c28a1834d188966195f26d0f68f96c",
+      "lines": 652
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f279e2f0ac3f37e6bd3f4b4e2f7e14dca76592a122375eea40ab08db2c7e1597",
+      "lines": 530
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "03997b5957794977f73ea854450d3f91c19070e5f4e28ca2ae7e66a836a66b02",
+      "lines": 1327
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5beef2c9273166bd0ee8eeb578fe4807ca44e9a1ca5bd1ecb6af62c83ff83789",
+      "lines": 1102
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "33e29c60fad9c3246195337dde7c991d051c26ca32c4b53d7dca4411ff6f73af",
+      "lines": 638
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/persistence/AuthPairingLinks.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5d7abc626ede0aacbe6b844b9964fb8601b8ae601902b47f93fedcb454dc60ba",
+      "lines": 365
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/web/src/hostedPairing.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "fe86a1e7481c11f6e2de0c4fbc4cdf6f2db9e87f375a9c8c7a20570feebd2092",
+      "lines": 95
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/shared/src/remote.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0559dd1b678b8a7bb591df696a65957ea8bda183337be3bffd2c1df3e49810e4",
+      "lines": 245
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "accac1b5ce365051d90808152edd68e5e0bab8ee1020633be06fc095da831321",
+      "lines": 92
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "b3781a09eeef57cedef332ce8e1e84469d03cb720db37fca3533704512900ffc",
+      "lines": 456
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.test.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f0da62d37675c00f200801e33939079bf8bc705e7e8e2632a877a2e158a480f5",
+      "lines": 64
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "30f0b08e838433f4315e69fc26cf5c1c53befee35b05877dca25dc2ffd82fdb4",
+      "lines": 250
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.test.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7e0a9924b69d66af9fb59671e1772f9da7ba6c64c9a396b91c1493d81c89a944",
+      "lines": 317
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.test.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "441befa2eaf03384eea4434c5678569c1d9170945e99f7aac13021ae8ae22be1",
+      "lines": 627
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7f5662f0ef964f210e2a05b61a22d177c958409a7ee33020e5bec66f83e23104",
+      "lines": 121
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-secure-storage.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a67a084853b232a80318f9a68d153a4cf74b43cf0d0aa04fa538b5047d1c1759",
+      "lines": 52
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/utils.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "208b49db0866b7f64ef2fe4566559dd66420485663054a48ed9ede51eed2dd05",
+      "lines": 198
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e65e3282b0118fb13febc538da74f7f3dd86240e494701d65c7d1791d2dd13ae",
+      "lines": 4175
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5a1a0e257f53078acbb77f0c8fe7d4aad8e8c304d3fb57c3e4ed60e3a55fd0e0",
+      "lines": 261
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-remote-environment-registry.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9871b34554e1f5045c053ac17746a95284b2938980367f8c7c26e56f9c7205ff",
+      "lines": 211
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/useConnectionController.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "63384e0a92a481d986a14c7f79a95fa0857f56e7ab2449c842d602b94bc11e33",
+      "lines": 135
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/platform/storageDocument.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "4cd5ffc4cc679cd958e8d48e6cd7e847d99f0fbc14b63bd87deef55dc87bdd99",
+      "lines": 238
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3fa7548441710be6e323236e11aa3d9a76a547454442307347efc6a8bf8ad69a",
+      "lines": 964
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/http.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "54cd5f18c3db0a781f7bcbf05c1d3d1f9ff29fa0ee785afe6e97270e87721869",
+      "lines": 681
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/MediaFile.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9d57c3a205ee4b44f2e0861693cbf37af8781ebd8b6c8a2cc12ee85d28f40676",
+      "lines": 136
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-storage.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c22dd28eafa7831a309da70778c1a488b017190cdf2fb9843a06bd4234accdfc",
+      "lines": 266
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f35f10f78d564c15c8e6cd75eb22cd8207c619a16c4b54cfa4439400d590e2cf",
+      "lines": 1191
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/dpop.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "155c837101809940a9a2f0eb74e8c5c0377047c5b272a0ce7cb1e09f33edcb87",
+      "lines": 302
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/managedRelayLayer.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "83b928a15dacd515c738bb8117738de04775d360e8864751406f541958af475e",
+      "lines": 72
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ee774e2bfa8793ba4aff9ac1af63cba535f996055e0b2eb7ec9a4027dd05c4f8",
+      "lines": 168
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/tailscale/src/tailscale.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3341689cd7ab60eca29665867b14d5976117fb45d88fa3ab7dee96840b6d75a5",
+      "lines": 381
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/tailscaleEndpointProvider.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1b7490d1823f335b383bc86918e0b4081bf58bd86efaace4bd59830b5ebf64e7",
+      "lines": 146
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/ssh/src/tunnel.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "bc6e53464adc14df66aed4eed918ab0a1e30679904c5e18c96381ee7f7798290",
+      "lines": 1773
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "cbbc805c14f61ab5432c5e2de35a7696184ff6c81d7c7c5413956ae8195f99a2",
+      "lines": 1519
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/pair.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "30c199726d5020a8e94bef62bce09d4d6f3004269aeeb4941b57fda33efe0916",
+      "lines": 543
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/routes.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "89e663360e5bb1b86ca486d0a7722bcc595ea3d4a65adefef4b766e617cc28e8",
+      "lines": 432
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/operations/connect-setup.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9e8fa8c3b528a13f5b395fc604defed97329ceecc7475ec6ef771bc46a515149",
+      "lines": 139
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": ".env.example",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3bb91e2fe4d6967bf1c677f2fccf84ed3328e54cc60ef8301e34a32540b631de",
+      "lines": 31
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "AGENTS.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9c9d808701f45595fd4ae52f8fdec0f8abad9f7339d244b71b328f1ffedd5249",
+      "lines": 164
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/install.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "fa0f0dbfb73d5782ee7c740ca41db698a5558d47f9462d07462c0cbb0e5c31f9",
+      "lines": 184
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/layer.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "b9d0e6a0c07d368a9a94cb501dee719a4dcfb6a0500ef6c8124cc5451c70f4b9",
+      "lines": 106
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/onboarding.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "fc01146b68543ec6c493036f5780bbbdbb1275729504ff13bf6d4bb3aa1d450d",
+      "lines": 48
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/workspace.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5e9ca7e442ebc794dbaffb88a2d6b7de13ac7e78a43f6c027c3f35e1a389db23",
+      "lines": 48
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6bef1d74e0712c55c3d5161fb52feb98c15cb4746f47b68487c3bb9cf8c8afeb",
+      "lines": 609
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/EnvironmentRoutesSection.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1d59f54de027aa87d954e35454cab5ae3db4be7dcd9d4e7be805d230e5b04545",
+      "lines": 339
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/migration.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ac6eda0ae2857512c1b8d57d9b7eaece1bd47e062cf15a405dd739534ab700b6",
+      "lines": 110
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/connection.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "97c96ed9daecd40805f00e46a20dae797698571d0b000108f8ee847f438a81ae",
+      "lines": 34
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9943a0b45e07b9fca401a0405e1221375f3d1e26dfe663c0eeb776afe1ff5ab1",
+      "lines": 446
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/environment-cache-store.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5db5697814bed44448d7097a3b75bb894fdebd4c9389c453a904201009a8ce20",
+      "lines": 248
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "867d47d87c7c070cf5dd6443ba9e2a54360b552c00cc04b5ddaf87465fbf72bc",
+      "lines": 574
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/app-state-wakeups.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f8584242557e845ec16278806a97c9764983a0716fc294552757afe5905731b0",
+      "lines": 18
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/background-activity.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "490436e70868059cb89a086be755f1939107f298934cdac5e829e07827ab9f57",
+      "lines": 118
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/presentation.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "eaca2a46baf708db607c5ac453fd9a5eec21a51c06f3d52331b6e0ed00cde551",
+      "lines": 152
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5fc2e4ea6dc08e8d31d2943122c4302e822ebdc78bb15d8619d233fe942ad3ff",
+      "lines": 1002
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "d8face5ec8c39ecf9cdae79188e9f754171669e887bff2f68233dd8d25d041ce",
+      "lines": 222
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/HomeRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f36ec4d4b6e3364de488f844c89239062f99e9b16c2368357bf920fd0f944379",
+      "lines": 283
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c1df3108cdecc58e9de8884fac42b7d711a70cca0ec7790db6bbad713561e546",
+      "lines": 1064
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/home-list-filter-menu.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5346c90a1334bdfc5b37a899e24ff21d157de034fb8170d952d1d88730adfde3",
+      "lines": 91
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "d16cc5cce4602a45fb6a57148fd4d7dad0786f01d4db95104f3fd713d6cddd14",
+      "lines": 1363
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/useThreadListActions.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "4213fc94de1080f98aa44b7122ed351677a48ed4f37a37333e55b403438f406f",
+      "lines": 794
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "31a4fffbd74abfa861d3c60b17786c8ff942a5c110f38e0834f77453dc4b1c2c",
+      "lines": 470
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6a506f14ccbc2a728326c109977986162d65ad0377b88a5d2b2b4fa462d1343e",
+      "lines": 533
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/projects/AddProjectScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f78bfb44e6a9d4e982f18dfa1ae4e596144a43cb0afc0e3dd56915316a7f8e6a",
+      "lines": 1468
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "884ac3d52c7e944c33f2bb404923b1e091adbb519d629b5ec9fdf797a2383f6d",
+      "lines": 1899
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7b87dab776ffaf7db451ff6eecb38a66d606b509bec87c5997815cf063e24ff1",
+      "lines": 1049
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f60dd6c3df085e7576e7af972b9e1fc1bfca6ac7b5ccfc19c7a8eb11495cad2e",
+      "lines": 601
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0bf00661b55c6666489bcec75ff8607644663941c6a6ee0b5ffaad9b89ad740d",
+      "lines": 233
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsProjectOverviewRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7577ff79e6b034e66263f79c5337b17ad20503ade77da9d71b8d8c3ece942be4",
+      "lines": 175
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "337a6de6d9f9bbcf57cf8e2205f584df699d865c0e6171565ec8634dd398f9a8",
+      "lines": 1185
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "43640cedf8233e3c8380e923be2a78bbe498c84812fe584e37f044df4879d6c3",
+      "lines": 1465
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "363b906cfaac1eaafaab41c74b524238d3525521a73a197f0c4814d71433e7b1",
+      "lines": 632
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6947fdeae41f17e3120111a686bf28c9dd1d38bb862ecee13fe75d8ebc010796",
+      "lines": 3329
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/use-composer-command-menu.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7bef335e80ca21618fed79dd783d7eba97c93ef594e02a94764a0ea25089abe9",
+      "lines": 670
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "366abbc895177637783278d6b90556b6a88b7bbc993cb412942ff9aa629907a1",
+      "lines": 1487
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-selected-thread-requests.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "466bc821e03f7344f990ce8a171cb98a55a9ce8b412e5754257645b689e1718f",
+      "lines": 376
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "bace440fa4cb4d34a48d283dbed6f5811c9c975e802743ca330415edbb3dd2d0",
+      "lines": 197
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "213830297a17294afd3da46bcfba0818236fac4561ecf251e4c58f1b812baa37",
+      "lines": 1417
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e2202cace23cd5dc5050d6e334c6c93de3144e8669fd2323dbe075a5a82e3ab2",
+      "lines": 979
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "28df004bdd997b05c11b928c48c28f4d1e9b3843c0afcc52608f309943da3a72",
+      "lines": 923
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "9c4df2567b32613e2e2c8c31ea29204875875e32654253282620aa32516ab813",
+      "lines": 273
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsServerControlsRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c9c21b60de12e39f0675133fc51aebc16e950fc32bad164ba9a8ff41242b55ca",
+      "lines": 507
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsEnvironmentDetailRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f77779c0b5ee9ce6857dab62d5fbbab43021c3dabb23c995415693358471f668",
+      "lines": 382
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsFollowUpRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ab29a654b11a77dde8dbb051e952368c91259fede65e8371d58fcaadf67156bb",
+      "lines": 77
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/usage/UsageRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c5917c4b8f7ae508714cbf879c650d485086fe7002efa128203d2fce38111ed6",
+      "lines": 935
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsProviderAccountsRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a2915496dbea7de834dd9bcb95046f5aaf36cf6aaed644e287defe4736ee7bb2",
+      "lines": 369
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f7e4797a19854948927687df99990cfee983e4ca92000e1e3fe43c6b3b45bcd3",
+      "lines": 1271
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/contracts/src/clientRpcPermissions.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7cc080706529e4525350116415091e976de6c38c0d15b20700c18e0194d6d98e",
+      "lines": 61
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadHeader.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "d67d140ee756cc069d542de2f3fcc16c3a1a930991f6e3b219d14ac5a6ff1978",
+      "lines": 115
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/useTerminalGridSync.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "8b2aecd5034f23d0ccc7016bbd68d08f9ff9a016271c2dabc093a536cd50c3e6",
+      "lines": 52
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-terminal-session.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "06e23e56ccb529030b64b7d415f8931c0303a713df852c50c69482388a6b4cc0",
+      "lines": 114
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/terminal.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "baeab64cb6b4f8b67803315944f2851381978e78def8eaaf44f0f5baec2baab3",
+      "lines": 106
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-terminal/README.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a3a1dfa3b01260b0db7ce8492a39243eb0cfc5c06f4eeaef5c7e4ba8dfaab0c5",
+      "lines": 53
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/NativeTerminalSurface.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a3efaa0eb681e5ebdf84a6691d5903b7c5b5ba52b8752e37906a92e9d51de5da",
+      "lines": 258
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/terminal/Manager.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ddbfcf7b59522b6075817383a3567719e311ce7727b9e1be168a31de4193e712",
+      "lines": 3207
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/terminal.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "df31084041a994a83421fa43a057a79b27a2c4bf090188d297b60b0111817939",
+      "lines": 18
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/useFileTreeEntries.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a3da7cbe9a556069fc0b231bb3df04fc7c19cfcb6a2a1cc437b96b6b8cd9194e",
+      "lines": 197
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/FileTreeBrowser.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "84d12edca83a74af6b00939b8ec0d7fff60a4ac672770bcb2e38e096f00ff316",
+      "lines": 314
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/SourceFileSurface.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "58fa0e165a9d49c55b325ef2c1abbd1fea646e94676f9b80c4f1e0e9e4a20ba3",
+      "lines": 418
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/contracts/src/project.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "2fc971981cd9e81a9f2de7eed6a8e94ebd63a74d44326b0d6260c8c6a5bc58b1",
+      "lines": 564
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/composer.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a05f0cd9d4e4843761900fae714ede131db6a9945c9ab8fea2da02e555fb94da",
+      "lines": 318
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/PreviewStreamWebView.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "2382e9b5383182fbf0ec242656c9489d6da23f091864b8c8a9350a9ec700eb24",
+      "lines": 534
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a2565d34b010c50c3256526e99bdbeed2e75c9744fc1ccd9bbfc535f4a039222",
+      "lines": 288
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/reviewModel.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6f7ad28463583529f518144e61c84f61dd3f950df215c9363e82be6a9959bf9a",
+      "lines": 553
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/useReviewSections.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e3d1898f8e5e956e66982a0bd8e7ef59ea200e22be44a46788c9ffa5f8ee3101",
+      "lines": 226
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewCommentComposerSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1066626535314fa3364fc949c3e3128f06b5cd472fbcb07d62fe337ab87d3470",
+      "lines": 338
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.android.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "479b94228d352d83051cbe83b565f879dc6d0509a7a574bf9826df61fa5c5ff7",
+      "lines": 30
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "dd6bcb8a7bd2556ad09fad6cf77b3cc19338f26dce66b1ff8d88143991e94fb2",
+      "lines": 577
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitCommitSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "2586f912f387fe16551700de7f762658df8ee532a8de30d3a955281b42a105f4",
+      "lines": 305
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/git/GitManager.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ede59cd6805b01f3a45c0697920f0d6b3119115d99dd23210762d849b980fa8f",
+      "lines": 2967
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-selected-thread-git-actions.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a001019b77026833809807b5f7044d8f03d8109e1107721a3c318d838100d59e",
+      "lines": 449
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitConfirmSheet.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "ecadb50c49a3fbf3bfcc2ef11363649643e3eb8cdab021a7b5098b964c4d43ac",
+      "lines": 193
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/source-control.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1f98a8c6fe865d05d84032a83321f7b44b45ce990ffd6929df67c6f955093f0e",
+      "lines": 259
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/preview.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "52a0874b95237048d1c05af33f28792dd7c5222407f7af8e4089572bdcfabdda",
+      "lines": 166
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/preview/serverBrowserStream.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "990e5e28c57fa8b9bb5cbd11515407bc521ae270cde1133e3c087c050f27a672",
+      "lines": 482
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserTabMenu.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6bc1272b2c7da41cb075b3df88dbc9ca1273e5431ce09a8dbfaaf81c520b248c",
+      "lines": 157
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/threadDevicePreviews.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "95cd55380fdd52ab431ae50d4bcaac3230488c0a04d336f715b4bd7da28e9344",
+      "lines": 28
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/DevicePreviewRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a3dc1f0206db15cf9489605583fe6864374b5e78e8ec2583e01bffad3f645996",
+      "lines": 437
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/DeviceStreamWebView.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "c2a8e77258ac4f55ad7c01ef47bcf85ebd63d66823400bc6ff1144661c02da4a",
+      "lines": 210
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "docs/user/devices.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "4441efd6114eaedf79b80c340b9c7df6edc7f7226f8d4e0deb7be4baab03e0d7",
+      "lines": 118
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/device/DeviceHubProxy.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a6fe7f13228c7e7f3ecefab3cc7ee5b6842906ba5b281c013cb906e516d8ce1a",
+      "lines": 197
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/device.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "8965bc6309abb327afcf3e44eb878c0838e755eb5b48a4e2553539371f32468b",
+      "lines": 44
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/README.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "7838640d293a7cfa77c23529b6dbd60766337fbe000186726fd0c8296a8a3ca2",
+      "lines": 156
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "README.md",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "07301caabab983a6f1a6c1542cdad4c3d528233b7e0fabd6d76b089d7387a44c",
+      "lines": 141
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/native/voiceTranscription.ios.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e1226a8c6ffe6264df9cd144a4f2c2ef333f579e6cb2af1b31d3f3ae7527efcc",
+      "lines": 98
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/eas.json",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "87c836f0b5ffb79a08d85e42e4037597a0aa3172657a3dde9a9122973406f6ae",
+      "lines": 91
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "30b1c27ce731725e6a04ac628466fa9fe585612268fe8e192858402cc86757e5",
+      "lines": 849
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/src/http/Api.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0c51b4e2919bc6cce24f26212ab39e7d9f613f74666aae3390c00d31e8c4624f",
+      "lines": 1761
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/AgentActivityPublisher.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "8e40586d1bab76b4512e44032df1d937055e3b96abc1aac35b4bd57697611f92",
+      "lines": 195
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationPermissions.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "efbe3eedbb678de41b9e6765ffa24fdb20be83ee2895c2d8d5d732801f51afb5",
+      "lines": 78
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/registrationPayload.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "45d414aac55ecf3f3517cac3980833844f6efb58394b6c5b8b4465a7957cd3c7",
+      "lines": 52
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/Devices.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "b411c5708a27bdd82d85ccde9fc083f77f93eddec1df259aaca9c6d1b9b46bbd",
+      "lines": 265
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/CloudAuthProvider.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "1ff8cf89ce26ff861a28891eb8c4b580ec7ea046bb5cb82c517b1c1866596c96",
+      "lines": 218
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationPayload.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "eb0b8e9de074e657aac9e0ca11a7b63a1187cd43e5a8a328f65a734090fd8e7d",
+      "lines": 119
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationNavigation.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "cdf0f35e248f3c510bbabe7346f86b2d71cffc2070e1a0d0a7e0807dd576d475",
+      "lines": 54
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/foregroundNotificationBehavior.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "742e9b986ab90885ed4543ca341cef722a7a59384f843139b8870cea744a1a09",
+      "lines": 35
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentNotifications.kt",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "845d5d67b7036ea23064ac7eda3a88b32a20aa94e835109dd35a14b42f8c23d1",
+      "lines": 362
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/FcmClient.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "44a3879cbcc9de589a35c4e94b22618726e473ceaff5d526f3cd0abb65517de4",
+      "lines": 166
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.ios.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "6e2c91f80f0dbbbd957d5623126446ad8bde3c0d16168fcc793fbd78282779a8",
+      "lines": 11
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.android.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5668378e8d9bdc089a1299158d702e978b600cdd793f29d59fda7690e7082fe1",
+      "lines": 33
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3d87ff2e47d02d02983113b8f58fc47db748ce8efd1227db5d5102323ad054e8",
+      "lines": 505
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/androidNotifications.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "4e4c8e6d4814a4867b0eab81395cc5e73c8ddcd4279349d57dff1020e10524cc",
+      "lines": 59
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/VoiceInputProvider.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "debdc3dd44d82ff4118bff40fd3003cdec538d40effdaa8bcefc519b6f67ccbe",
+      "lines": 272
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/GlobalVoiceInputControl.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "a8c626d374917a69b3c116c506aa876b7446a98a2093caed7613c584010a92f3",
+      "lines": 254
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/native/voiceTranscription.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e59ef31f9dfa3c8c0ac46775f55d0a45f84c9b4defab8bfc98632fd88ee0d1b6",
+      "lines": 5
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/sharing/IncomingShareProvider.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0f14231438ca98124e74f820b52c87c90c71258f1f31e420faa78997542d499d",
+      "lines": 356
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/composerImages.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e621535559434f0fe01544ba00a2c60db87816463bf8c34e65c16c66746a7c33",
+      "lines": 742
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/copyTextWithHaptic.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "f1564b742352f1be8e2a60ef6e8b09aa5d6ecc0135f21e1fb5bb6cc74f97feee",
+      "lines": 71
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/components/ComposerAttachmentButton.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "57f71be1962d195d15b436f8bc6d587c2e70883fce65d64597744a45cd2948b6",
+      "lines": 60
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/ComposerDictationControl.tsx",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "aa6e08780ce36c8408f2ec34480dff5551ca14ac95b31493ebea85d3edde08e1",
+      "lines": 462
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/mobileTheme.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "5557fcb65c715ccfa5d33dfc2b8c2a11842440298529e907480afd0af63a2bb9",
+      "lines": 410
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/shortcuts/appShortcuts.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "0ca2a13804746c5f00914120d69fcbc87a99fdbdde60b0090a4363ffff02fca0",
+      "lines": 135
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/shortcuts/useAppShortcuts.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "e6d289502c960ae37a2bfc4b0a4032947482465bdb4d3d526096c6750f19f4a4",
+      "lines": 143
+    },
+    {
+      "repository": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/updates/app-updates.ts",
+      "commit": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+      "sha256": "3f1782dbbe01d49037960f782ac5f7a3608c60a8be33243f153c2acd6d3517ec",
+      "lines": 622
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/App/LunaApp.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "846a9fe6608e99a8406bba7e9419b197201e56285c56bde6e1d2ddd906a97fce",
+      "lines": 54
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SignInView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "1f8707eec55a34010c2befbed227a41f198760a67a5baa402ffa946a38af1c4b",
+      "lines": 286
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "ebed39653b89c75908afd0ad27f11d866f0dc6fe3a85a479db46891ce2b7a654",
+      "lines": 428
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppModel.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "dee4455ae0bd7b26ff7ad747f776fd9fc2896ed4a93523e378c207155d3ae330",
+      "lines": 802
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/README.md",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "d82752d762bad08cceaf4b52e888610ba4f84d563387324fe6e9d69638503284",
+      "lines": 163
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppConfig.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "0b2194fd85514143423c7a3aa446d9c87075db9e2b17a13839942d9665356525",
+      "lines": 226
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/DeviceRelayClient.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "c03ebcde7885c10d6f37131ca6b7c2dd18ec1dee2f8d884e895a91015688e344",
+      "lines": 518
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionStore.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "02a91ebdeb461219aa7dfe96736d4742b9a3f6c7fe56aa6cbd022d0945555b85",
+      "lines": 855
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "crates/rpc/src/remote_auth.rs",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "623651ebe1196f49d9ac1de8ca92a591cfd9d99e6abdda27a73a41719a3edc7e",
+      "lines": 717
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/implementation-plan.md",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "e7d314487b2e58c871c451cad02ff46df2cc517db06f9853a6a68a02d0a428c1",
+      "lines": 164
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/README.md",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "68b81ab6c8c4d73c9648df4cfc27f90dc3ab00dcbb8cf403b817801b21f39186",
+      "lines": 123
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/feature-parity.md",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "7c29e69bbda3a8e466617b35492cc03722c53e07230fd39af41521e2b7f32f1c",
+      "lines": 78
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/validation-plan.md",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "38362a45c0070d5629d3e15947b7898845162e7c9a90ff7a584fd84cb36438de",
+      "lines": 118
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Info.plist",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "943aa49edeb78be9c4e06e166516001c129b31434c55f18527959e92c97972d3",
+      "lines": 74
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SpaceView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "e268385252ce131bb0b3ade54e0201bee7d44781a4c13ba2ad19a9ba38b5d348",
+      "lines": 396
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "e60eaf80084414b9e4aeef6862ce6b6a84b9fd12f65d7098e2e464aa16d57eb1",
+      "lines": 789
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "891689d6828a4de9b76546e571df62b39194e2c09632ae721bc0932cb170f7a3",
+      "lines": 888
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/NewSessionView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "7ea21c65267e8e7a106390fc7465ce5d965c9b4980bd6da01bfa5ac383b3573d",
+      "lines": 998
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Models/Entities.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "7799ebc4faf941721d898cf6fde1522fb09272e41d85a75fa8c118cfc2dd9265",
+      "lines": 390
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "crates/proto/src/agent.rs",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "1a0ca2c7b670edee7e6219cf278e3d03cbb1b92063103256c7702c033b37cce7",
+      "lines": 1533
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SessionView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "99694abdba31161572e97c4e6d8a19578e656a8ce10b8d34ee88fe23da9c898a",
+      "lines": 258
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Transcript/TranscriptView.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "db686eac1d34feefe9b18d9b57e5fefa55484380d31470624783a0d090e86895",
+      "lines": 615
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/Attachments.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "34a5b486006e256de4b42de97bc81594f54df776c51aedb8bf5ebaa08dcb1a98",
+      "lines": 758
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionQueue.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "29ba10d4c73822e485dcce075891b0e65b1f165ca434ff6e16ff7f461223115d",
+      "lines": 251
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Views/PullRequestBadge.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "daf7c49f86f2241389849d20b4fb374057045620c21ca06b2cdb7e8001f10a31",
+      "lines": 83
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/DocDisk.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "6cfe6b1afa893061ee799fb075dd835ea214797fd0a351f1c00c5536d3ab9d59",
+      "lines": 182
+    },
+    {
+      "repository": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/Connectivity.swift",
+      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "sha256": "62a295d2cfe64447cfa8285270f7b78a80171a21a286761371c28079bc015b63",
+      "lines": 124
+    }
+  ],
+  "source_citations": [
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 3,
+      "end": 18
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 3,
+      "end": 14
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 58,
+      "end": 69
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 1,
+      "end": 11
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/runtime.ts",
+      "start": 19,
+      "end": 60
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/threads.ts",
+      "start": 14,
+      "end": 48
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-thread-outbox-drain.ts",
+      "start": 908,
+      "end": 940
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "start": 278,
+      "end": 283
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 628,
+      "end": 711
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "start": 131,
+      "end": 208
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3140,
+      "end": 3178
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 38,
+      "end": 63
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 1815,
+      "end": 1864
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10970,
+      "end": 10992
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EventSink.ts",
+      "start": 527,
+      "end": 590
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 5549,
+      "end": 5557
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+      "start": 152,
+      "end": 164
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 53,
+      "end": 70
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2031,
+      "end": 2040
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 744,
+      "end": 800
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 940,
+      "end": 981
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threads.ts",
+      "start": 795,
+      "end": 855
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 48,
+      "end": 66
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/desktop/src/app/DesktopApp.ts",
+      "start": 193,
+      "end": 265
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/DesktopBackendConfiguration.ts",
+      "start": 586,
+      "end": 612
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/DesktopBackendPool.ts",
+      "start": 145,
+      "end": 170
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 92,
+      "end": 102
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/server.ts",
+      "start": 15,
+      "end": 69
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/service.ts",
+      "start": 121,
+      "end": 139
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/service.ts",
+      "start": 167,
+      "end": 215
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/serviceLauncher.ts",
+      "start": 275,
+      "end": 387
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/background-service.md",
+      "start": 43,
+      "end": 57
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 71,
+      "end": 84
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 220,
+      "end": 238
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "start": 84,
+      "end": 180
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "start": 183,
+      "end": 255
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 9,
+      "end": 18
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 1,
+      "end": 7
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 93,
+      "end": 155
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 44,
+      "end": 51
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 68,
+      "end": 135
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 144,
+      "end": 185
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 142,
+      "end": 204
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "start": 120,
+      "end": 209
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 31,
+      "end": 53
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 132,
+      "end": 145
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 43,
+      "end": 155
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 9,
+      "end": 26
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 82,
+      "end": 87
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-thread-outbox-drain.ts",
+      "start": 908,
+      "end": 949
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EventSink.ts",
+      "start": 530,
+      "end": 544
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/environment.ts",
+      "start": 12,
+      "end": 16
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/compatibility.ts",
+      "start": 9,
+      "end": 42
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3140,
+      "end": 3152
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "start": 208,
+      "end": 255
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 16,
+      "end": 38
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 48,
+      "end": 55
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 220,
+      "end": 245
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/runtime.ts",
+      "start": 19,
+      "end": 60
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+      "start": 152,
+      "end": 164
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 3,
+      "end": 18
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "start": 119,
+      "end": 180
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 9,
+      "end": 29
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 93,
+      "end": 135
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 89,
+      "end": 135
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 65,
+      "end": 95
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 144,
+      "end": 161
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 142,
+      "end": 204
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 220,
+      "end": 238
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 78,
+      "end": 84
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-thread-outbox-drain.ts",
+      "start": 908,
+      "end": 940
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 628,
+      "end": 711
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3140,
+      "end": 3178
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 38,
+      "end": 63
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EventSink.ts",
+      "start": 527,
+      "end": 590
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+      "start": 152,
+      "end": 164
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/overview.md",
+      "start": 53,
+      "end": 67
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2031,
+      "end": 2040
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 744,
+      "end": 800
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 62,
+      "end": 79
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 132,
+      "end": 145
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 932,
+      "end": 980
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 9,
+      "end": 26
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/desktop/src/app/DesktopApp.ts",
+      "start": 193,
+      "end": 265
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 92,
+      "end": 102
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/server.ts",
+      "start": 55,
+      "end": 69
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/service.ts",
+      "start": 121,
+      "end": 139
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/background-service.md",
+      "start": 6,
+      "end": 57
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/environment.ts",
+      "start": 12,
+      "end": 16
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3140,
+      "end": 3152
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/compatibility.ts",
+      "start": 9,
+      "end": 42
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 58,
+      "end": 69
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 1,
+      "end": 11
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 1,
+      "end": 26
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 144,
+      "end": 161
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 142,
+      "end": 204
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 38,
+      "end": 63
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 932,
+      "end": 949
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/ThreadMessageIntake.ts",
+      "start": 14,
+      "end": 30
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 85,
+      "end": 155
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 19,
+      "end": 26
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/background-service.md",
+      "start": 23,
+      "end": 30
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 86,
+      "end": 90
+    },
+    {
+      "document": "01-architecture.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 228,
+      "end": 235
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "start": 1,
+      "end": 29
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "start": 111,
+      "end": 155
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/storage.ts",
+      "start": 105,
+      "end": 130
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 54,
+      "end": 63
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 82,
+      "end": 125
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 205,
+      "end": 225
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "start": 430,
+      "end": 447
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 1091,
+      "end": 1106
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "start": 998,
+      "end": 1050
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "start": 1053,
+      "end": 1079
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3218,
+      "end": 3232
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "start": 382,
+      "end": 396
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "start": 111,
+      "end": 120
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "start": 254,
+      "end": 300
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "start": 398,
+      "end": 452
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 1098,
+      "end": 1124
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/persistence/AuthPairingLinks.ts",
+      "start": 125,
+      "end": 156
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/persistence/AuthPairingLinks.ts",
+      "start": 236,
+      "end": 255
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 325,
+      "end": 342
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 1155,
+      "end": 1165
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/web/src/hostedPairing.ts",
+      "start": 73,
+      "end": 87
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 47,
+      "end": 62
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/shared/src/remote.ts",
+      "start": 144,
+      "end": 162
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "start": 45,
+      "end": 70
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "start": 73,
+      "end": 92
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 129,
+      "end": 145
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 53,
+      "end": 60
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 159,
+      "end": 195
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.test.ts",
+      "start": 10,
+      "end": 63
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "start": 111,
+      "end": 155
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "start": 115,
+      "end": 140
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 227,
+      "end": 231
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 298,
+      "end": 317
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 905,
+      "end": 965
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/persistence/AuthPairingLinks.ts",
+      "start": 160,
+      "end": 195
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "start": 559,
+      "end": 621
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 913,
+      "end": 943
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.test.ts",
+      "start": 96,
+      "end": 123
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.test.ts",
+      "start": 365,
+      "end": 405
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 13,
+      "end": 18
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 51,
+      "end": 58
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/storage.ts",
+      "start": 105,
+      "end": 130
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-secure-storage.ts",
+      "start": 31,
+      "end": 48
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 650,
+      "end": 712
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "start": 142,
+      "end": 176
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 1167,
+      "end": 1206
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "start": 298,
+      "end": 340
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "start": 432,
+      "end": 433
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 921,
+      "end": 930
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "start": 219,
+      "end": 259
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 3153,
+      "end": 3178
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 40,
+      "end": 59
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 275,
+      "end": 281
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 130,
+      "end": 201
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 333,
+      "end": 371
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "start": 455,
+      "end": 527
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 1127,
+      "end": 1153
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/utils.ts",
+      "start": 182,
+      "end": 198
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/http.ts",
+      "start": 383,
+      "end": 398
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "start": 2235,
+      "end": 2236
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "start": 1044,
+      "end": 1068
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
+      "start": 184,
+      "end": 210
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 91,
+      "end": 102
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-remote-environment-registry.ts",
+      "start": 156,
+      "end": 193
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/useConnectionController.ts",
+      "start": 91,
+      "end": 94
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 819,
+      "end": 856
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/platform/storageDocument.ts",
+      "start": 173,
+      "end": 199
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 249,
+      "end": 264
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "start": 67,
+      "end": 70
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "start": 786,
+      "end": 811
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/http.ts",
+      "start": 396,
+      "end": 418
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "start": 813,
+      "end": 829
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "start": 911,
+      "end": 935
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/assets/MediaFile.ts",
+      "start": 48,
+      "end": 99
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "start": 111,
+      "end": 120
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 1,
+      "end": 45
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 138,
+      "end": 180
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 65,
+      "end": 101
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 35,
+      "end": 63
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "start": 86,
+      "end": 113
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 729,
+      "end": 779
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "start": 607,
+      "end": 612
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-storage.ts",
+      "start": 191,
+      "end": 225
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 74,
+      "end": 101
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/auth.ts",
+      "start": 344,
+      "end": 365
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/dpop.ts",
+      "start": 195,
+      "end": 236
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/managedRelayLayer.ts",
+      "start": 15,
+      "end": 53
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "start": 6,
+      "end": 42
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.test.ts",
+      "start": 10,
+      "end": 28
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/shared/src/remote.ts",
+      "start": 72,
+      "end": 129
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "start": 905,
+      "end": 943
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "start": 131,
+      "end": 163
+    },
+    {
+      "document": "02-auth.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "start": 766,
+      "end": 856
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 1,
+      "end": 18
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "start": 120,
+      "end": 261
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 1,
+      "end": 30
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 6,
+      "end": 25
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 33,
+      "end": 63
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/utils.ts",
+      "start": 67,
+      "end": 81
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 122,
+      "end": 148
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/tailscale/src/tailscale.ts",
+      "start": 341,
+      "end": 380
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/desktop/src/backend/tailscaleEndpointProvider.ts",
+      "start": 26,
+      "end": 97
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 65,
+      "end": 70
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/tailscale/src/tailscale.ts",
+      "start": 194,
+      "end": 215
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 160,
+      "end": 180
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/ssh/src/tunnel.ts",
+      "start": 1142,
+      "end": 1161
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/ssh/src/tunnel.ts",
+      "start": 1499,
+      "end": 1534
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 78,
+      "end": 84
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 6,
+      "end": 31
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 35,
+      "end": 63
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "start": 1135,
+      "end": 1201
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 35,
+      "end": 56
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 29,
+      "end": 44
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "start": 374,
+      "end": 389
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "start": 1135,
+      "end": 1201
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 278,
+      "end": 359
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 35,
+      "end": 56
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "start": 21,
+      "end": 24
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 218,
+      "end": 248
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 3,
+      "end": 11
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "start": 1143,
+      "end": 1150
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/pair.ts",
+      "start": 479,
+      "end": 529
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 54,
+      "end": 63
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 58,
+      "end": 69
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/web/src/hostedPairing.ts",
+      "start": 73,
+      "end": 87
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 150,
+      "end": 158
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/routes.ts",
+      "start": 96,
+      "end": 143
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 35,
+      "end": 161
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 46,
+      "end": 53
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/routes.ts",
+      "start": 236,
+      "end": 338
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 348,
+      "end": 377
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/connection-runtime.md",
+      "start": 8,
+      "end": 26
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 85,
+      "end": 89
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 35,
+      "end": 39
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 348,
+      "end": 351
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 3,
+      "end": 26
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 122,
+      "end": 148
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/cli/pair.ts",
+      "start": 205,
+      "end": 229
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 167,
+      "end": 180
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/t3-connect.md",
+      "start": 92,
+      "end": 131
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/environment-auth.md",
+      "start": 52,
+      "end": 55
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/operations/connect-setup.md",
+      "start": 7,
+      "end": 35
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": ".env.example",
+      "start": 1,
+      "end": 22
+    },
+    {
+      "document": "03-transports.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 77,
+      "end": 111
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "AGENTS.md",
+      "start": 50,
+      "end": 70
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 227,
+      "end": 246
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/install.md",
+      "start": 108,
+      "end": 122
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 3,
+      "end": 29
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "start": 271,
+      "end": 303
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 294,
+      "end": 309
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/runtime.ts",
+      "start": 19,
+      "end": 60
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/layer.ts",
+      "start": 75,
+      "end": 104
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 220,
+      "end": 249
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 54,
+      "end": 69
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 111,
+      "end": 185
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 225,
+      "end": 275
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "start": 30,
+      "end": 92
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/pairing.test.ts",
+      "start": 10,
+      "end": 59
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 53,
+      "end": 60
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "start": 95,
+      "end": 163
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/onboarding.ts",
+      "start": 11,
+      "end": 31
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 207,
+      "end": 274
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 360,
+      "end": 397
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 480,
+      "end": 495
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/workspace.ts",
+      "start": 28,
+      "end": 47
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
+      "start": 205,
+      "end": 257
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 68,
+      "end": 136
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "start": 144,
+      "end": 199
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "start": 291,
+      "end": 316
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 294,
+      "end": 309
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "start": 145,
+      "end": 204
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 40,
+      "end": 54
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 296,
+      "end": 387
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 608,
+      "end": 627
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 749,
+      "end": 758
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 885,
+      "end": 953
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/internals/remote.md",
+      "start": 46,
+      "end": 53
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/EnvironmentRoutesSection.tsx",
+      "start": 47,
+      "end": 96
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/EnvironmentRoutesSection.tsx",
+      "start": 140,
+      "end": 228
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/EnvironmentRoutesSection.tsx",
+      "start": 285,
+      "end": 323
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 955,
+      "end": 1085
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
+      "start": 50,
+      "end": 139
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
+      "start": 151,
+      "end": 255
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "start": 169,
+      "end": 255
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 16,
+      "end": 42
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 51,
+      "end": 121
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/storage.ts",
+      "start": 51,
+      "end": 157
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-secure-storage.ts",
+      "start": 22,
+      "end": 52
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/migration.ts",
+      "start": 43,
+      "end": 89
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 62,
+      "end": 80
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "start": 83,
+      "end": 104
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/connection.ts",
+      "start": 19,
+      "end": 34
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "start": 9,
+      "end": 25
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "start": 151,
+      "end": 192
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "start": 252,
+      "end": 335
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "start": 424,
+      "end": 446
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/environment-cache-store.ts",
+      "start": 62,
+      "end": 165
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "start": 42,
+      "end": 91
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "start": 99,
+      "end": 149
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "start": 183,
+      "end": 249
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "start": 325,
+      "end": 411
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threads.ts",
+      "start": 774,
+      "end": 878
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "start": 268,
+      "end": 390
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 171,
+      "end": 225
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 230,
+      "end": 399
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 33,
+      "end": 122
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/platform.ts",
+      "start": 124,
+      "end": 155
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/app-state-wakeups.ts",
+      "start": 3,
+      "end": 18
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/background-activity.ts",
+      "start": 26,
+      "end": 87
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/connection/background-activity.ts",
+      "start": 89,
+      "end": 116
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 533,
+      "end": 676
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 867,
+      "end": 986
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "start": 40,
+      "end": 54
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 374,
+      "end": 382
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/compatibility.ts",
+      "start": 9,
+      "end": 42
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "start": 306,
+      "end": 320
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "start": 249,
+      "end": 261
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "start": 335,
+      "end": 341
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "start": 1116,
+      "end": 1163
+    },
+    {
+      "document": "04-mobile-runtime.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/connection/presentation.ts",
+      "start": 8,
+      "end": 80
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 689,
+      "end": 937
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 689,
+      "end": 710
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 452,
+      "end": 549
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 706,
+      "end": 855
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 874,
+      "end": 912
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 200,
+      "end": 411
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
+      "start": 135,
+      "end": 219
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/HomeRouteScreen.tsx",
+      "start": 40,
+      "end": 133
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "start": 291,
+      "end": 306
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/home-list-filter-menu.ts",
+      "start": 32,
+      "end": 91
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 45,
+      "end": 60
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/HomeRouteScreen.tsx",
+      "start": 225,
+      "end": 279
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
+      "start": 683,
+      "end": 871
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/home/useThreadListActions.ts",
+      "start": 35,
+      "end": 280
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
+      "start": 44,
+      "end": 125
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "start": 151,
+      "end": 247
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10576,
+      "end": 10626
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskRouteScreen.tsx",
+      "start": 137,
+      "end": 198
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 525,
+      "end": 547
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/projects/AddProjectScreen.tsx",
+      "start": 524,
+      "end": 659
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/projects/AddProjectScreen.tsx",
+      "start": 975,
+      "end": 1104
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/projects/AddProjectScreen.tsx",
+      "start": 1299,
+      "end": 1418
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 145,
+      "end": 160
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "start": 1590,
+      "end": 1622
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 628,
+      "end": 688
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "start": 890,
+      "end": 970
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.tsx",
+      "start": 276,
+      "end": 403
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "start": 98,
+      "end": 221
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsProjectOverviewRouteScreen.tsx",
+      "start": 50,
+      "end": 171
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "start": 647,
+      "end": 724
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
+      "start": 733,
+      "end": 824
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
+      "start": 1434,
+      "end": 1464
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "start": 1758,
+      "end": 1800
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 781,
+      "end": 801
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "start": 255,
+      "end": 310
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "start": 974,
+      "end": 1022
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
+      "start": 53,
+      "end": 205
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "start": 1294,
+      "end": 1369
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "start": 278,
+      "end": 373
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10634,
+      "end": 10653
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "start": 320,
+      "end": 377
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "start": 276,
+      "end": 310
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 951,
+      "end": 977
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 1815,
+      "end": 1851
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/use-composer-command-menu.ts",
+      "start": 62,
+      "end": 169
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/use-composer-command-menu.ts",
+      "start": 244,
+      "end": 286
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "start": 774,
+      "end": 986
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "start": 1218,
+      "end": 1292
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "start": 1592,
+      "end": 1615
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "start": 1556,
+      "end": 1655
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "start": 1681,
+      "end": 1950
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "start": 251,
+      "end": 275
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "start": 2704,
+      "end": 2742
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 45,
+      "end": 60
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "start": 1338,
+      "end": 1387
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-selected-thread-requests.ts",
+      "start": 228,
+      "end": 361
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 848,
+      "end": 872
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10670,
+      "end": 10675
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
+      "start": 29,
+      "end": 159
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "start": 1387,
+      "end": 1417
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10634,
+      "end": 10653
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.tsx",
+      "start": 276,
+      "end": 403
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 1230,
+      "end": 1278
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 430,
+      "end": 537
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "start": 700,
+      "end": 921
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "start": 228,
+      "end": 270
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 169,
+      "end": 208
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsServerControlsRouteScreen.tsx",
+      "start": 225,
+      "end": 485
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsEnvironmentDetailRouteScreen.tsx",
+      "start": 230,
+      "end": 369
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
+      "start": 135,
+      "end": 219
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsFollowUpRouteScreen.tsx",
+      "start": 47,
+      "end": 67
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 63,
+      "end": 111
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/usage/UsageRouteScreen.tsx",
+      "start": 59,
+      "end": 144
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsProviderAccountsRouteScreen.tsx",
+      "start": 210,
+      "end": 337
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 63,
+      "end": 111
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 328,
+      "end": 361
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "start": 278,
+      "end": 368
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "start": 579,
+      "end": 670
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "start": 735,
+      "end": 1007
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "start": 1018,
+      "end": 1091
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "start": 1120,
+      "end": 1251
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2041,
+      "end": 2072
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 600,
+      "end": 647
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
+      "start": 79,
+      "end": 95
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 1,
+      "end": 80
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/threads.ts",
+      "start": 1,
+      "end": 29
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "start": 141,
+      "end": 373
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 395,
+      "end": 445
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 628,
+      "end": 710
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "start": 951,
+      "end": 1022
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 1815,
+      "end": 1851
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10576,
+      "end": 10695
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 40,
+      "end": 61
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/clientRpcPermissions.ts",
+      "start": 11,
+      "end": 61
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 767,
+      "end": 775
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 164,
+      "end": 168
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
+      "start": 29,
+      "end": 159
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "start": 647,
+      "end": 705
+    },
+    {
+      "document": "05-mobile-workflows.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "start": 10634,
+      "end": 10650
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "AGENTS.md",
+      "start": 1,
+      "end": 47
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 1,
+      "end": 4
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadHeader.tsx",
+      "start": 25,
+      "end": 54
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 96,
+      "end": 176
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "start": 600,
+      "end": 652
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 279,
+      "end": 295
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 457,
+      "end": 489
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/useTerminalGridSync.ts",
+      "start": 13,
+      "end": 51
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-terminal-session.ts",
+      "start": 28,
+      "end": 60
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 793,
+      "end": 913
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 978,
+      "end": 1087
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "start": 1276,
+      "end": 1305
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/state/terminal.ts",
+      "start": 39,
+      "end": 102
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2861,
+      "end": 2887
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-terminal/README.md",
+      "start": 1,
+      "end": 23
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/NativeTerminalSurface.tsx",
+      "start": 69,
+      "end": 85
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/terminal/NativeTerminalSurface.tsx",
+      "start": 187,
+      "end": 257
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/terminal/Manager.ts",
+      "start": 2812,
+      "end": 2874
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/terminal.md",
+      "start": 1,
+      "end": 8
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 178,
+      "end": 187
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/useFileTreeEntries.ts",
+      "start": 11,
+      "end": 32
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/FileTreeBrowser.tsx",
+      "start": 142,
+      "end": 195
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2635,
+      "end": 2655
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 435,
+      "end": 449
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 691,
+      "end": 714
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "start": 148,
+      "end": 153
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 234,
+      "end": 332
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 307,
+      "end": 312
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 773,
+      "end": 856
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/SourceFileSurface.tsx",
+      "start": 40,
+      "end": 52
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "start": 307,
+      "end": 332
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2646,
+      "end": 2667
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/contracts/src/project.ts",
+      "start": 435,
+      "end": 450
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/composer.md",
+      "start": 298,
+      "end": 306
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/PreviewStreamWebView.tsx",
+      "start": 62,
+      "end": 109
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "start": 236,
+      "end": 264
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/composer.md",
+      "start": 32,
+      "end": 50
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/reviewModel.ts",
+      "start": 9,
+      "end": 24
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/useReviewSections.ts",
+      "start": 39,
+      "end": 97
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "start": 118,
+      "end": 150
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2859,
+      "end": 2860
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "start": 755,
+      "end": 813
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "start": 666,
+      "end": 678
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/review/ReviewCommentComposerSheet.tsx",
+      "start": 139,
+      "end": 152
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadHeader.tsx",
+      "start": 25,
+      "end": 54
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.android.tsx",
+      "start": 12,
+      "end": 30
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "start": 289,
+      "end": 350
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "start": 96,
+      "end": 136
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "start": 289,
+      "end": 350
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "start": 353,
+      "end": 399
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitCommitSheet.tsx",
+      "start": 44,
+      "end": 69
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitCommitSheet.tsx",
+      "start": 267,
+      "end": 299
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/git/GitManager.ts",
+      "start": 2086,
+      "end": 2090
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/ws.ts",
+      "start": 2803,
+      "end": 2827
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "start": 25,
+      "end": 61
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "start": 98,
+      "end": 172
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "start": 175,
+      "end": 227
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/use-selected-thread-git-actions.ts",
+      "start": 35,
+      "end": 54
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.tsx",
+      "start": 177,
+      "end": 206
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitConfirmSheet.tsx",
+      "start": 155,
+      "end": 188
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/source-control.md",
+      "start": 183,
+      "end": 196
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/source-control.md",
+      "start": 208,
+      "end": 221
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "start": 376,
+      "end": 391
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "start": 345,
+      "end": 359
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "start": 1239,
+      "end": 1252
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "start": 80,
+      "end": 103
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/preview.ts",
+      "start": 148,
+      "end": 165
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/preview/serverBrowserStream.ts",
+      "start": 226,
+      "end": 250
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "start": 53,
+      "end": 92
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/preview/serverBrowserStream.ts",
+      "start": 18,
+      "end": 41
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/preview/serverBrowserStream.ts",
+      "start": 391,
+      "end": 399
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/PreviewStreamWebView.tsx",
+      "start": 323,
+      "end": 345
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "start": 207,
+      "end": 270
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserTabMenu.tsx",
+      "start": 24,
+      "end": 44
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 185,
+      "end": 220
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/PreviewStreamWebView.tsx",
+      "start": 62,
+      "end": 109
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "start": 113,
+      "end": 136
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "start": 28,
+      "end": 35
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "start": 145,
+      "end": 150
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "start": 1239,
+      "end": 1251
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/threadDevicePreviews.ts",
+      "start": 3,
+      "end": 19
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/DevicePreviewRouteScreen.tsx",
+      "start": 94,
+      "end": 103
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/DevicePreviewRouteScreen.tsx",
+      "start": 205,
+      "end": 280
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/devices/DeviceStreamWebView.tsx",
+      "start": 115,
+      "end": 180
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/devices.md",
+      "start": 61,
+      "end": 70
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/device/DeviceHubProxy.ts",
+      "start": 1,
+      "end": 53
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/device/DeviceHubProxy.ts",
+      "start": 150,
+      "end": 194
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/state/device.ts",
+      "start": 14,
+      "end": 43
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/devices.md",
+      "start": 29,
+      "end": 34
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/devices.md",
+      "start": 82,
+      "end": 87
+    },
+    {
+      "document": "06-mobile-tools.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/devices.md",
+      "start": 89,
+      "end": 107
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/README.md",
+      "start": 1,
+      "end": 15
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "README.md",
+      "start": 1,
+      "end": 3
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/install.md",
+      "start": 108,
+      "end": 122
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 227,
+      "end": 237
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/install.md",
+      "start": 113,
+      "end": 122
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 440,
+      "end": 446
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/native/voiceTranscription.ios.ts",
+      "start": 36,
+      "end": 52
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 74,
+      "end": 99
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/eas.json",
+      "start": 7,
+      "end": 90
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/README.md",
+      "start": 6,
+      "end": 15
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "start": 445,
+      "end": 521
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "start": 735,
+      "end": 776
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/http/Api.ts",
+      "start": 1173,
+      "end": 1193
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/AgentActivityPublisher.ts",
+      "start": 57,
+      "end": 108
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/AgentActivityPublisher.ts",
+      "start": 145,
+      "end": 190
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 15,
+      "end": 40
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 139,
+      "end": 156
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 6,
+      "end": 12
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationPermissions.ts",
+      "start": 33,
+      "end": 77
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 269,
+      "end": 307
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 729,
+      "end": 799
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/registrationPayload.ts",
+      "start": 6,
+      "end": 51
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/http/Api.ts",
+      "start": 763,
+      "end": 808
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/Devices.ts",
+      "start": 88,
+      "end": 165
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 381,
+      "end": 449
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 810,
+      "end": 849
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 945,
+      "end": 967
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/cloud/CloudAuthProvider.tsx",
+      "start": 89,
+      "end": 108
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/Devices.ts",
+      "start": 178,
+      "end": 210
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationPayload.ts",
+      "start": 37,
+      "end": 119
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/notificationNavigation.ts",
+      "start": 10,
+      "end": 53
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/foregroundNotificationBehavior.ts",
+      "start": 5,
+      "end": 35
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 123,
+      "end": 193
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "start": 1100,
+      "end": 1151
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 185,
+      "end": 192
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentNotifications.kt",
+      "start": 21,
+      "end": 43
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentNotifications.kt",
+      "start": 225,
+      "end": 290
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/AgentActivityPublisher.ts",
+      "start": 65,
+      "end": 102
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/agentActivity/FcmClient.ts",
+      "start": 117,
+      "end": 144
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentNotifications.kt",
+      "start": 120,
+      "end": 160
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.ios.ts",
+      "start": 1,
+      "end": 11
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.android.ts",
+      "start": 1,
+      "end": 32
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx",
+      "start": 223,
+      "end": 316
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/registrationPayload.ts",
+      "start": 43,
+      "end": 50
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/agent-awareness/androidNotifications.ts",
+      "start": 51,
+      "end": 59
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/VoiceInputProvider.tsx",
+      "start": 44,
+      "end": 85
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/VoiceInputProvider.tsx",
+      "start": 129,
+      "end": 174
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/GlobalVoiceInputControl.tsx",
+      "start": 43,
+      "end": 56
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/native/voiceTranscription.ios.ts",
+      "start": 36,
+      "end": 98
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/native/voiceTranscription.ts",
+      "start": 1,
+      "end": 5
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 197,
+      "end": 220
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/sharing/IncomingShareProvider.tsx",
+      "start": 55,
+      "end": 143
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/sharing/IncomingShareProvider.tsx",
+      "start": 253,
+      "end": 315
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 113,
+      "end": 127
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "start": 321,
+      "end": 325
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/composerImages.ts",
+      "start": 384,
+      "end": 452
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/composerImages.ts",
+      "start": 576,
+      "end": 615
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/copyTextWithHaptic.ts",
+      "start": 1,
+      "end": 62
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/components/ComposerAttachmentButton.tsx",
+      "start": 14,
+      "end": 48
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/voice-input/ComposerDictationControl.tsx",
+      "start": 29,
+      "end": 42
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 239,
+      "end": 271
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/lib/mobileTheme.ts",
+      "start": 19,
+      "end": 30
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/shortcuts/appShortcuts.ts",
+      "start": 7,
+      "end": 24
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/shortcuts/useAppShortcuts.ts",
+      "start": 19,
+      "end": 64
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 227,
+      "end": 247
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/README.md",
+      "start": 122,
+      "end": 130
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/updates/app-updates.ts",
+      "start": 255,
+      "end": 315
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/features/updates/app-updates.ts",
+      "start": 325,
+      "end": 355
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "start": 474,
+      "end": 513
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/http/Api.ts",
+      "start": 763,
+      "end": 808
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/src/http/Api.ts",
+      "start": 1173,
+      "end": 1193
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 248,
+      "end": 265
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/app.config.ts",
+      "start": 299,
+      "end": 304
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/eas.json",
+      "start": 60,
+      "end": 90
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 79,
+      "end": 96
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "infra/relay/README.md",
+      "start": 139,
+      "end": 156
+    },
+    {
+      "document": "07-mobile-platform.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/README.md",
+      "start": 69,
+      "end": 71
+    },
+    {
+      "document": "08-luna-backend.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "start": 25,
+      "end": 83
+    },
+    {
+      "document": "08-luna-backend.md",
+      "repo": "pingdotgg/t3code",
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "start": 86,
+      "end": 223
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/LunaApp.swift",
+      "start": 38,
+      "end": 53
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SignInView.swift",
+      "start": 102,
+      "end": 141
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 208,
+      "end": 279
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/LunaApp.swift",
+      "start": 38,
+      "end": 53
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 8,
+      "end": 57
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 105,
+      "end": 120
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SignInView.swift",
+      "start": 11,
+      "end": 35
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SignInView.swift",
+      "start": 102,
+      "end": 141
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppModel.swift",
+      "start": 196,
+      "end": 274
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/README.md",
+      "start": 17,
+      "end": 49
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppConfig.swift",
+      "start": 105,
+      "end": 175
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/DeviceRelayClient.swift",
+      "start": 214,
+      "end": 260
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionStore.swift",
+      "start": 619,
+      "end": 661
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppConfig.swift",
+      "start": 204,
+      "end": 225
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/rpc/src/remote_auth.rs",
+      "start": 398,
+      "end": 535
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/implementation-plan.md",
+      "start": 25,
+      "end": 38
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/README.md",
+      "start": 1,
+      "end": 15
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/feature-parity.md",
+      "start": 1,
+      "end": 19
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/validation-plan.md",
+      "start": 1,
+      "end": 11
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 208,
+      "end": 273
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 46,
+      "end": 118
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 8,
+      "end": 57
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Info.plist",
+      "start": 25,
+      "end": 72
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 267,
+      "end": 279
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 700,
+      "end": 710
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 218,
+      "end": 285
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SpaceView.swift",
+      "start": 16,
+      "end": 83
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+      "start": 654,
+      "end": 746
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 232,
+      "end": 249
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+      "start": 560,
+      "end": 624
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 348,
+      "end": 427
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/NewSessionView.swift",
+      "start": 417,
+      "end": 424
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Models/Entities.swift",
+      "start": 344,
+      "end": 370
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/proto/src/agent.rs",
+      "start": 503,
+      "end": 527
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SessionView.swift",
+      "start": 105,
+      "end": 170
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Models/Entities.swift",
+      "start": 243,
+      "end": 277
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Transcript/TranscriptView.swift",
+      "start": 444,
+      "end": 558
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/Attachments.swift",
+      "start": 607,
+      "end": 710
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 803,
+      "end": 809
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionStore.swift",
+      "start": 547,
+      "end": 661
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionQueue.swift",
+      "start": 53,
+      "end": 82
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/SessionQueue.swift",
+      "start": 200,
+      "end": 240
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 289,
+      "end": 363
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 671,
+      "end": 712
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SessionView.swift",
+      "start": 119,
+      "end": 132
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 744,
+      "end": 886
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Models/Entities.swift",
+      "start": 372,
+      "end": 385
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/proto/src/agent.rs",
+      "start": 832,
+      "end": 846
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 486,
+      "end": 508
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 348,
+      "end": 393
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Composer/ComposerView.swift",
+      "start": 591,
+      "end": 664
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/NewSessionView.swift",
+      "start": 417,
+      "end": 438
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 736,
+      "end": 765
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 821,
+      "end": 850
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/SpaceView.swift",
+      "start": 117,
+      "end": 191
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+      "start": 535,
+      "end": 557
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+      "start": 626,
+      "end": 651
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/PullRequestBadge.swift",
+      "start": 24,
+      "end": 56
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/rpc/src/remote_auth.rs",
+      "start": 511,
+      "end": 525
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 711,
+      "end": 735
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 767,
+      "end": 774
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 8,
+      "end": 57
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Transcript/TranscriptView.swift",
+      "start": 500,
+      "end": 558
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/rpc/src/remote_auth.rs",
+      "start": 525,
+      "end": 530
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/LunaApp.swift",
+      "start": 22,
+      "end": 33
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppModel.swift",
+      "start": 549,
+      "end": 616
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/DocDisk.swift",
+      "start": 1,
+      "end": 86
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/Connectivity.swift",
+      "start": 15,
+      "end": 33
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 252,
+      "end": 320
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 379,
+      "end": 408
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "apps/mobile/src/Stack.tsx",
+      "start": 605,
+      "end": 631
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Views/HomeView.swift",
+      "start": 8,
+      "end": 57
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Info.plist",
+      "start": 25,
+      "end": 72
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Models/Entities.swift",
+      "start": 344,
+      "end": 370
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/proto/src/agent.rs",
+      "start": 129,
+      "end": 165
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/feature-parity.md",
+      "start": 23,
+      "end": 35
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/Sync/DeviceRelayClient.swift",
+      "start": 214,
+      "end": 260
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "crates/rpc/src/remote_auth.rs",
+      "start": 417,
+      "end": 535
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "docs/pending-tasks/control-this-mac/README.md",
+      "start": 3,
+      "end": 9
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "pingdotgg/t3code",
+      "path": "docs/user/remote-access.md",
+      "start": 10,
+      "end": 34
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppModel.swift",
+      "start": 360,
+      "end": 386
+    },
+    {
+      "document": "09-luna-mobile.md",
+      "repo": "novnski/luna",
+      "path": "apps/ios/Luna/App/AppModel.swift",
+      "start": 680,
+      "end": 719
+    }
+  ],
+  "local_links": [
+    {
+      "document": "03-transports.md",
+      "target": "04-mobile-runtime.md"
+    },
+    {
+      "document": "HANDOVER.md",
+      "target": "README.md"
+    },
+    {
+      "document": "HANDOVER.md",
+      "target": "gap-matrix.md"
+    },
+    {
+      "document": "HANDOVER.md",
+      "target": "implementation-plan.md"
+    },
+    {
+      "document": "HANDOVER.md",
+      "target": "validation-plan.md"
+    },
+    {
+      "document": "HANDOVER.md",
+      "target": "verification.md"
+    },
+    {
+      "document": "README.md",
+      "target": "gap-matrix.md"
+    },
+    {
+      "document": "README.md",
+      "target": "implementation-plan.md"
+    },
+    {
+      "document": "README.md",
+      "target": "validation-plan.md"
+    },
+    {
+      "document": "README.md",
+      "target": "verification.md"
+    },
+    {
+      "document": "README.md",
+      "target": "10-independent-review.md"
+    },
+    {
+      "document": "README.md",
+      "target": "HANDOVER.md"
+    },
+    {
+      "document": "README.md",
+      "target": "07-mobile-platform.md"
+    },
+    {
+      "document": "README.md",
+      "target": "../control-this-mac/README.md"
+    },
+    {
+      "document": "README.md",
+      "target": "01-architecture.md"
+    },
+    {
+      "document": "README.md",
+      "target": "02-auth.md"
+    },
+    {
+      "document": "README.md",
+      "target": "03-transports.md"
+    },
+    {
+      "document": "README.md",
+      "target": "04-mobile-runtime.md"
+    },
+    {
+      "document": "README.md",
+      "target": "05-mobile-workflows.md"
+    },
+    {
+      "document": "README.md",
+      "target": "06-mobile-tools.md"
+    },
+    {
+      "document": "README.md",
+      "target": "07-mobile-platform.md"
+    },
+    {
+      "document": "README.md",
+      "target": "08-luna-backend.md"
+    },
+    {
+      "document": "README.md",
+      "target": "09-luna-mobile.md"
+    },
+    {
+      "document": "README.md",
+      "target": "10-independent-review.md"
+    },
+    {
+      "document": "README.md",
+      "target": "verify-evidence.py"
+    },
+    {
+      "document": "README.md",
+      "target": "verification.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "README.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "05-mobile-workflows.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "08-luna-backend.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "09-luna-mobile.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "01-architecture.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "02-auth.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "03-transports.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "04-mobile-runtime.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "05-mobile-workflows.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "06-mobile-tools.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "07-mobile-platform.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "08-luna-backend.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "09-luna-mobile.md"
+    },
+    {
+      "document": "gap-matrix.md",
+      "target": "implementation-plan.md"
+    },
+    {
+      "document": "implementation-plan.md",
+      "target": "../control-this-mac/README.md"
+    },
+    {
+      "document": "implementation-plan.md",
+      "target": "08-luna-backend.md"
+    },
+    {
+      "document": "implementation-plan.md",
+      "target": "09-luna-mobile.md"
+    },
+    {
+      "document": "implementation-plan.md",
+      "target": "validation-plan.md"
+    },
+    {
+      "document": "implementation-plan.md",
+      "target": "../interactive-chat-surfaces/README.md"
+    },
+    {
+      "document": "validation-plan.md",
+      "target": "../control-this-mac/validation-plan.md"
+    },
+    {
+      "document": "validation-plan.md",
+      "target": "../../../.codex/skills/test-audit/SKILL.md"
+    },
+    {
+      "document": "verification.md",
+      "target": "verify-evidence.py"
+    }
+  ],
+  "document_sha256": {
+    "01-architecture.md": "65290714421f1d917258522b50a4761a3be080802e2ae6d93fd2c38b17a14583",
+    "02-auth.md": "64fe1f1fe9b9bc8504d88bb237292ce79cb61e6f233a9d13ed9664174b06a26a",
+    "03-transports.md": "ce11395a9cb98fa706f49ad68ae18a1c5f54428008b9233d0c9819ba7987f190",
+    "04-mobile-runtime.md": "4989ccf7f4d9ddc005f4b4dcae62a40d563bfe3245955eb0f8cfbf5b7a0bfb53",
+    "05-mobile-workflows.md": "6111a9fee092f1e7b16f2e925fbaa080cf52db4cb12b68e1cbc368ceb20ecade",
+    "06-mobile-tools.md": "dd079f86981dceb05e6521e4ac22a6a2f1f6daa986e4d011815a26e3fe5cb47a",
+    "07-mobile-platform.md": "5482f7ee28ce6feba917d9ba341603fea502fbb263846332f3c2e91965154555",
+    "08-luna-backend.md": "d4db6a8b1db4da58dee2e774d3198e909d0324d44053027e3a99e2fa97aea043",
+    "09-luna-mobile.md": "bd725e63ab689276a5d86568bc64419f9a1e0b8819a96ac92abf70f46cdca713",
+    "10-independent-review.md": "561e687c4ddeafe607999089f8a4a3ceb6e837c7e990f666c44b7826d50062f7",
+    "HANDOVER.md": "d03767c607f1b98940bed96f8f2b7dd91adc2b671272d1e3e9ca2409524b3eed",
+    "README.md": "65010511484d5ed21f26b752c9eeefd778117123d01658d567ae9ce0fc9522b7",
+    "gap-matrix.md": "aaeae0f9a51dbbaa9c1c122dbbd2db37211844ebab5434fe64a533435d58d0fe",
+    "implementation-plan.md": "c99326f00fcc2efe733834a9ab3569aae90cf1312a6cc42006c7d045787e4623",
+    "validation-plan.md": "a8f03c97d5fec16b3566b2dbdc9b9e51f7cd6ecbb62f7be89e4bb45fe8e23de7",
+    "verification.md": "4a8eb5bbefc4c5e1c184e522a1ba377a945400d4295b0bf4c98b65fc5f90132b"
+  },
+  "manifest_hash_policy": "manifest is excluded from its own hash; all16 Markdown files are included",
+  "limitations": [
+    "static source inspection only",
+    "store feature parity unverified",
+    "E2E scenarios proposed not run",
+    "source links/line bounds/hashes do not substitute for semantic review"
+  ],
+  "artifact_sha256": {
+    "verify-evidence.py": "228cb6f4bb66ad779a32dc5272778129d719eaaf5c3dcf5a1faa0c4f074bb44b",
+    "evidence-check.json": "f75102030c6f4eab54a70345586efb2ef2ac2491b3a3d3d1e3d7d5750489d3e4"
+  }
+}
