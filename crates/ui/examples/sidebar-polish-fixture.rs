@@ -162,6 +162,7 @@ fn attention(task_id: &str, kind: AttentionKind, minutes_ago: i64) -> AttentionI
         id: format!("{task_id}-{kind:?}"),
         dedup_key: format!("{task_id}-{kind:?}"),
         source_key: "synthetic".into(),
+        suppress_notification: false,
         kind,
         severity: AttentionSeverity::Info,
         lifecycle: if kind == AttentionKind::TaskCompleted {

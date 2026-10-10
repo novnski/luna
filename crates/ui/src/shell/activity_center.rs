@@ -4,10 +4,13 @@
 use super::*;
 use crate::settings::TaskNotificationPolicy;
 use luna_proto::{
-    AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTransition,
-    AttentionTransitionBatch, AttentionTransitionClaim, AttentionTransitionKind,
-    TerminalInventoryEntry, TerminalProcessState,
+    AttentionItem, AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
+    AttentionTransition, AttentionTransitionBatch, AttentionTransitionClaim,
+    AttentionTransitionKind, TerminalInventoryEntry, TerminalProcessState,
 };
+
+/// Automation alerts listed in the Activity view at most.
+const AUTOMATION_ALERT_ROWS: usize = 5;
 
 #[derive(Default)]
 pub(super) struct ActivityUi {
@@ -63,16 +66,23 @@ struct DeliveryContext<'a> {
 
 fn route_transition(transition: &AttentionTransition, context: DeliveryContext<'_>) -> Delivery {
     let item = &transition.item;
+    // A suppressed item (an automation muted by its own notification choice)
+    // stays in Activity without a sound or banner.
     if transition.transition == AttentionTransitionKind::Resolved
+        || item.suppress_notification
         || Some(item.device_id.as_str()) != context.local_device
         || context.policy == TaskNotificationPolicy::Muted
     {
         return Delivery::default();
     }
-    let completion = matches!(
-        item.kind,
-        AttentionKind::TaskCompleted | AttentionKind::TaskRecovered
-    );
+    // An automation's completion reaches here only when the automation
+    // notifies for all runs; unlike a chat's own completion it may banner.
+    let automation_completion = item.kind == AttentionKind::AutomationCompleted;
+    let completion = automation_completion
+        || matches!(
+            item.kind,
+            AttentionKind::TaskCompleted | AttentionKind::TaskRecovered
+        );
     if context.policy == TaskNotificationPolicy::ImportantOnly && completion {
         return Delivery::default();
     }
@@ -88,7 +98,7 @@ fn route_transition(transition: &AttentionTransition, context: DeliveryContext<'
     };
     Delivery {
         sound: Some(sound),
-        banner: !completion
+        banner: (!completion || automation_completion)
             && context.desktop_enabled
             && (!context.background_only || !context.app_focused),
     }
@@ -333,21 +343,43 @@ impl Shell {
             crate::sound::play(sound);
         }
         if delivery.banner {
-            let body = match transition.item.kind {
-                AttentionKind::ApprovalRequired | AttentionKind::UserInputRequired => {
-                    "A task needs your response."
+            let item = &transition.item;
+            // An automation's banner names its project; a click opens that
+            // automation and its history (a run may have created no chat).
+            let automation = match &item.target {
+                AttentionTarget::Automation {
+                    automation_id,
+                    project_id,
+                } => Some((automation_id, project_id)),
+                _ => None,
+            };
+            let project = automation.map(|(_, project_id)| {
+                crate::automations::project_name(self.state.read(cx), project_id)
+            });
+            let body = match (item.kind, project) {
+                (AttentionKind::ApprovalRequired | AttentionKind::UserInputRequired, _) => {
+                    "A task needs your response.".to_string()
                 }
-                _ => "A task needs attention.",
+                (AttentionKind::AutomationCompleted, Some(project)) => {
+                    format!("An automation in {project} finished.")
+                }
+                (_, Some(project)) => format!("An automation in {project} needs attention."),
+                _ => "A task needs attention.".to_string(),
             };
             // The existing native banner API carries one opaque click string.
             // Include the owning environment so a delayed click cannot open
             // a same-id task after an in-place profile switch.
-            let click_target = transition
-                .item
-                .task_id
-                .as_ref()
-                .map(|task_id| format!("l15:{}:{task_id}", transition.item.environment_id));
-            crate::notify::post("LUNA Activity", body, click_target.as_deref());
+            let click_target = match automation {
+                Some((automation_id, project_id)) => Some(format!(
+                    "l15a:{}:{project_id}:{automation_id}",
+                    item.environment_id
+                )),
+                None => item
+                    .task_id
+                    .as_ref()
+                    .map(|task_id| format!("l15:{}:{task_id}", item.environment_id)),
+            };
+            crate::notify::post("LUNA Activity", &body, click_target.as_deref());
         }
     }
 
@@ -660,6 +692,158 @@ impl Shell {
         )
     }
 
+    /// Automation outcomes the chat-only Activity rows would drop: a run
+    /// that created no chat, or whose chat is archived (successful fresh
+    /// chats can be) or not on this device. Newest first, unresolved before
+    /// recent, at most [`AUTOMATION_ALERT_ROWS`].
+    fn automation_alerts(&self, cx: &App) -> Vec<(AttentionItem, String, String)> {
+        let Some(snapshot) = self.activity.snapshot.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state.read(cx);
+        let mut seen = std::collections::HashSet::new();
+        snapshot
+            .needs_attention
+            .iter()
+            .chain(&snapshot.recent)
+            .filter_map(|item| {
+                let AttentionTarget::Automation {
+                    automation_id,
+                    project_id,
+                } = &item.target
+                else {
+                    return None;
+                };
+                let listed = item.task_id.as_ref().is_some_and(|task| {
+                    state.chats.iter().any(|chat| {
+                        chat.id == *task && chat.device_id == item.device_id && !chat.archived
+                    })
+                });
+                (!listed && seen.insert(item.id.clone()))
+                    .then(|| (item.clone(), automation_id.clone(), project_id.clone()))
+            })
+            .take(AUTOMATION_ALERT_ROWS)
+            .collect()
+    }
+
+    /// The Activity view's Automations section (the Board section's rows):
+    /// each alert names its project and opens that automation's history.
+    pub(super) fn render_automation_alerts(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.activity.view_active {
+            return None;
+        }
+        let alerts = self.automation_alerts(cx);
+        if alerts.is_empty() {
+            return None;
+        }
+        let now = chrono::Utc::now();
+        let cards = crate::automations::AutomationCards::global(cx);
+        let rows = alerts
+            .into_iter()
+            .map(|(item, automation_id, project_id)| {
+                let project = crate::automations::project_name(self.state.read(cx), &project_id);
+                // The automation's own name once a card has read it; the
+                // host's title otherwise.
+                let name = cards
+                    .read(cx)
+                    .record(&automation_id)
+                    .map(|record| record.definition.name.clone())
+                    .unwrap_or_else(|| item.title.clone());
+                let status = if item.kind == AttentionKind::AutomationCompleted {
+                    "Finished"
+                } else {
+                    "Needs attention"
+                };
+                let ago = crate::state::format_time_ago(
+                    chrono::DateTime::from_timestamp_millis(item.updated_at_ms).unwrap_or_default(),
+                    now,
+                );
+                let label = format!("{project} · {name}");
+                let id = format!("automation-alert-{}", item.id);
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(format!(
+                        "{label}: {status}, {ago}. {} Open its automation",
+                        item.summary
+                    )))
+                    .tab_index(0)
+                    .relative()
+                    .h(px(28.0))
+                    .px(px(8.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    .cursor_pointer()
+                    .hover_wash(id)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_automation(
+                            automation_id.clone(),
+                            false,
+                            Some(project_id.clone()),
+                            cx,
+                        )
+                    }))
+                    .on_key_down(crate::swallow_activation_key)
+                    .child(
+                        icon(icons::STOPWATCH_PLAY)
+                            .size(px(12.0))
+                            .flex_none()
+                            .text_color(if item.kind == AttentionKind::AutomationCompleted {
+                                theme.readable_muted(0.7)
+                            } else {
+                                theme.readable_tone(theme.warning, 1.0)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text.opacity(0.85))
+                            .child(SharedString::from(label)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.readable_muted(0.55))
+                            .child(SharedString::from(ago)),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .id("automation-alerts")
+                .role(gpui::Role::Group)
+                .aria_label("Automation alerts")
+                .pt(px(10.0))
+                .pr(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .px(px(8.0))
+                        .pb(px(2.0))
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.readable_muted(0.6))
+                        .child("Automations"),
+                )
+                .children(rows)
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_activity_action(
         &mut self,
         theme: &Theme,
@@ -668,22 +852,27 @@ impl Shell {
         let active = self.activity.view_active;
         let shortcut = self.shortcut_badge(crate::settings::ShortcutId::OpenActivity);
         let task_keys = self.activity_task_keys(cx);
-        let has_attention = self
-            .state
-            .read(cx)
-            .overview_chats(chrono::Utc::now())
+        let automation_alert = self
+            .automation_alerts(cx)
             .iter()
-            .any(|(status, chat)| {
-                matches!(
-                    status,
-                    luna_proto::ChatIndicator::AwaitingApproval
-                        | luna_proto::ChatIndicator::AwaitingInput
-                ) || (matches!(
-                    status,
-                    luna_proto::ChatIndicator::Completed | luna_proto::ChatIndicator::Errored
-                ) && chat.unseen())
-                    || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
-            });
+            .any(|(item, _, _)| item.unresolved());
+        let has_attention = automation_alert
+            || self
+                .state
+                .read(cx)
+                .overview_chats(chrono::Utc::now())
+                .iter()
+                .any(|(status, chat)| {
+                    matches!(
+                        status,
+                        luna_proto::ChatIndicator::AwaitingApproval
+                            | luna_proto::ChatIndicator::AwaitingInput
+                    ) || (matches!(
+                        status,
+                        luna_proto::ChatIndicator::Completed | luna_proto::ChatIndicator::Errored
+                    ) && chat.unseen())
+                        || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
+                });
         /// Shared unread-dot size.
         const UNREAD_DOT: f32 = 6.0;
         div()
@@ -781,6 +970,7 @@ mod tests {
                 id: "id".into(),
                 dedup_key: "key".into(),
                 source_key: "source".into(),
+                suppress_notification: false,
                 kind,
                 severity: AttentionSeverity::Info,
                 lifecycle: AttentionLifecycle::Unresolved,
@@ -878,6 +1068,86 @@ mod tests {
             ),
             Delivery::default()
         );
+    }
+
+    /// An automation's outcome follows the notification choice saved on it
+    /// (the host marks muted outcomes `suppress_notification`) and the run
+    /// chat's own preference. Failure cases, written before the policy:
+    /// 1. a suppressed (Never, or a successful Important updates run)
+    ///    outcome still plays a sound or posts a banner;
+    /// 2. a completion the automation allows (All runs) plays the Attention
+    ///    sound like a failure, or can never banner;
+    /// 3. an allowed completion ignores the run chat's Muted or Important
+    ///    only preference, or banners while the app is focused under
+    ///    "background only";
+    /// 4. an unsuppressed automation failure goes quiet.
+    #[test]
+    fn automation_outcomes_follow_their_saved_notification_choice() {
+        let background = DeliveryContext {
+            policy: TaskNotificationPolicy::All,
+            app_focused: false,
+            desktop_enabled: true,
+            background_only: true,
+            local_device: Some("device"),
+        };
+        let mut completed = transition(AttentionKind::AutomationCompleted, "run-chat");
+        completed.transition = AttentionTransitionKind::Recent;
+        assert_eq!(
+            route_transition(&completed, background),
+            Delivery {
+                sound: Some(crate::sound::Sound::Done),
+                banner: true,
+            },
+            "2: an allowed automation completion is a completion that may banner"
+        );
+        assert_eq!(
+            route_transition(
+                &completed,
+                DeliveryContext {
+                    app_focused: true,
+                    ..background
+                }
+            ),
+            Delivery {
+                sound: Some(crate::sound::Sound::Done),
+                banner: false,
+            },
+            "3: background-only keeps a focused app's banner away"
+        );
+        for policy in [
+            TaskNotificationPolicy::Muted,
+            TaskNotificationPolicy::ImportantOnly,
+        ] {
+            assert_eq!(
+                route_transition(
+                    &completed,
+                    DeliveryContext {
+                        policy,
+                        ..background
+                    }
+                ),
+                Delivery::default(),
+                "3: the run chat's {policy:?} preference still applies"
+            );
+        }
+        let failed = transition(AttentionKind::AutomationFailed, "run-chat");
+        assert_eq!(
+            route_transition(&failed, background),
+            Delivery {
+                sound: Some(crate::sound::Sound::Attention),
+                banner: true,
+            },
+            "4: an automation failure is an alert"
+        );
+        for mut muted in [completed, failed] {
+            muted.item.suppress_notification = true;
+            assert_eq!(
+                route_transition(&muted, background),
+                Delivery::default(),
+                "1: a suppressed {:?} stays in Activity only",
+                muted.item.kind
+            );
+        }
     }
 
     #[test]

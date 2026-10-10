@@ -4647,6 +4647,10 @@ impl Shell {
             TranscriptEvent::OpenAccounts => {
                 self.open_settings(SettingsSection::Providers, cx);
             }
+            TranscriptEvent::OpenAutomation {
+                automation_id,
+                edit,
+            } => self.open_automation(automation_id.clone(), *edit, None, cx),
             TranscriptEvent::ForkMessage {
                 task_id,
                 message_id,
@@ -5426,11 +5430,13 @@ impl Shell {
     /// The main outlet of a sidebar page, created lazily.
     fn sidebar_page_outlet(&mut self, page: SidebarPage, cx: &mut Context<Self>) -> AnyElement {
         match page {
-            // The app-wide panel, the same entity Settings used to host: its
-            // own title bar, section cards, scroller and rail.
-            SidebarPage::Automations => self
-                .automations_panel(crate::automations::AutomationScope::All, true, cx)
-                .into_any_element(),
+            // The page's panel, the same entity Settings used to host: its
+            // own title bar, section cards, scroller and rail. Its scope is
+            // the sidebar's project filter, like the Board's.
+            SidebarPage::Automations => {
+                let scope = self.automations_page_scope();
+                self.automations_panel(scope, true, cx).into_any_element()
+            }
             SidebarPage::Board => self.board_page(cx).into_any_element(),
         }
     }
@@ -5830,11 +5836,13 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
-            // The app-wide panel renders as a full settings page (title bar,
-            // section cards, its own scroller and rail) in `All` scope.
-            SettingsSection::Automations => self
-                .automations_panel(crate::automations::AutomationScope::All, true, cx)
-                .into_any_element(),
+            // The page's panel renders as a full settings page (title bar,
+            // section cards, its own scroller and rail) for the sidebar's
+            // project filter.
+            SettingsSection::Automations => {
+                let scope = self.automations_page_scope();
+                self.automations_panel(scope, true, cx).into_any_element()
+            }
             SettingsSection::Usage => self.render_usage_page(cx),
             SettingsSection::Updates => {
                 if !self.update_check_attempted
@@ -10151,6 +10159,9 @@ impl Shell {
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
         let terminal_inventory = self.render_terminal_inventory(theme, cx);
+        // Automation alerts with no chat row to carry them: each opens its
+        // project's automation and history.
+        let automation_alerts = self.render_automation_alerts(theme, cx);
         // Recent ticket activity (Board A10): each row goes to its chat.
         let board_activity = self.render_board_activity(theme, cx);
         let activity_load_state = self.render_activity_load_state(theme);
@@ -10223,6 +10234,7 @@ impl Shell {
             usize::from(activity_load_state.is_some())
                 + 1
                 + usize::from(terminal_inventory.is_some())
+                + usize::from(automation_alerts.is_some())
                 + usize::from(board_activity.is_some())
                 + 1
         });
@@ -10241,6 +10253,7 @@ impl Shell {
                 .into_iter()
                 .chain(["top".to_owned()])
                 .chain(terminal_inventory.as_ref().map(|_| "terminals".to_owned()))
+                .chain(automation_alerts.as_ref().map(|_| "automations".to_owned()))
                 .chain(board_activity.as_ref().map(|_| "board".to_owned()))
                 .chain(shelves.as_ref().map(|_| "spacer".to_owned()))
                 .chain(shelves.as_ref().map(|_| "shelves".to_owned()))
@@ -10271,6 +10284,7 @@ impl Shell {
                     .when_some(activity_load_state, |el, state| el.child(state))
                     .child(top)
                     .children(terminal_inventory)
+                    .children(automation_alerts)
                     .children(board_activity)
                     .when(has_shelves, |el| el.child(div().flex_1().min_h_0()))
                     .children(shelves),
@@ -13891,8 +13905,7 @@ impl Shell {
             match self.resolved_right_active(cx) {
                 RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
                 RightSurface::Automations if self.right_pane_open(cx) => {
-                    let scope =
-                        crate::automations::AutomationScope::Conversation(self.active_chat.clone());
+                    let scope = self.automations_conversation_scope(cx);
                     self.automations_panel(scope, false, cx).into_any_element()
                 }
                 RightSurface::RelatedChats if self.right_pane_open(cx) => {

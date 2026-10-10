@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Disposable signed app -> scheduler worker -> ordinary native Codex/Claude run.
+// Disposable signed app -> scheduler worker -> ordinary native provider run.
+// Optional LUNA_QA_AUTOMATION_PROVIDERS=codex,claude-code,opencode and
+// LUNA_QA_AUTOMATION_TARGETS=existing,newConversation extend the same proof.
 // Save every attempted mutation before sending. Unknown work is never replayed.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,6 +40,10 @@ const auditBase = process.env.LUNA_AUDIT_NATIVE_BASE;
 if (auditBase !== undefined) assert.ok(path.isAbsolute(auditBase) && !/[\r\n]/.test(auditBase), 'LUNA_AUDIT_NATIVE_BASE must be an absolute single-line path');
 const base = auditBase === undefined ? defaultBase : path.join(auditBase, 'automations');
 const mode = process.argv[2] ?? 'run';
+const providers = (process.env.LUNA_QA_AUTOMATION_PROVIDERS ?? 'codex,claude-code').split(',');
+const targetModes = (process.env.LUNA_QA_AUTOMATION_TARGETS ?? 'existing').split(',');
+assert.ok(providers.length > 0 && new Set(providers).size === providers.length && providers.every(p => ['codex', 'claude-code', 'opencode'].includes(p)));
+assert.ok(targetModes.length > 0 && new Set(targetModes).size === targetModes.length && targetModes.every(t => ['existing', 'newConversation'].includes(t)));
 assert.ok(['run', 'verify-restart', 'inspect'].includes(mode));
 execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
 const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist')], {encoding: 'utf8'}));
@@ -106,54 +112,76 @@ try {
     execFileSync('git', ['init', '-q', project]);
     const manifest = {pid, port, profileId: info.profileId, host: info.deviceId, tasks: {}, completed: false}; save('manifest', manifest);
     const spaceId = crypto.randomUUID(); await call('Mutate', {op: 'createSpace', spaceId, deviceId: info.deviceId, path: project});
-    for (const provider of ['codex', 'claude-code']) {
-      const catalog = await call('ListModels', {harness: provider}); save(`catalog-${provider}`, catalog);
-      const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : ['claude-sonnet-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5'];
-      const requestedModel = process.env[provider === 'codex' ? 'LUNA_QA_CODEX_MODEL' : 'LUNA_QA_CLAUDE_MODEL'];
-      const model = requestedModel === undefined ? preferred.map(id => catalog.find(m => m.id === id)).find(Boolean) ?? catalog.find(m => m.isDefault) ?? catalog[0] : catalog.find(m => m.id === requestedModel);
-      assert.ok(model, requestedModel === undefined ? `${provider} has no live model` : `${provider} model override is not in the live catalog: ${requestedModel}`);
-      const taskId = crypto.randomUUID(), automationId = crypto.randomUUID(), pausedId = crypto.randomUUID();
-      const marker = `AUTOMATION_QA_${crypto.randomBytes(6).toString('hex')}`;
-      const config = {harness: provider, model: model.id, reasoning: model.reasoningLevels?.includes('low') ? 'low' : model.reasoningLevels?.[0], permissionMode: 'ask', sandbox: 'workspace-write'};
-      await call('Mutate', {op: 'createChat', chatId: taskId, spaceId, cwd: project, config, title: `Automation QA ${provider}`});
-      // createChat returns before Git checkout discovery. A schedule approved
-      // with no checkout identity is correctly refused if that identity changes.
-      // Wait for this disposable Git project's actual identity before review.
-      const target = await until(async () => {
-        const row = (await call('WatchChats')).find(chat => chat.id === taskId);
-        return row?.checkoutId && row.cwd === project && row;
-      }, `${provider} checkout identity`, 30000);
-      save(`${provider}-target-before-review`, target);
-      const atMs = Date.now() + 5000, pausedAtMs = atMs + 5000;
-      manifest.tasks[provider] = {taskId, automationId, pausedId, marker, atMs, pausedAtMs, config}; save('manifest', manifest);
-      const definition = {name: `QA ${provider}`, prompt: `Reply with exactly ${marker}. Do not use tools, change files, contact any service or create work.`, timezone: 'Europe/Bucharest', target: {kind: 'existing', taskId}, trigger: {kind: 'once', atMs}, maxLatenessMs: 120000};
-      await mutation(info.deviceId, automationId, 0, {kind: 'save', definition}, `${provider}-save`);
-      await mutation(info.deviceId, pausedId, 0, {kind: 'save', definition: {...definition, name: `Paused QA ${provider}`, prompt: `PAUSED_${marker}`, trigger: {kind: 'once', atMs: pausedAtMs}}}, `${provider}-paused-save`);
-      await mutation(info.deviceId, pausedId, 1, {kind: 'pause'}, `${provider}-pause-before-due`);
-      const ledger = await until(async () => {
-        const page = await call('ListAutomationRuns', {automationId});
-        if (page.items.some(run => ['failed', 'unknown', 'skipped', 'cancelled'].includes(run.state))) { save(`${provider}-unexpected-ledger`, page); throw new Error(`${provider}: terminal occurrence was not completed`); }
-        return page.items.length === 1 && page.items[0].state === 'completed' && page;
-      }, `${provider} one native scheduled run`);
-      const run = ledger.items[0]; assert.equal(run.scheduledAtMs, atMs); assert.equal(run.coalesced, 0); assert.equal(run.taskId, taskId);
-      // Ledger completion and transcript hydration are independent readbacks.
-      // Observe the exact scheduled exchange before asserting its contents;
-      // never replay the completed occurrence while waiting for projection.
-      const entries = await until(async () => {
-        const observed = await transcript(taskId);
-        const userIndex = observed.findIndex(e => e.id === run.messageId && e.role === 'user');
-        const completeMarker = userIndex >= 0 && observed.slice(userIndex + 1).some(e =>
-          e.role === 'assistant' && e.status === 'complete' &&
-          (e.parts ?? []).filter(p => p.kind === 'text').map(p => p.text).join('\n').trim() === marker);
-        return completeMarker && observed;
-      }, `${provider} completed scheduled transcript`, 30000);
-      assert.equal(entries.filter(e => e.id === run.messageId && e.role === 'user').length, 1);
-      assert.ok(entries.some(e => e.role === 'assistant' && (e.parts ?? []).some(p => p.kind === 'text' && p.text.includes(marker))));
-      assert.equal(entries.filter(e => e.role === 'user').length, 1);
-      manifest.tasks[provider].run = run; save('manifest', manifest); save(`${provider}-completed`, {ledger, entries});
-      await mutation(info.deviceId, automationId, 1, {kind: 'pause'}, `${provider}-pause-completed`);
-      await delay(Math.max(0, pausedAtMs + 2200 - Date.now()));
-      assert.equal((await call('ListAutomationRuns', {automationId: pausedId})).items.length, 0);
+    for (const provider of providers) {
+      for (const targetMode of targetModes) {
+        const caseId = `${provider}-${targetMode}`;
+        const catalog = await call('ListModels', {harness: provider}); save(`catalog-${caseId}`, catalog);
+        const preferred = provider === 'codex' ? ['gpt-6-luna', 'gpt-6.1-sol'] : provider === 'opencode' ? ['opencode/big-pickle'] : ['claude-sonnet-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5'];
+        const requestedModel = process.env[provider === 'codex' ? 'LUNA_QA_CODEX_MODEL' : provider === 'opencode' ? 'LUNA_QA_OPENCODE_MODEL' : 'LUNA_QA_CLAUDE_MODEL'];
+        const model = requestedModel === undefined ? preferred.map(id => catalog.find(m => m.id === id)).find(Boolean) ?? catalog.find(m => m.isDefault) ?? catalog[0] : catalog.find(m => m.id === requestedModel);
+        assert.ok(model, requestedModel === undefined ? `${provider} has no live model` : `${provider} model override is not in the live catalog: ${requestedModel}`);
+        const taskId = crypto.randomUUID(), automationId = crypto.randomUUID(), pausedId = crypto.randomUUID();
+        const marker = `AUTOMATION_QA_${crypto.randomBytes(6).toString('hex')}`;
+        const config = {harness: provider, model: model.id, reasoning: model.reasoningLevels?.includes('low') ? 'low' : model.reasoningLevels?.[0], permissionMode: 'ask', sandbox: 'workspace-write'};
+        await call('Mutate', {op: 'createChat', chatId: taskId, spaceId, cwd: project, config, title: `Automation QA ${caseId}`});
+        // createChat returns before Git checkout discovery. A schedule approved
+        // with no checkout identity is correctly refused if that identity changes.
+        // Wait for this disposable Git project's actual identity before review.
+        const target = await until(async () => {
+          const row = (await call('WatchChats')).find(chat => chat.id === taskId);
+          return row?.checkoutId && row.cwd === project && row;
+        }, `${provider} checkout identity`, 30000);
+        save(`${caseId}-target-before-review`, target);
+        const atMs = Date.now() + 5000, pausedAtMs = atMs + 5000;
+        manifest.tasks[caseId] = {taskId, sourceTaskId: taskId, provider, targetMode, automationId, pausedId, marker, atMs, pausedAtMs, config}; save('manifest', manifest);
+        const execution = {harness: provider, model: model.id, reasoning: model.reasoningLevels?.includes('high') ? 'high' : config.reasoning, modelOptions: {}};
+        const destination = targetMode === 'existing' ? {kind: 'existing', taskId} : {kind: 'newConversation', originTaskId: taskId, projectId: spaceId};
+        const definition = {name: `QA ${caseId}`, prompt: `Reply with exactly ${marker}. Do not use tools, change files, contact any service or create work.`, timezone: 'Europe/Bucharest', target: destination, trigger: {kind: 'once', atMs}, maxLatenessMs: 120000, execution, sourceTaskId: taskId, notificationPolicy: 'never'};
+        const saved = await mutation(info.deviceId, automationId, 0, {kind: 'save', definition}, `${caseId}-save`);
+        assert.equal(saved.record.definition.execution.model, execution.model);
+        assert.equal(saved.record.definition.execution.reasoning ?? null, execution.reasoning ?? null);
+        assert.equal(saved.record.authority.projectId, spaceId);
+        manifest.tasks[caseId].execution = execution; save('manifest', manifest);
+        const observations = [];
+        await mutation(info.deviceId, pausedId, 0, {kind: 'save', definition: {...definition, name: `Paused QA ${provider}`, prompt: `PAUSED_${marker}`, trigger: {kind: 'once', atMs: pausedAtMs}}}, `${caseId}-paused-save`);
+        await mutation(info.deviceId, pausedId, 1, {kind: 'pause'}, `${caseId}-pause-before-due`);
+        const ledger = await until(async () => {
+          const page = await call('ListAutomationRuns', {automationId});
+          const observedTask = page.items[0]?.taskId ?? taskId;
+          const observed = (await call('WatchChats')).find(chat => chat.id === observedTask)?.execution;
+          if (observed?.running) observations.push(observed);
+          if (page.items.some(run => ['failed', 'unknown', 'skipped', 'cancelled'].includes(run.state))) { save(`${caseId}-unexpected-ledger`, page); throw new Error(`${provider}: terminal occurrence was not completed`); }
+          return page.items.length === 1 && page.items[0].state === 'completed' && page;
+        }, `${provider} one native scheduled run`);
+        const run = ledger.items[0]; assert.equal(run.scheduledAtMs, atMs); assert.equal(run.coalesced, 0); if (targetMode === 'existing') assert.equal(run.taskId, taskId);
+        else assert.notEqual(run.taskId, taskId);
+        manifest.tasks[caseId].taskId = run.taskId; save('manifest', manifest);
+        save(`${caseId}-execution-observations`, observations);
+        for (const observed of observations) {
+          assert.equal(observed.running.provider, execution.harness);
+          assert.equal(observed.running.model, execution.model);
+          assert.equal(observed.running.reasoning, execution.reasoning ?? null);
+        }
+        // Ledger completion and transcript hydration are independent readbacks.
+        // Observe the exact scheduled exchange before asserting its contents;
+        // never replay the completed occurrence while waiting for projection.
+        const entries = await until(async () => {
+          const observed = await transcript(run.taskId);
+          const userIndex = observed.findIndex(e => e.id === run.messageId && e.role === 'user');
+          const completeMarker = userIndex >= 0 && observed.slice(userIndex + 1).some(e =>
+            e.role === 'assistant' && e.status === 'complete' &&
+            (e.parts ?? []).filter(p => p.kind === 'text').map(p => p.text).join('\n').trim() === marker);
+          return completeMarker && observed;
+        }, `${provider} completed scheduled transcript`, 30000);
+        assert.equal(entries.filter(e => e.id === run.messageId && e.role === 'user').length, 1);
+        assert.ok(entries.some(e => e.role === 'assistant' && (e.parts ?? []).some(p => p.kind === 'text' && p.text.includes(marker))));
+        assert.equal(entries.filter(e => e.role === 'user').length, 1);
+        manifest.tasks[caseId].run = run; save('manifest', manifest); save(`${caseId}-completed`, {ledger, entries});
+        await mutation(info.deviceId, automationId, 1, {kind: 'pause'}, `${caseId}-pause-completed`);
+        await delay(Math.max(0, pausedAtMs + 2200 - Date.now()));
+        assert.equal((await call('ListAutomationRuns', {automationId: pausedId})).items.length, 0);
+        if (targetMode === 'newConversation') assert.equal((await transcript(taskId)).filter(e => e.role === 'user').length, 0);
+      }
     }
     manifest.completed = true; save('manifest', manifest); save('result', {passed: true, pid, results: await readback(manifest)});
     console.log(JSON.stringify({passed: true, evidence, providers: Object.keys(manifest.tasks), pid}));

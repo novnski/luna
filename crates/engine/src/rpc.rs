@@ -2245,13 +2245,33 @@ impl EngineRpc {
                     })
                     .cloned()
             });
-            desired.extend(crate::attention::project_task(
-                &self.engine_info.device_id,
-                chat,
-                session.as_ref(),
-                latest_assistant.as_slice(),
-                &queue,
-            ));
+            let scheduled = handle
+                .doc()
+                .read_latest_user_entry()
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .map(|message| self.store.automation_for_message(&chat.id, &message.id))
+                .transpose()
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .flatten()
+                .is_some();
+            desired.extend(
+                crate::attention::project_task(
+                    &self.engine_info.device_id,
+                    chat,
+                    session.as_ref(),
+                    latest_assistant.as_slice(),
+                    &queue,
+                )
+                .into_iter()
+                .filter(|item| {
+                    !scheduled
+                        || !matches!(
+                            item.kind,
+                            luna_proto::AttentionKind::TaskCompleted
+                                | luna_proto::AttentionKind::TaskFailed
+                        )
+                }),
+            );
         }
         for source in self
             .store
@@ -3001,7 +3021,7 @@ impl EngineRpc {
         mut command: TaskCommandParams,
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
-        automation_fence: Option<&luna_proto::AutomationRecord>,
+        automation_fence: Option<automations::AutomationCommandFence<'_>>,
     ) -> Result<CommandReceipt, RpcError> {
         if self.derived_fork_document(&command.task_id) {
             return Err(RpcError::Failed(
@@ -3041,7 +3061,8 @@ impl EngineRpc {
         let _lane = self.doc_host.task_command_gate(&command.task_id).await;
         let current = self.current_task_command_snapshot(&command.task_id)?;
         if let Some(automation) = automation_fence {
-            self.check_automation_dispatch_fence(automation, &command.task_id)?;
+            self.check_automation_command_fence(automation, &command.task_id)
+                .await?;
         }
         if send_fence.is_some_and(|fence| {
             current.task_revision != fence.target_snapshot.task_revision
@@ -8770,6 +8791,13 @@ impl CrossTaskBackend for EngineRpc {
         authority: &CrossTaskAuthority,
     ) -> Result<Value, CrossTaskError> {
         self.list_agent_automations(request, authority)
+    }
+    async fn list_automation_targets(
+        &self,
+        request: crate::cross_task_tools::AutomationTargetsRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<Value, CrossTaskError> {
+        self.list_agent_automation_targets(request, authority)
     }
 
     async fn child_creation_snapshot(

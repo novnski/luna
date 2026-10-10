@@ -779,7 +779,7 @@ impl Shell {
     /// The chat execution diagnostics describe: the focused group's active
     /// chat while this workbench is loaded for the selected chat, else `None`
     /// (the selected chat applies).
-    fn workbench_execution_focus(&self, cx: &App) -> Option<String> {
+    pub(super) fn workbench_execution_focus(&self, cx: &App) -> Option<String> {
         if !self.workbench_ready()
             || self.workbench.main.is_empty()
             || self.state.read(cx).selected_chat.as_deref() != Some(self.workbench.main.as_str())

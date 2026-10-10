@@ -2,7 +2,7 @@
 use super::*;
 use crate::automation::{due_slot, preview_times, validate_definition};
 use luna_proto::{
-    AutomationAuthority, AutomationMutationReceipt, AutomationMutationRequest,
+    AutomationAuthority, AutomationExecution, AutomationMutationReceipt, AutomationMutationRequest,
     AutomationOperation as Op, AutomationPage, AutomationPreview, AutomationReadRequest,
     AutomationRecord, AutomationRun, AutomationRunState as State, AutomationTarget,
     AutomationTrigger,
@@ -44,6 +44,17 @@ fn cap(a: PermissionMode, b: PermissionMode) -> PermissionMode {
         PermissionMode::Full
     }
 }
+fn same_schedule(
+    a: &luna_proto::AutomationDefinition,
+    b: &luna_proto::AutomationDefinition,
+) -> bool {
+    a.trigger == b.trigger && a.timezone == b.timezone
+}
+
+pub(super) enum AutomationCommandFence<'a> {
+    Dispatch(&'a AutomationRecord),
+    Archive(&'a AutomationRun),
+}
 impl EngineRpc {
     fn automation_tool_scope(&self, authority: &CrossTaskAuthority) -> Result<(), CrossTaskError> {
         if authority.local_environment_id != self.engine_info.device_id
@@ -55,9 +66,7 @@ impl EngineRpc {
             return Err(CrossTaskError::TargetScope);
         }
         let current = self
-            .automation_authority(&AutomationTarget::Existing {
-                task_id: authority.caller_task_id.clone(),
-            })
+            .automation_chat_authority(&authority.caller_task_id, false)
             .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
         if !authority.visible_project_ids.contains(&current.project_id) {
             return Err(CrossTaskError::TargetScope);
@@ -80,16 +89,39 @@ impl EngineRpc {
             .automation(&tool.automation_id)
             .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
         if existing.as_ref().is_some_and(|r| {
-            r.authority.origin_task_id != authority.caller_task_id
+            !authority
+                .visible_project_ids
+                .contains(&r.authority.project_id)
+                && r.definition
+                    .source_task_id
+                    .as_deref()
+                    .unwrap_or(&r.authority.origin_task_id)
+                    != authority.caller_task_id
                 || r.owner_host_id != authority.local_environment_id
         }) {
             return Err(CrossTaskError::TargetScope);
         }
         if let Op::Save { definition } = &tool.operation
-            && (definition.target.origin_task_id() != authority.caller_task_id
-                || definition.prompt.chars().count() > 8_000)
+            && (definition.prompt.chars().count() > 8_000
+                || definition.source_task_id.as_deref().is_some_and(|id| {
+                    id != authority.caller_task_id
+                        && existing
+                            .as_ref()
+                            .and_then(|r| r.definition.source_task_id.as_deref())
+                            != Some(id)
+                }))
         {
             return Err(CrossTaskError::TargetScope);
+        }
+        let caller = self
+            .automation_chat_authority(&authority.caller_task_id, false)
+            .map_err(err)?;
+        let mut operation = tool.operation.clone();
+        if let Op::Save { definition } = &mut operation {
+            definition.source_task_id = existing
+                .as_ref()
+                .and_then(|r| r.definition.source_task_id.clone())
+                .or_else(|| Some(authority.caller_task_id.clone()));
         }
         let mut request = AutomationMutationRequest {
             request_id: format!(
@@ -99,21 +131,46 @@ impl EngineRpc {
             automation_id: tool.automation_id.clone(),
             owner_host_id: authority.local_environment_id.clone(),
             expected_revision: tool.expected_revision,
-            operation: tool.operation.clone(),
+            operation,
             preview_id: String::new(),
+            permission_ceiling: Some(cap(
+                caller.permission_ceiling,
+                caller.config.effective_permission_mode,
+            )),
         };
         let preview = self
             .automation_preview(&request, crate::now_ms())
             .map_err(err)?;
         request.preview_id = preview.preview_id.clone();
+        let destination = match &request.operation {
+            Op::Save { definition } => {
+                self.automation_save_authority(
+                    definition,
+                    existing.as_ref(),
+                    request.permission_ceiling,
+                )
+                .map_err(err)?
+                .project_id
+            }
+            _ => existing
+                .as_ref()
+                .ok_or(CrossTaskError::TargetScope)?
+                .authority
+                .project_id
+                .clone(),
+        };
         let snapshot = self
             .current_task_command_snapshot(&authority.caller_task_id)
             .map_err(err)?;
+        let requires_local_approval = !authority.visible_project_ids.contains(&destination)
+            || matches!(tool.operation, Op::ResolveUnknown { .. });
         Ok(crate::cross_task_tools::PreparedAutomation {
             tool_request: tool,
             request,
             preview,
             snapshot,
+            requires_local_approval,
+            destination_project_id: destination,
         })
     }
 
@@ -142,7 +199,7 @@ impl EngineRpc {
             })
             .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
         Ok(
-            serde_json::json!({"requestId":receipt.request_id,"id":receipt.record.id,"revision":receipt.record.revision,"enabled":receipt.record.enabled,"deleted":receipt.record.deleted,"nextDueMs":receipt.record.next_due_ms,"ownerHostId":receipt.record.owner_host_id}),
+            serde_json::json!({"requestId":receipt.request_id,"id":receipt.record.id,"revision":receipt.record.revision,"enabled":receipt.record.enabled,"deleted":receipt.record.deleted,"completed":receipt.record.completed,"nextDueMs":receipt.record.next_due_ms,"ownerHostId":receipt.record.owner_host_id,"name":receipt.record.definition.name,"target":receipt.record.definition.target,"projectId":receipt.record.authority.project_id,"scheduleDescription":crate::automation::describe_trigger(&receipt.record.definition)}),
         )
     }
 
@@ -155,24 +212,199 @@ impl EngineRpc {
         if p.after_id.as_ref().is_some_and(|id| !bounded_id(id)) {
             return Err(CrossTaskError::Input);
         }
+        if p.project_id
+            .as_ref()
+            .is_some_and(|id| !authority.visible_project_ids.contains(id))
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        if p.automation_id.as_ref().is_some_and(|id| !bounded_id(id)) {
+            return Err(CrossTaskError::Input);
+        }
+        let full = p.automation_id.is_some();
         let limit = p.limit.unwrap_or(10).clamp(1, 20);
         let mut records = self
             .store
-            .automations(
+            .agent_automations(
                 &self.engine_info.device_id,
-                Some(&authority.caller_task_id),
-                p.after_id.as_deref(),
-                false,
+                &AutomationReadRequest {
+                    task_id: p
+                        .project_id
+                        .is_none()
+                        .then(|| authority.caller_task_id.clone()),
+                    project_id: p.project_id,
+                    automation_id: p.automation_id,
+                    after_id: p.after_id,
+                    include_deleted: p.include_deleted,
+                    ..Default::default()
+                },
+                authority
+                    .visible_project_ids
+                    .iter()
+                    .next()
+                    .ok_or(CrossTaskError::TargetScope)?,
+                &authority.caller_task_id,
                 limit + 1,
             )
             .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
         let next = (records.len() > limit).then(|| records[limit - 1].id.clone());
         records.truncate(limit);
-        let items: Vec<_> = records.into_iter().map(|r| serde_json::json!({"id":r.id,"revision":r.revision,"name":r.definition.name,"promptExcerpt":r.definition.prompt.chars().take(240).collect::<String>(),"enabled":r.enabled,"nextDueMs":r.next_due_ms,"timezone":r.definition.timezone,"target":r.definition.target,"trigger":r.definition.trigger})).collect();
+        let items: Vec<_> = records.into_iter().map(|r| {
+            let mut item=serde_json::json!({"id":r.id,"revision":r.revision,"name":r.definition.name,"promptExcerpt":r.definition.prompt.chars().take(240).collect::<String>(),"enabled":r.enabled,"deleted":r.deleted,"completed":r.completed,"nextDueMs":r.next_due_ms,"timezone":r.definition.timezone,"target":r.definition.target,"trigger":r.definition.trigger,"projectId":r.authority.project_id,"execution":r.definition.execution.as_ref().cloned().unwrap_or_else(||AutomationExecution::from(&r.authority.config)),"notificationPolicy":r.definition.notification_policy,"archiveSuccessfulRuns":r.definition.archive_successful_runs});
+            if full {item["definition"]=serde_json::to_value(&r.definition).unwrap_or(Value::Null);}
+            item
+        }).collect();
         Ok(serde_json::json!({"items":items,"nextAfterId":next,"contentUntrusted":true}))
     }
 
-    pub(super) fn check_automation_dispatch_fence(
+    pub(super) fn list_agent_automation_targets(
+        &self,
+        p: crate::cross_task_tools::AutomationTargetsRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<Value, CrossTaskError> {
+        self.automation_tool_scope(authority)?;
+        if p.query
+            .as_ref()
+            .is_some_and(|q| q.len() > 160 || q.chars().any(char::is_control))
+            || p.after_id.as_ref().is_some_and(|id| id.len() > 160)
+            || p.project_id.as_ref().is_some_and(|id| !bounded_id(id))
+        {
+            return Err(CrossTaskError::Input);
+        }
+        if p.project_id
+            .as_ref()
+            .is_some_and(|id| !authority.visible_project_ids.contains(id))
+            && !p.include_other_projects
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let query = p.query.unwrap_or_default().to_lowercase();
+        let limit = p.limit.unwrap_or(20).clamp(1, 50);
+        let projects = self
+            .workspace
+            .read_spaces()
+            .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
+        let mut rows = Vec::new();
+        for project in projects.iter().filter(|s| {
+            s.device_id == self.engine_info.device_id
+                && !s.is_removed()
+                && (p.include_other_projects || authority.visible_project_ids.contains(&s.id))
+                && p.project_id.as_ref().is_none_or(|id| id == &s.id)
+        }) {
+            let name = project.name.clone().unwrap_or_else(|| {
+                std::path::Path::new(&project.path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+            if name.to_lowercase().contains(&query) {
+                rows.push((format!("project:{}",project.id),serde_json::json!({"kind":"project","projectId":project.id,"name":name.chars().take(160).collect::<String>(),"requiresLocalApproval":!authority.visible_project_ids.contains(&project.id)})));
+            }
+        }
+        let selected = p
+            .project_id
+            .as_ref()
+            .or_else(|| authority.visible_project_ids.iter().next());
+        if let Some(project) = selected {
+            self.automation_project(project)
+                .map_err(|e| CrossTaskError::Backend(e.to_string()))?;
+            for chat in self
+                .workspace
+                .read_chats()
+                .map_err(|e| CrossTaskError::Backend(e.to_string()))?
+                .into_iter()
+                .filter(|c| {
+                    c.device_id == self.engine_info.device_id
+                        && !c.archived
+                        && c.space_id.as_ref() == Some(project)
+                        && c.config.as_ref().is_some_and(|c| !c.harness.is_retired())
+                })
+            {
+                if self.derived_fork_document(&chat.id) {
+                    continue;
+                }
+                let name = chat.title.unwrap_or_else(|| "Untitled conversation".into());
+                if name.to_lowercase().contains(&query) {
+                    rows.push((format!("chat:{}",chat.id),serde_json::json!({"kind":"conversation","projectId":project,"taskId":chat.id,"name":name.chars().take(160).collect::<String>(),"requiresLocalApproval":!authority.visible_project_ids.contains(project)})));
+                }
+            }
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows.retain(|(id, _)| p.after_id.as_ref().is_none_or(|after| id > after));
+        let next = (rows.len() > limit).then(|| rows[limit - 1].0.clone());
+        rows.truncate(limit);
+        Ok(
+            serde_json::json!({"items":rows.into_iter().map(|(_,v)|v).collect::<Vec<_>>(),"nextAfterId":next,"contentUntrusted":true}),
+        )
+    }
+
+    pub(super) async fn check_automation_command_fence(
+        &self,
+        fence: AutomationCommandFence<'_>,
+        task: &str,
+    ) -> Result<(), RpcError> {
+        let record = match fence {
+            AutomationCommandFence::Dispatch(record) => record,
+            AutomationCommandFence::Archive(run) => {
+                let current = self
+                    .store
+                    .automation_run(&run.id)
+                    .map_err(failed)?
+                    .ok_or_else(|| failed("Automation occurrence is missing"))?;
+                let record = self
+                    .store
+                    .automation(&run.automation_id)
+                    .map_err(failed)?
+                    .ok_or_else(|| failed("Automation is missing"))?;
+                if current.state != State::Completed
+                    || current.task_id != task
+                    || record.deleted
+                    || record.revision != run.automation_revision
+                    || !record.definition.archive_successful_runs
+                    || !matches!(
+                        record.definition.target,
+                        AutomationTarget::NewConversation { .. }
+                    )
+                {
+                    return Err(failed("Successful-run archive is no longer applicable"));
+                }
+                let chat = self
+                    .workspace
+                    .chat(task)
+                    .map_err(failed)?
+                    .ok_or_else(|| failed("Conversation no longer exists"))?;
+                if chat.device_id != self.engine_info.device_id
+                    || chat.space_id.as_deref() != Some(record.authority.project_id.as_str())
+                    || chat.cwd.as_deref() != Some(record.authority.cwd.as_str())
+                {
+                    return Err(failed(
+                        "The conversation moved after its scheduled run; it was kept open",
+                    ));
+                }
+                self.automation_target_idle(task)?;
+                if self.sessions.has_live_background_work(task) {
+                    return Err(failed(
+                        "The conversation has background work; it was kept open",
+                    ));
+                }
+                let doc = self.doc_host.open(task).map_err(failed)?;
+                if doc
+                    .doc()
+                    .read_latest_user_entry()
+                    .map_err(failed)?
+                    .is_none_or(|message| message.id != run.message_id)
+                {
+                    return Err(failed("The conversation has newer work; it was kept open"));
+                }
+                return Ok(());
+            }
+        };
+        self.check_automation_dispatch_fence(record, task)?;
+        self.verify_automation_location(record).await
+    }
+
+    fn check_automation_dispatch_fence(
         &self,
         record: &AutomationRecord,
         task: &str,
@@ -185,7 +417,7 @@ impl EngineRpc {
         if current.revision != record.revision || !current.enabled || current.deleted {
             return Err(failed("Automation changed before task admission"));
         }
-        let authority = self.automation_authority(&record.definition.target)?;
+        let authority = self.automation_dispatch_authority(record)?;
         self.verify_automation_authority(record, &authority)?;
         self.automation_target_idle(task)?;
         Ok(())
@@ -225,18 +457,32 @@ impl EngineRpc {
             })
             .transpose()
     }
-    fn automation_authority(
+    fn automation_project(&self, id: &str) -> Result<luna_proto::Space, RpcError> {
+        let project = self
+            .workspace
+            .space(id)
+            .map_err(failed)?
+            .ok_or_else(|| failed("Automation project was deleted"))?;
+        if project.device_id != self.engine_info.device_id || project.is_removed() {
+            return Err(failed(
+                "Automation project is removed or belongs to another host; restore it before resuming",
+            ));
+        }
+        Ok(project)
+    }
+
+    fn automation_chat_authority(
         &self,
-        target: &AutomationTarget,
+        id: &str,
+        allow_archived: bool,
     ) -> Result<AutomationAuthority, RpcError> {
-        let id = target.origin_task_id();
         let chat = self
             .workspace
             .chat(id)
             .map_err(failed)?
             .ok_or_else(|| failed("Target conversation was deleted"))?;
         if chat.device_id != self.engine_info.device_id
-            || chat.archived
+            || (chat.archived && !allow_archived)
             || self.derived_fork_document(id)
         {
             return Err(failed("Choose an active conversation on this host"));
@@ -246,21 +492,261 @@ impl EngineRpc {
             .ok_or_else(|| failed("Choose a provider and model first"))?;
         if !matches!(
             config.harness,
-            HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Mock
+            HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode | HarnessId::Mock
         ) {
-            return Err(failed("Automations currently support Codex and Claude"));
+            return Err(failed(
+                "Choose Codex, Claude Code, or OpenCode for this automation",
+            ));
         }
+        let project_id = chat
+            .space_id
+            .ok_or_else(|| failed("Target project is missing"))?;
+        self.automation_project(&project_id)?;
         Ok(AutomationAuthority {
             origin_task_id: id.into(),
-            project_id: chat
-                .space_id
-                .ok_or_else(|| failed("Target project is missing"))?,
+            project_id,
             cwd: chat.cwd.ok_or_else(|| failed("Target folder is missing"))?,
             checkout_id: chat.checkout_id,
             workspace_repair_revision: self.store.workspace_repair_revision(id).map_err(failed)?,
             permission_ceiling: config.permission_mode,
             config,
         })
+    }
+
+    fn automation_save_authority(
+        &self,
+        definition: &luna_proto::AutomationDefinition,
+        previous: Option<&AutomationRecord>,
+        ceiling: Option<PermissionMode>,
+    ) -> Result<AutomationAuthority, RpcError> {
+        let mut authority = match &definition.target {
+            AutomationTarget::Existing { task_id } => {
+                self.automation_chat_authority(task_id, false)?
+            }
+            AutomationTarget::NewConversation {
+                origin_task_id,
+                project_id,
+            } => {
+                // Unchanged new-chat destinations retain their approved checkout
+                // even when the provenance chat was archived or deleted.
+                if let Some(saved) = previous.filter(|r| {
+                    matches!(&r.definition.target, AutomationTarget::NewConversation { origin_task_id: saved_origin, .. }
+                        if project_id.as_deref().is_none_or(|id|id==r.authority.project_id)
+                        && (origin_task_id.is_none() || origin_task_id==saved_origin))
+                }) {
+                    self.automation_project(&saved.authority.project_id)?;
+                    saved.authority.clone()
+                } else if let Some(id) = project_id {
+                    let project = self.automation_project(id)?;
+                    let detaching_previous=previous.is_some_and(|saved|
+                        saved.definition.target.origin_task_id()==origin_task_id.as_deref()
+                        && (saved.authority.project_id!=*id || matches!(saved.definition.target,AutomationTarget::Existing{..})));
+                    let origin = match origin_task_id.as_deref() {
+                        None=>None,
+                        Some(origin)=>match self.automation_chat_authority(origin,true) {
+                            Ok(authority)=>Some(authority),
+                            Err(_) if detaching_previous=>None,
+                            Err(error)=>return Err(error),
+                        }
+                    }.filter(|a|a.project_id==*id);
+                    if let Some(origin) = origin {
+                        origin
+                    } else {
+                        let defaults = self
+                            .provider_defaults
+                            .as_ref()
+                            .map(|s| s.get())
+                            .transpose()
+                            .map_err(failed)?
+                            .unwrap_or_default();
+                        let provider = &project.execution_defaults.provider;
+                        let harness = definition
+                            .execution
+                            .as_ref()
+                            .map(|e| e.harness)
+                            .or_else(|| provider.as_ref().map(|p| p.harness))
+                            .unwrap_or_else(|| self.doc_host.harness_for(""));
+                        let saved = defaults.providers.get(&harness);
+                        let mode = project
+                            .execution_defaults
+                            .permission_mode
+                            .unwrap_or(PermissionMode::Ask);
+                        let config = ChatConfig {
+                            harness,
+                            provider_account_id: None,
+                            model: provider
+                                .as_ref()
+                                .filter(|p| p.harness == harness)
+                                .and_then(|p| p.model.clone())
+                                .or_else(|| saved.and_then(|s| s.model.clone())),
+                            reasoning: saved.and_then(|s| s.reasoning),
+                            model_options: saved
+                                .map(|s| s.model_options.clone())
+                                .unwrap_or_default(),
+                            sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+                            permission_mode: mode,
+                            effective_permission_mode: mode,
+                            permission_ceiling_source: None,
+                            permission_degradation_reason: None,
+                            permission_audit: vec![],
+                        };
+                        AutomationAuthority {
+                            origin_task_id: origin_task_id.clone().unwrap_or_default(),
+                            project_id: id.clone(),
+                            cwd: project.path,
+                            checkout_id: None,
+                            workspace_repair_revision: 0,
+                            config,
+                            permission_ceiling: mode,
+                        }
+                    }
+                } else {
+                    self.automation_chat_authority(
+                        origin_task_id
+                            .as_deref()
+                            .ok_or_else(|| failed("Choose a project for the new conversations"))?,
+                        true,
+                    )?
+                }
+            }
+        };
+        let destination_mode = authority.permission_ceiling;
+        let destination_config = authority.config.clone();
+        // Saving metadata never follows a later composer/model change.
+        if let Some(previous) = previous {
+            authority.config = previous.authority.config.clone();
+            authority.permission_ceiling =
+                cap(previous.authority.permission_ceiling, destination_mode);
+        }
+        if let Some(execution) = &definition.execution {
+            authority.config.harness = execution.harness;
+            authority.config.provider_account_id = execution.provider_account_id.clone();
+            authority.config.model = execution.model.clone();
+            authority.config.reasoning = execution.reasoning;
+            authority.config.model_options = execution.model_options.clone();
+            if let Some(models) = self
+                .model_cache
+                .cached(execution.harness, execution.provider_account_id.as_deref())
+                && let Some(id) = &execution.model
+            {
+                let model=models.iter().find(|model|&model.id==id).ok_or_else(||failed("The selected model is not in this provider's current catalog; reload models"))?;
+                if execution.reasoning.is_some_and(|level| {
+                    !model.reasoning_levels.is_empty() && !model.reasoning_levels.contains(&level)
+                }) {
+                    return Err(failed(
+                        "This model does not support the selected reasoning level",
+                    ));
+                }
+                for (key, value) in &execution.model_options {
+                    if !model.options.iter().any(|option| {
+                        option.id == *key
+                            && value
+                                .as_str()
+                                .is_some_and(|v| option.choices.iter().any(|choice| choice.id == v))
+                    }) {
+                        return Err(failed(format!(
+                            "Unsupported model option {key}; choose an option from the current model catalog"
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(ceiling) = ceiling {
+            authority.permission_ceiling = cap(authority.permission_ceiling, ceiling);
+        }
+        authority.config.permission_mode = cap(
+            authority.config.permission_mode,
+            authority.permission_ceiling,
+        );
+        if matches!(definition.target, AutomationTarget::Existing { .. }) {
+            self.verify_existing_automation_execution(&authority.config, &destination_config)?;
+            if self
+                .task_identity
+                .view(&authority.origin_task_id)
+                .and_then(|view| view.current_binding)
+                .is_some_and(|binding| {
+                    !binding.provider_task_id.is_empty()
+                        && binding.provider_id != authority.config.harness
+                })
+            {
+                return Err(failed(
+                    "This conversation has a different native provider binding; repair its context or choose a new conversation each run",
+                ));
+            }
+        }
+        Ok(authority)
+    }
+
+    fn verify_existing_automation_execution(
+        &self,
+        saved: &ChatConfig,
+        current: &ChatConfig,
+    ) -> Result<(), RpcError> {
+        if saved.harness != current.harness {
+            return Err(failed(
+                "An existing conversation keeps its provider. Choose a model from that provider, or start a new conversation each run to use another provider",
+            ));
+        }
+        if saved.provider_account_id != current.provider_account_id {
+            let same = self
+                .agent_accounts
+                .resolve_execution(saved.harness, saved.provider_account_id.as_deref())
+                .ok()
+                .zip(
+                    self.agent_accounts
+                        .resolve_execution(current.harness, current.provider_account_id.as_deref())
+                        .ok(),
+                )
+                .is_some_and(|(a, b)| a.auth_instance_id == b.auth_instance_id);
+            if !same {
+                return Err(failed(
+                    "An existing conversation keeps its provider account. Choose that account or start a new conversation each run",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn automation_dispatch_authority(
+        &self,
+        record: &AutomationRecord,
+    ) -> Result<AutomationAuthority, RpcError> {
+        self.automation_project(&record.authority.project_id)?;
+        match &record.definition.target {
+            AutomationTarget::Existing { task_id } => {
+                self.automation_chat_authority(task_id, false)
+            }
+            AutomationTarget::NewConversation { .. } => {
+                if !std::path::Path::new(&record.authority.cwd).is_dir() {
+                    return Err(failed("Automation folder is no longer available"));
+                }
+                Ok(record.authority.clone())
+            }
+        }
+    }
+
+    async fn verify_automation_location(&self, record: &AutomationRecord) -> Result<(), RpcError> {
+        let project = self.automation_project(&record.authority.project_id)?;
+        let cwd = std::path::Path::new(&record.authority.cwd);
+        if self
+            .repos
+            .workspace_directory(std::path::Path::new(&project.path), cwd)
+            .await
+            .is_none()
+        {
+            return Err(failed(
+                "The automation folder no longer belongs to its project or a registered worktree; review its destination",
+            ));
+        }
+        if let Some(expected) = &record.authority.checkout_id {
+            let actual=self.repos.checkout_identity(cwd).await.map_err(|_|failed("The approved checkout is unavailable; restore it or review the automation destination"))?;
+            if &actual.id != expected {
+                return Err(failed(
+                    "The automation checkout identity changed; restore it or review the destination before running",
+                ));
+            }
+        }
+        Ok(())
     }
     fn automation_preview(
         &self,
@@ -313,17 +799,36 @@ impl EngineRpc {
         let (authority, next) = match &p.operation {
             Op::Save { definition } => {
                 validate_definition(definition).map_err(failed)?;
-                let next = preview_times(&definition.trigger, &definition.timezone, now, 3)
-                    .map_err(failed)?;
-                if next.is_empty() {
+                let inactive = current
+                    .as_ref()
+                    .is_some_and(|r| !r.enabled && same_schedule(&r.definition, definition));
+                let next = if inactive {
+                    vec![]
+                } else {
+                    preview_times(&definition.trigger, &definition.timezone, now, 3)
+                        .map_err(failed)?
+                };
+                if next.is_empty() && !inactive {
                     return Err(failed("Choose a future occurrence"));
                 }
-                (self.automation_authority(&definition.target)?, next)
+                (
+                    self.automation_save_authority(
+                        definition,
+                        current.as_ref(),
+                        p.permission_ceiling,
+                    )?,
+                    next,
+                )
             }
             Op::Resume => {
                 let r = current
                     .as_ref()
                     .ok_or_else(|| failed("Automation is missing"))?;
+                if r.completed {
+                    return Err(failed(
+                        "This automation is finished; edit its schedule to choose new future work",
+                    ));
+                }
                 if let AutomationTrigger::PrWatch { wake_budget, .. } = r.definition.trigger
                     && r.watch
                         .as_ref()
@@ -333,7 +838,7 @@ impl EngineRpc {
                         "The wake budget is exhausted; edit and review a new budget",
                     ));
                 }
-                let a = self.automation_authority(&r.definition.target)?;
+                let a = self.automation_dispatch_authority(r)?;
                 self.verify_automation_authority(r, &a)?;
                 let next = preview_times(&r.definition.trigger, &r.definition.timezone, now, 3)
                     .map_err(failed)?;
@@ -344,6 +849,29 @@ impl EngineRpc {
                 }
                 (r.authority.clone(), next)
             }
+            Op::ResolveUnknown { occurrence_id } => {
+                let record = current
+                    .as_ref()
+                    .ok_or_else(|| failed("Automation is missing"))?;
+                let run = self
+                    .store
+                    .automation_run(occurrence_id)
+                    .map_err(failed)?
+                    .filter(|r| {
+                        r.automation_id == record.id
+                            && r.owner_host_id == self.engine_info.device_id
+                            && r.state == State::Unknown
+                    })
+                    .ok_or_else(|| {
+                        failed("Only an unknown occurrence of this automation can be resolved")
+                    })?;
+                if self.sessions.turn_in_flight(&run.task_id) {
+                    return Err(failed(
+                        "This conversation still has a running turn; stop or finish it before resolving the old occurrence",
+                    ));
+                }
+                (record.authority.clone(), vec![])
+            }
             _ => (
                 current
                     .ok_or_else(|| failed("Automation is missing"))?
@@ -351,7 +879,56 @@ impl EngineRpc {
                 vec![],
             ),
         };
-        Ok(AutomationPreview{preview_id:preview_token(&hash,&authority,p.expected_revision,now)?,expires_at_ms:now.saturating_add(60_000),next_occurrences_ms:next,owner_host_id:p.owner_host_id.clone(),permission_ceiling:authority.permission_ceiling,description:"Runs on this host while LUNA is open. Pause prevents new delivery; accepted work continues under its normal task permissions. Missed slots coalesce to one latest eligible run; uncertain delivery is never resent.".into()})
+        let description = if matches!(p.operation, Op::ResolveUnknown { .. }) {
+            "Acknowledge the uncertain old outcome without resending it. Separately scheduled future occurrences may run; this does not prove whether the old message was delivered.".to_owned()
+        } else {
+            let project = self
+                .workspace
+                .space(&authority.project_id)
+                .ok()
+                .flatten()
+                .map(|p| {
+                    p.name.unwrap_or_else(|| {
+                        std::path::Path::new(&p.path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                })
+                .unwrap_or_else(|| authority.project_id.clone());
+            let provider = match authority.config.harness {
+                HarnessId::ClaudeCode => "Claude Code",
+                HarnessId::Codex => "Codex",
+                HarnessId::Opencode => "OpenCode",
+                HarnessId::Mock => "Mock",
+                _ => "Unavailable provider",
+            };
+            format!(
+                "Project {} · folder {} · {} · model {} · reasoning {}. LUNA must be running on this device. Pausing prevents new delivery. Missed slots coalesce; uncertain delivery is never resent.",
+                project,
+                authority.cwd,
+                provider,
+                authority
+                    .config
+                    .model
+                    .as_deref()
+                    .unwrap_or("provider default"),
+                authority
+                    .config
+                    .reasoning
+                    .map(|r| format!("{r:?}").to_lowercase())
+                    .unwrap_or_else(|| "provider default".into())
+            )
+        };
+        Ok(AutomationPreview {
+            preview_id: preview_token(&hash, &authority, p.expected_revision, now)?,
+            expires_at_ms: now.saturating_add(60_000),
+            next_occurrences_ms: next,
+            owner_host_id: p.owner_host_id.clone(),
+            permission_ceiling: authority.permission_ceiling,
+            description,
+        })
     }
     fn verify_automation_authority(
         &self,
@@ -359,16 +936,17 @@ impl EngineRpc {
         a: &AutomationAuthority,
     ) -> Result<(), RpcError> {
         let b = &r.authority;
+        if matches!(r.definition.target, AutomationTarget::Existing { .. }) {
+            self.verify_existing_automation_execution(&b.config, &a.config)?;
+        }
         if a.origin_task_id != b.origin_task_id
             || a.project_id != b.project_id
             || a.cwd != b.cwd
             || a.checkout_id != b.checkout_id
             || a.workspace_repair_revision != b.workspace_repair_revision
-            || a.config.harness != b.config.harness
-            || a.config.provider_account_id != b.config.provider_account_id
         {
             return Err(failed(
-                "Target folder, project, provider, account or workspace identity changed; review the automation",
+                "Target folder, project or workspace identity changed; review the automation",
             ));
         }
         Ok(())
@@ -410,25 +988,69 @@ impl EngineRpc {
         }
         let current = self.store.automation(&p.automation_id).map_err(failed)?;
         let mut record = match &p.operation {
-            Op::Save { definition } => AutomationRecord {
-                id: p.automation_id.clone(),
-                owner_host_id: p.owner_host_id.clone(),
-                revision: p.expected_revision + 1,
-                definition: definition.clone(),
-                authority: self.automation_authority(&definition.target)?,
-                enabled: true,
-                deleted: false,
-                next_due_ms: preview.next_occurrences_ms.first().copied(),
-                created_at_ms: current.as_ref().map_or(now, |r| r.created_at_ms),
-                updated_at_ms: now,
-                watch: matches!(definition.trigger, AutomationTrigger::PrWatch { .. })
-                    .then(Default::default),
-            },
+            Op::Save { definition } => {
+                let authority = self.automation_save_authority(
+                    definition,
+                    current.as_ref(),
+                    p.permission_ceiling,
+                )?;
+                let mut definition = definition.clone();
+                if let AutomationTarget::NewConversation { project_id, .. } = &mut definition.target
+                {
+                    *project_id = Some(authority.project_id.clone());
+                }
+                definition.execution = Some(AutomationExecution::from(&authority.config));
+                definition.source_task_id = current
+                    .as_ref()
+                    .and_then(|r| {
+                        r.definition.source_task_id.clone().or_else(|| {
+                            (!r.authority.origin_task_id.is_empty())
+                                .then(|| r.authority.origin_task_id.clone())
+                        })
+                    })
+                    .or(definition.source_task_id)
+                    .or_else(|| definition.target.origin_task_id().map(str::to_owned));
+                let watch = match (&definition.trigger, current.as_ref()) {
+                    (
+                        AutomationTrigger::PrWatch {
+                            repository, number, ..
+                        },
+                        Some(old),
+                    ) if matches!(&old.definition.trigger,AutomationTrigger::PrWatch{repository:old_repo,number:old_number,..} if old_repo == repository && old_number == number) => {
+                        old.watch.clone()
+                    }
+                    (AutomationTrigger::PrWatch { .. }, _) => Some(Default::default()),
+                    _ => None,
+                };
+                let remains_finished = current
+                    .as_ref()
+                    .is_some_and(|r| r.completed && same_schedule(&r.definition, &definition));
+                let enabled = current
+                    .as_ref()
+                    .is_none_or(|r| r.enabled || (r.completed && !remains_finished));
+                AutomationRecord {
+                    id: p.automation_id.clone(),
+                    owner_host_id: p.owner_host_id.clone(),
+                    revision: p.expected_revision + 1,
+                    definition,
+                    authority,
+                    enabled,
+                    deleted: false,
+                    completed: remains_finished,
+                    next_due_ms: enabled
+                        .then(|| preview.next_occurrences_ms.first().copied())
+                        .flatten(),
+                    created_at_ms: current.as_ref().map_or(now, |r| r.created_at_ms),
+                    updated_at_ms: now,
+                    watch,
+                }
+            }
             _ => current.ok_or_else(|| failed("Automation is missing"))?,
         };
         record.revision = p.expected_revision + 1;
         record.updated_at_ms = now;
         let mut cancel = None;
+        let mut resolve_unknown = None;
         match &p.operation {
             Op::Pause => {
                 record.enabled = false;
@@ -441,6 +1063,7 @@ impl EngineRpc {
             }
             Op::Resume => {
                 record.enabled = true;
+                record.completed = false;
                 record.next_due_ms = preview.next_occurrences_ms.first().copied();
             }
             Op::CancelOccurrence { occurrence_id } => {
@@ -449,6 +1072,12 @@ impl EngineRpc {
                 cancel = Some(occurrence_id.as_str());
             }
             Op::Save { .. } => {}
+            Op::ResolveUnknown { occurrence_id } => {
+                resolve_unknown = Some(occurrence_id.as_str());
+                if record.next_due_ms.is_none() {
+                    record.enabled = false;
+                }
+            }
         }
         // Revalidate the authority captured in the approved preview before committing.
         if preview_token(&hash, &record.authority, p.expected_revision, reviewed_at)?
@@ -469,6 +1098,7 @@ impl EngineRpc {
                 &record,
                 &receipt,
                 cancel,
+                resolve_unknown,
                 permit.as_ref().map(|p| p.ticket()),
             )
             .map_err(failed)
@@ -504,23 +1134,8 @@ impl EngineRpc {
                 let limit = p.limit.unwrap_or(50).clamp(1, 100);
                 let mut items = self
                     .store
-                    .automations(
-                        &self.engine_info.device_id,
-                        p.task_id.as_deref(),
-                        p.after_id.as_deref(),
-                        p.include_deleted,
-                        limit + 1,
-                    )
+                    .automations(&self.engine_info.device_id, &p, limit + 1)
                     .map_err(failed)?;
-                if let Some(id) = p.automation_id {
-                    items = self
-                        .store
-                        .automation(&id)
-                        .map_err(failed)?
-                        .filter(|r| r.owner_host_id == self.engine_info.device_id)
-                        .into_iter()
-                        .collect();
-                }
                 let next = (items.len() > limit).then(|| items[limit - 1].id.clone());
                 items.truncate(limit);
                 RpcReply::value(&AutomationPage {
@@ -533,13 +1148,7 @@ impl EngineRpc {
                 let limit = p.limit.unwrap_or(50).clamp(1, 100);
                 let mut items = self
                     .store
-                    .automation_runs(
-                        &self.engine_info.device_id,
-                        p.automation_id.as_deref(),
-                        p.after_id.as_deref(),
-                        false,
-                        limit + 1,
-                    )
+                    .scoped_automation_runs(&self.engine_info.device_id, &p, limit + 1)
                     .map_err(failed)?;
                 let next = (items.len() > limit).then(|| items[limit - 1].id.clone());
                 items.truncate(limit);
@@ -686,12 +1295,28 @@ impl EngineRpc {
                             .map_or_else(|| "Task command rejected".into(), |r| r.message);
                     }
                     _ if run.boot_id != self.cleanup_boot_id
-                        || r.reason.as_ref().is_some_and(|r| {
-                            r.code == CommandReasonCode::ProviderAcceptanceUnknown
-                        }) =>
+                        // Admission uses the same reason while awaiting a
+                        // provider. Only a committed ambiguous receipt closes
+                        // that wait as Unknown (as in the Board lifecycle).
+                        || (r.committed_at_ms.is_some()
+                            && r.reason.as_ref().is_some_and(|r| {
+                                r.code == CommandReasonCode::ProviderAcceptanceUnknown
+                            })) =>
                     {
                         run.state = State::Unknown;
                         run.detail="Delivery cannot be proven; inspect the conversation before creating any new request".into();
+                    }
+                    CommandReceiptStatus::Pending
+                        if !self.sessions.turn_in_flight(&run.task_id)
+                            && crate::now_ms().saturating_sub(r.accepted_at_ms) > 5_000 =>
+                    {
+                        // As with Board delivery, give an admitted startup a
+                        // brief grace period. Once it has ended without an
+                        // acknowledgement, retain uncertainty rather than an
+                        // indefinitely Dispatching occurrence. Receipt times
+                        // use the engine clock, not a caller's due-slot clock.
+                        run.state = State::Unknown;
+                        run.detail = "The run ended without confirming provider acceptance; inspect the conversation before creating any new request".into();
                     }
                     _ => {}
                 }
@@ -707,6 +1332,7 @@ impl EngineRpc {
                     .map_err(failed)?;
             }
         }
+        self.finalize_automation_runs(now).await?;
         for record in self
             .store
             .due_automations(&self.engine_info.device_id, now, false)
@@ -747,6 +1373,10 @@ impl EngineRpc {
                 state: State::Claimed,
                 detail: "Occurrence claimed durably before task admission".into(),
                 boot_id: self.cleanup_boot_id.clone(),
+                automation_name: record.definition.name.clone(),
+                project_id: record.authority.project_id.clone(),
+                notification_policy: record.definition.notification_policy,
+                finalized_at_ms: None,
             };
             if now.saturating_sub(slot) > record.definition.max_lateness_ms {
                 run.state = State::Skipped;
@@ -758,6 +1388,12 @@ impl EngineRpc {
             if let Some(error) = calendar_error {
                 next.enabled = false;
                 run.state = State::Failed;
+                run.detail = format!("Paused before delivery: {error}");
+            }
+            if let Err(error) = self.automation_project(&record.authority.project_id) {
+                next.enabled = false;
+                next.next_due_ms = None;
+                run.state = State::Skipped;
                 run.detail = format!("Paused before delivery: {error}");
             }
             let permit = self.automation_permit()?;
@@ -793,11 +1429,25 @@ impl EngineRpc {
         run: &mut AutomationRun,
         now: i64,
     ) -> Result<(), RpcError> {
-        let authority = self.automation_authority(&r.definition.target)?;
+        let authority = self.automation_dispatch_authority(r)?;
         self.verify_automation_authority(r, &authority)?;
+        self.verify_automation_location(r).await?;
         self.automation_target_idle(&run.task_id)?;
-        let mut config = authority.config.clone();
-        config.permission_mode = cap(config.permission_mode, r.authority.permission_ceiling);
+        let mut config = r.authority.config.clone();
+        config.permission_mode = cap(
+            authority.config.permission_mode,
+            r.authority.permission_ceiling,
+        );
+        config.sandbox = match (config.sandbox, authority.config.sandbox) {
+            (luna_proto::SandboxLevel::ReadOnly, _) | (_, luna_proto::SandboxLevel::ReadOnly) => {
+                luna_proto::SandboxLevel::ReadOnly
+            }
+            (luna_proto::SandboxLevel::WorkspaceWrite, _)
+            | (_, luna_proto::SandboxLevel::WorkspaceWrite) => {
+                luna_proto::SandboxLevel::WorkspaceWrite
+            }
+            _ => luna_proto::SandboxLevel::DangerFullAccess,
+        };
         let prior = run.state;
         run.state = State::Dispatching;
         run.updated_at_ms = now;
@@ -839,7 +1489,7 @@ impl EngineRpc {
                     )?,
                     false,
                     None,
-                    Some(r),
+                    Some(AutomationCommandFence::Dispatch(r)),
                 )
                 .await?;
             if receipt.status != CommandReceiptStatus::Applied {
@@ -882,7 +1532,12 @@ impl EngineRpc {
             now,
         )?;
         let receipt = self
-            .execute_task_command_with_fences(command, false, None, Some(r))
+            .execute_task_command_with_fences(
+                command,
+                false,
+                None,
+                Some(AutomationCommandFence::Dispatch(r)),
+            )
             .await?;
         if matches!(
             receipt.status,
@@ -924,6 +1579,82 @@ impl EngineRpc {
             intent,
         })
     }
+
+    async fn finalize_automation_runs(&self, now: i64) -> Result<(), RpcError> {
+        for mut run in self
+            .store
+            .automation_terminal_effects(&self.engine_info.device_id)
+            .map_err(failed)?
+        {
+            let Some(record) = self.store.automation(&run.automation_id).map_err(failed)? else {
+                continue;
+            };
+            if run.state == State::Completed
+                && record.definition.archive_successful_runs
+                && matches!(
+                    record.definition.target,
+                    AutomationTarget::NewConversation { .. }
+                )
+                && record.revision == run.automation_revision
+                && !record.deleted
+            {
+                // The completion event precedes release of its runtime lease.
+                // Give that exact turn time to retire; never stop it to archive.
+                if self.sessions.turn_in_flight(&run.task_id)
+                    && self
+                        .sessions
+                        .work_runtime(&run.task_id)
+                        .is_some_and(|live| live.message_id == run.message_id)
+                {
+                    continue;
+                }
+                let command_id = format!("{}:archive", run.command_id);
+                let command = self.automation_command(
+                    &run.task_id,
+                    &command_id,
+                    TaskCommandIntent::SetArchived { archived: true },
+                    now,
+                );
+                let result = match command {
+                    Ok(command) => {
+                        self.execute_task_command_with_fences(
+                            command,
+                            false,
+                            None,
+                            Some(AutomationCommandFence::Archive(&run)),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(receipt) if receipt.status==CommandReceiptStatus::Applied => run.detail.push_str(" The successful fresh conversation was archived."),
+                    Ok(_) => run.detail.push_str(" Automatic archive was not confirmed; inspect the conversation before retrying."),
+                    Err(error)=>run.detail.push_str(&format!(" Conversation kept open: {error}")),
+                }
+            }
+            if record.revision == run.automation_revision
+                && record.next_due_ms.is_none()
+                && !record.deleted
+                && record.enabled
+            {
+                let mut finished = record.clone();
+                finished.enabled = false;
+                finished.completed = run.state == State::Completed;
+                finished.updated_at_ms = now;
+                let permit = self.automation_permit()?;
+                self.store
+                    .observe_automation(&record, &finished, permit.as_ref().map(|p| p.ticket()))
+                    .map_err(failed)?;
+            }
+            run.finalized_at_ms = Some(now);
+            let permit = self.automation_permit()?;
+            self.store
+                .update_automation_run(&run, run.state, false, permit.as_ref().map(|p| p.ticket()))
+                .map_err(failed)?;
+        }
+        Ok(())
+    }
 }
 
 impl EngineRpc {
@@ -943,6 +1674,18 @@ impl EngineRpc {
             return Ok(());
         };
         let mut next = r.clone();
+        if let Err(error) = self.automation_project(&r.authority.project_id) {
+            next.enabled = false;
+            next.next_due_ms = None;
+            next.updated_at_ms = now;
+            next.watch.get_or_insert_with(Default::default).last_error =
+                Some(format!("Paused: {error}"));
+            let permit = self.automation_permit()?;
+            self.store
+                .observe_automation(r, &next, permit.as_ref().map(|p| p.ticket()))
+                .map_err(failed)?;
+            return Ok(());
+        }
         let mut cursor = r.watch.clone().unwrap_or_default();
         if cursor.wakes_used >= *wake_budget {
             next.next_due_ms = None;
@@ -1065,6 +1808,10 @@ impl EngineRpc {
                 &wake_cursor[..12]
             ),
             boot_id: self.cleanup_boot_id.clone(),
+            automation_name: r.definition.name.clone(),
+            project_id: r.authority.project_id.clone(),
+            notification_policy: r.definition.notification_policy,
+            finalized_at_ms: None,
         };
         let claimed = self
             .store

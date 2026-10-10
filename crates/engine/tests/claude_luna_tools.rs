@@ -258,6 +258,7 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
         "wait_threads",
         "send_message_to_thread",
         "list_automations",
+        "list_automation_targets",
         "automation_update",
     ] {
         assert!(tools.iter().any(|tool| tool == name), "{name}: {run1:#}");

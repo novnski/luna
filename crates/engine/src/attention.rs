@@ -25,33 +25,60 @@ pub(crate) const MANAGED_KINDS: &[AttentionKind] = &[
     AttentionKind::ProviderAuthenticationRequired,
     AttentionKind::ConnectivityUnavailable,
     AttentionKind::AutomationFailed,
+    AttentionKind::AutomationCompleted,
 ];
 
 pub(crate) fn project_automation(
     environment_id: &str,
     source: &luna_sync::AutomationAttentionSource,
 ) -> Option<AttentionItem> {
-    let bad_run = source.run.as_ref().filter(|r| {
-        matches!(
-            r.state,
-            luna_proto::AutomationRunState::Unknown | luna_proto::AutomationRunState::Failed
-        )
-    });
-    if !source.watch_unknown && bad_run.is_none() {
+    use luna_proto::{AutomationNotificationPolicy as Policy, AutomationRunState as State};
+    let bad_run = source
+        .run
+        .as_ref()
+        .filter(|r| matches!(r.state, State::Unknown | State::Failed | State::Skipped));
+    let completed = source.run.as_ref().filter(|r| r.state == State::Completed);
+    if !source.watch_unknown && bad_run.is_none() && completed.is_none() {
         return None;
     }
-    let key = format!("automation:{}:{}", environment_id, source.automation_id);
-    let timestamp = bad_run.map_or(source.updated_at_ms, |r| r.updated_at_ms);
+    let selected = bad_run.or(completed);
+    let success = completed.is_some() && !source.watch_unknown && bad_run.is_none();
+    let key = format!(
+        "automation:{}:{}:{}",
+        environment_id,
+        source.automation_id,
+        selected.map_or("watch", |r| if r.state == State::Skipped {
+            "skipped"
+        } else {
+            r.id.as_str()
+        })
+    );
+    let timestamp = selected.map_or(source.updated_at_ms, |r| r.updated_at_ms);
+    let task_id = selected
+        .map(|r| r.task_id.clone())
+        .or_else(|| (!source.origin_task_id.is_empty()).then(|| source.origin_task_id.clone()));
+    let target = if success {
+        task_id.as_ref().map(|id| AttentionTarget::Task {
+            task_id: id.clone(),
+        })
+    } else {
+        None
+    }
+    .unwrap_or_else(|| AttentionTarget::Automation {
+        automation_id: source.automation_id.clone(),
+        project_id: source.project_id.clone(),
+    });
     Some(AttentionItem {
         contract_version: ATTENTION_CONTRACT_VERSION, id: stable_id(&key), dedup_key:key.clone(),
         source_key:format!("{key}:{}:{}:{}",source.revision,source.watch_unknown,bad_run.map_or("",|r|r.id.as_str())),
-        kind: AttentionKind::AutomationFailed, severity: AttentionSeverity::Warning, lifecycle: AttentionLifecycle::Unresolved,
-        environment_id: environment_id.into(), device_id: environment_id.into(), task_id:Some(source.origin_task_id.clone()), turn_id:None, request_id:None,
-        title:"Automation needs attention".into(),
-        summary:if source.watch_unknown { "PR observation is unavailable. Inspect Automations before relying on its status." } else { "A scheduled occurrence failed or its delivery is unconfirmed. Inspect Automations and the conversation." }.into(),
-        created_at_ms:timestamp,updated_at_ms:timestamp,seen_at_ms:None,acknowledged_at_ms:None,resolved_at_ms:None,
-        target: AttentionTarget::Task { task_id: source.origin_task_id.clone() }, source: AttentionSourcePointer {
-            task_id:Some(source.origin_task_id.clone()),message_id:None,part_id:None,request_id:None,queue_id:None,recovery_id:None,activity_event_id:None,
+        suppress_notification: source.notification_policy==Policy::Never || (success&&source.notification_policy!=Policy::AllRuns),
+        kind: if success{AttentionKind::AutomationCompleted}else{AttentionKind::AutomationFailed}, severity: if success{AttentionSeverity::Info}else{AttentionSeverity::Warning}, lifecycle: if success{AttentionLifecycle::Resolved}else{AttentionLifecycle::Unresolved},
+        environment_id: environment_id.into(), device_id: environment_id.into(), task_id:task_id.clone(), turn_id:None, request_id:None,
+        title:if success{"Automation completed"}else{"Automation needs attention"}.into(),
+        summary:if source.watch_unknown { "PR observation is unavailable. Inspect Automations before relying on its status." } else if success {"A scheduled run finished."}else { "A scheduled occurrence was skipped, failed or its delivery is unconfirmed. Inspect Automations and the conversation." }.into(),
+        created_at_ms:timestamp,updated_at_ms:timestamp,seen_at_ms:None,acknowledged_at_ms:None,resolved_at_ms:success.then_some(timestamp),
+        target, source: AttentionSourcePointer {
+            task_id,message_id:selected.map(|r|r.message_id.clone()),part_id:None,request_id:None,queue_id:None,recovery_id:None,activity_event_id:None,
         },
     })
 }
@@ -78,6 +105,7 @@ pub(crate) fn project_connectivity(
         id: stable_id(&key),
         dedup_key: key.clone(),
         source_key: format!("{key}:{state:?}"),
+        suppress_notification: false,
         kind: AttentionKind::ConnectivityUnavailable,
         severity: AttentionSeverity::Warning,
         lifecycle: AttentionLifecycle::Unresolved,
@@ -135,6 +163,7 @@ fn item(source: ItemSource<'_>) -> AttentionItem {
         id,
         dedup_key: source.dedup_key,
         source_key: source.source_key,
+        suppress_notification: false,
         kind: source.kind,
         severity: source.severity,
         lifecycle: if source.resolved {

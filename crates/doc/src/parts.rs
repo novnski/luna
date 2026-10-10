@@ -1049,7 +1049,7 @@ pub struct SidecarPayload {
 /// Keeps: command / path / pattern / url / query / todo items / server+tool names,
 /// and a subagent spawn's model/type (see [`spawn_badge`] — a couple of short
 /// identifiers the chip names the child by), and a LUNA create-thread call's
-/// idempotency key (see [`created_thread_key`]).
+/// idempotency key (see [`created_thread_key`]) or automation's stable ID.
 /// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, Mcp/Unknown input.
 /// Full inputs remain only in the host's local run journal. Idempotent.
 pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
@@ -1070,7 +1070,9 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
         ToolCall::Mcp { server, tool, .. } => ToolCall::Mcp {
             server: server.clone(),
             tool: tool.clone(),
-            input: spawn_badge(call).or_else(|| created_thread_key(call)),
+            input: spawn_badge(call)
+                .or_else(|| created_thread_key(call))
+                .or_else(|| automation_key(call)),
         },
         ToolCall::ComputerUse { .. } => call.clone(),
         ToolCall::Unknown { name, .. } => ToolCall::Unknown {
@@ -1127,6 +1129,30 @@ fn created_thread_key(call: &ToolCall) -> Option<serde_json::Value> {
     let key = input.get("idempotencyKey")?.as_str()?;
     (!key.is_empty() && key.len() <= 128 && key.bytes().all(|byte| byte.is_ascii_graphic()))
         .then(|| serde_json::json!({ "idempotencyKey": key }))
+}
+
+/// Only a stable local ID enters the transcript; prompts, target folders and
+/// execution/access settings remain host-local. The UI loads current metadata
+/// after a successful tool call, rather than trusting model-authored card text.
+fn automation_key(call: &ToolCall) -> Option<serde_json::Value> {
+    let ToolCall::Mcp {
+        server,
+        tool,
+        input: Some(input),
+    } = call
+    else {
+        return None;
+    };
+    if server != "luna" || tool != "automation_update" {
+        return None;
+    }
+    let id = input.get("automationId")?.as_str()?;
+    (!id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-:.".contains(&b)))
+    .then(|| serde_json::json!({"automationId":id}))
 }
 
 #[cfg(test)]

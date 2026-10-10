@@ -4,6 +4,8 @@ use jiff::{
     tz::{AmbiguousOffset, TimeZone},
 };
 use luna_proto::{AutomationDefinition, AutomationTrigger};
+mod recurrence;
+use recurrence::CalendarRule;
 
 pub fn validate_definition(d: &AutomationDefinition) -> Result<(), String> {
     if d.name.trim().is_empty()
@@ -17,6 +19,39 @@ pub fn validate_definition(d: &AutomationDefinition) -> Result<(), String> {
         return Err("Missed-run tolerance must be between zero and 24 hours".into());
     }
     TimeZone::get(&d.timezone).map_err(|e| e.to_string())?;
+    if d.source_task_id
+        .as_ref()
+        .is_some_and(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err("Invalid source conversation".into());
+    }
+    if d.archive_successful_runs
+        && matches!(d.target, luna_proto::AutomationTarget::Existing { .. })
+    {
+        return Err("Automatic archiving is only available for a new conversation each run".into());
+    }
+    if let Some(execution) = &d.execution {
+        if execution.harness.is_retired() {
+            return Err("Choose Codex, Claude Code, or OpenCode".into());
+        }
+        if execution.model.as_ref().is_some_and(|model| {
+            model.trim().is_empty()
+                || model.trim() != model
+                || model.len() > 512
+                || model.chars().any(char::is_control)
+        }) || execution
+            .provider_account_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
+            || execution.model_options.len() > 32
+            || serde_json::to_vec(&execution.model_options)
+                .map_err(|e| e.to_string())?
+                .len()
+                > 8192
+        {
+            return Err("Choose valid, bounded provider/model settings".into());
+        }
+    }
     match &d.trigger {
         AutomationTrigger::Once { at_ms } => {
             Timestamp::from_millisecond(*at_ms).map_err(|e| e.to_string())?;
@@ -42,6 +77,10 @@ pub fn validate_definition(d: &AutomationDefinition) -> Result<(), String> {
             {
                 return Err("Invalid local time or weekdays".into());
             }
+        }
+        AutomationTrigger::RRule { rule, anchor_ms } => {
+            Timestamp::from_millisecond(*anchor_ms).map_err(|e| e.to_string())?;
+            CalendarRule::parse(rule)?;
         }
         AutomationTrigger::PrWatch {
             repository,
@@ -116,6 +155,9 @@ pub(crate) fn next_after(
         AutomationTrigger::PrWatch { poll_minutes, .. } => {
             Ok(after.checked_add(i64::from(*poll_minutes) * 60_000))
         }
+        AutomationTrigger::RRule { rule, anchor_ms } => {
+            CalendarRule::parse(rule)?.next(timezone, *anchor_ms, after)
+        }
         AutomationTrigger::Calendar {
             hour,
             minute,
@@ -165,7 +207,7 @@ pub(crate) fn due_slot(
         AutomationTrigger::PrWatch { .. } => {
             Ok((due, 0, next_after(&d.trigger, &d.timezone, now)?))
         }
-        AutomationTrigger::Calendar { .. } => {
+        AutomationTrigger::Calendar { .. } | AutomationTrigger::RRule { .. } => {
             let mut slot = due;
             let mut n = 0;
             // Bound the walk to 3,660 calendar occurrences. Very old definitions
@@ -182,6 +224,44 @@ pub(crate) fn due_slot(
             }
             Ok((slot, n, None))
         }
+    }
+}
+
+/// Shared concise card text for saved agent-tool results.
+pub fn describe_trigger(d: &AutomationDefinition) -> String {
+    match &d.trigger {
+        AutomationTrigger::Once { at_ms } => {
+            format!("Once, {}", format_in_zone(*at_ms, &d.timezone))
+        }
+        AutomationTrigger::Interval { every_minutes, .. } => {
+            format!("Every {every_minutes} minutes")
+        }
+        AutomationTrigger::Calendar {
+            hour,
+            minute,
+            weekdays,
+        } => {
+            let labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            let days = if weekdays.is_empty() {
+                "Every day".into()
+            } else {
+                weekdays
+                    .iter()
+                    .filter_map(|d| labels.get((*d as usize).wrapping_sub(1)).copied())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("{days} at {hour:02}:{minute:02} ({})", d.timezone)
+        }
+        AutomationTrigger::RRule { rule, .. } => {
+            format!("{} ({})", rule.trim_start_matches("RRULE:"), d.timezone)
+        }
+        AutomationTrigger::PrWatch {
+            repository,
+            number,
+            poll_minutes,
+            ..
+        } => format!("Watch {repository}#{number}, every {poll_minutes} minutes"),
     }
 }
 

@@ -1,5 +1,5 @@
 //! Host-owned schedules. Provider-native jobs are a separate observation surface.
-use crate::{ChatConfig, PermissionMode};
+use crate::{ChatConfig, HarnessId, PermissionMode, ReasoningLevel};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9,14 +9,21 @@ use serde::{Deserialize, Serialize};
     rename_all_fields = "camelCase"
 )]
 pub enum AutomationTarget {
-    Existing { task_id: String },
-    NewConversation { origin_task_id: String },
+    Existing {
+        task_id: String,
+    },
+    NewConversation {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_task_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+    },
 }
 impl AutomationTarget {
-    pub fn origin_task_id(&self) -> &str {
+    pub fn origin_task_id(&self) -> Option<&str> {
         match self {
-            Self::Existing { task_id } => task_id,
-            Self::NewConversation { origin_task_id } => origin_task_id,
+            Self::Existing { task_id } => Some(task_id),
+            Self::NewConversation { origin_task_id, .. } => origin_task_id.as_deref(),
         }
     }
 }
@@ -40,6 +47,11 @@ pub enum AutomationTrigger {
         minute: i8,
         weekdays: Vec<i8>,
     },
+    /// A bounded RFC 5545 calendar-rule subset; all local times use definition.timezone.
+    RRule {
+        rule: String,
+        anchor_ms: i64,
+    },
     PrWatch {
         repository: String,
         number: u64,
@@ -47,6 +59,53 @@ pub enum AutomationTrigger {
         wake_budget: u32,
     },
 }
+
+/// Saved execution selection. Access remains bounded by the approved authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutomationExecution {
+    pub harness: HarnessId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<ReasoningLevel>,
+    #[serde(default)]
+    pub model_options: serde_json::Map<String, serde_json::Value>,
+}
+impl Default for AutomationExecution {
+    fn default() -> Self {
+        Self {
+            harness: HarnessId::Codex,
+            provider_account_id: None,
+            model: None,
+            reasoning: None,
+            model_options: Default::default(),
+        }
+    }
+}
+impl From<&ChatConfig> for AutomationExecution {
+    fn from(config: &ChatConfig) -> Self {
+        Self {
+            harness: config.harness,
+            provider_account_id: config.provider_account_id.clone(),
+            model: config.model.clone(),
+            reasoning: config.reasoning,
+            model_options: config.model_options.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AutomationNotificationPolicy {
+    AllRuns,
+    #[default]
+    ImportantUpdates,
+    Never,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutomationDefinition {
@@ -56,6 +115,33 @@ pub struct AutomationDefinition {
     pub target: AutomationTarget,
     pub trigger: AutomationTrigger,
     pub max_lateness_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<AutomationExecution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task_id: Option<String>,
+    #[serde(default)]
+    pub notification_policy: AutomationNotificationPolicy,
+    #[serde(default)]
+    pub archive_successful_runs: bool,
+}
+impl Default for AutomationDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            prompt: String::new(),
+            timezone: "UTC".into(),
+            target: AutomationTarget::NewConversation {
+                origin_task_id: None,
+                project_id: None,
+            },
+            trigger: AutomationTrigger::Once { at_ms: 0 },
+            max_lateness_ms: 600_000,
+            execution: None,
+            source_task_id: None,
+            notification_policy: Default::default(),
+            archive_successful_runs: false,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +175,8 @@ pub struct AutomationRecord {
     pub authority: AutomationAuthority,
     pub enabled: bool,
     pub deleted: bool,
+    #[serde(default)]
+    pub completed: bool,
     pub next_due_ms: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -111,6 +199,10 @@ pub enum AutomationOperation {
     CancelOccurrence {
         occurrence_id: String,
     },
+    /// Acknowledge an uncertain old outcome without ever replaying its message.
+    ResolveUnknown {
+        occurrence_id: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -122,6 +214,9 @@ pub struct AutomationMutationRequest {
     pub operation: AutomationOperation,
     #[serde(default)]
     pub preview_id: String,
+    /// Host-derived cap for agent proposals. The provider-facing tool omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_ceiling: Option<PermissionMode>,
 }
 /// Provider arguments never carry host identity, permission grants or a preview token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +256,7 @@ pub enum AutomationRunState {
     Unknown,
     Skipped,
     Cancelled,
+    Resolved,
 }
 impl AutomationRunState {
     pub fn blocks_next(self) -> bool {
@@ -187,6 +283,15 @@ pub struct AutomationRun {
     pub state: AutomationRunState,
     pub detail: String,
     pub boot_id: String,
+    #[serde(default)]
+    pub automation_name: String,
+    #[serde(default)]
+    pub project_id: String,
+    #[serde(default)]
+    pub notification_policy: AutomationNotificationPolicy,
+    /// Durable terminal side-effect checkpoint; never a delivery confirmation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finalized_at_ms: Option<i64>,
 }
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -195,6 +300,8 @@ pub struct AutomationReadRequest {
     pub automation_id: Option<String>,
     #[serde(default)]
     pub task_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
     #[serde(default)]
     pub after_id: Option<String>,
     #[serde(default)]

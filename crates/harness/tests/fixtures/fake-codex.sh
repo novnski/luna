@@ -529,13 +529,19 @@ case "$turnline" in
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l5-automation:\([0-9a-f-]*\).*/\1/p')
   listed=$(mcp '{"jsonrpc":"2.0","id":180,"method":"tools/list","params":{}}')
   has "$listed" '"name":"automation_update"' || { fail_turn "$tid" "automation tool missing"; exit 0; }
+  has "$listed" '"name":"list_automation_targets"' || { fail_turn "$tid" "automation target discovery missing"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-automation\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-automation"}}}'
+  destinations=$(mcp_tool 187 list_automation_targets '{}' th-1 t-automation call-automation-targets)
+  has "$destinations" '"isError":false' && has "$destinations" 'automation-agent-project' || { fail_turn "$tid" "automation targets omitted the current project"; exit 0; }
   args="{\"automationId\":\"agent-approved\",\"expectedRevision\":0,\"idempotencyKey\":\"agent-create\",\"operation\":{\"kind\":\"save\",\"definition\":{\"name\":\"Agent approved schedule\",\"prompt\":\"Inspect the release\",\"timezone\":\"UTC\",\"target\":{\"kind\":\"existing\",\"taskId\":\"$target\"},\"trigger\":{\"kind\":\"once\",\"atMs\":2051222400000},\"maxLatenessMs\":300000}}}"
   response=$(mcp_tool 181 automation_update "$args" foreign-thread t-automation call-wrong-task)
   has "$response" '"isError":true' || { fail_turn "$tid" "foreign automation source accepted"; exit 0; }
+  emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-automation\",\"item\":{\"type\":\"mcpToolCall\",\"id\":\"call-automation-create\",\"server\":\"luna\",\"tool\":\"automation_update\",\"arguments\":$args,\"status\":\"inProgress\"}}}"
   response=$(mcp_tool 182 automation_update "$args" th-1 t-automation call-automation-create)
   has "$response" '"isError":false' && has "$response" 'agent-approved' || { fail_turn "$tid" "approved automation did not return receipt"; exit 0; }
+  tool_result=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["result"]))')
+  emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-automation\",\"item\":{\"type\":\"mcpToolCall\",\"id\":\"call-automation-create\",\"server\":\"luna\",\"tool\":\"automation_update\",\"status\":\"completed\",\"result\":$tool_result}}}"
   response=$(mcp_tool 183 automation_update "$args" th-1 t-automation call-automation-create)
   has "$response" '"isError":true' || { fail_turn "$tid" "replayed automation call accepted"; exit 0; }
   changed=$(printf '%s' "$args" | sed 's/Inspect the release/Different instructions/')

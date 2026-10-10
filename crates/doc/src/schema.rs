@@ -552,6 +552,24 @@ impl SessionDoc {
     /// system rows follow it. Keep the full reader's salvage/skip policy
     /// without materializing settled histories or their tool output.
     pub fn read_latest_assistant_entry(&self) -> Result<Option<SessionMessageEntry>, DocError> {
+        self.read_latest_entry_for_role(MessageRole::Assistant)
+    }
+
+    /// Scheduling uses the exact last user message to avoid archiving or
+    /// attributing a later human turn to an old automation.
+    pub fn read_latest_user_entry(&self) -> Result<Option<SessionMessageEntry>, DocError> {
+        self.read_latest_entry_for_role(MessageRole::User)
+    }
+
+    fn read_latest_entry_for_role(
+        &self,
+        role: MessageRole,
+    ) -> Result<Option<SessionMessageEntry>, DocError> {
+        let role_name = match role {
+            MessageRole::Assistant => "assistant",
+            MessageRole::User => "user",
+            MessageRole::System => "system",
+        };
         let messages = self.doc.get_list("messages");
         for index in (0..messages.len()).rev() {
             let Some(value) = messages.get(index) else {
@@ -559,7 +577,7 @@ impl SessionDoc {
             };
             let value = match value {
                 loro::ValueOrContainer::Container(loro::Container::Map(map)) => {
-                    if matches!(map.get("role"), Some(loro::ValueOrContainer::Value(loro::LoroValue::String(role))) if matches!(role.as_str(), "user" | "system"))
+                    if matches!(map.get("role"), Some(loro::ValueOrContainer::Value(loro::LoroValue::String(value))) if value.as_str()!=role_name)
                     {
                         continue;
                     }
@@ -569,7 +587,7 @@ impl SessionDoc {
                 _ => continue,
             };
             match entry_from_json(value.to_json_value()) {
-                Ok(entry) if entry.role == MessageRole::Assistant => return Ok(Some(entry)),
+                Ok(entry) if entry.role == role => return Ok(Some(entry)),
                 Ok(_) => {}
                 Err(err) => {
                     tracing::warn!(chat = %self.chat_id().unwrap_or_default(), error = %err,

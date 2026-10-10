@@ -2232,11 +2232,7 @@ impl SessionsEngine {
             (
                 claim,
                 plan.snapshot.clone(),
-                contract
-                    .context
-                    .project_id
-                    .clone()
-                    .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                plan.destination_project_id.clone(),
                 contract.context.environment_id.clone(),
                 None,
                 None,
@@ -2320,12 +2316,12 @@ impl SessionsEngine {
                     .map(|policy| policy.effective_mode)
             })
             .unwrap_or_default();
-        let needs_card = (proposal.automation_plan.is_some()
-            && effective_mode == PermissionMode::Ask)
-            || proposal
-                .child_plan
-                .as_ref()
-                .is_some_and(|plan| plan.escalation.is_some());
+        let needs_card = proposal.automation_plan.as_ref().is_some_and(|plan| {
+            effective_mode == PermissionMode::Ask || plan.requires_local_approval
+        }) || proposal
+            .child_plan
+            .as_ref()
+            .is_some_and(|plan| plan.escalation.is_some());
         let mut fence = if !needs_card {
             proposal.fence
         } else {

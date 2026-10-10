@@ -888,9 +888,11 @@ async fn seed_rpc(
                     },
                     trigger,
                     max_lateness_ms: 30 * 60_000,
+                    ..luna_proto::AutomationDefinition::default()
                 },
             },
             preview_id: String::new(),
+            permission_ceiling: None,
         };
         let applied = async {
             let preview: luna_proto::AutomationPreview = reader

@@ -1,7 +1,8 @@
 //! Atomic host-local automation metadata and no-replay occurrence claims.
 use super::*;
 use luna_proto::{
-    AutomationMutationReceipt, AutomationRecord, AutomationRun, AutomationRunState as State,
+    AutomationMutationReceipt, AutomationNotificationPolicy, AutomationReadRequest,
+    AutomationRecord, AutomationRun, AutomationRunState as State,
 };
 
 /// Minimal producer metadata; prompts and provider configuration are not read.
@@ -12,6 +13,8 @@ pub struct AutomationAttentionSource {
     pub updated_at_ms: i64,
     pub watch_unknown: bool,
     pub run: Option<AutomationRun>,
+    pub notification_policy: AutomationNotificationPolicy,
+    pub project_id: String,
 }
 
 fn get_record(c: &Connection, id: &str) -> Result<Option<AutomationRecord>, StoreError> {
@@ -38,7 +41,7 @@ impl DocsStore {
         host: &str,
     ) -> Result<Vec<AutomationAttentionSource>, StoreError> {
         let c = self.conn();
-        let mut q = c.prepare("SELECT a.id,a.origin_task_id,a.revision,json_extract(CAST(a.record AS TEXT),'$.updatedAtMs'),json_extract(CAST(a.record AS TEXT),'$.watch.lastError') IS NOT NULL,(SELECT r.record FROM automation_runs r WHERE r.automation_id=a.id ORDER BY r.blocks_next DESC,r.id DESC LIMIT 1) FROM automations a WHERE a.owner_host_id=?1 AND a.deleted=0 ORDER BY a.id LIMIT 1000")?;
+        let mut q = c.prepare("SELECT a.id,a.origin_task_id,a.revision,json_extract(CAST(a.record AS TEXT),'$.updatedAtMs'),json_extract(CAST(a.record AS TEXT),'$.watch.lastError') IS NOT NULL,(SELECT r.record FROM automation_runs r WHERE r.automation_id=a.id ORDER BY r.blocks_next DESC,r.id DESC LIMIT 1),a.record FROM automations a WHERE a.owner_host_id=?1 AND a.deleted=0 ORDER BY a.id LIMIT 1000")?;
         let rows = q
             .query_map([host], |r| {
                 Ok((
@@ -48,12 +51,22 @@ impl DocsStore {
                     r.get::<_, i64>(3)?,
                     r.get::<_, bool>(4)?,
                     r.get::<_, Option<Vec<u8>>>(5)?,
+                    r.get::<_, Vec<u8>>(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(automation_id, origin_task_id, revision, updated_at_ms, watch_unknown, run)| {
+                |(
+                    automation_id,
+                    origin_task_id,
+                    revision,
+                    updated_at_ms,
+                    watch_unknown,
+                    run,
+                    record,
+                )| {
+                    let record: AutomationRecord = serde_json::from_slice(&record)?;
                     Ok(AutomationAttentionSource {
                         automation_id,
                         origin_task_id,
@@ -61,6 +74,8 @@ impl DocsStore {
                         updated_at_ms,
                         watch_unknown,
                         run: run.map(|b| serde_json::from_slice(&b)).transpose()?,
+                        notification_policy: record.definition.notification_policy,
+                        project_id: record.authority.project_id,
                     })
                 },
             )
@@ -106,16 +121,47 @@ impl DocsStore {
     pub fn automations(
         &self,
         host: &str,
-        task: Option<&str>,
-        after: Option<&str>,
-        deleted: bool,
+        filter: &AutomationReadRequest,
         limit: usize,
     ) -> Result<Vec<AutomationRecord>, StoreError> {
+        self.automation_rows(host, filter, limit, None)
+    }
+
+    /// Provider reads retain project scope even when the caller has historical
+    /// runs of an automation that was subsequently moved to another project.
+    pub fn agent_automations(
+        &self,
+        host: &str,
+        filter: &AutomationReadRequest,
+        project: &str,
+        caller: &str,
+        limit: usize,
+    ) -> Result<Vec<AutomationRecord>, StoreError> {
+        self.automation_rows(host, filter, limit, Some((project, caller)))
+    }
+
+    fn automation_rows(
+        &self,
+        host: &str,
+        filter: &AutomationReadRequest,
+        limit: usize,
+        visibility: Option<(&str, &str)>,
+    ) -> Result<Vec<AutomationRecord>, StoreError> {
         let c = self.conn();
-        let mut q=c.prepare("SELECT record FROM automations WHERE owner_host_id=?1 AND (?2 IS NULL OR origin_task_id=?2) AND (?3 IS NULL OR id>?3) AND (?4 OR deleted=0) ORDER BY id LIMIT ?5")?;
+        let mut q=c.prepare("SELECT a.record FROM automations a WHERE a.owner_host_id=?1 AND (?2 IS NULL OR a.origin_task_id=?2 OR json_extract(CAST(a.record AS TEXT),'$.definition.sourceTaskId')=?2 OR json_extract(CAST(a.record AS TEXT),'$.definition.target.taskId')=?2 OR EXISTS(SELECT 1 FROM automation_runs r WHERE r.automation_id=a.id AND r.task_id=?2)) AND (?3 IS NULL OR a.id>?3) AND (?4 OR a.deleted=0) AND (?5 IS NULL OR json_extract(CAST(a.record AS TEXT),'$.authority.projectId')=?5) AND (?6 IS NULL OR a.id=?6) AND (?8 IS NULL OR json_extract(CAST(a.record AS TEXT),'$.authority.projectId')=?8 OR COALESCE(json_extract(CAST(a.record AS TEXT),'$.definition.sourceTaskId'),a.origin_task_id)=?9) ORDER BY a.id LIMIT ?7")?;
         let rows = q
             .query_map(
-                params![host, task, after, deleted, limit.clamp(1, 101)],
+                params![
+                    host,
+                    filter.task_id,
+                    filter.after_id,
+                    filter.include_deleted,
+                    filter.project_id,
+                    filter.automation_id,
+                    limit.clamp(1, 101),
+                    visibility.map(|v| v.0),
+                    visibility.map(|v| v.1)
+                ],
                 |r| r.get::<_, Vec<u8>>(0),
             )?
             .collect::<Result<Vec<_>, _>>()?;
@@ -158,12 +204,86 @@ impl DocsStore {
             .map(|b| Ok(serde_json::from_slice(&b)?))
             .collect()
     }
+
+    /// UI and tool reads intersect every supplied scope before pagination.
+    pub fn scoped_automation_runs(
+        &self,
+        host: &str,
+        filter: &AutomationReadRequest,
+        limit: usize,
+    ) -> Result<Vec<AutomationRun>, StoreError> {
+        let c = self.conn();
+        let mut q = c.prepare("SELECT r.record FROM automation_runs r JOIN automations a ON a.id=r.automation_id WHERE r.owner_host_id=?1 AND (?2 IS NULL OR r.automation_id=?2) AND (?3 IS NULL OR r.task_id=?3) AND (?4 IS NULL OR COALESCE(NULLIF(json_extract(CAST(r.record AS TEXT),'$.projectId'),''),json_extract(CAST(a.record AS TEXT),'$.authority.projectId'))=?4) AND (?5 IS NULL OR r.id<?5) ORDER BY r.id DESC LIMIT ?6")?;
+        let rows = q
+            .query_map(
+                params![
+                    host,
+                    filter.automation_id,
+                    filter.task_id,
+                    filter.project_id,
+                    filter.after_id,
+                    limit.clamp(1, 101)
+                ],
+                |r| r.get::<_, Vec<u8>>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|b| Ok(serde_json::from_slice(&b)?))
+            .collect()
+    }
+
+    pub fn automation_run(&self, id: &str) -> Result<Option<AutomationRun>, StoreError> {
+        let b: Option<Vec<u8>> = self
+            .conn()
+            .query_row(
+                "SELECT record FROM automation_runs WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        b.map(|b| serde_json::from_slice(&b))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn automation_for_message(
+        &self,
+        task: &str,
+        message: &str,
+    ) -> Result<Option<AutomationRun>, StoreError> {
+        let b: Option<Vec<u8>> = self
+            .conn()
+            .query_row(
+                "SELECT record FROM automation_runs WHERE task_id=?1 AND message_id=?2",
+                params![task, message],
+                |r| r.get(0),
+            )
+            .optional()?;
+        b.map(|b| serde_json::from_slice(&b))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn automation_terminal_effects(
+        &self,
+        host: &str,
+    ) -> Result<Vec<AutomationRun>, StoreError> {
+        let c = self.conn();
+        let mut q = c.prepare("SELECT record FROM automation_runs WHERE owner_host_id=?1 AND blocks_next=0 AND json_extract(CAST(record AS TEXT),'$.finalizedAtMs') IS NULL ORDER BY id LIMIT 100")?;
+        let rows = q
+            .query_map([host], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|b| Ok(serde_json::from_slice(&b)?))
+            .collect()
+    }
     pub fn mutate_automation(
         &self,
         expected: u64,
         r: &AutomationRecord,
         receipt: &AutomationMutationReceipt,
         cancel: Option<&str>,
+        resolve_unknown: Option<&str>,
         permit: Option<&WritePermit>,
     ) -> Result<AutomationMutationReceipt, StoreError> {
         let mut c = self.command_writer(permit)?;
@@ -218,6 +338,24 @@ impl DocsStore {
             run.state = State::Cancelled;
             run.updated_at_ms = receipt.committed_at_ms;
             run.detail = "Cancelled before dispatch admission".into();
+            write_run(&tx, &run)?;
+        }
+        if let Some(id) = resolve_unknown {
+            let b: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT record FROM automation_runs WHERE id=?1 AND automation_id=?2",
+                    params![id, r.id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let mut run: AutomationRun =
+                serde_json::from_slice(&b.ok_or(StoreError::AutomationConflict)?)?;
+            if run.state != State::Unknown {
+                return Err(StoreError::AutomationConflict);
+            }
+            run.state = State::Resolved;
+            run.updated_at_ms = receipt.committed_at_ms;
+            run.detail = "Uncertain outcome acknowledged by the user; this occurrence was not resent. Future scheduled work is allowed.".into();
             write_run(&tx, &run)?;
         }
         write_record(&tx, r)?;
@@ -327,6 +465,16 @@ impl DocsStore {
                 r.detail = detail.into();
                 r.updated_at_ms = now;
                 write_run(&tx, &r)?;
+                if let Some(mut automation) = get_record(&tx, &r.automation_id)?
+                    && automation.revision == r.automation_revision
+                    && automation.next_due_ms.is_none()
+                    && state == State::Completed
+                {
+                    automation.completed = true;
+                    automation.enabled = false;
+                    automation.updated_at_ms = now;
+                    write_record(&tx, &automation)?;
+                }
             }
         }
         tx.commit()?;

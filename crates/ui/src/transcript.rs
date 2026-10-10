@@ -1191,6 +1191,12 @@ pub enum RowKind {
     GoalAchieved {
         label: SharedString,
     },
+    /// An automation the agent saved in this turn (LUNA's
+    /// `automation_update`): its live name, cadence and status, with Open
+    /// and Edit. One card per automation, after the turn's content.
+    AutomationCard {
+        automation_id: SharedString,
+    },
 }
 
 /// Version bit for a user row that carries the "Sent as goal" badge: the mark
@@ -1758,7 +1764,19 @@ pub fn rows_for_entry(
         // still re-splices).
         // Lifted before the mention projection, so a comment body's own
         // Markdown never lands in the bubble.
-        let (body, badges) = crate::badges::split(&parsed.text);
+        let (body, mut badges) = crate::badges::split(&parsed.text);
+        // A schedule's message carries the backend's own identity; typed
+        // messages never do, so they stay unmarked.
+        if crate::automations::is_scheduled_message(&entry.id) {
+            badges.insert(
+                0,
+                crate::badges::MessageBadge {
+                    icon: crate::icons::STOPWATCH_PLAY,
+                    label: "Sent by scheduled task".into(),
+                    details: Vec::new(),
+                },
+            );
+        }
         let (text, mentions) = match crate::composer::sent_mention_display(&body) {
             Some((display, spans)) => (display, spans),
             None => (body, Vec::new()),
@@ -1791,6 +1809,8 @@ pub fn rows_for_entry(
     let mut group_ix = 0usize;
     let mut pending_group: Vec<ToolItem> = Vec::new();
     let mut group_last_part_ix = 0usize;
+    // Automations saved by this turn's successful `automation_update` calls.
+    let mut automation_cards: Vec<String> = Vec::new();
 
     let flush_group =
         |rows: &mut Vec<Row>, group: &mut Vec<ToolItem>, group_ix: &mut usize, last_ix: usize| {
@@ -1836,6 +1856,13 @@ pub fn rows_for_entry(
                 subagent_activity,
                 ..
             } => {
+                if *resolved
+                    && !*is_error
+                    && let Some(id) = automation_card_id(call)
+                    && !automation_cards.contains(&id)
+                {
+                    automation_cards.push(id);
+                }
                 let item = ToolItem {
                     part_id: part.id().to_owned(),
                     call: call.clone(),
@@ -2120,6 +2147,20 @@ pub fn rows_for_entry(
         &mut group_ix,
         group_last_part_ix,
     );
+    for automation_id in automation_cards {
+        rows.push(Row {
+            id: format!("{}#automation-{automation_id}", entry.id).into(),
+            version: fnv1a(automation_id.as_bytes()),
+            turn_start: false,
+            kind: RowKind::AutomationCard {
+                automation_id: automation_id.into(),
+            },
+            role: entry.role,
+            entry_id: entry_id.clone(),
+            timestamp: None,
+            copy_text: None,
+        });
+    }
 
     if let Some(first) = rows.first_mut() {
         first.turn_start = true;
@@ -2134,6 +2175,24 @@ pub fn rows_for_entry(
         last.version ^= 1 << 62;
     }
     rows
+}
+
+/// The automation a successful LUNA `automation_update` call saved: the id
+/// the doc keeps from its input (every other input field stays private).
+fn automation_card_id(call: &ToolCall) -> Option<String> {
+    let ToolCall::Mcp {
+        server,
+        tool,
+        input: Some(input),
+    } = call
+    else {
+        return None;
+    };
+    if server != "luna" || tool != "automation_update" {
+        return None;
+    }
+    let id = input.get("automationId")?.as_str()?;
+    (!id.is_empty() && id.len() <= 128).then(|| id.to_string())
 }
 
 /// `LUNA_FRAME_STATS=1` logs live-row render-cost percentiles (p50/p95 µs
@@ -2310,8 +2369,10 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
             _ => 0.0,
         };
         render::MD_BLOCK_GAP + heading_extra
-    } else if matches!(row.kind, RowKind::ToolGroup { .. })
-        || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
+    } else if matches!(
+        row.kind,
+        RowKind::ToolGroup { .. } | RowKind::AutomationCard { .. }
+    ) || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
     {
         Theme::SPACE_MD
     } else {
@@ -3347,6 +3408,7 @@ fn charged_row(row: &Row, seen: &mut HashSet<usize>) -> usize {
         RowKind::AsyncQuestionCard { title, status, .. } => title.len() + status.len(),
         RowKind::ErrorChip { message } => message.len(),
         RowKind::GoalAchieved { label } => label.len(),
+        RowKind::AutomationCard { automation_id } => automation_id.len(),
         RowKind::GeneratedImage {
             owner,
             path,
@@ -4082,6 +4144,8 @@ pub struct Transcript {
     blob_fetch_counter: u64,
     _observe: Subscription,
     _text_changes: Subscription,
+    /// Inline automation cards repaint when their records land or change.
+    _automation_cards: Subscription,
 }
 
 /// One sidecar blob fetch's lifecycle.
@@ -4144,6 +4208,12 @@ pub enum TranscriptEvent {
     OpenAsyncQuestion {
         chat_id: String,
         message_id: String,
+    },
+    /// An inline automation card's Open (`edit: false`) or Edit: show that
+    /// saved automation on the Automations page.
+    OpenAutomation {
+        automation_id: String,
+        edit: bool,
     },
 }
 
@@ -4223,6 +4293,8 @@ impl Transcript {
         });
         cx.on_release(|view, cx| view.diagrams.clear(cx)).detach();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync_or_defer(cx));
+        let cards = crate::automations::AutomationCards::global(cx);
+        let automation_cards = cx.observe(&cards, |_: &mut Self, _, cx| cx.notify());
         let text_changes = cx.subscribe(
             &state,
             |this: &mut Self, state, event: &crate::state::TranscriptTextChanged, cx| {
@@ -4338,6 +4410,7 @@ impl Transcript {
             blob_fetch_counter: 0,
             _observe: observe,
             _text_changes: text_changes,
+            _automation_cards: automation_cards,
         };
         this.sync(cx);
         this
@@ -8068,6 +8141,28 @@ impl Transcript {
                 }
                 RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
                 RowKind::GoalAchieved { label } => goal_achieved_row(label.clone(), &theme),
+                RowKind::AutomationCard { automation_id } => {
+                    let state = self.state.clone();
+                    let id = automation_id.to_string();
+                    let view = crate::automations::AutomationCards::global(cx)
+                        .update(cx, |cards, cx| cards.view(&state, &id, cx));
+                    let transcript = cx.entity().downgrade();
+                    crate::automations::render_card(
+                        SharedString::from(format!("{}-card", row.id)),
+                        &view,
+                        &theme,
+                        move |edit, _, cx| {
+                            transcript
+                                .update(cx, |_, cx| {
+                                    cx.emit(TranscriptEvent::OpenAutomation {
+                                        automation_id: id.clone(),
+                                        edit,
+                                    })
+                                })
+                                .ok();
+                        },
+                    )
+                }
             }
         };
 
@@ -10891,6 +10986,7 @@ fn perf_row_text(row: &Row) -> (&'static str, String) {
         }
         RowKind::ErrorChip { message } => ("error", message.to_string()),
         RowKind::GoalAchieved { label } => ("goal", label.to_string()),
+        RowKind::AutomationCard { automation_id } => ("automation", automation_id.to_string()),
         RowKind::GeneratedImage { name, .. } => ("image", name.clone()),
     };
     if text.len() > 4096 {
@@ -16079,8 +16175,18 @@ impl Transcript {
                             .as_ref()
                             .map(|ids| ids.contains(&row.entry_id)),
                     });
-                    if let RowKind::User { attachments, .. } = &row.kind {
+                    if let RowKind::User {
+                        attachments,
+                        badges,
+                        ..
+                    } = &row.kind
+                    {
                         readback["attachments"] = attachments.len().into();
+                        readback["badges"] = badges
+                            .iter()
+                            .map(|badge| badge.label.to_string())
+                            .collect::<Vec<_>>()
+                            .into();
                     }
                     if let RowKind::ToolGroup { tools, .. } = &row.kind {
                         readback["groupGlyph"] = tool_group_glyph(tools).into();

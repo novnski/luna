@@ -345,6 +345,15 @@ const SPECS: [Spec; 5] = [
     },
 ];
 
+/// The automation stages' chat config: Mock 1 is in the Mock catalog, which
+/// the host checks a saved execution against (`mock-fixture` is not).
+fn automation_config() -> ChatConfig {
+    ChatConfig {
+        model: Some("mock-1".into()),
+        ..config()
+    }
+}
+
 fn config() -> ChatConfig {
     ChatConfig {
         harness: HarnessId::Mock,
@@ -5287,7 +5296,9 @@ fn main() -> anyhow::Result<()> {
                         })?
                     };
                 }
-                const AUTO_CHAT: &str = "e2e2e2e2-0000-4000-8000-000000000001";
+                // Its own chat in the project root (never a seeded chat's id:
+                // createChat keeps an existing chat's folder).
+                const AUTO_CHAT: &str = "e5e5e5e5-0000-4000-8000-000000000001";
                 const REMOTE_CHAT: &str = "e3e3e3e3-0000-4000-8000-000000000001";
                 const REMOTE_HOST: &str = "w20m-remote-host";
                 let right_was_open = frame(window, cx)?["rightOpen"].as_bool() == Some(true);
@@ -5301,7 +5312,7 @@ fn main() -> anyhow::Result<()> {
                             "chatId": AUTO_CHAT,
                             "spaceId": PROJECT,
                             "cwd": automation_cwd.to_string_lossy(),
-                            "config": serde_json::to_value(config())?,
+                            "config": serde_json::to_value(automation_config())?,
                         }),
                     )
                     .await?;
@@ -5388,7 +5399,13 @@ fn main() -> anyhow::Result<()> {
                 }
                 panel!(false, |p, c| p.fixture_set("poll", "15", c));
                 panel!(false, |p, c| p.fixture_set("budget", "100", c));
-                let valid_watch = automations(window, cx, false)?["editor"]["built"].clone();
+                // The watch builds once the provider's catalog has settled
+                // (an execution is never built from unsettled defaults).
+                let valid_watch = wait_automations(window, cx, false, "a bounded PR watch builds", 80, |rb| {
+                    rb["editor"]["built"].is_null()
+                })
+                .await?["editor"]["built"]
+                    .clone();
                 anyhow::ensure!(valid_watch.is_null(), "a bounded PR watch builds: {valid_watch}");
                 // Case 65: a one-shot entered as wall time in its IANA zone;
                 // the host's preview names exactly that instant.
@@ -5400,6 +5417,23 @@ fn main() -> anyhow::Result<()> {
                 panel!(false, |p, c| p.fixture_set("timezone", zone, c));
                 panel!(false, |p, c| p.fixture_set("date", &local[..10], c));
                 panel!(false, |p, c| p.fixture_set("time", &local[11..16], c));
+                // Review is enabled (the request builds) only once the
+                // provider's catalog has settled; earlier, the reasoning
+                // would resolve under the review (run 2's failure).
+                let laid_out = wait_automations(window, cx, false, "Review enabled after the catalog", 80, |rb| {
+                    rb["editor"]["built"].is_null()
+                })
+                .await?;
+                // The right pane scrolls its editor rather than squeezing it:
+                // at this window the open editor and list are taller than the
+                // pane, so a squeezed column (overlapping rows) can't scroll.
+                anyhow::ensure!(
+                    laid_out["scroll"]["maxOffsetY"].as_f64().is_some_and(|y| y > 0.0)
+                        && laid_out["scroll"]["paneEditorHeight"].as_f64().is_some_and(|height| height >= 600.0),
+                    "the right pane's editor keeps its height and the pane scrolls: {}",
+                    laid_out["scroll"]
+                );
+                shot(window, cx, output.join("w20m-automation-editor-pane.png")).await?;
                 panel!(false, |p, c| p.fixture_review(c));
                 let reviewed = wait_automations(window, cx, false, "the host's review", 50, |rb| {
                     let phase = rb["editor"]["phase"].as_str().unwrap_or("");
@@ -5412,6 +5446,19 @@ fn main() -> anyhow::Result<()> {
                         && reviewed["editor"]["nextOccurrencesMs"] == serde_json::json!([due])
                         && reviewed["editor"]["expectedRevision"] == 0,
                     "the host previews exactly {local} for a new automation: {reviewed}"
+                );
+                // The reviewed request carries the reasoning the model
+                // resolves to (Mock 1 offers only Medium), the host's review
+                // names it, and nothing later moves it out from under the
+                // review.
+                settle(cx, 500).await;
+                let still = automations(window, cx, false)?;
+                anyhow::ensure!(
+                    reviewed["editor"]["definition"]["execution"]["reasoning"] == "medium"
+                        && reviewed["editor"]["resolved"]["reasoning"] == "medium"
+                        && reviewed["editor"]["previewDescription"].as_str().is_some_and(|text| text.contains("reasoning medium"))
+                        && still["editor"]["previewCurrent"] == true,
+                    "the review covers the resolved reasoning and stays current: {still}"
                 );
                 let request_id = reviewed["editor"]["requestId"].as_str().unwrap_or_default().to_string();
                 let automation_id = reviewed["editor"]["automationId"].as_str().unwrap_or_default().to_string();
@@ -5473,19 +5520,56 @@ fn main() -> anyhow::Result<()> {
                 let mut seen_states = std::collections::BTreeSet::new();
                 let mut completed = None;
                 let mut last_runs = Value::Null;
+                // A terminal outcome other than Completed ends the wait at
+                // once, with the history saved (a refused or uncertain run
+                // never turns into Completed later).
+                let mut terminal = None;
                 for _ in 0..1500 {
                     draw(window, cx)?;
                     last_runs = automations(window, cx, false)?["runs"][automation_id.as_str()].clone();
                     for run in last_runs["items"].as_array().into_iter().flatten() {
-                        seen_states.insert(run["state"].as_str().unwrap_or_default().to_string());
-                        if run["state"] == "Completed" {
-                            completed = Some(run.clone());
+                        let state = run["state"].as_str().unwrap_or_default();
+                        seen_states.insert(state.to_string());
+                        match state {
+                            "Completed" => completed = Some(run.clone()),
+                            "Failed" | "Skipped" | "Unknown" | "Cancelled" => terminal = Some(run.clone()),
+                            _ => {}
                         }
                     }
-                    if completed.is_some() {
+                    if completed.is_some() || terminal.is_some() {
                         break;
                     }
                     settle(cx, 100).await;
+                }
+                if completed.is_none()
+                    && let Some(run) = terminal
+                {
+                    // Evidence for why: the run's own command receipt (its
+                    // status, reason and commit time), when the run was
+                    // claimed against now, and what the chat shows.
+                    let receipt = run["commandId"]
+                        .as_str()
+                        .map(|id| command_store.task_command_receipt(id))
+                        .transpose()?
+                        .flatten();
+                    let auto_texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(AUTO_CHAT, cx))?;
+                    let _ = std::fs::write(
+                        output.join("w20m-terminal-run.json"),
+                        serde_json::to_vec_pretty(&serde_json::json!({
+                            "runs": last_runs,
+                            "seen": seen_states,
+                            "commandReceipt": receipt,
+                            "observedAtMs": Utc::now().timestamp_millis(),
+                            "mockDelayMs": MOCK_DELAY_MS,
+                            "deliveredPromptCount": auto_texts.iter().filter(|text| text.contains(W20M_PROMPT)).count(),
+                        }))
+                        .unwrap_or_default(),
+                    );
+                    anyhow::bail!(
+                        "the one-shot ended {} instead of completing ({}); history saved to w20m-terminal-run.json: {last_runs}",
+                        run["state"],
+                        run["detail"]
+                    );
                 }
                 let Some(run) = completed else {
                     let _ = std::fs::write(
@@ -5509,23 +5593,21 @@ fn main() -> anyhow::Result<()> {
                     "one occurrence delivered once to the automation chat, with its own times and ids: {run} (seen {seen_states:?})"
                 );
                 shot(window, cx, output.join("w20m-automation-completed.png")).await?;
-                // Case 70: Pause is reviewed and confirmed; a spent one-shot
-                // reads as needing a new future time, never a plain Resume.
-                panel!(false, |p, c| p.fixture_action(&automation_id, "pause", c));
-                wait_automations(window, cx, false, "the pause review", 50, |rb| rb["action"]["phase"] == "reviewed").await?;
-                panel!(false, |p, c| p.fixture_confirm(c));
-                let paused = wait_automations(window, cx, false, "the pause applies", 80, |rb| {
-                    rb["action"].is_null()
-                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["enabled"] == false))
+                // Case 70: a one-shot that ran reads Finished (never Active
+                // or Paused, old A16) and offers Edit time, which opens the
+                // exact row's editor without a Pause or Resume request.
+                let finished = wait_automations(window, cx, false, "the one-shot reads Finished", 80, |rb| {
+                    rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["lifecycle"] == "Finished"))
                 })
                 .await?;
-                let paused_row = paused["rows"].as_array().and_then(|rows| rows.iter().find(|row| row["id"] == automation_id.as_str()).cloned()).unwrap_or_default();
+                let finished_row = finished["rows"].as_array().and_then(|rows| rows.iter().find(|row| row["id"] == automation_id.as_str()).cloned()).unwrap_or_default();
                 anyhow::ensure!(
-                    paused_row["revision"] == 2
-                        && paused_row["status"].as_str().is_some_and(|status| status.starts_with("Paused.")),
-                    "Pause applies at the next revision with an honest status: {paused_row}"
+                    finished_row["completed"] == true
+                        && finished_row["toggle"] == "Edit time"
+                        && finished_row["status"].as_str().is_some_and(|status| status.starts_with("Finished.")),
+                    "a finished one-shot says Finished and offers Edit time: {finished_row}"
                 );
-                anyhow::ensure!(paused_row["toggle"] == "Edit time", "a spent paused one-shot offers Edit time: {paused_row}");
+                let finished_revision = finished_row["revision"].clone();
                 let offered = panel!(false, |p, c| p.fixture_toggle(&automation_id, c));
                 let editing = automations(window, cx, false)?;
                 anyhow::ensure!(
@@ -5533,9 +5615,24 @@ fn main() -> anyhow::Result<()> {
                         && editing["action"].is_null()
                         && editing["editor"]["automationId"] == automation_id.as_str()
                         && editing["editor"]["existing"] == true
-                        && editing["editor"]["resumes"] == true
-                        && editing["editor"]["expectedRevision"] == 2,
-                    "Edit time opens the exact row's editor without a Resume request: {editing}"
+                        && editing["editor"]["paused"] == false
+                        && editing["editor"]["expectedRevision"] == finished_revision,
+                    "Edit time opens the exact row's editor without a Pause or Resume request: {editing}"
+                );
+                // Case 83, attribution: the delivered prompt is the run's own
+                // backend message and reads "Sent by scheduled task" above
+                // the bubble (A10).
+                draw(window, cx)?;
+                let auto_rows = window.update(cx, |shell, _, cx| shell.fixture_transcript_rows(AUTO_CHAT, cx))?;
+                let delivered_row = auto_rows
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|row| row["kind"] == "user" && row["text"].as_str().is_some_and(|text| text.contains(W20M_PROMPT))).cloned())
+                    .unwrap_or_default();
+                anyhow::ensure!(
+                    delivered_row["entryId"] == run["messageId"]
+                        && run["messageId"].as_str().is_some_and(|id| id.starts_with("automation-message:"))
+                        && delivered_row["badges"].as_array().and_then(|badges| badges.first()) == Some(&serde_json::json!("Sent by scheduled task")),
+                    "the scheduled prompt is attributed to its schedule: {delivered_row} (run {run})"
                 );
                 // Case 71: switching Main drops answers for the previous
                 // conversation (rapid real selections, each surface drawn),
@@ -5570,7 +5667,7 @@ fn main() -> anyhow::Result<()> {
                 settle(cx, 2000).await;
                 let reloaded = wait_automations(window, cx, false, "saved automations after a reconnect", 80, |rb| {
                     rb["loading"] == false
-                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["revision"] == 2))
+                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["revision"] == finished_revision))
                 })
                 .await?;
                 let runs_after: luna_proto::AutomationPage<luna_proto::AutomationRun> =
@@ -5597,9 +5694,11 @@ fn main() -> anyhow::Result<()> {
                                 target: luna_proto::AutomationTarget::Existing { task_id: AUTO_CHAT.into() },
                                 trigger: luna_proto::AutomationTrigger::Once { at_ms: 4_102_444_800_000 + index * 60_000 },
                                 max_lateness_ms: 600_000,
+                                ..luna_proto::AutomationDefinition::default()
                             },
                         },
                         preview_id: String::new(),
+                        permission_ceiling: None,
                     };
                     let preview: luna_proto::AutomationPreview = reader
                         .call_as(luna_rpc::methods::PREVIEW_AUTOMATION, serde_json::to_value(&request)?)
@@ -5628,6 +5727,594 @@ fn main() -> anyhow::Result<()> {
                     .collect();
                 anyhow::ensure!(ids.len() == 52 && ids.contains(&automation_id), "Load more adds the rest once: {} ids", ids.len());
                 window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                // w20n. Failure cases 73-83: the project-scoped manager and
+                // editor through the real RPC (docs/design/automations-workflow/
+                // frontend-status.md lists each case's regression). A second
+                // project, Ops, owns one chat; the page follows the sidebar's
+                // project filter like the Board.
+                const PROJECT_B: &str = "w20n-ops-project";
+                const OPS_CHAT: &str = "e4e4e4e4-0000-4000-8000-000000000001";
+                let ops_dir = automation_cwd
+                    .parent()
+                    .map(|parent| parent.join("w20n-ops"))
+                    .ok_or_else(|| anyhow::anyhow!("the project folder's parent"))?;
+                std::fs::create_dir_all(&ops_dir)?;
+                automation_workspace.create_space(
+                    PROJECT_B,
+                    &queue_device,
+                    ops_dir.to_str().unwrap_or_default(),
+                    Some("Ops".into()),
+                    false,
+                )?;
+                reader
+                    .call(
+                        "Mutate",
+                        serde_json::json!({
+                            "op": "createChat",
+                            "chatId": OPS_CHAT,
+                            "spaceId": PROJECT_B,
+                            "cwd": ops_dir.to_string_lossy(),
+                            "config": serde_json::to_value(automation_config())?,
+                        }),
+                    )
+                    .await?;
+                automation_workspace.rename_chat(OPS_CHAT, "Ops notes")?;
+                let ops_space = automation_workspace
+                    .read_spaces()?
+                    .into_iter()
+                    .find(|space| space.id == PROJECT_B)
+                    .ok_or_else(|| anyhow::anyhow!("the Ops project's engine row"))?;
+                let ops_row = automation_workspace.chat(OPS_CHAT)?.ok_or_else(|| anyhow::anyhow!("the Ops chat's engine row"))?;
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.spaces.push(ops_space);
+                        state.chats.push(ops_row);
+                        cx.notify();
+                    })
+                });
+                let row_of = |rb: &Value, id: &str| -> Value {
+                    rb["rows"]
+                        .as_array()
+                        .and_then(|rows| rows.iter().find(|row| row["id"] == id).cloned())
+                        .unwrap_or(Value::Null)
+                };
+                let editor_of = |cx: &mut AsyncApp| -> anyhow::Result<Value> { Ok(automations(window, cx, true)?["editor"].clone()) };
+                // Case 74: project LUNA's page lists only its own automations;
+                // switching the sidebar to Ops closes an open editor and never
+                // shows LUNA's rows as Ops's.
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_set_space_filter(Some(PROJECT.into()), cx);
+                    shell.fixture_open_automation_settings(cx);
+                })?;
+                let luna_page = wait_automations(window, cx, true, "project LUNA's page", 80, |rb| {
+                    rb["scope"]["project"] == PROJECT && rb["loading"] == false && rb["rows"].as_array().is_some_and(|rows| !rows.is_empty())
+                })
+                .await?;
+                anyhow::ensure!(
+                    luna_page["rows"].as_array().is_some_and(|rows| rows.iter().all(|row| row["projectId"] == PROJECT)),
+                    "project LUNA's page lists only LUNA's automations: {}",
+                    luna_page["rows"]
+                );
+                panel!(true, |p, c| p.fixture_new(c));
+                anyhow::ensure!(editor_of(cx)?["projectId"] == PROJECT, "New on LUNA's page targets LUNA");
+                window.update(cx, |shell, _, cx| shell.fixture_set_space_filter(Some(PROJECT_B.into()), cx))?;
+                let ops_page = wait_automations(window, cx, true, "Ops's empty page", 80, |rb| {
+                    rb["scope"]["project"] == PROJECT_B && rb["loading"] == false && rb["error"].is_null()
+                })
+                .await?;
+                anyhow::ensure!(
+                    ops_page["editor"].is_null() && ops_page["rows"].as_array().is_some_and(Vec::is_empty),
+                    "switching projects drops LUNA's rows and editor: {ops_page}"
+                );
+                shot(window, cx, output.join("w20n-automations-empty-project.png")).await?;
+                // Case 75: New from the empty Ops page starts in Ops, a fresh
+                // chat each run, with no source chat.
+                panel!(true, |p, c| p.fixture_new(c));
+                let opened = editor_of(cx)?;
+                anyhow::ensure!(
+                    opened["projectId"] == PROJECT_B
+                        && opened["fresh"] == true
+                        && opened["chatId"].is_null()
+                        && opened["sourceTaskId"].is_null()
+                        && opened["existing"] == false,
+                    "New on an empty project's page starts there with a fresh chat each run: {opened}"
+                );
+                // Case 73: dates and times are parsed strictly, never wrapped.
+                panel!(true, |p, c| p.fixture_set("name", "W20N ops digest", c));
+                panel!(true, |p, c| p.fixture_set("prompt", "Summarize the Ops notes.", c));
+                panel!(true, |p, c| p.fixture_set("timezone", "Europe/Bucharest", c));
+                let mut date_refusals = Vec::new();
+                for (date, time, expected) in [
+                    ("2035-257-257", "09:30", "Enter the date as YYYY-MM-DD."),
+                    ("2035-1-01", "09:30", "Enter the date as YYYY-MM-DD."),
+                    ("2035-02-30", "09:30", "2035-02-30 is not a calendar date."),
+                    ("2035-01-01", "25:00", "Enter a time between 00:00 and 23:59."),
+                    ("2035-01-01", "9:3", "Enter the time as HH:MM."),
+                ] {
+                    panel!(true, |p, c| p.fixture_set("date", date, c));
+                    panel!(true, |p, c| p.fixture_set("time", time, c));
+                    let built = editor_of(cx)?["built"].clone();
+                    anyhow::ensure!(built == expected, "{date} {time} is refused with its reason ({expected}): {built}");
+                    date_refusals.push(serde_json::json!({"date": date, "time": time, "refusal": built}));
+                }
+                panel!(true, |p, c| p.fixture_review(c));
+                let refused_review = editor_of(cx)?;
+                anyhow::ensure!(
+                    refused_review["phase"].as_str().is_some_and(|phase| phase.starts_with("error:"))
+                        && refused_review["previewCurrent"] == false,
+                    "a refused schedule can't be reviewed or saved: {refused_review}"
+                );
+                // Cases 76-77: an interval in Ops with Never notifications,
+                // archived successful runs, and an explicit execution whose
+                // reasoning is validated against the chosen model.
+                panel!(true, |p, c| p.fixture_set("kind", "interval", c));
+                panel!(true, |p, c| p.fixture_set("every", "60", c));
+                panel!(true, |p, c| p.fixture_set("notifications", "never", c));
+                panel!(true, |p, c| p.fixture_set("archive", "true", c));
+                panel!(true, |p, c| p.fixture_set("harness", "mock", c));
+                let mut picked = false;
+                for _ in 0..80 {
+                    picked = window.update(cx, |shell, window, cx| {
+                        shell
+                            .fixture_automations(true)
+                            .is_some_and(|panel| panel.update(cx, |p, cx| p.fixture_pick_model("mock-fable-5", window, cx)))
+                    })?;
+                    if picked {
+                        break;
+                    }
+                    draw(window, cx)?;
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(picked, "the model menu offers mock-fable-5");
+                panel!(true, |p, c| p.fixture_set("reasoning", "high", c));
+                let high = wait_automations(window, cx, true, "Fable 5 at High", 80, |rb| {
+                    rb["editor"]["resolved"]["model"] == "mock-fable-5" && rb["editor"]["resolved"]["reasoning"] == "high"
+                })
+                .await?;
+                anyhow::ensure!(high["editor"]["modelNote"].is_null(), "High is offered by Fable 5: {}", high["editor"]);
+                let mut picked = false;
+                for _ in 0..80 {
+                    picked = window.update(cx, |shell, window, cx| {
+                        shell
+                            .fixture_automations(true)
+                            .is_some_and(|panel| panel.update(cx, |p, cx| p.fixture_pick_model("mock-1", window, cx)))
+                    })?;
+                    if picked {
+                        break;
+                    }
+                    draw(window, cx)?;
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(picked, "the model menu offers mock-1");
+                let clamped = wait_automations(window, cx, true, "Mock 1 clamps High", 80, |rb| {
+                    rb["editor"]["resolved"]["model"] == "mock-1" && rb["editor"]["resolved"]["reasoning"] == "medium"
+                })
+                .await?;
+                anyhow::ensure!(
+                    clamped["editor"]["modelNote"] == "High isn't offered by this model; runs use Medium.",
+                    "switching to a Medium-only model says what runs use: {}",
+                    clamped["editor"]
+                );
+                shot(window, cx, output.join("w20n-automation-editor.png")).await?;
+                panel!(true, |p, c| p.fixture_review(c));
+                let ops_reviewed = wait_automations(window, cx, true, "the Ops automation's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                let reviewed_definition = ops_reviewed["editor"]["definition"].clone();
+                anyhow::ensure!(
+                    ops_reviewed["editor"]["phase"] == "reviewed"
+                        && ops_reviewed["editor"]["previewCurrent"] == true
+                        && ops_reviewed["editor"]["nextOccurrencesMs"].as_array().is_some_and(|next| !next.is_empty())
+                        && reviewed_definition["target"] == serde_json::json!({"kind": "newConversation", "projectId": PROJECT_B})
+                        && reviewed_definition["execution"]["harness"] == "mock"
+                        && reviewed_definition["execution"]["model"] == "mock-1"
+                        && reviewed_definition["execution"]["reasoning"] == "medium"
+                        && reviewed_definition["notificationPolicy"] == "never"
+                        && reviewed_definition["archiveSuccessfulRuns"] == true
+                        && reviewed_definition["sourceTaskId"].is_null(),
+                    "the reviewed request carries the destination, execution and policies shown: {}",
+                    ops_reviewed["editor"]
+                );
+                let ops_id = ops_reviewed["editor"]["automationId"].as_str().unwrap_or_default().to_string();
+                anyhow::ensure!(panel!(true, |p, c| p.fixture_apply(c)) == Some(true), "Save runs for the reviewed request");
+                let ops_saved = wait_automations(window, cx, true, "the Ops automation saved", 80, |rb| {
+                    rb["editor"].is_null() && !row_of(rb, &ops_id).is_null()
+                })
+                .await?;
+                let ops_row = row_of(&ops_saved, &ops_id);
+                let stored: luna_proto::AutomationPage<luna_proto::AutomationRecord> = reader
+                    .call_as(luna_rpc::methods::LIST_AUTOMATIONS, serde_json::json!({ "automationId": ops_id }))
+                    .await?;
+                let stored = stored.items.into_iter().next().ok_or_else(|| anyhow::anyhow!("the host holds {ops_id}"))?;
+                // The fields the form shows, compared one by one: the host
+                // may normalize execution details the form never showed.
+                let stored_definition = serde_json::to_value(&stored.definition)?;
+                let stored_execution = stored_definition["execution"].clone();
+                let same_as_reviewed = |definition: &Value| {
+                    ["name", "prompt", "timezone", "target", "trigger", "notificationPolicy", "archiveSuccessfulRuns", "sourceTaskId"]
+                        .iter()
+                        .all(|key| definition[*key] == reviewed_definition[*key])
+                        && ["harness", "model", "reasoning"]
+                            .iter()
+                            .all(|key| definition["execution"][*key] == reviewed_definition["execution"][*key])
+                };
+                anyhow::ensure!(
+                    ops_row["projectId"] == PROJECT_B
+                        && ops_row["lifecycle"] == "Active"
+                        && ops_row["notificationPolicy"] == "never"
+                        && ops_row["archiveSuccessfulRuns"] == true
+                        && ops_row["execution"]["model"] == "mock-1"
+                        && ops_row["execution"]["reasoning"] == "medium"
+                        && stored.authority.project_id == PROJECT_B
+                        && same_as_reviewed(&stored_definition),
+                    "the backend saved exactly the reviewed definition in Ops: {ops_row}"
+                );
+                // Case 78: reopening reads every persisted value back.
+                panel!(true, |p, c| p.fixture_edit(&ops_id, c));
+                let reopened = editor_of(cx)?;
+                anyhow::ensure!(
+                    reopened["existing"] == true
+                        && reopened["kind"] == "interval"
+                        && reopened["projectId"] == PROJECT_B
+                        && reopened["fresh"] == true
+                        && reopened["notificationPolicy"] == "never"
+                        && reopened["archiveSuccessfulRuns"] == true
+                        && reopened["draft"]["harness"] == "mock"
+                        && reopened["draft"]["model"] == "mock-1"
+                        && reopened["draft"]["reasoning"] == "medium"
+                        && same_as_reviewed(&reopened["definition"])
+                        && reopened["definition"]["execution"] == stored_execution,
+                    "the reopened editor reads back the saved automation: {reopened}"
+                );
+                // Case 79: Pause, then a rename while paused saves without
+                // resuming and without touching the execution.
+                let revision = ops_row["revision"].as_u64().unwrap_or_default();
+                panel!(true, |p, c| p.fixture_action(&ops_id, "pause", c));
+                wait_automations(window, cx, true, "the Ops pause review", 50, |rb| rb["action"]["phase"] == "reviewed").await?;
+                panel!(true, |p, c| p.fixture_confirm(c));
+                wait_automations(window, cx, true, "the Ops automation paused", 80, |rb| {
+                    rb["action"].is_null() && row_of(rb, &ops_id)["lifecycle"] == "Paused"
+                })
+                .await?;
+                panel!(true, |p, c| p.fixture_edit(&ops_id, c));
+                anyhow::ensure!(editor_of(cx)?["paused"] == true, "the editor knows it edits a paused automation");
+                panel!(true, |p, c| p.fixture_set("name", "W20N ops digest (paused edit)", c));
+                panel!(true, |p, c| p.fixture_review(c));
+                let paused_review = wait_automations(window, cx, true, "the paused rename's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                anyhow::ensure!(
+                    paused_review["editor"]["definition"]["execution"] == stored_execution,
+                    "a rename carries the saved execution unchanged: {}",
+                    paused_review["editor"]
+                );
+                anyhow::ensure!(panel!(true, |p, c| p.fixture_apply(c)) == Some(true), "Save runs for the paused rename");
+                let renamed = wait_automations(window, cx, true, "the paused rename saved", 80, |rb| {
+                    rb["editor"].is_null() && row_of(rb, &ops_id)["name"] == "W20N ops digest (paused edit)"
+                })
+                .await?;
+                let renamed_row = row_of(&renamed, &ops_id);
+                anyhow::ensure!(
+                    renamed_row["enabled"] == false
+                        && renamed_row["lifecycle"] == "Paused"
+                        && renamed_row["revision"] == revision + 2
+                        && renamed_row["execution"] == stored_execution,
+                    "editing a paused automation keeps it paused (A15): {renamed_row}"
+                );
+                // Case 80: retarget. A chat chosen in Ops is cleared when the
+                // project moves to LUNA (the menus' contents are native QA).
+                panel!(true, |p, c| p.fixture_edit(&ops_id, c));
+                panel!(true, |p, c| p.fixture_set("target", "existing", c));
+                anyhow::ensure!(
+                    editor_of(cx)?["built"] == "Choose the chat each run is sent to.",
+                    "an existing-chat target needs a chat"
+                );
+                panel!(true, |p, c| p.fixture_set("chat", OPS_CHAT, c));
+                panel!(true, |p, c| p.fixture_set("project", PROJECT, c));
+                let moved = editor_of(cx)?;
+                anyhow::ensure!(
+                    moved["projectId"] == PROJECT && moved["chatId"].is_null() && moved["built"] == "Choose the chat each run is sent to.",
+                    "moving to another project clears the previous project's chat: {moved}"
+                );
+                panel!(true, |p, c| p.fixture_set("chat", AUTO_CHAT, c));
+                panel!(true, |p, c| p.fixture_review(c));
+                let retarget_review = wait_automations(window, cx, true, "the retarget's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                anyhow::ensure!(
+                    retarget_review["editor"]["phase"] == "reviewed"
+                        && retarget_review["editor"]["definition"]["target"] == serde_json::json!({"kind": "existing", "taskId": AUTO_CHAT})
+                        && retarget_review["editor"]["definition"]["archiveSuccessfulRuns"] == false,
+                    "the retarget names LUNA's chat and drops fresh-chat archiving: {}",
+                    retarget_review["editor"]
+                );
+                anyhow::ensure!(panel!(true, |p, c| p.fixture_apply(c)) == Some(true), "Save runs for the retarget");
+                let left_ops = wait_automations(window, cx, true, "the retarget leaves Ops's page", 120, |rb| {
+                    rb["editor"].is_null() && rb["scope"]["project"] == PROJECT_B && row_of(rb, &ops_id).is_null()
+                })
+                .await?;
+                let retargeted: luna_proto::AutomationPage<luna_proto::AutomationRecord> = reader
+                    .call_as(luna_rpc::methods::LIST_AUTOMATIONS, serde_json::json!({ "automationId": ops_id }))
+                    .await?;
+                anyhow::ensure!(
+                    retargeted.items.first().is_some_and(|record| record.authority.project_id == PROJECT
+                        && record.definition.target == luna_proto::AutomationTarget::Existing { task_id: AUTO_CHAT.into() }
+                        && !record.enabled),
+                    "the retargeted automation moved to LUNA, still paused: {:?}",
+                    retargeted.items.first().map(|record| (&record.authority.project_id, &record.definition.target, record.enabled))
+                );
+                window.update(cx, |shell, _, cx| shell.fixture_set_space_filter(Some(PROJECT.into()), cx))?;
+                wait_automations(window, cx, true, "LUNA's page again", 80, |rb| rb["scope"]["project"] == PROJECT && rb["loading"] == false).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation(&ops_id, false, cx))?;
+                let shown = wait_automations(window, cx, true, "the retargeted row shown", 80, |rb| {
+                    rb["highlight"] == ops_id.as_str() && !row_of(rb, &ops_id).is_null()
+                })
+                .await?;
+                anyhow::ensure!(
+                    row_of(&shown, &ops_id)["destination"] == "Sends to Automation checks in LUNA",
+                    "the row spells out the exact destination: {}",
+                    row_of(&shown, &ops_id)
+                );
+                // Case 81: a custom rule in words, and the host's next runs at
+                // its local times; an unsupported field is the host's error.
+                panel!(true, |p, c| p.fixture_new(c));
+                panel!(true, |p, c| p.fixture_set("name", "W20N rule check", c));
+                panel!(true, |p, c| p.fixture_set("prompt", "Rule check.", c));
+                panel!(true, |p, c| p.fixture_set("timezone", "Europe/Bucharest", c));
+                panel!(true, |p, c| p.fixture_set("kind", "custom", c));
+                panel!(true, |p, c| p.fixture_set("date", "", c));
+                panel!(true, |p, c| p.fixture_set("time", "", c));
+                panel!(true, |p, c| p.fixture_set("rule", "FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=30", c));
+                anyhow::ensure!(
+                    editor_of(cx)?["rule"] == "Every week on Mon, Wed at 09:30",
+                    "a supported rule reads in words"
+                );
+                // A malformed day with a multi-byte character (a split inside
+                // `é`) is shown verbatim, painted without a panic.
+                panel!(true, |p, c| p.fixture_set("rule", "FREQ=WEEKLY;BYDAY=é1", c));
+                draw(window, cx)?;
+                anyhow::ensure!(
+                    editor_of(cx)?["rule"].is_null(),
+                    "a malformed Unicode day isn't put into words"
+                );
+                panel!(true, |p, c| p.fixture_set("rule", "FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=30", c));
+                wait_automations(window, cx, true, "Review enabled for the rule", 80, |rb| {
+                    rb["editor"]["built"].is_null()
+                })
+                .await?;
+                panel!(true, |p, c| p.fixture_review(c));
+                let rule_review = wait_automations(window, cx, true, "the rule's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                let rule_times: Vec<String> = rule_review["editor"]["nextOccurrencesMs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_i64)
+                    .map(|at| luna_engine::automation::format_in_zone(at, "Europe/Bucharest"))
+                    .collect();
+                let on_rule = |shown: &String| {
+                    let weekday = shown
+                        .get(..10)
+                        .and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                        .map(|date| date.format("%a").to_string());
+                    shown.get(11..16) == Some("09:30") && matches!(weekday.as_deref(), Some("Mon" | "Wed"))
+                };
+                anyhow::ensure!(
+                    rule_review["editor"]["phase"] == "reviewed" && !rule_times.is_empty() && rule_times.iter().all(on_rule),
+                    "the host's next runs fall on Mon/Wed 09:30 Bucharest: {rule_times:?} {}",
+                    rule_review["editor"]
+                );
+                panel!(true, |p, c| p.fixture_set("rule", "FREQ=DAILY;COUNT=3", c));
+                panel!(true, |p, c| p.fixture_review(c));
+                let unsupported = wait_automations(window, cx, true, "the unsupported rule's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                anyhow::ensure!(
+                    unsupported["editor"]["phase"].as_str().is_some_and(|phase| phase.starts_with("error:"))
+                        && unsupported["editor"]["rule"].is_null()
+                        && panel!(true, |p, c| p.fixture_apply(c)) != Some(true),
+                    "an unsupported rule field is refused by the host and can't be saved: {}",
+                    unsupported["editor"]
+                );
+                // Case 82: delete; the deleted automation reads Deleted and its
+                // history still opens.
+                panel!(true, |p, c| p.fixture_action(&ops_id, "delete", c));
+                wait_automations(window, cx, true, "the delete review", 50, |rb| rb["action"]["phase"] == "reviewed").await?;
+                panel!(true, |p, c| p.fixture_confirm(c));
+                // A deleted row leaves the list (Show deleted is off) unless
+                // it was the one Open showed, which then reads Deleted.
+                wait_automations(window, cx, true, "the delete applies", 80, |rb| {
+                    let row = row_of(rb, &ops_id);
+                    rb["action"].is_null() && (row.is_null() || row["lifecycle"] == "Deleted")
+                })
+                .await?;
+                // Its history is reached the way a card's Open reaches it
+                // (an include-deleted read by id); the Show deleted chip is
+                // native QA.
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation(&ops_id, false, cx))?;
+                let deleted_view = wait_automations(window, cx, true, "the deleted row and its history", 80, |rb| {
+                    row_of(rb, &ops_id)["lifecycle"] == "Deleted" && rb["runs"][ops_id.as_str()].is_object() && rb["runs"][ops_id.as_str()]["error"].is_null()
+                })
+                .await?;
+                anyhow::ensure!(
+                    row_of(&deleted_view, &ops_id)["toggle"].is_null(),
+                    "a deleted automation offers no Edit, Pause or Resume: {}",
+                    row_of(&deleted_view, &ops_id)
+                );
+                shot(window, cx, output.join("w20n-automations-project-page.png")).await?;
+                // Case 83, card: a saved-automation tool part exactly as the
+                // doc stores it (through the doc's privacy policy) renders one
+                // card with the live name, cadence and status; a typed message
+                // carries no schedule label.
+                let card_call = luna_doc::sanitize_tool_call(&luna_proto::ToolCall::Mcp {
+                    server: "luna".into(),
+                    tool: "automation_update".into(),
+                    input: Some(serde_json::json!({
+                        "automationId": automation_id,
+                        "expectedRevision": 1,
+                        "idempotencyKey": "w20n-card",
+                        "operation": {"kind": "pause"},
+                    })),
+                });
+                let mut card_parts = Vec::new();
+                for event in [
+                    luna_proto::AgentEvent::ToolCall { id: "w20n-card-call".into(), call: card_call },
+                    luna_proto::AgentEvent::ToolResult { id: "w20n-card-call".into(), is_error: false, output: None, diff: None },
+                ] {
+                    luna_doc::fold_event_into_parts(&mut card_parts, &event);
+                }
+                let card_at = Utc::now().timestamp_millis();
+                {
+                    let _entered = doc_runtime.enter();
+                    let doc = queue_doc_host.open(AUTO_CHAT)?;
+                    doc.doc().push_message(&text_entry("w20n-typed", MessageRole::User, "A typed note.", &queue_device, card_at - 1_000))?;
+                    doc.doc().push_message(&SessionMessageEntry {
+                        id: "w20n-card-reply".into(),
+                        role: MessageRole::Assistant,
+                        parts: card_parts,
+                        created_at: card_at,
+                        device_id: queue_device.clone(),
+                        status: Some(MessageStatus::Complete),
+                        continuation_of: None,
+                    })?;
+                }
+                window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                // The card's painted name, cadence and status, and Open moving
+                // another project's filter, are native QA; here the card row
+                // and its Open/Edit routes.
+                let mut card_row = Value::Null;
+                let mut typed_row = Value::Null;
+                for _ in 0..120 {
+                    draw(window, cx)?;
+                    let rows = window.update(cx, |shell, _, cx| shell.fixture_transcript_rows(AUTO_CHAT, cx))?;
+                    let rows = rows.as_array().cloned().unwrap_or_default();
+                    card_row = rows.iter().find(|row| row["kind"] == "automation").cloned().unwrap_or(Value::Null);
+                    typed_row = rows.iter().find(|row| row["entryId"] == "w20n-typed").cloned().unwrap_or(Value::Null);
+                    if !card_row.is_null() && !typed_row.is_null() {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                let cards = window
+                    .update(cx, |shell, _, cx| shell.fixture_transcript_rows(AUTO_CHAT, cx))?
+                    .as_array()
+                    .map_or(0, |rows| rows.iter().filter(|row| row["kind"] == "automation").count());
+                anyhow::ensure!(
+                    card_row["text"] == automation_id.as_str()
+                        && card_row["entryId"] == "w20n-card-reply"
+                        && cards == 1
+                        && typed_row["badges"].as_array().is_some_and(Vec::is_empty),
+                    "one card for the saved automation, and no label on a typed message: {card_row} {typed_row}"
+                );
+                // Let the painted card read its record before the capture.
+                for _ in 0..10 {
+                    draw(window, cx)?;
+                    settle(cx, 100).await;
+                }
+                shot(window, cx, output.join("w20n-automation-card.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation(&automation_id, false, cx))?;
+                let opened_from_card = wait_automations(window, cx, true, "the card's Open", 80, |rb| {
+                    rb["highlight"] == automation_id.as_str() && rb["runs"][automation_id.as_str()].is_object()
+                })
+                .await?;
+                anyhow::ensure!(
+                    opened_from_card["scope"]["project"] == PROJECT && opened_from_card["editor"].is_null(),
+                    "Open shows the automation on its project's page without editing it: {}",
+                    opened_from_card["scope"]
+                );
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation(&automation_id, true, cx))?;
+                let edited_from_card = wait_automations(window, cx, true, "the card's Edit", 80, |rb| {
+                    rb["editor"]["automationId"] == automation_id.as_str()
+                })
+                .await?;
+                anyhow::ensure!(
+                    edited_from_card["editor"]["existing"] == true,
+                    "Edit opens that automation's own editor: {}",
+                    edited_from_card["editor"]
+                );
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_leave_settings(false, cx);
+                    shell.fixture_set_space_filter(None, cx);
+                })?;
+                // Case 84: the right pane follows the focused tab, not Main.
+                // With Ops's chat focused beside Main (another project), New
+                // creates from Ops's chat in Ops; focusing Main's tab moves
+                // the pane back to Main and drops the Ops editor.
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open(OPS_CHAT, cx))?;
+                wait_for(window, cx, "Ops's chat focused beside Main", |rb| {
+                    rb["main"] == AUTO_CHAT && rb["focusedChat"] == OPS_CHAT
+                })
+                .await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automations(cx))?;
+                wait_automations(window, cx, false, "the focused Ops chat's automations", 60, |rb| {
+                    rb["scope"]["conversation"] == OPS_CHAT && rb["loading"] == false
+                })
+                .await?;
+                panel!(false, |p, c| p.fixture_new(c));
+                let focused_editor = automations(window, cx, false)?;
+                anyhow::ensure!(
+                    focused_editor["scope"]["conversation"] == OPS_CHAT
+                        && focused_editor["editor"]["sourceTaskId"] == OPS_CHAT
+                        && focused_editor["editor"]["chatId"] == OPS_CHAT
+                        && focused_editor["editor"]["projectId"] == PROJECT_B
+                        && focused_editor["editor"]["fresh"] == false
+                        && focused_editor["rows"].as_array().is_some_and(|rows| rows.iter().all(|row| row["projectId"] == PROJECT_B)),
+                    "creating from a focused tab uses that chat and its project, never Main's: {focused_editor}"
+                );
+                shot(window, cx, output.join("w20n-automations-focused-tab.png")).await?;
+                click_tab(window, cx, AUTO_CHAT).await?;
+                wait_for(window, cx, "Main's tab focused again", |rb| rb["focusedChat"] == AUTO_CHAT).await?;
+                let main_scope = wait_automations(window, cx, false, "the pane back on Main", 60, |rb| {
+                    rb["scope"]["conversation"] == AUTO_CHAT && rb["loading"] == false
+                })
+                .await?;
+                anyhow::ensure!(
+                    main_scope["editor"].is_null()
+                        && main_scope["rows"].as_array().is_some_and(|rows| rows.iter().all(|row| row["projectId"] != PROJECT_B)),
+                    "a new focus drops the Ops editor and shows no Ops rows: {main_scope}"
+                );
+                window.update(cx, |shell, window, cx| shell.fixture_close_automations(window, cx))?;
+                anyhow::ensure!(
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_close(OPS_CHAT, cx))?,
+                    "close Ops's tab"
+                );
+                wait_for(window, cx, "Ops's tab closed", |rb| occurrences(rb, OPS_CHAT) == 0).await?;
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.spaces.retain(|space| space.id != PROJECT_B);
+                        state.chats.retain(|chat| chat.id != OPS_CHAT);
+                        cx.notify();
+                    })
+                });
+                progress(&output, &mut record, "automationsProjectWorkflow".into(), serde_json::json!({
+                    "opsAutomation": ops_id,
+                    "dateRefusals": date_refusals,
+                    "reviewedDefinition": reviewed_definition,
+                    "clampNote": clamped["editor"]["modelNote"],
+                    "reopened": reopened,
+                    "pausedRename": renamed_row,
+                    "retargetedProject": PROJECT,
+                    "ruleNextRuns": rule_times,
+                    "unsupportedRule": unsupported["editor"]["phase"],
+                    "deletedRow": row_of(&deleted_view, &ops_id),
+                    "card": card_row,
+                    "typedMessage": typed_row,
+                    "openedFromCard": opened_from_card["scope"],
+                    "leftOps": left_ops["scope"],
+                    "focusedTabEditor": focused_editor["editor"],
+                    "mainAfterFocus": main_scope["scope"],
+                }));
                 // Isolation: no send reached Main or Child A since w20m began
                 // (the same send intents w20l counts; Main's earlier recovery
                 // may still settle on its own and is not a send).
@@ -5669,8 +6356,9 @@ fn main() -> anyhow::Result<()> {
                     "receiptRevision": receipt.record.revision,
                     "run": run,
                     "seenStates": seen_states,
-                    "paused": paused_row,
-                    "pausedEditor": editing,
+                    "finished": finished_row,
+                    "finishedEditor": editing,
+                    "scheduledMessage": delivered_row,
                     "runsAfterReconnect": runs_after.items.len(),
                     "pagedRows": ids.len(),
                     "automationChat": AUTO_CHAT,

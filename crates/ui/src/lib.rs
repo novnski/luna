@@ -326,29 +326,69 @@ pub fn run_app(config: UiConfig) {
     });
 }
 
-/// A clicked banner: bring Luna forward on that chat through the sidebar's
-/// own path (chat route + composer focus), reopening the main window first if
-/// ⌘W closed it.
-fn parse_activity_notification_target(click_target: &str) -> Option<(&str, &str)> {
+/// What a clicked Activity banner opens, in its owning environment.
+#[derive(Debug, PartialEq, Eq)]
+enum NotificationTarget<'a> {
+    /// `l15:{environment}:{chat}`.
+    Chat { environment: &'a str, chat: &'a str },
+    /// `l15a:{environment}:{project}:{automation}`.
+    Automation {
+        environment: &'a str,
+        project: &'a str,
+        automation: &'a str,
+    },
+}
+
+fn parse_activity_notification_target(click_target: &str) -> Option<NotificationTarget<'_>> {
+    if let Some(target) = click_target.strip_prefix("l15a:") {
+        let mut parts = target.splitn(3, ':');
+        let (Some(environment), Some(project), Some(automation)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            return None;
+        };
+        return (!environment.is_empty() && !project.is_empty() && !automation.is_empty()).then(
+            || NotificationTarget::Automation {
+                environment,
+                project,
+                automation,
+            },
+        );
+    }
     click_target
         .strip_prefix("l15:")
         .and_then(|target| target.split_once(':'))
         .filter(|(environment, chat)| !environment.is_empty() && !chat.is_empty())
+        .map(|(environment, chat)| NotificationTarget::Chat { environment, chat })
 }
 
+/// A clicked banner: bring Luna forward on that chat through the sidebar's
+/// own path (chat route + composer focus), or on that automation's history
+/// in its project, reopening the main window first if ⌘W closed it.
 fn open_notified_chat(click_target: String, state: &gpui::Entity<state::AppState>, cx: &mut App) {
-    let Some((environment_id, chat_id)) = parse_activity_notification_target(&click_target) else {
+    let Some(target) = parse_activity_notification_target(&click_target) else {
         return;
     };
     let exact_owner = {
         let current = state.read(cx);
+        let environment_id = match target {
+            NotificationTarget::Chat { environment, .. }
+            | NotificationTarget::Automation { environment, .. } => environment,
+        };
         current
             .engine()
             .is_some_and(|engine| engine.engine_info().device_id == environment_id)
-            && current
-                .chats
-                .iter()
-                .any(|chat| chat.id == chat_id && chat.device_id == environment_id)
+            && match target {
+                NotificationTarget::Chat { chat, .. } => current
+                    .chats
+                    .iter()
+                    .any(|row| row.id == chat && row.device_id == environment_id),
+                NotificationTarget::Automation { project, .. } => current
+                    .spaces
+                    .iter()
+                    .chain(&current.removed_spaces)
+                    .any(|space| space.id == project && space.device_id == environment_id),
+            }
     };
     if !exact_owner {
         return;
@@ -364,16 +404,30 @@ fn open_notified_chat(click_target: String, state: &gpui::Entity<state::AppState
         .windows()
         .into_iter()
         .find_map(|window| window.downcast::<shell::Shell>());
-    match shell {
-        Some(shell) => {
+    match (target, shell) {
+        (NotificationTarget::Chat { chat, .. }, Some(shell)) => {
             let _ = shell.update(cx, |shell, window, cx| {
                 window.activate_window();
-                shell.open_chat(chat_id.to_string(), cx);
+                shell.open_chat(chat.to_string(), cx);
             });
         }
-        None => state.update(cx, |state, cx| {
-            state.select_chat(Some(chat_id.to_string()), cx)
+        (NotificationTarget::Chat { chat, .. }, None) => state.update(cx, |state, cx| {
+            state.select_chat(Some(chat.to_string()), cx)
         }),
+        (
+            NotificationTarget::Automation {
+                project,
+                automation,
+                ..
+            },
+            Some(shell),
+        ) => {
+            let _ = shell.update(cx, |shell, window, cx| {
+                window.activate_window();
+                shell.open_automation(automation.to_string(), false, Some(project.to_string()), cx);
+            });
+        }
+        (NotificationTarget::Automation { .. }, None) => {}
     }
 }
 
@@ -381,14 +435,42 @@ fn open_notified_chat(click_target: String, state: &gpui::Entity<state::AppState
 mod activity_notification_tests {
     use super::*;
 
+    /// A banner names its owning environment and either a chat or, for an
+    /// automation (whose run may have created no chat), its project and id.
+    /// Failure cases: an automation click parsed as a chat id, a missing
+    /// part accepted, or a chat click read as an automation.
     #[test]
     fn banner_target_requires_an_exact_l15_environment_and_task() {
         assert_eq!(
             parse_activity_notification_target("l15:device:task"),
-            Some(("device", "task"))
+            Some(NotificationTarget::Chat {
+                environment: "device",
+                chat: "task",
+            })
         );
-        for invalid in ["task", "l15::task", "l15:device:", "l14:device:task"] {
-            assert_eq!(parse_activity_notification_target(invalid), None);
+        assert_eq!(
+            parse_activity_notification_target("l15a:device:project:auto-1"),
+            Some(NotificationTarget::Automation {
+                environment: "device",
+                project: "project",
+                automation: "auto-1",
+            })
+        );
+        for invalid in [
+            "task",
+            "l15::task",
+            "l15:device:",
+            "l14:device:task",
+            "l15a:device:project",
+            "l15a:device::auto-1",
+            "l15a::project:auto-1",
+            "l15a:device:project:",
+        ] {
+            assert_eq!(
+                parse_activity_notification_target(invalid),
+                None,
+                "{invalid}"
+            );
         }
     }
 }

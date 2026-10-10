@@ -4871,6 +4871,7 @@ mod tests {
 
     fn attention(id: &str, kind: AttentionKind, lifecycle: AttentionLifecycle) -> AttentionItem {
         AttentionItem {
+            suppress_notification: false,
             contract_version: ATTENTION_CONTRACT_VERSION,
             id: id.into(),
             dedup_key: format!("dedup:{id}"),

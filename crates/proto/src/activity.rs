@@ -284,6 +284,10 @@ pub enum AttentionLifecycle {
     rename_all_fields = "camelCase"
 )]
 pub enum AttentionTarget {
+    Automation {
+        automation_id: String,
+        project_id: String,
+    },
     Task {
         task_id: String,
     },
@@ -329,6 +333,9 @@ pub struct AttentionItem {
     pub id: String,
     pub dedup_key: String,
     pub source_key: String,
+    /// Keep the item visible in Activity without a desktop notification or sound.
+    #[serde(default)]
+    pub suppress_notification: bool,
     pub kind: AttentionKind,
     pub severity: AttentionSeverity,
     pub lifecycle: AttentionLifecycle,

@@ -2375,6 +2375,19 @@ impl Pickers {
     /// The fully-resolved config the composer threads into the Run request and
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
+    /// Whether the effective provider's model catalog has settled (listed
+    /// or failed), so [`Self::resolved`] names the model and reasoning a run
+    /// will use rather than defaults that change when the catalog lands.
+    /// `true` while no provider is chosen.
+    pub fn catalog_settled(&self, cx: &App) -> bool {
+        self.effective_harness(cx).is_none_or(|harness| {
+            matches!(
+                self.models.get(&harness),
+                Some(Loadable::Ready(_) | Loadable::Error(_))
+            )
+        })
+    }
+
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
         let permission_mode = self.requested_permission_mode(cx);
         let effective_permission_mode = match self.effective_permission_preview(cx, permission_mode)

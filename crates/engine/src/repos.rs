@@ -1072,6 +1072,21 @@ impl Repos {
     /// worktrees. Filesystem resolution happens on a disposable thread because
     /// user-selected paths may be dead mounts.
     pub async fn workspace_checkout(&self, repo_path: &Path, candidate: &Path) -> Option<PathBuf> {
+        self.workspace_location(repo_path, candidate, false).await
+    }
+
+    /// A project directory or a descendant of one of its registered worktrees.
+    /// Canonical paths prevent a symlink from silently escaping the project.
+    pub async fn workspace_directory(&self, repo_path: &Path, candidate: &Path) -> Option<PathBuf> {
+        self.workspace_location(repo_path, candidate, true).await
+    }
+
+    async fn workspace_location(
+        &self,
+        repo_path: &Path,
+        candidate: &Path,
+        descendants: bool,
+    ) -> Option<PathBuf> {
         let repo_path = repo_path.to_path_buf();
         let candidate = candidate.to_path_buf();
         let worktrees: Vec<_> = self
@@ -1086,7 +1101,7 @@ impl Repos {
             std::iter::once(repo_path)
                 .chain(worktrees)
                 .filter_map(|path| std::fs::canonicalize(path).ok())
-                .any(|path| path == candidate)
+                .any(|path| path == candidate || (descendants && candidate.starts_with(path)))
                 .then_some(candidate)
         })
         .await
