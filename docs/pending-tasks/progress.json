@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791736276.28024,
+  "created_at": 1791740109.556215,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 8,
+      "done": 9,
       "in_progress": 0,
       "paused": 0,
-      "ready": 72,
+      "ready": 71,
       "review": 0
     },
     "groups": [
@@ -140,11 +140,11 @@
         "id": "transcript",
         "title": "Transcript trust, recovery and current checklist",
         "tasks": 3,
-        "done": 1,
-        "remaining": 2,
-        "accepted_units": 4,
+        "done": 2,
+        "remaining": 1,
+        "accepted_units": 8,
         "total_units": 12,
-        "acceptance_percent": 33.3,
+        "acceptance_percent": 66.7,
         "milestone_status": {}
       },
       {
@@ -373,15 +373,14 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 3,
-      "remaining": 73,
-      "accepted_units": 12,
+      "done": 4,
+      "remaining": 72,
+      "accepted_units": 16,
       "total_units": 296,
-      "acceptance_percent": 4.1
+      "acceptance_percent": 5.4
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-06",
       "CORE-01",
       "CORE-02",
       "SW-12",
@@ -421,16 +420,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.9584792
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-06",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958512
     },
     {
       "attempts": 0,
@@ -1793,6 +1782,112 @@
       "note": "Verification-only close: owners green, live Codex+Claude E06 N1-N8 and V1-V4 pass on 4128f083, no reproducible defect, no runtime change. Added scripts/qa-transcript-fidelity.py for later E06/E19 reruns. Limits: Full mode, one live run per provider, OpenCode left to OC campaign.",
       "status": "done",
       "updated_at": 1791736276.183729
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "handoff": {
+          "at": 1791740109.340451,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+              "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/sha256.json",
+              "sha256": "93704c26cdf862b2a7c663ce8a367b0a2467b066c190e5c8b758722f0eab9aaf"
+            },
+            {
+              "ref": "commit:cbcfaf2303435fd41668830dc5ebd8fbba361b88"
+            }
+          ],
+          "note": "Commands/exit codes in evidence/commands.json; committed, source, raw and native hashes in evidence/sha256.json; limitations in sw-06/README.md. Runtime changed (Claude adapter): harness 224/0 and engine 81/0 suites green, rustfmt clean, no clippy warnings in changed files. QA app quit/unregistered/removed (data kept); primary LUNA Dev refreshed with the fix (PID 28173, 59777, codesign ok, 4s build). Delivered cbcfaf23, origin readback matches"
+        },
+        "native": {
+          "at": 1791740087.041708,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/e11b-before-fix.txt",
+              "sha256": "fe2d25059aed50dbaa011864b18845844894105d15445795627e5acc966f68c2"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172301Z.md",
+              "sha256": "a1d484212ac84656f9c463c82515a42a40eca1dc468412290bf9917fbb760fc9"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172352Z.md",
+              "sha256": "1d034e8a668d386f0b17b8f905b8e50968ea8595fe236b6a81e97c192c355abf"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s9s-codex-20261011T170634Z.md",
+              "sha256": "4318d357ef2e4ecb0610776c6ff26633a79656f2ffac6b81809daa1143284b75"
+            }
+          ],
+          "note": "Native E06 passed in SW-05; completion/input race reproduced on Claude 2.1.293 (lost steer turn), fixed at the Claude turn ledger owner with regression E11b failing before/passing after; Claude S9S passes x2 on fixed build, Codex S9S passes"
+        },
+        "receipts": {
+          "at": 1791740086.840727,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+              "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+              "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+              "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+            }
+          ],
+          "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+        },
+        "recovery": {
+          "at": 1791740086.9386828,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s4-claude-code-20261011T170822Z.md",
+              "sha256": "d73684850aad586911bb76d27b80c8e64be211e5da0104af645c4097c92ca4ad"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/rewind-codex.json",
+              "sha256": "f4c8bf83076a3a28a260c033d3b5a1e763ba370264ad2bf769632089ef17cb4e"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-codex.txt",
+              "sha256": "b4c03415dbd83284cfe458a1934b8d1d9113e9bb5e6b494b1355ec444d021a1e"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-claude-code.txt",
+              "sha256": "ea384164b52fc3812aabad322192794fe0fc7e5a3cd1b2b99bf391238c4ce568"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/handoff-run.txt",
+              "sha256": "4b8dec66159601f34b3fcc14d2738fd3c35c274fb1fc97f663f745296f95b23a"
+            }
+          ],
+          "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall"
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:cbcfaf2303435fd41668830dc5ebd8fbba361b88"
+        }
+      ],
+      "id": "SW-06",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791736988.2973702,
+        "expires_at": 1791753727.726951,
+        "heartbeat_at": 1791739327.726951,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "Certified E07/E08 live on Codex 0.160 and Claude 2.1.293; fixed a reproduced Claude defect (steer queued past the result was lost) in the turn ledger with regression E11b; added S9S live steer scenario. Follow-up: steer refusal reason text for non-steer rows is misleading.",
+      "status": "done",
+      "updated_at": 1791740109.4581912
     }
   ],
   "events": [
@@ -4875,6 +4970,515 @@
           "claimed_at": 1791734500.434954,
           "expires_at": 1791743368.596789,
           "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 174,
+      "task": "SW-06",
+      "at": 1791736988.297441,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791740588.2973702,
+          "heartbeat_at": 1791736988.2973702,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 175,
+      "task": "SW-06",
+      "at": 1791737091.2009668,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791751491.200896,
+          "heartbeat_at": 1791737091.200895,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 176,
+      "task": "SW-06",
+      "at": 1791738308.693845,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791752708.6937542,
+          "heartbeat_at": 1791738308.6937542,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 177,
+      "task": "SW-06",
+      "at": 1791739327.727045,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 178,
+      "task": "SW-06",
+      "at": 1791740086.840982,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "receipts": {
+            "at": 1791740086.840727,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+                "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+                "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+              }
+            ],
+            "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+          }
+        },
+        "criterion": "receipts",
+        "evidence": null,
+        "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 179,
+      "task": "SW-06",
+      "at": 1791740086.9389608,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "receipts": {
+            "at": 1791740086.840727,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+                "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+                "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+              }
+            ],
+            "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+          },
+          "recovery": {
+            "at": 1791740086.9386828,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s4-claude-code-20261011T170822Z.md",
+                "sha256": "d73684850aad586911bb76d27b80c8e64be211e5da0104af645c4097c92ca4ad"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/rewind-codex.json",
+                "sha256": "f4c8bf83076a3a28a260c033d3b5a1e763ba370264ad2bf769632089ef17cb4e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-codex.txt",
+                "sha256": "b4c03415dbd83284cfe458a1934b8d1d9113e9bb5e6b494b1355ec444d021a1e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-claude-code.txt",
+                "sha256": "ea384164b52fc3812aabad322192794fe0fc7e5a3cd1b2b99bf391238c4ce568"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/handoff-run.txt",
+                "sha256": "4b8dec66159601f34b3fcc14d2738fd3c35c274fb1fc97f663f745296f95b23a"
+              }
+            ],
+            "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall"
+          }
+        },
+        "criterion": "recovery",
+        "evidence": null,
+        "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 180,
+      "task": "SW-06",
+      "at": 1791740087.0420952,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "native": {
+            "at": 1791740087.041708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/e11b-before-fix.txt",
+                "sha256": "fe2d25059aed50dbaa011864b18845844894105d15445795627e5acc966f68c2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172301Z.md",
+                "sha256": "a1d484212ac84656f9c463c82515a42a40eca1dc468412290bf9917fbb760fc9"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172352Z.md",
+                "sha256": "1d034e8a668d386f0b17b8f905b8e50968ea8595fe236b6a81e97c192c355abf"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s9s-codex-20261011T170634Z.md",
+                "sha256": "4318d357ef2e4ecb0610776c6ff26633a79656f2ffac6b81809daa1143284b75"
+              }
+            ],
+            "note": "Native E06 passed in SW-05; completion/input race reproduced on Claude 2.1.293 (lost steer turn), fixed at the Claude turn ledger owner with regression E11b failing before/passing after; Claude S9S passes x2 on fixed build, Codex S9S passes"
+          },
+          "receipts": {
+            "at": 1791740086.840727,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+                "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+                "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+              }
+            ],
+            "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+          },
+          "recovery": {
+            "at": 1791740086.9386828,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s4-claude-code-20261011T170822Z.md",
+                "sha256": "d73684850aad586911bb76d27b80c8e64be211e5da0104af645c4097c92ca4ad"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/rewind-codex.json",
+                "sha256": "f4c8bf83076a3a28a260c033d3b5a1e763ba370264ad2bf769632089ef17cb4e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-codex.txt",
+                "sha256": "b4c03415dbd83284cfe458a1934b8d1d9113e9bb5e6b494b1355ec444d021a1e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-claude-code.txt",
+                "sha256": "ea384164b52fc3812aabad322192794fe0fc7e5a3cd1b2b99bf391238c4ce568"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/handoff-run.txt",
+                "sha256": "4b8dec66159601f34b3fcc14d2738fd3c35c274fb1fc97f663f745296f95b23a"
+              }
+            ],
+            "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall"
+          }
+        },
+        "criterion": "native",
+        "evidence": null,
+        "note": "Native E06 passed in SW-05; completion/input race reproduced on Claude 2.1.293 (lost steer turn), fixed at the Claude turn ledger owner with regression E11b failing before/passing after; Claude S9S passes x2 on fixed build, Codex S9S passes",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 181,
+      "task": "SW-06",
+      "at": 1791740109.3522282,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791740109.340451,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/sha256.json",
+                "sha256": "93704c26cdf862b2a7c663ce8a367b0a2467b066c190e5c8b758722f0eab9aaf"
+              },
+              {
+                "ref": "commit:cbcfaf2303435fd41668830dc5ebd8fbba361b88"
+              }
+            ],
+            "note": "Commands/exit codes in evidence/commands.json; committed, source, raw and native hashes in evidence/sha256.json; limitations in sw-06/README.md. Runtime changed (Claude adapter): harness 224/0 and engine 81/0 suites green, rustfmt clean, no clippy warnings in changed files. QA app quit/unregistered/removed (data kept); primary LUNA Dev refreshed with the fix (PID 28173, 59777, codesign ok, 4s build). Delivered cbcfaf23, origin readback matches"
+          },
+          "native": {
+            "at": 1791740087.041708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/e11b-before-fix.txt",
+                "sha256": "fe2d25059aed50dbaa011864b18845844894105d15445795627e5acc966f68c2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172301Z.md",
+                "sha256": "a1d484212ac84656f9c463c82515a42a40eca1dc468412290bf9917fbb760fc9"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172352Z.md",
+                "sha256": "1d034e8a668d386f0b17b8f905b8e50968ea8595fe236b6a81e97c192c355abf"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s9s-codex-20261011T170634Z.md",
+                "sha256": "4318d357ef2e4ecb0610776c6ff26633a79656f2ffac6b81809daa1143284b75"
+              }
+            ],
+            "note": "Native E06 passed in SW-05; completion/input race reproduced on Claude 2.1.293 (lost steer turn), fixed at the Claude turn ledger owner with regression E11b failing before/passing after; Claude S9S passes x2 on fixed build, Codex S9S passes"
+          },
+          "receipts": {
+            "at": 1791740086.840727,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+                "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+                "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+              }
+            ],
+            "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+          },
+          "recovery": {
+            "at": 1791740086.9386828,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s4-claude-code-20261011T170822Z.md",
+                "sha256": "d73684850aad586911bb76d27b80c8e64be211e5da0104af645c4097c92ca4ad"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/rewind-codex.json",
+                "sha256": "f4c8bf83076a3a28a260c033d3b5a1e763ba370264ad2bf769632089ef17cb4e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-codex.txt",
+                "sha256": "b4c03415dbd83284cfe458a1934b8d1d9113e9bb5e6b494b1355ec444d021a1e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-claude-code.txt",
+                "sha256": "ea384164b52fc3812aabad322192794fe0fc7e5a3cd1b2b99bf391238c4ce568"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/handoff-run.txt",
+                "sha256": "4b8dec66159601f34b3fcc14d2738fd3c35c274fb1fc97f663f745296f95b23a"
+              }
+            ],
+            "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall"
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes in evidence/commands.json; committed, source, raw and native hashes in evidence/sha256.json; limitations in sw-06/README.md. Runtime changed (Claude adapter): harness 224/0 and engine 81/0 suites green, rustfmt clean, no clippy warnings in changed files. QA app quit/unregistered/removed (data kept); primary LUNA Dev refreshed with the fix (PID 28173, 59777, codesign ok, 4s build). Delivered cbcfaf23, origin readback matches",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expired": false,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 182,
+      "task": "SW-06",
+      "at": 1791740109.458403,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791740109.340451,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/sha256.json",
+                "sha256": "93704c26cdf862b2a7c663ce8a367b0a2467b066c190e5c8b758722f0eab9aaf"
+              },
+              {
+                "ref": "commit:cbcfaf2303435fd41668830dc5ebd8fbba361b88"
+              }
+            ],
+            "note": "Commands/exit codes in evidence/commands.json; committed, source, raw and native hashes in evidence/sha256.json; limitations in sw-06/README.md. Runtime changed (Claude adapter): harness 224/0 and engine 81/0 suites green, rustfmt clean, no clippy warnings in changed files. QA app quit/unregistered/removed (data kept); primary LUNA Dev refreshed with the fix (PID 28173, 59777, codesign ok, 4s build). Delivered cbcfaf23, origin readback matches"
+          },
+          "native": {
+            "at": 1791740087.041708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/e11b-before-fix.txt",
+                "sha256": "fe2d25059aed50dbaa011864b18845844894105d15445795627e5acc966f68c2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172301Z.md",
+                "sha256": "a1d484212ac84656f9c463c82515a42a40eca1dc468412290bf9917fbb760fc9"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/fixed-s9s-claude-code-20261011T172352Z.md",
+                "sha256": "1d034e8a668d386f0b17b8f905b8e50968ea8595fe236b6a81e97c192c355abf"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s9s-codex-20261011T170634Z.md",
+                "sha256": "4318d357ef2e4ecb0610776c6ff26633a79656f2ffac6b81809daa1143284b75"
+              }
+            ],
+            "note": "Native E06 passed in SW-05; completion/input race reproduced on Claude 2.1.293 (lost steer turn), fixed at the Claude turn ledger owner with regression E11b failing before/passing after; Claude S9S passes x2 on fixed build, Codex S9S passes"
+          },
+          "receipts": {
+            "at": 1791740086.840727,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/README.md",
+                "sha256": "5e2f990590b4866382f8cf06c77902a17b60bb7c55eb77556e5f3b2db48f31be"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/commands.json",
+                "sha256": "2124ea59b39f370ec7869de85f1c9dedddb4fa32717c6046ebe92e9f50bee928"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/claude-2.1.293-race-frames.json",
+                "sha256": "47f5cc4e5b1ad1dd4c16833eb15e65673f5f419957157930e0de7a1692b504f3"
+              }
+            ],
+            "note": "E07/E08 correlated live: S9Q/S9S/S7/S1/S4 read provider input, task-command receipts, queue frames, journal/doc and rows; Claude race traced to native session JSONL + captured 2.1.293 lifecycle wire"
+          },
+          "recovery": {
+            "at": 1791740086.9386828,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/scenarios/s4-claude-code-20261011T170822Z.md",
+                "sha256": "d73684850aad586911bb76d27b80c8e64be211e5da0104af645c4097c92ca4ad"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/rewind-codex.json",
+                "sha256": "f4c8bf83076a3a28a260c033d3b5a1e763ba370264ad2bf769632089ef17cb4e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-codex.txt",
+                "sha256": "b4c03415dbd83284cfe458a1934b8d1d9113e9bb5e6b494b1355ec444d021a1e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/related-claude-code.txt",
+                "sha256": "ea384164b52fc3812aabad322192794fe0fc7e5a3cd1b2b99bf391238c4ce568"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-06/evidence/handoff-run.txt",
+                "sha256": "4b8dec66159601f34b3fcc14d2738fd3c35c274fb1fc97f663f745296f95b23a"
+              }
+            ],
+            "note": "S4 restart keeps unaccepted queued row queued (not delivered/replayed) and continues same task; fork binding across restart (related-chats Codex+Claude); Codex rewind 8/8; Codex->Claude->Codex handoff recall"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:cbcfaf2303435fd41668830dc5ebd8fbba361b88"
+          }
+        ],
+        "note": "Certified E07/E08 live on Codex 0.160 and Claude 2.1.293; fixed a reproduced Claude defect (steer queued past the result was lost) in the turn ledger with regression E11b; added S9S live steer scenario. Follow-up: steer refusal reason text for non-steer rows is misleading.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791736988.2973702,
+          "expires_at": 1791753727.726951,
+          "heartbeat_at": 1791739327.726951,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }

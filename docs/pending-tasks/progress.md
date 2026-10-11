@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-11T19:31:16+03:00.
+Generated 2026-10-11T20:35:09+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **4.1% accepted**, **3/76 Done**.
+Active scope: **5.4% accepted**, **4/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: SW-06, CORE-01, CORE-02, SW-12, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: CORE-01, CORE-02, SW-12, ZI-01, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -52,10 +52,10 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [SW-06 — Certify native long-session steering and recovery](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [ZI-03 — Preserve and show the actual current provider checklist](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
 | [AW-08 — Transcript and composer presentation preferences](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [SW-05 — Close currently reproducible transcript and identity gaps](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
+| [SW-06 — Certify native long-session steering and recovery](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
 
 ## Shared visual artifacts, HTML and MCP Apps
 
