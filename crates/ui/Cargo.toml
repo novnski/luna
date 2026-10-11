@@ -302,5 +302,9 @@ tempfile.workspace = true
 mimalloc.workspace = true
 tracing-subscriber.workspace = true
 
+# Unix fixtures check that their root is owned by the current user.
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
