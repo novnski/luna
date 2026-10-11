@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791732743.63986,
+  "created_at": 1791736276.28024,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 7,
+      "done": 8,
       "in_progress": 0,
       "paused": 0,
-      "ready": 73,
+      "ready": 72,
       "review": 0
     },
     "groups": [
@@ -140,11 +140,11 @@
         "id": "transcript",
         "title": "Transcript trust, recovery and current checklist",
         "tasks": 3,
-        "done": 0,
-        "remaining": 3,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 2,
+        "accepted_units": 4,
         "total_units": 12,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 33.3,
         "milestone_status": {}
       },
       {
@@ -373,15 +373,15 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 2,
-      "remaining": 74,
-      "accepted_units": 8,
+      "done": 3,
+      "remaining": 73,
+      "accepted_units": 12,
       "total_units": 296,
-      "acceptance_percent": 2.7
+      "acceptance_percent": 4.1
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-05",
+      "SW-06",
       "CORE-01",
       "CORE-02",
       "SW-12",
@@ -421,16 +421,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.9584792
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-05",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958495
     },
     {
       "attempts": 0,
@@ -1705,6 +1695,104 @@
       "note": "Baseline, owner map, workflow set and contracts delivered. Key facts: Claude Ask/Auto lack Executor (claude.ai connectors load); Codex MCP has no readback; all existing contracts restartRequired; CLI drift checked (no tool/method breakage). Live E01 nonce/resume proof is SW-01. Status checkpoint commit pending: progress.json also carries the uncommitted ART-01 intake.",
       "status": "done",
       "updated_at": 1791732739.771764
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "delivery": {
+          "at": 1791736250.709298,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+              "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+              "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+              "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+            }
+          ],
+          "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket"
+        },
+        "handoff": {
+          "at": 1791736276.070941,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+              "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/sha256.json",
+              "sha256": "c08be071c21f82d49372df2b89fa154f2cd7f0c3b35eeccc03e61897760802dd"
+            },
+            {
+              "ref": "commit:6ee12515b1bcd1d71796efbe604c56fd8671eefe"
+            }
+          ],
+          "note": "Commands/exit codes in evidence/commands.json; committed, raw and native-transcript hashes in evidence/sha256.json; limitations in sw-05/README.md. No runtime code changed. QA app quit gracefully, unregistered and removed (data kept); primary LUNA Dev reopened and verified (PID 35390, port 59777, codesign ok). Delivered on main 6ee12515, origin readback matches"
+        },
+        "reproduce": {
+          "at": 1791736250.615699,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+              "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+              "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+              "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+            }
+          ],
+          "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+        },
+        "verification": {
+          "at": 1791736250.8115342,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/viewport-diffs.json",
+              "sha256": "51356b8b112c06a2d656c2ced70f347f8172b1d9d6457ebcaa4f745154720a35"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+              "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+              "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+              "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+            }
+          ],
+          "note": "E06 live/native in disposable signed QA app: Codex 0.160 + Claude 2.1.293 ordering/notice/child/restart (N1-N8) and mid-history viewport through streaming, turn end, chat switch, resize (V1-V4, 0 changed pixels with positive controls)"
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:6ee12515b1bcd1d71796efbe604c56fd8671eefe"
+        }
+      ],
+      "id": "SW-05",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791734500.434954,
+        "expires_at": 1791743368.596789,
+        "heartbeat_at": 1791736168.596788,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "Verification-only close: owners green, live Codex+Claude E06 N1-N8 and V1-V4 pass on 4128f083, no reproducible defect, no runtime change. Added scripts/qa-transcript-fidelity.py for later E06/E19 reruns. Limits: Full mode, one live run per provider, OpenCode left to OC campaign.",
+      "status": "done",
+      "updated_at": 1791736276.183729
     }
   ],
   "events": [
@@ -4333,6 +4421,460 @@
           "claimed_at": 1791731497.930258,
           "expires_at": 1791739734.238312,
           "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 166,
+      "task": "SW-05",
+      "at": 1791734500.435082,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791738100.434954,
+          "heartbeat_at": 1791734500.434954,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 167,
+      "task": "SW-05",
+      "at": 1791734590.863646,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791745390.863574,
+          "heartbeat_at": 1791734590.863574,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 168,
+      "task": "SW-05",
+      "at": 1791736168.596879,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 169,
+      "task": "SW-05",
+      "at": 1791736250.61592,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "reproduce": {
+            "at": 1791736250.615699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+                "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+                "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+              }
+            ],
+            "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+          }
+        },
+        "criterion": "reproduce",
+        "evidence": null,
+        "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 170,
+      "task": "SW-05",
+      "at": 1791736250.7095308,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791736250.709298,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              }
+            ],
+            "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket"
+          },
+          "reproduce": {
+            "at": 1791736250.615699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+                "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+                "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+              }
+            ],
+            "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 171,
+      "task": "SW-05",
+      "at": 1791736250.8118389,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791736250.709298,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              }
+            ],
+            "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket"
+          },
+          "reproduce": {
+            "at": 1791736250.615699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+                "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+                "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+              }
+            ],
+            "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+          },
+          "verification": {
+            "at": 1791736250.8115342,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/viewport-diffs.json",
+                "sha256": "51356b8b112c06a2d656c2ced70f347f8172b1d9d6457ebcaa4f745154720a35"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+                "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+              }
+            ],
+            "note": "E06 live/native in disposable signed QA app: Codex 0.160 + Claude 2.1.293 ordering/notice/child/restart (N1-N8) and mid-history viewport through streaming, turn end, chat switch, resize (V1-V4, 0 changed pixels with positive controls)"
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "E06 live/native in disposable signed QA app: Codex 0.160 + Claude 2.1.293 ordering/notice/child/restart (N1-N8) and mid-history viewport through streaming, turn end, chat switch, resize (V1-V4, 0 changed pixels with positive controls)",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 172,
+      "task": "SW-05",
+      "at": 1791736276.081625,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791736250.709298,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              }
+            ],
+            "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket"
+          },
+          "handoff": {
+            "at": 1791736276.070941,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+                "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/sha256.json",
+                "sha256": "c08be071c21f82d49372df2b89fa154f2cd7f0c3b35eeccc03e61897760802dd"
+              },
+              {
+                "ref": "commit:6ee12515b1bcd1d71796efbe604c56fd8671eefe"
+              }
+            ],
+            "note": "Commands/exit codes in evidence/commands.json; committed, raw and native-transcript hashes in evidence/sha256.json; limitations in sw-05/README.md. No runtime code changed. QA app quit gracefully, unregistered and removed (data kept); primary LUNA Dev reopened and verified (PID 35390, port 59777, codesign ok). Delivered on main 6ee12515, origin readback matches"
+          },
+          "reproduce": {
+            "at": 1791736250.615699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+                "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+                "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+              }
+            ],
+            "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+          },
+          "verification": {
+            "at": 1791736250.8115342,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/viewport-diffs.json",
+                "sha256": "51356b8b112c06a2d656c2ced70f347f8172b1d9d6457ebcaa4f745154720a35"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+                "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+              }
+            ],
+            "note": "E06 live/native in disposable signed QA app: Codex 0.160 + Claude 2.1.293 ordering/notice/child/restart (N1-N8) and mid-history viewport through streaming, turn end, chat switch, resize (V1-V4, 0 changed pixels with positive controls)"
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes in evidence/commands.json; committed, raw and native-transcript hashes in evidence/sha256.json; limitations in sw-05/README.md. No runtime code changed. QA app quit gracefully, unregistered and removed (data kept); primary LUNA Dev reopened and verified (PID 35390, port 59777, codesign ok). Delivered on main 6ee12515, origin readback matches",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expired": false,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 173,
+      "task": "SW-05",
+      "at": 1791736276.183903,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791736250.709298,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              }
+            ],
+            "note": "No losing owner reproduced, so no repair: distinct messages, privacy limits and row identity verified intact live (N3, N6, N8); verification-only close per ticket"
+          },
+          "handoff": {
+            "at": 1791736276.070941,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+                "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/sha256.json",
+                "sha256": "c08be071c21f82d49372df2b89fa154f2cd7f0c3b35eeccc03e61897760802dd"
+              },
+              {
+                "ref": "commit:6ee12515b1bcd1d71796efbe604c56fd8671eefe"
+              }
+            ],
+            "note": "Commands/exit codes in evidence/commands.json; committed, raw and native-transcript hashes in evidence/sha256.json; limitations in sw-05/README.md. No runtime code changed. QA app quit gracefully, unregistered and removed (data kept); primary LUNA Dev reopened and verified (PID 35390, port 59777, codesign ok). Delivered on main 6ee12515, origin readback matches"
+          },
+          "reproduce": {
+            "at": 1791736250.615699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/README.md",
+                "sha256": "08c52b565307c0fff2665fd96efbc1b0334cfa4149e4b22d7bb604d57422800d"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/owner-suites-summary.txt",
+                "sha256": "a9fb77042b36a6fe7cf61f7233ce38e11ef43ad49edbdd48c90ac6a01fdecb18"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/failures.md",
+                "sha256": "4d9281ede182efd3e1e04246fafd1d164d6d39d32ef0bbab61569e1bddca5e11"
+              }
+            ],
+            "note": "Current owners rerun green (engine 14, harness 19+1 live-gated, doc 98, ui transcript 81). Adapter/fold split and Claude child-late-result path traced to existing owners; live Codex+Claude N1-N8 found no reproducible adapter/journal/document/row failure on 4128f083"
+          },
+          "verification": {
+            "at": 1791736250.8115342,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/viewport-diffs.json",
+                "sha256": "51356b8b112c06a2d656c2ced70f347f8172b1d9d6457ebcaa4f745154720a35"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/codex-transcript-fidelity.json",
+                "sha256": "fe103a1b9de6b57be5260914b7576ec5549ad443e32752cfa472e2c1c9e912bd"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/claude-transcript-fidelity.json",
+                "sha256": "9b71ea6f5ba18b4b35849612aee75fac67b99fd0d1e713fa67e591f1905f21a6"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-05/evidence/commands.json",
+                "sha256": "9142409431559898c0a87364c525d78047b38dd6c792b29db1f51537f356e367"
+              }
+            ],
+            "note": "E06 live/native in disposable signed QA app: Codex 0.160 + Claude 2.1.293 ordering/notice/child/restart (N1-N8) and mid-history viewport through streaming, turn end, chat switch, resize (V1-V4, 0 changed pixels with positive controls)"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:6ee12515b1bcd1d71796efbe604c56fd8671eefe"
+          }
+        ],
+        "note": "Verification-only close: owners green, live Codex+Claude E06 N1-N8 and V1-V4 pass on 4128f083, no reproducible defect, no runtime change. Added scripts/qa-transcript-fidelity.py for later E06/E19 reruns. Limits: Full mode, one live run per provider, OpenCode left to OC campaign.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791734500.434954,
+          "expires_at": 1791743368.596789,
+          "heartbeat_at": 1791736168.596788,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
