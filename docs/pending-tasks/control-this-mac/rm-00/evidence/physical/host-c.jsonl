@@ -1,0 +1,5 @@
+{"atMs":1791745160825,"bound":"192.168.18.2:64037","event":"ready","pin":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"5560c6af-c585-48ae-9746-b65b9637c69d","environmentId":"1077f50a-4a99-4fd0-8fe5-652d2a1450d5","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"ticket":{"endpoints":["https://192.168.18.2:64037"],"spkiSha256":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"5560c6af-c585-48ae-9746-b65b9637c69d","environmentId":"1077f50a-4a99-4fd0-8fe5-652d2a1450d5","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"version":1}}
+{"alpn":"http/1.1","atMs":1791745164695,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.3:49780","tlsVersion":"TLSv1_3"}
+{"atMs":1791745164695,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.3:49780","status":200}
+{"atMs":1791745164731,"error":null,"event":"closed","peer":"192.168.18.3:49780"}
+{"atMs":1791745175554,"event":"stopped"}

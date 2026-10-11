@@ -1,0 +1,33 @@
+run target/qa/control-this-mac/rm00-host-20261011T190517Z on 192.168.18.2 (Iulians-MacBook-Pro-16.local)
+H1 identity stability
+  [PASS] H1: restart kept pin 7a562402ab93 and target; openssl agrees
+H2 damaged identities
+  [PASS] H2/key-world-readable: exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-key-world-readable/tls-key.pem is accessible by other users
+  [PASS] H2/dir-group-readable: exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-dir-group-readable is accessible by other users
+  [PASS] H2/key-symlink: exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-key-symlink/tls-key.pem is not a regular file or directory of the expected kind
+  [PASS] H2/key-corrupt: exit 2: identity key is not a P-256 PKCS#8 key: Could not parse key pair
+  [PASS] H2/key-rsa: exit 2: identity key is not a P-256 PKCS#8 key: not an ECDSA P-256 key
+  [PASS] H2/target-invalid: exit 2: identity target is invalid: invalid type: integer `1`, expected a string at line 1 column 14
+  [PASS] H2/target-missing: exit 2: identity is incomplete (target.json is missing); refusing to create a different key
+  [PASS] H2/key-missing: exit 2: identity is incomplete (tls-key.pem is missing); refusing to create a different key
+H3 bind rules
+  [PASS] H3/wildcard-v4: 0.0.0.0:64578: exit 2: refusing wildcard address 0.0.0.0: bind one explicit interface
+  [PASS] H3/wildcard-v6: [::]:64579: exit 2: refusing wildcard address ::: bind one explicit interface
+  [PASS] H3/loopback: 127.0.0.1:64580: exit 2: refusing loopback address 127.0.0.1: it is not a remote route
+  [PASS] H3/port-zero: 192.168.18.2:0: exit 2: an explicit, nonzero port is required
+  [PASS] H3/lan-port-in-use: 192.168.18.2:64575: exit 2: 192.168.18.2:64575 is already in use
+  [PASS] H3/loopback-port-in-use: 192.168.18.2:64576: exit 2: port 64576 is already in use on loopback (for example by LUNA's local IPC); choose another
+  [PASS] H3/luna-ipc-port: 192.168.18.2:59777: exit 2: port 59777 is already in use on loopback (for example by LUNA's local IPC); choose another
+  [PASS] H3/luna-ipc-kept: LUNA Dev still listens on its IPC port
+H4/H5 routes and plain HTTP
+  [PASS] H4/health: 200 {"protocol":"remote-direct-v1"}
+  [PASS] H4/descriptor: 200 keys=['catalogVersion', 'protocol', 'spkiSha256', 'target']
+  [PASS] H4/unknown-path: /nope -> 404
+  [PASS] H4/engine-method: /EngineInfo -> 404
+  [PASS] H4/rpc-frame: / -> 413
+  [PASS] H4/post-descriptor: /remote/v1/descriptor -> 405
+  [PASS] H4/get-with-body: /remote/v1/health -> 413
+  [PASS] H4/curl-wrong-pin: curl with a wrong pin exits 90
+  [PASS] H5: plain HTTP: curl exit 1, host handshake failures 1
+{"passed": 26, "total": 26} passed
+exit=0

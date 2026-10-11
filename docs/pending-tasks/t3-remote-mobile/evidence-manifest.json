@@ -3,13 +3,14 @@
   "timezone": "Europe/Bucharest",
   "kind": "source-research-and-pending-specification",
   "baseline": {
-    "luna_sha": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+    "luna_sha": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
     "t3_sha": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
     "t3_original_checkout_sha": "50647de0143e68fde051eb1a0ccf4fe63f9947b2",
     "t3_mobile_source_version": "2.0.0",
     "public_ios_listing_version": "1.4.1",
     "public_ios_minimum": "iOS/iPadOS18",
-    "nightly_mobile_beta_required": true
+    "nightly_mobile_beta_required": true,
+    "luna_sha_note": "Rebased by RM-00 on 2026-10-11: the research recorded 4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c, a pre-rebase SHA that never reached main; 7b269800d7 (parent of the landed research commit 7f3e2a7e) holds all 27 cited LUNA files byte-for-byte."
   },
   "public_checks": [
     {
@@ -1434,189 +1435,189 @@
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/App/LunaApp.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "846a9fe6608e99a8406bba7e9419b197201e56285c56bde6e1d2ddd906a97fce",
       "lines": 54
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/SignInView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "1f8707eec55a34010c2befbed227a41f198760a67a5baa402ffa946a38af1c4b",
       "lines": 286
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/HomeView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "ebed39653b89c75908afd0ad27f11d866f0dc6fe3a85a479db46891ce2b7a654",
       "lines": 428
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/App/AppModel.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "dee4455ae0bd7b26ff7ad747f776fd9fc2896ed4a93523e378c207155d3ae330",
       "lines": 802
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/README.md",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "d82752d762bad08cceaf4b52e888610ba4f84d563387324fe6e9d69638503284",
       "lines": 163
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/App/AppConfig.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "0b2194fd85514143423c7a3aa446d9c87075db9e2b17a13839942d9665356525",
       "lines": 226
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/DeviceRelayClient.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "c03ebcde7885c10d6f37131ca6b7c2dd18ec1dee2f8d884e895a91015688e344",
       "lines": 518
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/SessionStore.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "02a91ebdeb461219aa7dfe96736d4742b9a3f6c7fe56aa6cbd022d0945555b85",
       "lines": 855
     },
     {
       "repository": "novnski/luna",
       "path": "crates/rpc/src/remote_auth.rs",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "623651ebe1196f49d9ac1de8ca92a591cfd9d99e6abdda27a73a41719a3edc7e",
       "lines": 717
     },
     {
       "repository": "novnski/luna",
       "path": "docs/pending-tasks/control-this-mac/implementation-plan.md",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "e7d314487b2e58c871c451cad02ff46df2cc517db06f9853a6a68a02d0a428c1",
       "lines": 164
     },
     {
       "repository": "novnski/luna",
       "path": "docs/pending-tasks/control-this-mac/README.md",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "68b81ab6c8c4d73c9648df4cfc27f90dc3ab00dcbb8cf403b817801b21f39186",
       "lines": 123
     },
     {
       "repository": "novnski/luna",
       "path": "docs/pending-tasks/control-this-mac/feature-parity.md",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "7c29e69bbda3a8e466617b35492cc03722c53e07230fd39af41521e2b7f32f1c",
       "lines": 78
     },
     {
       "repository": "novnski/luna",
       "path": "docs/pending-tasks/control-this-mac/validation-plan.md",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "38362a45c0070d5629d3e15947b7898845162e7c9a90ff7a584fd84cb36438de",
       "lines": 118
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Info.plist",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "943aa49edeb78be9c4e06e166516001c129b31434c55f18527959e92c97972d3",
       "lines": 74
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/SpaceView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "e268385252ce131bb0b3ade54e0201bee7d44781a4c13ba2ad19a9ba38b5d348",
       "lines": 396
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "e60eaf80084414b9e4aeef6862ce6b6a84b9fd12f65d7098e2e464aa16d57eb1",
       "lines": 789
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Composer/ComposerView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "891689d6828a4de9b76546e571df62b39194e2c09632ae721bc0932cb170f7a3",
       "lines": 888
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/NewSessionView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "7ea21c65267e8e7a106390fc7465ce5d965c9b4980bd6da01bfa5ac383b3573d",
       "lines": 998
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Models/Entities.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "7799ebc4faf941721d898cf6fde1522fb09272e41d85a75fa8c118cfc2dd9265",
       "lines": 390
     },
     {
       "repository": "novnski/luna",
       "path": "crates/proto/src/agent.rs",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "1a0ca2c7b670edee7e6219cf278e3d03cbb1b92063103256c7702c033b37cce7",
       "lines": 1533
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/SessionView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "99694abdba31161572e97c4e6d8a19578e656a8ce10b8d34ee88fe23da9c898a",
       "lines": 258
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Transcript/TranscriptView.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "db686eac1d34feefe9b18d9b57e5fefa55484380d31470624783a0d090e86895",
       "lines": 615
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Composer/Attachments.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "34a5b486006e256de4b42de97bc81594f54df776c51aedb8bf5ebaa08dcb1a98",
       "lines": 758
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/SessionQueue.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "29ba10d4c73822e485dcce075891b0e65b1f165ca434ff6e16ff7f461223115d",
       "lines": 251
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Views/PullRequestBadge.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "daf7c49f86f2241389849d20b4fb374057045620c21ca06b2cdb7e8001f10a31",
       "lines": 83
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/DocDisk.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "6cfe6b1afa893061ee799fb075dd835ea214797fd0a351f1c00c5536d3ab9d59",
       "lines": 182
     },
     {
       "repository": "novnski/luna",
       "path": "apps/ios/Luna/Sync/Connectivity.swift",
-      "commit": "4f3a6b0cbe2603db7b18f7d452d3a5dfdecb183c",
+      "commit": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
       "sha256": "62a295d2cfe64447cfa8285270f7b78a80171a21a286761371c28079bc015b63",
       "lines": 124
     }
@@ -6561,9 +6562,9 @@
     "09-luna-mobile.md": "bd725e63ab689276a5d86568bc64419f9a1e0b8819a96ac92abf70f46cdca713",
     "10-independent-review.md": "561e687c4ddeafe607999089f8a4a3ceb6e837c7e990f666c44b7826d50062f7",
     "HANDOVER.md": "d03767c607f1b98940bed96f8f2b7dd91adc2b671272d1e3e9ca2409524b3eed",
-    "README.md": "65010511484d5ed21f26b752c9eeefd778117123d01658d567ae9ce0fc9522b7",
+    "README.md": "788733749a9ba454c26c87fcf57b7424ec8e9008d032f6b4a3af81dafef382dc",
     "gap-matrix.md": "aaeae0f9a51dbbaa9c1c122dbbd2db37211844ebab5434fe64a533435d58d0fe",
-    "implementation-plan.md": "c99326f00fcc2efe733834a9ab3569aae90cf1312a6cc42006c7d045787e4623",
+    "implementation-plan.md": "cd12de95ececdd04e0277becd8d81cc1d7cb1fb4654c03729f1bfecaa8c1221b",
     "validation-plan.md": "a8f03c97d5fec16b3566b2dbdc9b9e51f7cd6ecbb62f7be89e4bb45fe8e23de7",
     "verification.md": "4a8eb5bbefc4c5e1c184e522a1ba377a945400d4295b0bf4c98b65fc5f90132b"
   },

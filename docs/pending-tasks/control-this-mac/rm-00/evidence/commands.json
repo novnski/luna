@@ -1,0 +1,115 @@
+[
+ {
+  "step": "audit verifier before rebase",
+  "command": "python3 docs/pending-tasks/t3-remote-mobile/verify-evidence.py",
+  "exit": 1,
+  "result": "27 LUNA sources unavailable at rewritten SHA 4f3a6b0c; 2 document hashes changed"
+ },
+ {
+  "step": "audit verifier after re-pin",
+  "command": "python3 docs/pending-tasks/t3-remote-mobile/verify-evidence.py",
+  "exit": 0,
+  "result": "219 sources, 676 citations, 16 documents, 54 links, 0 errors",
+  "artifact": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json"
+ },
+ {
+  "step": "host crate check",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh check -p luna-remote --examples",
+  "exit": 0,
+  "log": "target/qa/control-this-mac/check-remote.log"
+ },
+ {
+  "step": "mobile crate check (adds uniffi 0.32.2 to the lockfile)",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh check -p luna-mobile",
+  "exit": 0,
+  "log": "target/qa/control-this-mac/check-mobile.log"
+ },
+ {
+  "step": "iOS Rust target",
+  "command": "rustup target add aarch64-apple-ios",
+  "exit": 0
+ },
+ {
+  "step": "probe host build",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh build --locked -p luna-remote --example probe",
+  "exit": 0,
+  "log": "target/qa/control-this-mac/build-probe.log"
+ },
+ {
+  "step": "iOS core and Swift bindings",
+  "command": "CARGO_INCREMENTAL=0 scripts/ios/build-mobile-core.sh iphoneos apps/ios/RemoteProbe/Generated",
+  "exit": 0,
+  "log": "target/qa/control-this-mac/build-mobile-core.log"
+ },
+ {
+  "step": "probe app, LUNA team",
+  "command": "xcodebuild -project apps/ios/RemoteProbe.xcodeproj -scheme RemoteProbe -destination id=<udid> -derivedDataPath target/ios-probe-dd -allowProvisioningUpdates build",
+  "exit": 65,
+  "result": "No Xcode account for team 5XY3M483YQ"
+ },
+ {
+  "step": "probe app, owner's Personal Team",
+  "command": "xcodebuild ... -allowProvisioningUpdates DEVELOPMENT_TEAM=JDC33NUDHX build",
+  "exit": 0,
+  "result": "Swift 6, complete strict concurrency, no warnings",
+  "log": "target/qa/control-this-mac/xcodebuild-probe.log"
+ },
+ {
+  "step": "physical run 1",
+  "command": "python3 scripts/qa-remote-direct-m0.py --device <udid>",
+  "exit": 1,
+  "result": "24/51: app launch refused, Personal Team profile not yet trusted on the phone",
+  "run": "target/qa/control-this-mac/rm00-20261011T185031Z"
+ },
+ {
+  "step": "physical run 2",
+  "command": "python3 scripts/qa-remote-direct-m0.py --device <udid>",
+  "exit": 1,
+  "result": "45/51: macOS stealth firewall dropped LAN traffic to Homebrew Python hosting the scripted fixture",
+  "run": "target/qa/control-this-mac/rm00-20261011T185335Z"
+ },
+ {
+  "step": "physical run 3",
+  "command": "/usr/bin/python3 scripts/qa-remote-direct-m0.py --device <udid>",
+  "exit": 0,
+  "result": "51/51 with two production test hooks, then removed",
+  "run": "target/qa/control-this-mac/rm00-20261011T185632Z"
+ },
+ {
+  "step": "physical run 4 (final)",
+  "command": "/usr/bin/python3 scripts/qa-remote-direct-m0.py --device <udid>",
+  "exit": 0,
+  "result": "51/51, no test hooks",
+  "run": "target/qa/control-this-mac/rm00-20261011T185915Z",
+  "artifact": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/report.json"
+ },
+ {
+  "step": "clippy",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-remote -p luna-mobile -p luna-proto --all-targets",
+  "exit": 0,
+  "result": "no warnings in new or changed files",
+  "log": "target/qa/control-this-mac/clippy.log"
+ },
+ {
+  "step": "Rust suites",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-proto -p luna-rpc -p luna-remote -p luna-mobile && CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test remote_auth --test device_routing",
+  "exit": 0,
+  "result": "proto 35, rpc 13, device_room 14 (+1 ignored), subscription_lifecycle 7, remote_auth 5, device_routing 5",
+  "log": "target/qa/control-this-mac/rust-tests.log"
+ },
+ {
+  "step": "LUNA Dev refresh",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit": 0,
+  "result": "188 s, PID 27919, IPC 59777, codesign strict ok",
+  "log": "target/qa/control-this-mac/primary-refresh.log"
+ },
+ {
+  "step": "host checks with LUNA Dev running",
+  "command": "/usr/bin/python3 scripts/qa-remote-direct-m0.py --host-only",
+  "exit": 0,
+  "result": "26/26 including LUNA IPC port 59777 refused and kept",
+  "run": "target/qa/control-this-mac/rm00-host-20261011T190517Z",
+  "artifact": "docs/pending-tasks/control-this-mac/rm-00/evidence/host-with-luna-dev/report.json"
+ }
+]

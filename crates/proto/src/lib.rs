@@ -35,6 +35,7 @@ pub mod provider_defaults;
 pub mod provider_mcp;
 pub mod provider_updates;
 pub mod recovery;
+pub mod remote_control;
 pub mod runtime_contract;
 pub mod task_command;
 pub mod task_identity;

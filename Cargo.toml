@@ -10,6 +10,8 @@ members = [
     "crates/harness",
     "crates/engine",
     "crates/rpc",
+    "crates/remote",
+    "crates/mobile",
     "crates/update",
     "crates/ui",
     "crates/syntax",
@@ -32,6 +34,7 @@ luna-sync = { path = "crates/sync" }
 luna-harness = { path = "crates/harness" }
 luna-engine = { path = "crates/engine" }
 luna-rpc = { path = "crates/rpc" }
+luna-remote = { path = "crates/remote" }
 luna-update = { path = "crates/update" }
 luna-ui = { path = "crates/ui" }
 luna-syntax = { path = "crates/syntax" }

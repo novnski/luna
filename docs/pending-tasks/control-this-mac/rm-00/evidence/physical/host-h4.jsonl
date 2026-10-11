@@ -1,0 +1,26 @@
+{"atMs":1791745160237,"bound":"192.168.18.2:64023","event":"ready","pin":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"8e7947f5-8c8c-4f99-91f9-ca98084d168e","environmentId":"5316b732-c18c-4f40-802c-db72a5cedcc7","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"ticket":{"endpoints":["https://192.168.18.2:64023"],"spkiSha256":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"8e7947f5-8c8c-4f99-91f9-ca98084d168e","environmentId":"5316b732-c18c-4f40-802c-db72a5cedcc7","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"version":1}}
+{"alpn":"http/1.1","atMs":1791745160307,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64024","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160307,"event":"request","method":"GET","path":"/remote/v1/health","peer":"192.168.18.2:64024","status":200}
+{"atMs":1791745160307,"error":null,"event":"closed","peer":"192.168.18.2:64024"}
+{"alpn":"http/1.1","atMs":1791745160323,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64026","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160323,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.2:64026","status":200}
+{"atMs":1791745160324,"error":null,"event":"closed","peer":"192.168.18.2:64026"}
+{"alpn":"http/1.1","atMs":1791745160339,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64027","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160339,"event":"request","method":"GET","path":"/nope","peer":"192.168.18.2:64027","status":404}
+{"atMs":1791745160340,"error":null,"event":"closed","peer":"192.168.18.2:64027"}
+{"alpn":"http/1.1","atMs":1791745160356,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64028","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160356,"event":"request","method":"GET","path":"/EngineInfo","peer":"192.168.18.2:64028","status":404}
+{"atMs":1791745160356,"error":null,"event":"closed","peer":"192.168.18.2:64028"}
+{"alpn":"http/1.1","atMs":1791745160372,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64029","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160372,"event":"request","method":"POST","path":"/","peer":"192.168.18.2:64029","status":413}
+{"atMs":1791745160373,"error":null,"event":"closed","peer":"192.168.18.2:64029"}
+{"alpn":"http/1.1","atMs":1791745160388,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64030","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160388,"event":"request","method":"POST","path":"/remote/v1/descriptor","peer":"192.168.18.2:64030","status":405}
+{"atMs":1791745160388,"error":null,"event":"closed","peer":"192.168.18.2:64030"}
+{"alpn":"http/1.1","atMs":1791745160405,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64031","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160405,"event":"request","method":"GET","path":"/remote/v1/health","peer":"192.168.18.2:64031","status":413}
+{"atMs":1791745160405,"error":null,"event":"closed","peer":"192.168.18.2:64031"}
+{"alpn":"http/1.1","atMs":1791745160422,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64032","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160423,"error":null,"event":"closed","peer":"192.168.18.2:64032"}
+{"alpn":null,"atMs":1791745160438,"error":"received corrupt message of type InvalidContentType","event":"handshake","ok":false,"peer":"192.168.18.2:64033","tlsVersion":null}
+{"atMs":1791745160642,"event":"stopped"}

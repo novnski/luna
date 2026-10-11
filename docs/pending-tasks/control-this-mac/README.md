@@ -103,7 +103,7 @@ No Tailscale, DERP, Cloudflare tunnel, WorkOS login, cloud room membership, APNs
 
 ## Milestones
 
-1. **M0: Prove the boundary.** Complete the feature inventory and failure cases, confirm a physical phone can reach a harmless pinned-TLS host endpoint, and verify a native transport callback can feed the Rust core.
+1. **M0: Prove the boundary.** Complete the feature inventory and failure cases, confirm a physical phone can reach a harmless pinned-TLS host endpoint, and verify a native transport callback can feed the Rust core. RM-00 delivered this on a physical iPhone; see [results](rm-00/README.md) and the [rebased contract](rm-00/contract.md).
 2. **M1: Pair and revoke.** Deliver the Connections screen, direct listener, QR flow, durable device/session records, connection readback, and disabling/revocation.
 3. **M2: Follow real work.** Deliver host-owned project/thread snapshots, incremental transcript streams, reconnect/resume, and honest offline state on the phone.
 4. **M3: Continue real work.** Deliver scoped creation, send/queue/steer/stop, questions and approvals, attachments, and engine-owned idempotent admission.

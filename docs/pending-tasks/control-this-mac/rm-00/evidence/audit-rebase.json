@@ -1,0 +1,191 @@
+[
+ {
+  "path": "apps/ios/Luna/App/LunaApp.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/SignInView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/HomeView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "dd75f9a43b",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/App/AppModel.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "dd75f9a43b",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/README.md",
+  "head_matches_audit": false,
+  "audited_content_found_at": "dd75f9a43b",
+  "commits_since": 1,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/App/AppConfig.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/DeviceRelayClient.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/SessionStore.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "crates/rpc/src/remote_auth.rs",
+  "head_matches_audit": false,
+  "audited_content_found_at": "2eb087a07a",
+  "commits_since": 1,
+  "exists_at_head": true
+ },
+ {
+  "path": "docs/pending-tasks/control-this-mac/implementation-plan.md",
+  "head_matches_audit": true,
+  "audited_content_found_at": "a6b90b9e61",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "docs/pending-tasks/control-this-mac/README.md",
+  "head_matches_audit": false,
+  "audited_content_found_at": "a6b90b9e61",
+  "commits_since": 3,
+  "exists_at_head": true
+ },
+ {
+  "path": "docs/pending-tasks/control-this-mac/feature-parity.md",
+  "head_matches_audit": true,
+  "audited_content_found_at": "e6f869fd94",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "docs/pending-tasks/control-this-mac/validation-plan.md",
+  "head_matches_audit": true,
+  "audited_content_found_at": "a6b90b9e61",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Info.plist",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/SpaceView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/WorkspaceStore.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "25f85c7c60",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Composer/ComposerView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/NewSessionView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "dd75f9a43b",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Models/Entities.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "25f85c7c60",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "crates/proto/src/agent.rs",
+  "head_matches_audit": true,
+  "audited_content_found_at": "aa2e0ce579",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/SessionView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "dd75f9a43b",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Transcript/TranscriptView.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Composer/Attachments.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/SessionQueue.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Views/PullRequestBadge.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/DocDisk.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ },
+ {
+  "path": "apps/ios/Luna/Sync/Connectivity.swift",
+  "head_matches_audit": true,
+  "audited_content_found_at": "7c7f593b4a",
+  "commits_since": 0,
+  "exists_at_head": true
+ }
+]

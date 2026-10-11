@@ -1,0 +1,14 @@
+{"atMs":1791745160651,"bound":"192.168.18.2:64034","event":"ready","pin":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"8e7947f5-8c8c-4f99-91f9-ca98084d168e","environmentId":"5316b732-c18c-4f40-802c-db72a5cedcc7","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"ticket":{"endpoints":["https://192.168.18.2:64034","https://Iulians-MacBook-Pro-16.local:64034"],"spkiSha256":"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6","target":{"deviceId":"8e7947f5-8c8c-4f99-91f9-ca98084d168e","environmentId":"5316b732-c18c-4f40-802c-db72a5cedcc7","protocolVersion":1,"requiredCapabilities":["remote-auth-v1"],"workspaceScope":"local"},"version":1}}
+{"alpn":"http/1.1","atMs":1791745160953,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.2:64039","tlsVersion":"TLSv1_3"}
+{"atMs":1791745160953,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.2:64039","status":200}
+{"atMs":1791745160953,"error":null,"event":"closed","peer":"192.168.18.2:64039"}
+{"alpn":"http/1.1","atMs":1791745164380,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.3:49775","tlsVersion":"TLSv1_3"}
+{"atMs":1791745164382,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.3:49775","status":200}
+{"atMs":1791745164413,"error":null,"event":"closed","peer":"192.168.18.3:49775"}
+{"alpn":"http/1.1","atMs":1791745164439,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.3:49776","tlsVersion":"TLSv1_3"}
+{"atMs":1791745164440,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.3:49776","status":200}
+{"atMs":1791745164469,"error":null,"event":"closed","peer":"192.168.18.3:49776"}
+{"alpn":"http/1.1","atMs":1791745164588,"error":null,"event":"handshake","ok":true,"peer":"192.168.18.3:49777","tlsVersion":"TLSv1_3"}
+{"atMs":1791745164589,"event":"request","method":"GET","path":"/remote/v1/descriptor","peer":"192.168.18.3:49777","status":200}
+{"atMs":1791745164626,"error":null,"event":"closed","peer":"192.168.18.3:49777"}
+{"atMs":1791745175542,"event":"stopped"}

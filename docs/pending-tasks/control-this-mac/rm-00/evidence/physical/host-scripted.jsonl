@@ -1,0 +1,8 @@
+{"event": "request", "variant": "unsupported-protocol", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49781", "atMs": 1791745164762}
+{"event": "request", "variant": "unsupported-catalog", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49782", "atMs": 1791745164808}
+{"event": "request", "variant": "descriptor-pin-mismatch", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49783", "atMs": 1791745164869}
+{"event": "request", "variant": "oversized-descriptor", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49784", "atMs": 1791745164919}
+{"event": "request", "variant": "malformed-descriptor", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49785", "atMs": 1791745164975}
+{"event": "request", "variant": "http-500", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49786", "atMs": 1791745165027}
+{"event": "request", "variant": "slow-descriptor", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49787", "atMs": 1791745168083}
+{"event": "request", "variant": "slow-descriptor", "path": "/remote/v1/descriptor", "peer": "192.168.18.3:49788", "atMs": 1791745172791}

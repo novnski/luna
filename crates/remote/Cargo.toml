@@ -1,0 +1,31 @@
+[package]
+name = "luna-remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Direct host for Control this Mac. RM-00 (M0) holds only the profile-owned
+# TLS identity and the harmless pinned descriptor endpoint; RM-01 adds the
+# authenticated gateway on the same identity.
+
+[dependencies]
+luna-proto.workspace = true
+luna-rpc.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+time = "0.3"
+
+[[example]]
+name = "probe"

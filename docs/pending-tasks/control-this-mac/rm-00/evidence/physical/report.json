@@ -1,0 +1,269 @@
+{
+ "runId": "rm00-20261011T185915Z",
+ "bindIp": "192.168.18.2",
+ "mdns": "Iulians-MacBook-Pro-16.local",
+ "device": "00008140-000621C01A50801C",
+ "hostOnly": false,
+ "checks": [
+  {
+   "case": "H1",
+   "passed": true,
+   "detail": "restart kept pin a332b72e2693 and target; openssl agrees"
+  },
+  {
+   "case": "H2/key-world-readable",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-20261011T185915Z/identities/bad-key-world-readable/tls-key.pem is accessible by other users"
+  },
+  {
+   "case": "H2/dir-group-readable",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-20261011T185915Z/identities/bad-dir-group-readable is accessible by other users"
+  },
+  {
+   "case": "H2/key-symlink",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-20261011T185915Z/identities/bad-key-symlink/tls-key.pem is not a regular file or directory of the expected kind"
+  },
+  {
+   "case": "H2/key-corrupt",
+   "passed": true,
+   "detail": "exit 2: identity key is not a P-256 PKCS#8 key: Could not parse key pair"
+  },
+  {
+   "case": "H2/key-rsa",
+   "passed": true,
+   "detail": "exit 2: identity key is not a P-256 PKCS#8 key: not an ECDSA P-256 key"
+  },
+  {
+   "case": "H2/target-invalid",
+   "passed": true,
+   "detail": "exit 2: identity target is invalid: invalid type: integer `1`, expected a string at line 1 column 14"
+  },
+  {
+   "case": "H2/target-missing",
+   "passed": true,
+   "detail": "exit 2: identity is incomplete (target.json is missing); refusing to create a different key"
+  },
+  {
+   "case": "H2/key-missing",
+   "passed": true,
+   "detail": "exit 2: identity is incomplete (tls-key.pem is missing); refusing to create a different key"
+  },
+  {
+   "case": "H3/wildcard-v4",
+   "passed": true,
+   "detail": "0.0.0.0:64020: exit 2: refusing wildcard address 0.0.0.0: bind one explicit interface"
+  },
+  {
+   "case": "H3/wildcard-v6",
+   "passed": true,
+   "detail": "[::]:64021: exit 2: refusing wildcard address ::: bind one explicit interface"
+  },
+  {
+   "case": "H3/loopback",
+   "passed": true,
+   "detail": "127.0.0.1:64022: exit 2: refusing loopback address 127.0.0.1: it is not a remote route"
+  },
+  {
+   "case": "H3/port-zero",
+   "passed": true,
+   "detail": "192.168.18.2:0: exit 2: an explicit, nonzero port is required"
+  },
+  {
+   "case": "H3/lan-port-in-use",
+   "passed": true,
+   "detail": "192.168.18.2:64018: exit 2: 192.168.18.2:64018 is already in use"
+  },
+  {
+   "case": "H4/health",
+   "passed": true,
+   "detail": "200 {\"protocol\":\"remote-direct-v1\"}"
+  },
+  {
+   "case": "H4/descriptor",
+   "passed": true,
+   "detail": "200 keys=['catalogVersion', 'protocol', 'spkiSha256', 'target']"
+  },
+  {
+   "case": "H4/unknown-path",
+   "passed": true,
+   "detail": "/nope -> 404"
+  },
+  {
+   "case": "H4/engine-method",
+   "passed": true,
+   "detail": "/EngineInfo -> 404"
+  },
+  {
+   "case": "H4/rpc-frame",
+   "passed": true,
+   "detail": "/ -> 413"
+  },
+  {
+   "case": "H4/post-descriptor",
+   "passed": true,
+   "detail": "/remote/v1/descriptor -> 405"
+  },
+  {
+   "case": "H4/get-with-body",
+   "passed": true,
+   "detail": "/remote/v1/health -> 413"
+  },
+  {
+   "case": "H4/curl-wrong-pin",
+   "passed": true,
+   "detail": "curl with a wrong pin exits 90"
+  },
+  {
+   "case": "H5",
+   "passed": true,
+   "detail": "plain HTTP: curl exit 1, host handshake failures 1"
+  },
+  {
+   "case": "setup/launch",
+   "passed": true,
+   "detail": "devicectl exit 0; result copied: True"
+  },
+  {
+   "case": "P8/verified-ip",
+   "passed": true,
+   "detail": "verified via 192.168.18.2:64034 from 192.168.18.3:49776 wifi proxied=False TLSv1.3"
+  },
+  {
+   "case": "P9/verified-mdns",
+   "passed": true,
+   "detail": "verified via 192.168.18.2:64034 from 192.168.18.3:49777 wifi proxied=False TLSv1.3"
+  },
+  {
+   "case": "P8/host-peer",
+   "passed": true,
+   "detail": "host A saw descriptor reads from ['192.168.18.2', '192.168.18.3']; phone reported ['192.168.18.3']"
+  },
+  {
+   "case": "B1",
+   "passed": true,
+   "detail": "core states via listener: ['reading@main', 'verified@background']"
+  },
+  {
+   "case": "P3/wrong-pin",
+   "passed": true,
+   "detail": "rejected/trustRejected; presented a332b72e2693; host a2: 1 handshake(s), 0 request(s)"
+  },
+  {
+   "case": "P4/swapped-host",
+   "passed": true,
+   "detail": "rejected/trustRejected; presented 8455b006cddf; host b: 1 handshake(s), 0 request(s)"
+  },
+  {
+   "case": "P5",
+   "passed": true,
+   "detail": "rejected/targetMismatch: expected device 8e7947f5-8c8c-4f99-91f9-ca98084d168e environment 5316b732-c18c-4f40-802c-db72a5cedcc7, host is device 5560c6af-c585-48ae-9746-b65b9637c69d environment 1077f50a-4a99-4fd0-8fe5-652d2a1450d5; host C requests 1"
+  },
+  {
+   "case": "P6/unsupported-protocol",
+   "passed": true,
+   "detail": "rejected/unsupportedVersion: protocol remote-direct-v9 catalog 1; served 1"
+  },
+  {
+   "case": "P6/unsupported-catalog",
+   "passed": true,
+   "detail": "rejected/unsupportedVersion: protocol remote-direct-v1 catalog 99; served 1"
+  },
+  {
+   "case": "P6/descriptor-pin-mismatch",
+   "passed": true,
+   "detail": "rejected/pinMismatch: descriptor names a different key than the one checked; served 1"
+  },
+  {
+   "case": "P7/oversized-descriptor",
+   "passed": true,
+   "detail": "rejected/body: descriptor is larger than 16384 bytes; served 1"
+  },
+  {
+   "case": "P7/malformed-descriptor",
+   "passed": true,
+   "detail": "rejected/body: descriptor: EOF while parsing a value at line 1 column 43; served 1"
+  },
+  {
+   "case": "P7/http-500",
+   "passed": true,
+   "detail": "rejected/httpStatus: HTTP status 500; served 1"
+  },
+  {
+   "case": "B2",
+   "passed": true,
+   "detail": "cancelled; transport ['trust', 'cancel', 'delivered']; states ['reading@main', 'cancelled@main']"
+  },
+  {
+   "case": "B3",
+   "passed": true,
+   "detail": "released; coreDeallocated=True; transport ['trust', 'dropped']"
+  },
+  {
+   "case": "P1/ticket-malformed",
+   "passed": true,
+   "detail": "constructorError: ticket: key must be a string at line 1 column 2"
+  },
+  {
+   "case": "P1/ticket-oversized",
+   "passed": true,
+   "detail": "constructorError: ticket: ticket is larger than 4096 bytes"
+  },
+  {
+   "case": "P1/ticket-version-2",
+   "passed": true,
+   "detail": "constructorError: ticket: unsupported ticket version 2"
+  },
+  {
+   "case": "P1/ticket-bad-pin",
+   "passed": true,
+   "detail": "constructorError: ticket: pin must be 64 lowercase hex digits"
+  },
+  {
+   "case": "P1/ticket-unknown-field",
+   "passed": true,
+   "detail": "constructorError: ticket: unknown field `credential`, expected one of `version`, `target`, `endpoints`, `spkiSha256` at line 1 column 368"
+  },
+  {
+   "case": "P2/endpoint-http",
+   "passed": true,
+   "detail": "constructorError: endpoint: http://192.168.18.2:64038: only https is allowed"
+  },
+  {
+   "case": "P2/endpoint-ws",
+   "passed": true,
+   "detail": "constructorError: endpoint: wss://192.168.18.2:64038: only https is allowed"
+  },
+  {
+   "case": "P2/endpoint-path",
+   "passed": true,
+   "detail": "constructorError: endpoint: https://192.168.18.2:64038/remote/v1/descriptor: an endpoint is an origin; no path, query or fragment"
+  },
+  {
+   "case": "P2/endpoint-userinfo",
+   "passed": true,
+   "detail": "constructorError: endpoint: https://u:p@192.168.18.2:64038: credentials are not allowed in an endpoint"
+  },
+  {
+   "case": "P2/endpoint-query",
+   "passed": true,
+   "detail": "constructorError: endpoint: https://192.168.18.2:64038?x=1: an endpoint is an origin; no path, query or fragment"
+  },
+  {
+   "case": "P1P2/no-network",
+   "passed": true,
+   "detail": "sentinel host saw 0 connection(s), 0 request(s)"
+  },
+  {
+   "case": "P8/interface",
+   "passed": true,
+   "detail": "phone default path: wifi"
+  }
+ ],
+ "passed": true,
+ "counts": {
+  "passed": 51,
+  "total": 51
+ }
+}

@@ -1,0 +1,144 @@
+{
+ "runId": "rm00-host-20261011T190517Z",
+ "bindIp": "192.168.18.2",
+ "mdns": "Iulians-MacBook-Pro-16.local",
+ "device": null,
+ "hostOnly": true,
+ "checks": [
+  {
+   "case": "H1",
+   "passed": true,
+   "detail": "restart kept pin 7a562402ab93 and target; openssl agrees"
+  },
+  {
+   "case": "H2/key-world-readable",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-key-world-readable/tls-key.pem is accessible by other users"
+  },
+  {
+   "case": "H2/dir-group-readable",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-dir-group-readable is accessible by other users"
+  },
+  {
+   "case": "H2/key-symlink",
+   "passed": true,
+   "detail": "exit 2: target/qa/control-this-mac/rm00-host-20261011T190517Z/identities/bad-key-symlink/tls-key.pem is not a regular file or directory of the expected kind"
+  },
+  {
+   "case": "H2/key-corrupt",
+   "passed": true,
+   "detail": "exit 2: identity key is not a P-256 PKCS#8 key: Could not parse key pair"
+  },
+  {
+   "case": "H2/key-rsa",
+   "passed": true,
+   "detail": "exit 2: identity key is not a P-256 PKCS#8 key: not an ECDSA P-256 key"
+  },
+  {
+   "case": "H2/target-invalid",
+   "passed": true,
+   "detail": "exit 2: identity target is invalid: invalid type: integer `1`, expected a string at line 1 column 14"
+  },
+  {
+   "case": "H2/target-missing",
+   "passed": true,
+   "detail": "exit 2: identity is incomplete (target.json is missing); refusing to create a different key"
+  },
+  {
+   "case": "H2/key-missing",
+   "passed": true,
+   "detail": "exit 2: identity is incomplete (tls-key.pem is missing); refusing to create a different key"
+  },
+  {
+   "case": "H3/wildcard-v4",
+   "passed": true,
+   "detail": "0.0.0.0:64578: exit 2: refusing wildcard address 0.0.0.0: bind one explicit interface"
+  },
+  {
+   "case": "H3/wildcard-v6",
+   "passed": true,
+   "detail": "[::]:64579: exit 2: refusing wildcard address ::: bind one explicit interface"
+  },
+  {
+   "case": "H3/loopback",
+   "passed": true,
+   "detail": "127.0.0.1:64580: exit 2: refusing loopback address 127.0.0.1: it is not a remote route"
+  },
+  {
+   "case": "H3/port-zero",
+   "passed": true,
+   "detail": "192.168.18.2:0: exit 2: an explicit, nonzero port is required"
+  },
+  {
+   "case": "H3/lan-port-in-use",
+   "passed": true,
+   "detail": "192.168.18.2:64575: exit 2: 192.168.18.2:64575 is already in use"
+  },
+  {
+   "case": "H3/loopback-port-in-use",
+   "passed": true,
+   "detail": "192.168.18.2:64576: exit 2: port 64576 is already in use on loopback (for example by LUNA's local IPC); choose another"
+  },
+  {
+   "case": "H3/luna-ipc-port",
+   "passed": true,
+   "detail": "192.168.18.2:59777: exit 2: port 59777 is already in use on loopback (for example by LUNA's local IPC); choose another"
+  },
+  {
+   "case": "H3/luna-ipc-kept",
+   "passed": true,
+   "detail": "LUNA Dev still listens on its IPC port"
+  },
+  {
+   "case": "H4/health",
+   "passed": true,
+   "detail": "200 {\"protocol\":\"remote-direct-v1\"}"
+  },
+  {
+   "case": "H4/descriptor",
+   "passed": true,
+   "detail": "200 keys=['catalogVersion', 'protocol', 'spkiSha256', 'target']"
+  },
+  {
+   "case": "H4/unknown-path",
+   "passed": true,
+   "detail": "/nope -> 404"
+  },
+  {
+   "case": "H4/engine-method",
+   "passed": true,
+   "detail": "/EngineInfo -> 404"
+  },
+  {
+   "case": "H4/rpc-frame",
+   "passed": true,
+   "detail": "/ -> 413"
+  },
+  {
+   "case": "H4/post-descriptor",
+   "passed": true,
+   "detail": "/remote/v1/descriptor -> 405"
+  },
+  {
+   "case": "H4/get-with-body",
+   "passed": true,
+   "detail": "/remote/v1/health -> 413"
+  },
+  {
+   "case": "H4/curl-wrong-pin",
+   "passed": true,
+   "detail": "curl with a wrong pin exits 90"
+  },
+  {
+   "case": "H5",
+   "passed": true,
+   "detail": "plain HTTP: curl exit 1, host handshake failures 1"
+  }
+ ],
+ "passed": true,
+ "counts": {
+  "passed": 26,
+  "total": 26
+ }
+}

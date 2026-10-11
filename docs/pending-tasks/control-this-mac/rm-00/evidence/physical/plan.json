@@ -1,0 +1,132 @@
+{
+ "runId": "rm00-20261011T185915Z",
+ "prime": {
+  "id": "prime",
+  "ticket": "{\"endpoints\": [\"https://192.168.18.2:64034\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+  "endpoint": 0
+ },
+ "primeTimeoutSecs": 150,
+ "cases": [
+  {
+   "id": "verified-ip",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64034\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "verified-mdns",
+   "ticket": "{\"endpoints\": [\"https://Iulians-MacBook-Pro-16.local:64034\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "wrong-pin",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64035\"], \"spkiSha256\": \"8455b006cddf9ff3196bfc1fcd9b0e375f4f6be56a906b4238a616a8cd414275\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "swapped-host",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64036\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "same-key-other-target",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64037\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "unsupported-protocol",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64040\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "unsupported-catalog",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64041\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "descriptor-pin-mismatch",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64042\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "oversized-descriptor",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64043\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "malformed-descriptor",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64044\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "http-500",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64045\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "cancel-late",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64046\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "action": "cancelAfterMs",
+   "ms": 500,
+   "waitMs": 4000,
+   "endpoint": 0
+  },
+  {
+   "id": "released-core",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64046\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "action": "releaseAfterMs",
+   "ms": 300,
+   "waitMs": 4500,
+   "endpoint": 0
+  },
+  {
+   "id": "ticket-malformed",
+   "ticket": "{not json https://192.168.18.2:64038",
+   "endpoint": 0
+  },
+  {
+   "id": "ticket-oversized",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ",
+   "endpoint": 0
+  },
+  {
+   "id": "ticket-version-2",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 2}",
+   "endpoint": 0
+  },
+  {
+   "id": "ticket-bad-pin",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038\"], \"spkiSha256\": \"A332B72E2693F9406074A3945DB8CA9CED1BA98DA49D35C6306CB18FFA8562A6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "ticket-unknown-field",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1, \"credential\": \"not-in-m0\"}",
+   "endpoint": 0
+  },
+  {
+   "id": "endpoint-http",
+   "ticket": "{\"endpoints\": [\"http://192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "endpoint-ws",
+   "ticket": "{\"endpoints\": [\"wss://192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "endpoint-path",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038/remote/v1/descriptor\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "endpoint-userinfo",
+   "ticket": "{\"endpoints\": [\"https://u:p@192.168.18.2:64038\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  },
+  {
+   "id": "endpoint-query",
+   "ticket": "{\"endpoints\": [\"https://192.168.18.2:64038?x=1\"], \"spkiSha256\": \"a332b72e2693f9406074a3945db8ca9ced1ba98da49d35c6306cb18ffa8562a6\", \"target\": {\"deviceId\": \"8e7947f5-8c8c-4f99-91f9-ca98084d168e\", \"environmentId\": \"5316b732-c18c-4f40-802c-db72a5cedcc7\", \"protocolVersion\": 1, \"requiredCapabilities\": [\"remote-auth-v1\"], \"workspaceScope\": \"local\"}, \"version\": 1}",
+   "endpoint": 0
+  }
+ ]
+}

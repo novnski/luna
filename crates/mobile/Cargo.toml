@@ -1,0 +1,29 @@
+[package]
+name = "luna-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The owned mobile core that the iOS app links through UniFFI. Platform code
+# owns networking, TLS trust, Keychain and lifecycle; it feeds results into
+# this core, which decides what they mean. RM-00 holds only the direct-host
+# descriptor probe; IOS-00 grows the facade.
+[lib]
+name = "luna_mobile"
+crate-type = ["lib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+luna-proto.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uniffi = "0.32"
+url = "2"

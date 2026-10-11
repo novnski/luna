@@ -42,15 +42,7 @@ pub struct RemoteEnvironment {
     pub environment_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemoteTarget {
-    pub device_id: String,
-    pub workspace_scope: WorkspaceScope,
-    pub environment_id: String,
-    pub protocol_version: u16,
-    pub required_capabilities: Vec<String>,
-}
+pub use luna_proto::remote_control::RemoteTarget;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
