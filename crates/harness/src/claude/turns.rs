@@ -21,6 +21,12 @@
 //! capability the legacy rule stays (every root result completes the active
 //! turn): a folded send is invisible there, and Claude turns have no quiesce
 //! backstop, so withholding could strand a turn forever.
+//!
+//! An OWN result is also withheld while an explicit steer is natively
+//! `queued` (`msg_lifecycle_v1`) and unconsumed: live 2.1.293 answers the
+//! running prompt alone and then starts the queued steer as its next turn, so
+//! the steer's replay must reach the engine as an in-turn `Steered`. Its own
+//! result (or the steer's cancellation, or process exit) ends the LUNA turn.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -68,6 +74,9 @@ struct PendingSend {
     kind: SendKind,
     /// A segment boundary (`Steered`) for this send is still owed to the engine.
     boundary_owed: bool,
+    /// `msg_lifecycle_v1` reported this send `queued` and not yet `started`:
+    /// the CLI holds it and will run it, at the latest as its next turn.
+    natively_queued: bool,
 }
 
 /// A segment boundary the normalizer emits as `Steered`.
@@ -122,6 +131,9 @@ pub(crate) struct TurnLedger {
     stamps_observed: bool,
     runtime_version: Option<String>,
     withheld_foreign: u32,
+    /// An own result's `Done` is withheld because an explicit steer the CLI
+    /// queued past it will run next (2.1.293: queued -> result -> started).
+    withheld_behind_steer: bool,
     /// Own sends the current turn's root frames (or a `started` lifecycle)
     /// named, and whether any of them named another sender; reset per result.
     turn_own: Vec<String>,
@@ -152,6 +164,7 @@ impl TurnLedger {
             luna_id,
             kind,
             boundary_owed: kind == SendKind::FollowUp && self.defers_follow_up_boundary(),
+            natively_queued: false,
         });
     }
 
@@ -197,6 +210,13 @@ impl TurnLedger {
         }
         let mut out = Vec::new();
         for uuid in echoed {
+            for send in self
+                .pending
+                .iter_mut()
+                .filter(|send| send.native_uuid == *uuid)
+            {
+                send.natively_queued = false;
+            }
             if let Some(send) = self
                 .pending
                 .iter_mut()
@@ -209,13 +229,36 @@ impl TurnLedger {
         out
     }
 
+    /// `command_lifecycle queued` for one of our explicit steers: the CLI did
+    /// not fold it into the running turn yet and will start it itself.
+    pub fn on_queued(&mut self, uuid: &str) {
+        for send in self
+            .pending
+            .iter_mut()
+            .filter(|send| send.native_uuid == uuid && send.kind == SendKind::Steer)
+        {
+            send.natively_queued = true;
+        }
+    }
+
+    fn awaits_queued_steer(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|send| send.kind == SendKind::Steer && send.natively_queued)
+    }
+
     /// A send the CLI will never answer (`cancelled`/`discarded`/`refused`).
     /// Returns true when it was the last unconsumed send a withheld foreign
     /// result was waiting behind.
     pub fn on_abandoned(&mut self, uuid: &str) -> bool {
         let before = self.pending.len();
         self.pending.retain(|send| send.native_uuid != uuid);
-        before != self.pending.len() && self.withheld_foreign > 0 && !self.awaits_human_turn()
+        let removed = before != self.pending.len();
+        let behind_steer = self.withheld_behind_steer && !self.awaits_queued_steer();
+        if removed && behind_steer {
+            self.withheld_behind_steer = false;
+        }
+        removed && ((self.withheld_foreign > 0 && !self.awaits_human_turn()) || behind_steer)
     }
 
     fn awaits_human_turn(&self) -> bool {
@@ -268,6 +311,12 @@ impl TurnLedger {
                     .partition(|send| echoed.contains(&send.native_uuid.as_str()));
                 self.pending = kept.into();
                 out.consumed = consumed;
+                // A steer the CLI still holds will start as its next turn
+                // (live 2.1.293): this LUNA turn is not over until it runs.
+                if !interrupted && self.awaits_queued_steer() {
+                    out.withhold_done = true;
+                    self.withheld_behind_steer = true;
+                }
             }
             ResultOwner::Foreign if !turn_own.is_empty() && !turn_foreign => {
                 // The turn this result closes visibly ran only our send(s):
@@ -309,6 +358,7 @@ impl TurnLedger {
         }
         if !out.withhold_done {
             self.withheld_foreign = 0;
+            self.withheld_behind_steer = false;
         }
         for send in &mut out.consumed {
             if send.boundary_owed {
@@ -331,8 +381,10 @@ impl TurnLedger {
                 "lunaId": send.luna_id,
                 "kind": send.kind.label(),
                 "boundaryOwed": send.boundary_owed,
+                "nativelyQueued": send.natively_queued,
             })).collect::<Vec<_>>(),
             "withheldForeign": self.withheld_foreign,
+            "withheldBehindSteer": self.withheld_behind_steer,
         })
     }
 }
@@ -424,6 +476,7 @@ impl NativeTracker {
                         "started" => {
                             boundaries = self.ledger.on_started(&[lifecycle.command_uuid.as_str()]);
                         }
+                        "queued" => self.ledger.on_queued(&lifecycle.command_uuid),
                         "cancelled" | "discarded" | "refused" => {
                             out.extend(self.abandoned(&lifecycle.command_uuid));
                         }
@@ -460,6 +513,17 @@ impl NativeTracker {
             }
         }
         (boundaries, out)
+    }
+
+    /// The process ended while an own `Done` waited behind a queued steer:
+    /// that turn did complete, so its `Done` is the stream's terminal event.
+    pub(crate) fn take_withheld_for_exit(&mut self) -> Option<AgentEvent> {
+        if self.ledger.withheld_behind_steer {
+            self.ledger.withheld_behind_steer = false;
+            self.withheld_done.take()
+        } else {
+            None
+        }
     }
 
     /// A send the CLI will never run: release a foreign `Done` that was only
@@ -601,6 +665,10 @@ impl Normalizer {
                 .into_iter()
                 .map(|boundary| self.boundary_event(boundary))
                 .collect(),
+            "queued" => {
+                self.native.ledger.on_queued(native_uuid);
+                Vec::new()
+            }
             "cancelled" | "discarded" | "refused" => {
                 self.native.abandoned(native_uuid).into_iter().collect()
             }

@@ -76,12 +76,23 @@ class Session:
 
     # -- frames ------------------------------------------------------------
     def init(self):
-        emit({"type": "system", "subtype": "init", "cwd": os.getcwd(),
-              "session_id": self.session_id, "tools": ["Bash", "Read"], "mcp_servers": [],
-              "model": self.model, "permissionMode": "acceptEdits", "slash_commands": [],
-              "apiKeySource": "none", "claude_code_version": "2.1.286",
-              "output_style": "default", "agents": [], "skills": [], "plugins": [],
-              "uuid": str(uuidlib.uuid4()), "fast_mode_state": "off"})
+        frame = {"type": "system", "subtype": "init", "cwd": os.getcwd(),
+                 "session_id": self.session_id, "tools": ["Bash", "Read"], "mcp_servers": [],
+                 "model": self.model, "permissionMode": "acceptEdits", "slash_commands": [],
+                 "apiKeySource": "none", "claude_code_version": "2.1.286",
+                 "output_style": "default", "agents": [], "skills": [], "plugins": [],
+                 "uuid": str(uuidlib.uuid4()), "fast_mode_state": "off"}
+        if self.scenario == "steer-race":
+            # 2.1.293 live capture: the init that advertises input receipts.
+            frame["claude_code_version"] = "2.1.293"
+            frame["capabilities"] = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1",
+                                     "interrupt_send_now_v1", "msg_lifecycle_v1",
+                                     "request_marker_lists_v1", "ui_surface_v1"]
+        emit(frame)
+
+    def lifecycle(self, line, state):
+        emit({"type": "command_lifecycle", "command_uuid": line.get("uuid"), "state": state,
+              "uuid": str(uuidlib.uuid4()), "session_id": self.session_id})
 
     def replay(self, line, uuid=None):
         emit({"type": "user", "message": line.get("message"), "session_id": self.session_id,
@@ -265,6 +276,27 @@ def main():
         session.replay(steer)  # duplicate acknowledgment (dedupe path)
         session.text("steered:%s" % content_text(steer))
         session.result("done", [first.get("uuid"), steer.get("uuid")])
+    elif scenario == "steer-race":
+        # 2.1.293 live capture: a steer written while the turn runs is only
+        # queued; the turn ends answering the first prompt alone, then the CLI
+        # starts the queued line as its own next turn.
+        session.lifecycle(first, "queued")
+        session.lifecycle(first, "started")
+        session.replay(first)
+        session.text("working")
+        steer = read_line(session)
+        if steer is None:
+            return
+        session.lifecycle(steer, "queued")
+        session.text("first answer")
+        session.result("first", [first.get("uuid")])
+        session.lifecycle(first, "completed")
+        session.lifecycle(steer, "started")
+        session.init()
+        session.replay(steer)
+        session.text("steered:%s" % content_text(steer))
+        session.result("second", [steer.get("uuid")])
+        session.lifecycle(steer, "completed")
     elif scenario == "foreign":
         # A Claude-initiated turn runs before the queued human prompt.
         session.text("background report")

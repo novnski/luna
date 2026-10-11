@@ -1,0 +1,5 @@
+PASS real parent records unique context
+PASS native fork creates a distinct provider session
+PASS side knows inherited context without receiving the code word again
+PASS process restart resumes the same fork with all context
+Evidence: target/qa/luna-only-workflows/sw06-20261011T164424Z/related/live-codex-ZpQsiO

@@ -4,6 +4,8 @@
 //!
 //! Scenarios (see CC-06 `failure-cases.md`):
 //! - E11 explicit steer settles its durable row only on the native replay;
+//! - E11b a steer the CLI queues past the turn's result (2.1.293 `msg_lifecycle`
+//!   `queued` -> `started` after the result) still settles once, with its reply;
 //! - E24 a Claude-initiated result never completes the queued human turn;
 //! - E10 a parked run switches model/effort natively (no restart) and the
 //!   Usage RPC reports latest-wins live accounting and stream-observed limits;
@@ -300,6 +302,67 @@ async fn explicit_claude_steer_settles_by_native_replay_receipt() {
     assert_eq!(steer_line["uuid"], id, "the native uuid IS the queue id");
     assert_eq!(conversation_spawns(&fx.project).len(), 1, "no second run");
     wait_for(|| idle(core), "the turn to complete").await;
+    core.shutdown().await;
+}
+
+/// E11b (SW-06, live 2.1.293): the steer reaches Claude while the turn is
+/// finishing, so the CLI only queues it, answers the first prompt alone, then
+/// starts the steer as its own next turn. Failure before the fix: the first
+/// result retired the steer as delivery-unknown and the follow-on turn was
+/// dropped, leaving the row stuck in the queue with no user row or reply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_steer_queued_past_the_result_settles_once_with_its_reply() {
+    let fx = setup("claude-sonnet-5-5", ReasoningLevel::High).await;
+    let core = &fx.core;
+    core.doc_host
+        .queue_message(CHAT, "cc06:steer-race opening", Vec::new())
+        .unwrap();
+    wait_for(
+        || {
+            texts(core, MessageRole::Assistant)
+                .iter()
+                .any(|(_, text)| text.contains("working"))
+        },
+        "the first Claude turn to stream",
+    )
+    .await;
+    let reply = luna_rpc::memory_client(core.rpc_service())
+        .call(
+            luna_rpc::methods::QUEUE_MESSAGE,
+            serde_json::json!({"chatId": CHAT, "text": "redirect please",
+                "holdForTurnEnd": true, "followUpBehavior": "steer"}),
+        )
+        .await
+        .expect("queue steer");
+    let id = reply["id"].as_str().unwrap().to_owned();
+    wait_for(
+        || {
+            queue_is_empty(core)
+                && texts(core, MessageRole::Assistant)
+                    .iter()
+                    .any(|(_, text)| text.contains("steered:redirect please"))
+                && idle(core)
+        },
+        "the queued-past-result steer to settle with its own reply",
+    )
+    .await;
+    let users: Vec<_> = texts(core, MessageRole::User)
+        .into_iter()
+        .filter(|(_, text)| text == "redirect please")
+        .collect();
+    assert_eq!(users.len(), 1, "the steer is one user row");
+    assert_eq!(users[0].0, id, "the transcript row keeps the queue id");
+    let replies = texts(core, MessageRole::Assistant)
+        .into_iter()
+        .filter(|(_, text)| text.contains("steered:redirect please"))
+        .count();
+    assert_eq!(replies, 1, "the follow-on turn's reply lands once");
+    let written = stdin_users(&fx.project)
+        .into_iter()
+        .filter(|frame| frame["type"] == "user" && frame["message"]["content"] == "redirect please")
+        .count();
+    assert_eq!(written, 1, "the steer is written once, never resent");
+    assert_eq!(conversation_spawns(&fx.project).len(), 1, "no second run");
     core.shutdown().await;
 }
 

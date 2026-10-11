@@ -1,0 +1,1 @@
+PASS native fork merge + active parent + Codex → Claude → Codex recall. Evidence: target/qa/luna-only-workflows/sw06-20261011T164424Z/context-transfer/run-M5BuCS

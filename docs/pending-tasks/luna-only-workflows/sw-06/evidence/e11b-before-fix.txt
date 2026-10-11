@@ -1,0 +1,12 @@
+# E11b on unfixed code (1139e752 + new test/peer only)
+command: CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_cc06_e2e claude_steer_queued_past_the_result
+exit: 101
+test claude_steer_queued_past_the_result_settles_once_with_its_reply ... FAILED
+thread 'claude_steer_queued_past_the_result_settles_once_with_its_reply' (45949213) panicked at crates/engine/tests/claude_cc06_e2e.rs:156:9:
+timed out waiting for the queued-past-result steer to settle with its own reply
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 20.27s
+
+# State at the timeout (temporary diagnostic, not committed):
+queue: [QueuedMessage { text: "redirect please", follow_up_behavior: Steer, hold_reason: None, status: DeliveryUnknown { mode: SteerNow, .. }, .. }]
+users: ["cc06:steer-race opening"]   (no "redirect please" row)
+assistants: ["workingfirst answer"]   (no "steered:redirect please" reply)

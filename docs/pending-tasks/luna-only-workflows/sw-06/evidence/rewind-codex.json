@@ -1,0 +1,19 @@
+{
+  "result": "passed",
+  "taskId": "3aa715ff-234a-4dbe-b301-62b0a6822ae5",
+  "providerTaskId": "01a12c05-f8d5-7f81-98ed-772e037a6619",
+  "assertions": [
+    "same binding/session",
+    "exact retained prefix",
+    "duplicate does not revert twice",
+    "draft preserved",
+    "file hashes preserved",
+    "checkpoints preserved",
+    "real same-session continuation without rewound markers",
+    "first-turn empty prefix and continuation without prior markers"
+  ],
+  "pending": [
+    "native UI screenshots",
+    "busy/stale/legacy/steer/unknown/restart scenarios"
+  ]
+}

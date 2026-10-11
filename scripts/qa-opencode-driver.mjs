@@ -192,7 +192,7 @@ export class Driver {
 
   // Idle chats get session.run, busy chats queueMessage with holdForTurnEnd
   // (crates/ui/src/composer.rs); the command id is the message id.
-  async send(chatId, composerText, {attachments = [], label = 'message', queue = null, inputItems = []} = {}) {
+  async send(chatId, composerText, {attachments = [], label = 'message', queue = null, inputItems = [], followUpBehavior = null} = {}) {
     // Composer::skill_wire_text: for Claude a leading `$skill` is sent as
     // `/skill`; the prompt hash keeps the composer text (QF-18).
     const text = this.provider === 'claude-code' ? composerText.replace(/^\$(?=[A-Za-z0-9][\w.-]*(\s|$))/, '/') : composerText;
@@ -202,7 +202,10 @@ export class Driver {
     const useQueue = queue ?? this.busy(chatId);
     const config = chat.config;
     const intent = useQueue
-      ? {kind: 'queueMessage', messageId, text, attachments, inputItems, holdForTurnEnd: true, execution: config}
+      // The composer's Steer mode queues with followUpBehavior "steer"; the
+      // engine then tries a native in-turn steer before holding the row.
+      ? {kind: 'queueMessage', messageId, text, attachments, inputItems, holdForTurnEnd: true, execution: config,
+        ...(followUpBehavior ? {followUpBehavior} : {})}
       : {kind: 'session', command: {kind: 'run', messageId, request: {
         prompt: text, inputItems, harness: config.harness, providerAccountId: config.providerAccountId ?? null,
         model: config.model ?? null, reasoning: config.reasoning ?? null, modelOptions: config.modelOptions ?? {}, cwd: chat.cwd,
@@ -349,6 +352,13 @@ export class Driver {
     const row = (chat.queue.latest?.items ?? []).find(item => item.id === messageId);
     return this.execute(chatId, {kind: 'steerQueuedNow', messageId, expectedQueueRevision: row?.revision ?? null},
       {label: 'steer queued now', sendKind: 'steer', extra: {chatRole: chat.role, messageId}});
+  }
+
+  async sendQueued(chatId, messageId) {
+    const chat = this.chats.get(chatId);
+    const row = (chat.queue.latest?.items ?? []).find(item => item.id === messageId);
+    return this.execute(chatId, {kind: 'sendQueuedNow', messageId, expectedQueueRevision: row?.revision ?? null},
+      {label: 'send queued now', sendKind: 'message', extra: {chatRole: chat.role, messageId}});
   }
 
   async chatRecord(taskId) {

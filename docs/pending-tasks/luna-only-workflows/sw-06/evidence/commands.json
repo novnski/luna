@@ -1,0 +1,152 @@
+[
+ {
+  "name": "claude-S9Q",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9Q --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 73
+ },
+ {
+  "name": "claude-S7",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S7 --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 124
+ },
+ {
+  "name": "claude-S5",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S5 --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 77
+ },
+ {
+  "name": "claude-S1",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S1 --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 62
+ },
+ {
+  "name": "claude-S9S",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9S --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 1,
+  "seconds": 375
+ },
+ {
+  "name": "codex-S9Q",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9Q --provider codex --tier T3 --model gpt-6.1-sol --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 86
+ },
+ {
+  "name": "codex-S9S",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9S --provider codex --tier T3 --model gpt-6.1-sol --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 72
+ },
+ {
+  "name": "claude-S4-pre",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S4 --provider claude-code --tier T3 --phase pre",
+  "exit_code": 0,
+  "seconds": 25
+ },
+ {
+  "name": "claude-S4-post",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S4 --provider claude-code --tier T3 --phase post --run <S4 run>",
+  "exit_code": 0,
+  "seconds": 8
+ },
+ {
+  "name": "related-codex",
+  "command": "LUNA_RELATED_QA_PROVIDER=codex LUNA_RELATED_QA_MODEL=gpt-6.1-sol node scripts/qa-related-chats-live.mjs",
+  "exit_code": 0,
+  "seconds": 30
+ },
+ {
+  "name": "related-claude-code",
+  "command": "LUNA_RELATED_QA_PROVIDER=claude-code LUNA_RELATED_QA_MODEL=claude-opus-5-5 node scripts/qa-related-chats-live.mjs",
+  "exit_code": 0,
+  "seconds": 31
+ },
+ {
+  "name": "e11b-before-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_cc06_e2e claude_steer_queued_past_the_result",
+  "exit_code": 101,
+  "expected_exit_code": 101,
+  "seconds": 27
+ },
+ {
+  "name": "cc06-after-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_cc06_e2e",
+  "exit_code": 0,
+  "seconds": 57
+ },
+ {
+  "name": "harness-claude-after-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --lib --test claude --test claude_availability --test claude_cc06 --test claude_coordination --test claude_effective_config --test claude_extensions --test claude_goals --test claude_history --test claude_inputs --test claude_luna_tools --test claude_mcp --test claude_peers --test claude_permissions --test claude_tool_results ",
+  "exit_code": 1
+ },
+ {
+  "name": "engine-after-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_cc06_e2e --test claude_child_chats --test claude_command_scope --test claude_goals_review --test claude_history --test claude_inputs --test claude_luna_tools --test claude_mcp_inventory --test claude_native_agents --test claude_native_tasks --test claude_permissions --test claude_tool_results --test claude_turn_identity  --test message_queue --test native_inputs --test queued_attachments --test restart_resume --test timeline_order_e2e",
+  "exit_code": 1,
+  "seconds": 4
+ },
+ {
+  "name": "harness-claude-after-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --lib --test claude --test claude_availability --test claude_cc06 --test claude_coordination --test claude_effective_config --test claude_extensions --test claude_goals --test claude_history --test claude_inputs --test claude_luna_tools --test claude_mcp --test claude_peers --test claude_permissions --test claude_tool_results",
+  "exit_code": 0
+ },
+ {
+  "name": "engine-after-fix",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_cc06_e2e --test claude_child_chats --test claude_command_scope --test claude_goals_review --test claude_history --test claude_inputs --test claude_luna_tools --test claude_mcp_inventory --test claude_native_agents --test claude_native_tasks --test claude_permissions --test claude_tool_results --test claude_turn_identity --test message_queue --test native_inputs --test queued_attachments --test restart_resume --test timeline_order_e2e",
+  "exit_code": 0,
+  "seconds": 172
+ },
+ {
+  "name": "clippy",
+  "command": "scripts/cargo.sh clippy --locked -p luna-harness -p luna-engine --tests -- -D warnings",
+  "exit_code": 101,
+  "seconds": 15
+ },
+ {
+  "name": "clippy",
+  "command": "scripts/cargo.sh clippy --locked -p luna-harness -p luna-engine --tests",
+  "exit_code": 0,
+  "seconds": 57
+ },
+ {
+  "name": "qa-build-fix",
+  "command": "LUNA_DEV_* (QA Steering) scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 43
+ },
+ {
+  "name": "claude-S9S-fixed-1",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9S --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 51
+ },
+ {
+  "name": "claude-S9S-fixed-2",
+  "command": "node scripts/qa-opencode-scenarios.mjs run S9S --provider claude-code --tier T3 --turn-timeout 300",
+  "exit_code": 0,
+  "seconds": 52
+ },
+ {
+  "name": "rewind-codex",
+  "command": "LUNA_REWIND_CODEX_HOME=~/.codex LUNA_REWIND_IPC_PORT=59852 LUNA_REWIND_APP=<QA Steering.app> node scripts/qa-same-chat-rewind.mjs run <dir>",
+  "exit_code": 1,
+  "seconds": 195
+ },
+ {
+  "name": "handoff-run",
+  "command": "LUNA_DEV_* (QA Steering) LUNA_AUDIT_NATIVE_BASE=<run> node scripts/qa-context-transfer-live.mjs run",
+  "exit_code": 0,
+  "seconds": 80
+ },
+ {
+  "name": "rewind-codex-2",
+  "command": "LUNA_REWIND_CODEX_HOME=~/.codex LUNA_REWIND_IPC_PORT=59852 LUNA_REWIND_APP=<QA Steering.app> node scripts/qa-same-chat-rewind.mjs run <dir>",
+  "exit_code": 0,
+  "seconds": 53,
+  "note": "rerun: attempt 1 settled but the model appended a period to the exact marker"
+ }
+]

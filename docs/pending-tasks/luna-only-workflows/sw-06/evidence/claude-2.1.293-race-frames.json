@@ -1,0 +1,129 @@
+{
+ "about": "Claude Code 2.1.293 stream-json for a steer written 0.3 s after the first prompt (scripts: claude-race-capture.py). Sanitized: init reduced to protocol fields, rate-limit and usage/cost details removed.",
+ "frames": [
+  {
+   "t": 0.002,
+   "line": "{\"_sent\": \"Reply with exactly RACE-A. Do not use tools.\", \"uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\"}"
+  },
+  {
+   "t": 0.312,
+   "line": "{\"_sent\": \"Reply with exactly RACE-B. Do not use tools.\", \"uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\"}"
+  },
+  {
+   "t": 0.807,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"state\": \"queued\", \"uuid\": \"e1532972-2935-4ebe-b83e-1bbdc58e5257\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  },
+  {
+   "t": 0.808,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"state\": \"started\", \"uuid\": \"0d631520-3f80-49e7-8f87-5b8a09f1cffa\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  },
+  {
+   "t": 0.812,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"state\": \"queued\", \"uuid\": \"40633091-799f-40a0-a276-3bf8f404c885\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  },
+  {
+   "t": 0.83,
+   "line": "{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"model\": \"claude-haiku-5-5\", \"permissionMode\": \"bypassPermissions\", \"claude_code_version\": \"2.1.293\", \"capabilities\": [\"interrupt_receipt_v1\", \"interrupt_cancel_queued_v1\", \"interrupt_send_now_v1\", \"msg_lifecycle_v1\", \"request_marker_lists_v1\", \"sdk_mcp_tools_list_changed\", \"sdk_mcp_manifests\", \"mcp_read_resource_v1\", \"mcp_tool_ui_meta_v1\", \"ui_surface_v1\"], \"uuid\": \"89791e8d-b707-4053-9779-6ea7f6139748\", \"_sanitized\": \"init reduced to protocol fields; local config omitted\"}"
+  },
+  {
+   "t": 0.833,
+   "line": "{\"type\": \"system\", \"subtype\": \"status\", \"status\": \"requesting\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"uuid\": \"e22a4747-06b7-4505-b1cd-25e52e35648b\", \"user_message_uuids\": [\"88f794e8-55f1-426d-b17e-6d70c56934c0\"]}"
+  },
+  {
+   "t": 2.082,
+   "line": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"Reply with exactly RACE-A. Do not use tools.\"}]}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"timestamp\": \"2026-10-11T17:04:16.295Z\", \"isReplay\": true}"
+  },
+  {
+   "t": 2.082,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_start\", \"message\": {\"model\": \"claude-haiku-5-5\", \"id\": \"msg_011Cfvp5WqHEAdkKSZTtuM8T\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"container\": null, \"stop_reason\": null, \"stop_sequence\": null, \"stop_details\": null, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 13130, \"cache_read_input_tokens\": 11946, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 13130}, \"output_tokens\": 7, \"service_tier\": \"standard\", \"inference_geo\": \"global\"}, \"input_transformations\": [], \"diagnostics\": null, \"context_management\": null}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"a4037f94-d2c3-41c3-93a0-7edabebdc407\", \"ttft_ms\": 1237, \"thinking_display\": \"updates\", \"user_message_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"user_message_uuids\": [\"88f794e8-55f1-426d-b17e-6d70c56934c0\"]}"
+  },
+  {
+   "t": 2.082,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"f95a7477-90e4-4eba-a205-dfc3b4f14817\"}"
+  },
+  {
+   "t": 2.082,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"RACE-A\"}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"7a266bb1-68c7-41da-90b1-0e69abd52575\"}"
+  },
+  {
+   "t": 2.086,
+   "line": "{\"type\": \"assistant\", \"message\": {\"model\": \"claude-haiku-5-5\", \"id\": \"msg_011Cfvp5WqHEAdkKSZTtuM8T\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"RACE-A\"}], \"container\": null, \"stop_reason\": null, \"stop_sequence\": null, \"stop_details\": null, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 13130, \"cache_read_input_tokens\": 11946, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 13130}, \"output_tokens\": 7, \"service_tier\": \"standard\", \"inference_geo\": \"global\"}, \"input_transformations\": [], \"diagnostics\": null, \"context_management\": null}, \"parent_tool_use_id\": null, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"uuid\": \"44fb6cc2-a87c-44a7-944d-a7dae2e78c68\", \"timestamp\": \"2026-10-11T17:04:17.555Z\", \"request_id\": \"req_011Cfvp5WZQpRTPn9rMZyNSx\", \"user_message_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"user_message_uuids\": [\"88f794e8-55f1-426d-b17e-6d70c56934c0\"]}"
+  },
+  {
+   "t": 2.086,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_stop\", \"index\": 0}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"a5ac206b-054e-46ff-b58e-1c9595f59bd6\"}"
+  },
+  {
+   "t": 2.099,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"stop_details\": null, \"container\": null}, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 13130, \"cache_read_input_tokens\": 11946, \"output_tokens\": 7, \"output_tokens_details\": {\"thinking_tokens\": 0}, \"iterations\": [{\"input_tokens\": 2, \"output_tokens\": 7, \"cache_read_input_tokens\": 11946, \"cache_creation_input_tokens\": 13130, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 13130}, \"type\": \"message\"}]}, \"context_management\": {\"applied_edits\": []}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"ced5b373-3137-4a64-be4c-dafc5035c7a5\"}"
+  },
+  {
+   "t": 2.099,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_stop\"}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"2787da0d-8400-46e7-b6b1-c58ee29b0a92\"}"
+  },
+  {
+   "t": 2.102,
+   "line": "{\"type\": \"rate_limit_event\", \"_sanitized\": \"account rate-limit details omitted\"}"
+  },
+  {
+   "t": 2.11,
+   "line": "{\"duration_api_ms\": 1261, \"stop_reason\": \"end_turn\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"terminal_reason\": \"completed\", \"fast_mode_state\": \"off\", \"fast_mode_disabled_reason\": \"sdk_opt_in_required\", \"subagent_stats\": {\"spawned\": 0, \"requested\": {\"background\": 0, \"foreground\": 0, \"unset\": 0}, \"started_in_background\": 0, \"max_depth\": 0, \"spawned_by_subagents\": 0, \"completed\": 0, \"failed\": 0, \"killed\": {\"parent\": 0, \"user\": 0, \"system\": 0}, \"refused\": {\"depth_limit\": 0, \"concurrency_limit\": 0, \"budget\": 0}, \"by_type\": {}}, \"safety_stops\": 0, \"is_error\": false, \"num_turns\": 1, \"subtype\": \"success\", \"api_error_status\": null, \"result\": \"RACE-A\", \"ttft_ms\": 1274, \"type\": \"result\", \"duration_ms\": 1300, \"uuid\": \"a4cd7bc0-2fdb-401c-8f4e-1d84c606938f\", \"ttft_stream_ms\": 1272, \"time_to_request_ms\": 35, \"first_content_frame_ms\": 1273, \"user_message_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"user_message_uuids\": [\"88f794e8-55f1-426d-b17e-6d70c56934c0\"], \"request_sent_wall_ms\": 1791738256317, \"first_request_input_tokens\": 25078, \"queued_turn_count\": 0, \"result_index\": 0}"
+  },
+  {
+   "t": 2.111,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"88f794e8-55f1-426d-b17e-6d70c56934c0\", \"state\": \"completed\", \"uuid\": \"77384691-efa5-40a2-b789-8f20200978a6\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  },
+  {
+   "t": 2.112,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"state\": \"started\", \"uuid\": \"3e40f83e-5b7a-4290-9966-d8d60169a5d2\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  },
+  {
+   "t": 2.118,
+   "line": "{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"model\": \"claude-haiku-5-5\", \"permissionMode\": \"bypassPermissions\", \"claude_code_version\": \"2.1.293\", \"capabilities\": [\"interrupt_receipt_v1\", \"interrupt_cancel_queued_v1\", \"interrupt_send_now_v1\", \"msg_lifecycle_v1\", \"request_marker_lists_v1\", \"sdk_mcp_tools_list_changed\", \"sdk_mcp_manifests\", \"mcp_read_resource_v1\", \"mcp_tool_ui_meta_v1\", \"ui_surface_v1\"], \"uuid\": \"c3f803a4-e25e-4ace-9b39-97101e012bb8\", \"_sanitized\": \"init reduced to protocol fields; local config omitted\"}"
+  },
+  {
+   "t": 2.12,
+   "line": "{\"type\": \"system\", \"subtype\": \"status\", \"status\": \"requesting\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"uuid\": \"b8c75c64-9f96-41ef-8f45-a86df0a4932e\", \"user_message_uuids\": [\"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\"]}"
+  },
+  {
+   "t": 3.106,
+   "line": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"Reply with exactly RACE-B. Do not use tools.\"}]}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"timestamp\": \"2026-10-11T17:04:17.588Z\", \"isReplay\": true}"
+  },
+  {
+   "t": 3.106,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_start\", \"message\": {\"model\": \"claude-haiku-5-5\", \"id\": \"msg_011Cfvp5bpAvwtQ2mjC6cgwX\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"container\": null, \"stop_reason\": null, \"stop_sequence\": null, \"stop_details\": null, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 8502, \"cache_read_input_tokens\": 17553, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 8502}, \"output_tokens\": 7, \"service_tier\": \"standard\", \"inference_geo\": \"global\"}, \"input_transformations\": [], \"diagnostics\": {\"cache_miss_reason\": {\"type\": \"messages_changed\", \"cache_missed_input_tokens\": 10492}}, \"context_management\": null}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"5311828d-b4e3-4467-837c-bfdbb3aa2ef3\", \"ttft_ms\": 980, \"thinking_display\": \"updates\", \"user_message_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"user_message_uuids\": [\"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\"]}"
+  },
+  {
+   "t": 3.107,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"d5bfc9ba-38f6-4126-ae5e-8abd4bfbd786\"}"
+  },
+  {
+   "t": 3.107,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"RACE-B\"}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"491aa8bc-a68d-4947-bcad-9ac435b0984d\"}"
+  },
+  {
+   "t": 3.11,
+   "line": "{\"type\": \"assistant\", \"message\": {\"model\": \"claude-haiku-5-5\", \"id\": \"msg_011Cfvp5bpAvwtQ2mjC6cgwX\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"RACE-B\"}], \"container\": null, \"stop_reason\": null, \"stop_sequence\": null, \"stop_details\": null, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 8502, \"cache_read_input_tokens\": 17553, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 8502}, \"output_tokens\": 7, \"service_tier\": \"standard\", \"inference_geo\": \"global\"}, \"input_transformations\": [], \"diagnostics\": {\"cache_miss_reason\": {\"type\": \"messages_changed\", \"cache_missed_input_tokens\": 10492}}, \"context_management\": null}, \"parent_tool_use_id\": null, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"uuid\": \"5972fe34-efe6-4536-8dff-1d93145f0331\", \"timestamp\": \"2026-10-11T17:04:18.579Z\", \"request_id\": \"req_011Cfvp5bYoY4rqm9511ADXE\", \"user_message_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"user_message_uuids\": [\"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\"]}"
+  },
+  {
+   "t": 3.11,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"content_block_stop\", \"index\": 0}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"ad2a50f2-1c35-41ee-b10c-57214b6259a2\"}"
+  },
+  {
+   "t": 3.12,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"stop_details\": null, \"container\": null}, \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 8502, \"cache_read_input_tokens\": 17553, \"output_tokens\": 7, \"output_tokens_details\": {\"thinking_tokens\": 0}, \"iterations\": [{\"input_tokens\": 2, \"output_tokens\": 7, \"cache_read_input_tokens\": 17553, \"cache_creation_input_tokens\": 8502, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 8502}, \"type\": \"message\"}]}, \"context_management\": {\"applied_edits\": []}}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"31206bc4-70fa-4a81-af7d-a09caa216937\"}"
+  },
+  {
+   "t": 3.12,
+   "line": "{\"type\": \"stream_event\", \"event\": {\"type\": \"message_stop\"}, \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"parent_tool_use_id\": null, \"uuid\": \"77be9404-cc6c-4e94-8272-8c40fa44c3d8\"}"
+  },
+  {
+   "t": 3.126,
+   "line": "{\"duration_api_ms\": 2258, \"stop_reason\": \"end_turn\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\", \"terminal_reason\": \"completed\", \"fast_mode_state\": \"off\", \"fast_mode_disabled_reason\": \"sdk_opt_in_required\", \"subagent_stats\": {\"spawned\": 0, \"requested\": {\"background\": 0, \"foreground\": 0, \"unset\": 0}, \"started_in_background\": 0, \"max_depth\": 0, \"spawned_by_subagents\": 0, \"completed\": 0, \"failed\": 0, \"killed\": {\"parent\": 0, \"user\": 0, \"system\": 0}, \"refused\": {\"depth_limit\": 0, \"concurrency_limit\": 0, \"budget\": 0}, \"by_type\": {}}, \"safety_stops\": 0, \"is_error\": false, \"num_turns\": 1, \"subtype\": \"success\", \"api_error_status\": null, \"result\": \"RACE-B\", \"ttft_ms\": 995, \"type\": \"result\", \"duration_ms\": 1014, \"uuid\": \"97bcda60-34bd-47e0-8e45-20c640300bf4\", \"ttft_stream_ms\": 994, \"time_to_request_ms\": 14, \"first_content_frame_ms\": 995, \"user_message_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"user_message_uuids\": [\"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\"], \"request_sent_wall_ms\": 1791738257599, \"first_request_input_tokens\": 26057, \"queued_turn_count\": 0, \"result_index\": 1}"
+  },
+  {
+   "t": 3.127,
+   "line": "{\"type\": \"command_lifecycle\", \"command_uuid\": \"d8cd0f01-5abd-4e68-bf8d-a31cd294d65b\", \"state\": \"completed\", \"uuid\": \"aa149a8f-b3e3-44db-9c92-0e0de5d6eac5\", \"session_id\": \"98c8b0ae-bd1f-4413-8d32-35fc114893a6\"}"
+  }
+ ]
+}

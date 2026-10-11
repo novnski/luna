@@ -1452,6 +1452,15 @@ async fn run_session(session: Session) {
         }
     }
 
+    // An own turn whose Done waited behind a natively queued steer did
+    // complete; if the CLI ended before running the steer, report that Done.
+    if !interrupted
+        && !event_tx.is_closed()
+        && let Some(done) = norm.native.take_withheld_for_exit()
+        && event_tx.send(Ok(done)).await.is_ok()
+    {
+        any_done = true;
+    }
     // Terminal bookkeeping: never end the stream without a Done unless the
     // consumer already hung up.
     if !event_tx.is_closed() {

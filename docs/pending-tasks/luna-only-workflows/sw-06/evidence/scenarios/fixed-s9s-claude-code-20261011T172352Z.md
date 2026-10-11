@@ -1,0 +1,43 @@
+# OpenCode QA scenario S9S: Live steer: an image steer row lands in the running turn; a steer racing turn completion is delivered once (claude-code, run)
+
+- Provider: claude-code; model claude-opus-5-5; variant (none); permission full.
+- Evidence tier: **T3** through the signed QA app's RPC surface.
+- App: LUNA QA Steering pid 28402; LUNA 1139e752c611dc98f29969c7f533b32e3a9d0779 (dirty=true).
+- Result: **PASS**
+
+| Criterion | Expected | Actual | Pass |
+| --- | --- | --- | --- |
+| model-in-catalog | requested or tier default model listed by ListModels | claude-opus-5-5 | yes |
+| tier-label | T3 uses a real (non-mock) model | claude-opus-5-5 | yes |
+| steer-applied: steer-queued | the busy chat accepts the steer row through queueMessage | {"path":"queueMessage","receipt":"applied"} | yes |
+| steer-applied: steer-claimed-live | the steer row leaves the queue while the turn is still running | {"busy":true} | yes |
+| steer-applied: turn-settled | the turn settles (idle) within the turn timeout | settled:idle via working>idle | yes |
+| steer-applied: single-turn | the steer joined the running turn: one working period, no extra turn | {"runs":1,"quiet":true} | yes |
+| steer-applied: steer-row-once | the steered row appears exactly once | 1 | yes |
+| steer-applied: steer-before-turn-end | the steered row sits before the turn's final reply | 2 | yes |
+| steer-applied: steer-consumed | the reply carries STEERED-0D9E509D-purple | WAITED-0D9E509D  STEERED-0D9E509D-purple | yes |
+| completion-race: race-queued | the steer row is accepted while the turn runs | applied | yes |
+| completion-race: race-outcome | which side of the race won (steered in-turn, next turn, or held for an explicit send) | {"outcome":"delivered","runs":1} | info: yes |
+| completion-race: race-not-lost | the steer row is either delivered or visibly held with a reason, never lost | delivered | yes |
+| completion-race: race-row-once | the race row is delivered exactly once | {"outcome":"delivered","count":1,"quiet":true} | yes |
+| completion-race: queue-empty | no row is left behind in the queue | [] | yes |
+| completion-race: race-consumed | a reply carries RACE-0D9E509D-B | RACE-0D9E509D-B | yes |
+| secret-scan | no credentials in evidence (OCF-142) | {"passed": true, "findings": 0, "filesScanned": 13} | yes |
+
+## Notes
+
+- Validation rows: PD-14, SW-06 E07.
+- Nonce 0D9E509D; prompts are provider-neutral (QF-18).
+
+## Unverified by this run
+
+- The provider-record side (Claude session JSONL, Codex rollout) is compared by the SW-06 analysis, not here.
+- Which side of the completion race wins is timing-dependent; both truthful outcomes are accepted and recorded.
+- Model consumption claims; a model statement is not verification (validation-plan §1 item 7).
+- Screenshots prove presentation only; RPC admission proves admission, not consumption.
+
+## Replay
+
+```
+node scripts/qa-opencode-scenarios.mjs run S9S --provider claude-code --tier T3 --turn-timeout 300 --evidence-root target/qa/luna-only-workflows/sw06-20261011T164424Z/scenarios-fixed
+```

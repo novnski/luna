@@ -11,6 +11,8 @@ Queue ownership: SW-00–SW-16. Preserve linked implementation owners across IC,
 
 **SW-05 (11 October, `4128f083`):** [transcript and viewport verification](sw-05/README.md) passed live on Codex and Claude with no runtime change. [`scripts/qa-transcript-fidelity.py`](../../../scripts/qa-transcript-fidelity.py) repeats the provider-record comparison for later E06/E19 runs.
 
+**SW-06 (11 October):** [steering and recovery certification](sw-06/README.md) found and fixed one Claude defect: a steer queued past the turn's result was lost. Every other E07/E08 contract passed live on Codex and Claude.
+
 ## Outcome and scope
 
 Iulian can carry his recurring desktop work through LUNA: investigate Moralis support and infrastructure using current evidence, implement and verify code, coordinate requested helpers, inspect and revise visual artifacts, preserve past context, and follow scheduled work. LUNA remains the interface over native provider engines; this plan does not replace Claude/Codex inference or introduce another orchestrator.

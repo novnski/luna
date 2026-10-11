@@ -13,7 +13,7 @@
 //        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
 //        [--capture-hold-ms <ms>]  (keep the S1 approval card, S1 question panel
 //        and S2X late card unanswered that long so the operator can capture them)
-//   S9Q also accepts --provider codex --tier T3 --model <explicit model>.
+//   S9Q and S9S also accept --provider codex --tier T3 --model <explicit model>.
 //   Other scenarios and fake-engine parity remain OpenCode/Claude only.
 //   Live-only extras (never rehearsed): S2X background child ask after the
 //   root Done, parked follow-up and per-child Stop; S4X OpenCode server
@@ -26,6 +26,8 @@
 //   [--unattended-ms], default 15000); S9Q nonblocking questions through
 //   LUNA ask_user (T3, both providers): keep working, late answer as a new
 //   turn, amendment, idempotent repeat, answer steered into a running turn;
+//   S9S live steer: an image steer row joins the running turn, and a steer
+//   racing turn completion is delivered once (steered or held, then sent);
 //   S8X automatic compaction with a
 //   small-context mock model (T2) [--big-command].
 //
@@ -1489,6 +1491,79 @@ const SCENARIOS = {
     },
   },
 
+  S9S: {
+    title: 'Live steer: an image steer row lands in the running turn; a steer racing turn completion is delivered once', validation: ['PD-14', 'SW-06 E07'],
+    parity: true, extra: true, permissionMode: 'full', phases: ['run'],
+    steps: ['steer-applied', 'completion-race'],
+    prompts: n => ({
+      busy: `Use your shell tool to run exactly this command: sleep 15\nThen reply with exactly WAITED-${n}, and also follow any instruction I add while you are waiting.`,
+      steer: `While you wait: the attached image has one dominant colour. In your final reply also write STEERED-${n}- followed by that colour as one lowercase word. Do not use any other tool.`,
+      short: `Reply with exactly RACE-${n}-A. Do not use tools.`,
+      race: `Reply with exactly RACE-${n}-B. Do not use tools.`,
+    }),
+    unverified: ['The provider-record side (Claude session JSONL, Codex rollout) is compared by the SW-06 analysis, not here.',
+      'Which side of the completion race wins is timing-dependent; both truthful outcomes are accepted and recorded.'],
+    async run(s, P) {
+      const chatId = s.chatId('root');
+      const chat = s.d.chatByRole('root');
+      const queued = id => (chat.queue.latest?.items ?? []).find(item => item.id === id) ?? null;
+      const rows = id => s.entries('root').filter(e => e.id === id);
+      const workingRuns = mark => s.d.sessions.since(chatId, mark).map(h => h.status)
+        .filter((status, i, all) => status === 'working' && all[i - 1] !== 'working').length;
+      await s.step('steer-applied', async () => {
+        const mark = s.d.sessions.mark(chatId);
+        const busy = await s.d.send(chatId, s.p(P.busy, 'tool-shell:sleep 15'));
+        await waitOn([s.d.sessions, chat.mirror], () => s.d.busy(chatId) || null, 60000, 'busy').catch(() => null);
+        // Let the provider start its shell call so the steer arrives mid-turn.
+        await sleep(4000);
+        const staged = await s.d.upload(solidPng(64, 64, [130, 30, 200]), 'qa-purple.png');
+        const steer = await s.d.send(chatId, s.p(P.steer, 'image'), {attachments: [staged.path], queue: true, followUpBehavior: 'steer'});
+        s.check('steer-queued', 'the busy chat accepts the steer row through queueMessage', {path: steer.path, receipt: steer.receipt?.status},
+          steer.path === 'queueMessage' && ['applied', 'pending'].includes(steer.receipt?.status));
+        const left = await waitOn([chat.queue, s.d.sessions], () => (!queued(steer.messageId) ? {busy: s.d.busy(chatId)} : null), 30000, 'steer leaves queue').catch(() => null);
+        s.check('steer-claimed-live', 'the steer row leaves the queue while the turn is still running', left, Boolean(left?.busy));
+        const wait = await s.d.waitTurn(chatId, {mark: busy.mark, messageId: busy.messageId, timeoutMs: s.turnTimeout});
+        s.settled(wait);
+        const quiet = await s.stays('root', entries => entries.some(e => e.status === 'streaming'), 6000);
+        s.check('single-turn', 'the steer joined the running turn: one working period, no extra turn', {runs: workingRuns(mark), quiet}, workingRuns(mark) === 1 && quiet);
+        s.check('steer-row-once', 'the steered row appears exactly once', rows(steer.messageId).length, rows(steer.messageId).length === 1);
+        const entries = s.entries('root');
+        const at = entries.findIndex(e => e.id === steer.messageId);
+        const after = entries.slice(at + 1).filter(e => e.role === 'assistant').map(textOf).join('\n');
+        s.check('steer-before-turn-end', 'the steered row sits before the turn\'s final reply', at, at > entries.findIndex(e => e.id === busy.messageId) && /\S/.test(after));
+        s.modelCheck('steer-consumed', `the reply carries STEERED-${s.nonce}-purple`, after.slice(-200), after.toLowerCase().includes(`steered-${s.nonce}-purple`.toLowerCase()));
+        s.ids.steer = {busy: busy.messageId, steer: steer.messageId, image: staged};
+      });
+      await s.step('completion-race', async () => {
+        const mark = s.d.sessions.mark(chatId);
+        const first = await s.d.send(chatId, s.p(P.short, `text:${s.m('RACE')}-A`));
+        await waitOn([s.d.sessions, chat.mirror], () => s.d.busy(chatId) || null, 60000, 'race busy').catch(() => null);
+        // Queued the moment the short turn is visibly running, so the steer
+        // races the reply's completion.
+        const race = await s.d.send(chatId, s.p(P.race, `text:${s.m('RACE')}-B`), {queue: true, followUpBehavior: 'steer'});
+        s.check('race-queued', 'the steer row is accepted while the turn runs', race.receipt?.status, ['applied', 'pending'].includes(race.receipt?.status));
+        await s.d.waitTurn(chatId, {mark: first.mark, messageId: first.messageId, timeoutMs: s.turnTimeout});
+        await s.d.waitIdle(chatId, {timeoutMs: 120000}).catch(() => null);
+        const landed = await waitOn([chat.mirror, chat.queue], () => (rows(race.messageId).length || queued(race.messageId)?.holdReason ? true : null), 30000, 'race outcome').catch(() => null);
+        const held = queued(race.messageId);
+        let outcome = rows(race.messageId).length ? 'delivered' : held ? `held:${held.holdReason ?? 'none'}` : 'missing';
+        s.info('race-outcome', 'which side of the race won (steered in-turn, next turn, or held for an explicit send)', {outcome, runs: workingRuns(mark)}, Boolean(landed));
+        s.check('race-not-lost', 'the steer row is either delivered or visibly held with a reason, never lost', outcome, outcome !== 'missing' && outcome !== 'held:none');
+        if (held) {
+          const {receipt} = await s.d.sendQueued(chatId, race.messageId);
+          s.check('held-send-receipt', 'an explicit Send now of the held row is accepted', receipt?.status, ['applied', 'pending'].includes(receipt?.status));
+          await waitOn([chat.mirror, s.d.sessions], () => (s.d.replySettled(s.entries('root'), race.messageId) && !s.d.busy(chatId) ? true : null), s.turnTimeout, 'held row delivered').catch(() => null);
+          outcome = `${outcome}->sent`;
+        }
+        const quiet = await s.stays('root', entries => entries.filter(e => e.id === race.messageId).length > 1, 6000);
+        s.check('race-row-once', 'the race row is delivered exactly once', {outcome, count: rows(race.messageId).length, quiet}, rows(race.messageId).length === 1 && quiet);
+        s.check('queue-empty', 'no row is left behind in the queue', (chat.queue.latest?.items ?? []).map(i => i.id), !queued(race.messageId));
+        const reply = s.replyAfter('root', race.messageId) || s.replyAfter('root', first.messageId);
+        s.modelCheck('race-consumed', `a reply carries RACE-${s.nonce}-B`, reply.slice(-160), reply.includes(`RACE-${s.nonce}-B`));
+        s.ids.race = {first: first.messageId, race: race.messageId, outcome};
+      });
+    },
+  },
   S8X: {
     title: 'Automatic compaction mid-turn and manual compaction ordering (small-context mock, T2)', validation: ['OCE-14'], parity: false, extra: true, permissionMode: 'full', phases: ['run'],
     steps: ['warm-up', 'large-tool-turn', 'next-turn', 'manual-compaction', 'after-compaction'],
@@ -1581,12 +1656,12 @@ async function runScenario(id, opts, {rehearsal = null} = {}) {
   const scenario = SCENARIOS[id];
   assert.ok(scenario, `unknown scenario ${id}; try: list`);
   const provider = opts.provider;
-  const codexQuestions = provider === 'codex' && id === 'S9Q' && !rehearsal;
+  const codexQuestions = provider === 'codex' && ['S9Q', 'S9S'].includes(id) && !rehearsal;
   assert.ok(PROVIDERS.includes(provider) || codexQuestions,
-    `--provider must be one of ${PROVIDERS.join(', ')} (Codex is supported only for live S9Q)`);
+    `--provider must be one of ${PROVIDERS.join(', ')} (Codex is supported only for live S9Q and S9S)`);
   if (codexQuestions) {
-    assert.equal(opts.tier, 'T3', 'Codex S9Q requires --tier T3');
-    assert.ok(opts.model?.trim(), 'Codex S9Q requires an explicit --model from ListModels');
+    assert.equal(opts.tier, 'T3', `Codex ${id} requires --tier T3`);
+    assert.ok(opts.model?.trim(), `Codex ${id} requires an explicit --model from ListModels`);
   }
   const phase = opts.phase ?? scenario.phases[0];
   assert.ok(scenario.phases.includes(phase), `${id} phases: ${scenario.phases.join(', ')}`);
