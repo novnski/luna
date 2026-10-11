@@ -1,0 +1,28 @@
+     Running tests/automations_e2e.rs (target/debug/deps/automations_e2e-db148dae21b0f7ff)
+test live_github_observation_uses_real_bounded_read_api ... ignored, requires authenticated gh and LUNA_AUTOMATION_LIVE_PR=owner/repo#number
+test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.24s
+     Running tests/board_store_e2e.rs (target/debug/deps/board_store_e2e-22a7bd1f75fc2080)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
+     Running tests/board_tools_e2e.rs (target/debug/deps/board_tools_e2e-7668dc9db3f4d41b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.61s
+     Running tests/claude_mcp_inventory.rs (target/debug/deps/claude_mcp_inventory-31933e433706c7e5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+     Running tests/claude_permissions.rs (target/debug/deps/claude_permissions-7d820488ac0ca13c)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s
+     Running tests/cross_task_tools.rs (target/debug/deps/cross_task_tools-bb95b10d26fac6ce)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.08s
+     Running tests/local_import.rs (target/debug/deps/local_import-cb9fb46cd3d57b07)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+     Running tests/message_queue.rs (target/debug/deps/message_queue-cb85c817727c33d8)
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.94s
+     Running tests/native_inputs.rs (target/debug/deps/native_inputs-73ecb0bbbf5d742b)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.41s
+     Running tests/queued_attachments.rs (target/debug/deps/queued_attachments-2eb9dc5f5985b3f5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+     Running tests/restart_resume.rs (target/debug/deps/restart_resume-37cc2a4fe28d3226)
+test real_claude_remembers_codeword_across_engine_restart ... ignored, requires installed+authenticated claude CLI; spends tokens
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.25s
+     Running tests/session_history.rs (target/debug/deps/session_history-622921f40e54cda9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/timeline_order_e2e.rs (target/debug/deps/timeline_order_e2e-be10c7b4ddfc9581)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s

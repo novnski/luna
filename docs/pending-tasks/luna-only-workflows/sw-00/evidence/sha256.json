@@ -1,0 +1,32 @@
+{
+ "committed": {
+  "claude-launch-probe.json": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2",
+  "codex-method-drift.json": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586",
+  "commands.json": "b406ed28e8e687cdf05c5d1629cbe76283f318b4ba41d92aa4dcd97cf6cfc4bc",
+  "engine-suites-summary.txt": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513",
+  "luna-chat-tool-usage.json": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a",
+  "luna-live-baseline.json": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4",
+  "native-mode-usage.json": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1",
+  "platform.json": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131",
+  "scripts/qa-workflow-baseline.mjs": "e524020e98b08e7171e0aa5249effb887953b07f4b1f4a232f28a21be65909ee",
+  "scripts/qa-claude-launch-probe.py": "02adca924897a34752bdd6e0ba704605cf8add3412fad0aba5a5c9717e4ac23c"
+ },
+ "local_raw_run": {
+  "directory": "target/qa/luna-only-workflows/sw00-20261011T151529Z",
+  "files": {
+   "luna-live-baseline.json": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4",
+   "live-baseline.log": "0a739df352bbc9d7a643596616a3cda208833ca2bb7e487971018db43d876e8b",
+   "claude-launch-probe.json": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2",
+   "claude-launch-probe.log": "41bfdcbef526a539ef7f80318f061d5d9fff967b530eea08170bda11d8d59cc7",
+   "codex-method-drift.json": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586",
+   "codex-schema.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "engine-suites.log": "2700c449f3a288429ad0643afad010b158f663e92bb7bceb16c63d841ad3605c",
+   "engine-suites.exit.json": "4166c10d0b6a622685aa5b935ba4290fb38e4845c75c53ca0fe4ecc939055360",
+   "codex-schema-0.160.0/codex_app_server_protocol.schemas.json": "8683f6fd9fbb994fa2bfb704ab5b02c9890238fa507a4c0ff33ff45884cd0a2e",
+   "codex-schema-0.160.0/codex_app_server_protocol.v2.schemas.json": "81a88c04ae4984b16d73080f4109d0477682bc76c8adbe483e371175ce54c054",
+   "codex-schema-0.160.0/ClientRequest.json": "1c7fec8758deb95ffe967060130e8d1ddb7a0a5a437ee9b64086dddbed8f5831",
+   "codex-schema-0.160.0/ServerNotification.json": "d3479ecf59ca421a8b052d3d15e8196d23d297a0bd85ae5a270a34ddd9c865c9",
+   "codex-schema-0.160.0/ServerRequest.json": "f339be472737a0003efa25fba2e6e6c9237e621cd065b6d6995c51256e9dc1fb"
+  }
+ }
+}

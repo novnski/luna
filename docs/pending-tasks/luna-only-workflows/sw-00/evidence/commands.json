@@ -1,0 +1,120 @@
+[
+ {
+  "name": "live-engine-baseline",
+  "command": [
+   "env",
+   "LUNA_BASELINE_EVIDENCE_DIR=target/qa/luna-only-workflows/sw00-20261011T151529Z",
+   "node",
+   "scripts/qa-workflow-baseline.mjs"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "seconds": 11,
+  "output": "luna-live-baseline.json",
+  "proof": "live engine (primary LUNA Dev, read-only IPC) + provider control-only/catalog probes"
+ },
+ {
+  "name": "claude-launch-probe",
+  "command": [
+   "python3",
+   "scripts/qa-claude-launch-probe.py",
+   "target/qa/luna-only-workflows/sw00-20261011T151529Z"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "seconds": 1,
+  "output": "claude-launch-probe.json",
+  "proof": "real Claude CLI 2.1.293, isolated config, closed loopback endpoint, no model turn; exits 1 on tool-grant or MCP-scope drift (Full run is the positive control)"
+ },
+ {
+  "name": "codex-schema",
+  "command": [
+   "codex",
+   "app-server",
+   "generate-json-schema",
+   "--out",
+   "target/qa/luna-only-workflows/sw00-20261011T151529Z/codex-schema-0.160.0"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "output": "retained locally (4.3 MiB); hashes in sha256.json"
+ },
+ {
+  "name": "codex-method-drift",
+  "command": [
+   "rg",
+   "-o",
+   "'\"[a-z][a-zA-Z]*/[a-zA-Z/]+\"'",
+   "crates/harness/src/codex/",
+   "crates/engine/src"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "output": "codex-method-drift.json",
+  "proof": "static: LUNA method literals vs generated 0.160.0 schema enums"
+ },
+ {
+  "name": "native-mode-usage",
+  "command": [
+   "python3",
+   "<scratch>/modes.py"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "output": "native-mode-usage.json",
+  "proof": "local Codex rollouts / Claude transcripts modified since 2026-07-10; counts only"
+ },
+ {
+  "name": "luna-chat-tool-usage",
+  "command": [
+   "python3",
+   "<scratch inline>"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "output": "luna-chat-tool-usage.json",
+  "proof": "provider transcripts of the 16 LUNA chats with sessions; tool names/counts only"
+ },
+ {
+  "name": "engine-owner-suites",
+  "command": [
+   "CARGO_INCREMENTAL=0",
+   "scripts/cargo.sh",
+   "test",
+   "--locked",
+   "-p",
+   "luna-engine",
+   "--test",
+   "claude_mcp_inventory",
+   "--test",
+   "claude_permissions",
+   "--test",
+   "cross_task_tools",
+   "--test",
+   "timeline_order_e2e",
+   "--test",
+   "message_queue",
+   "--test",
+   "native_inputs",
+   "--test",
+   "queued_attachments",
+   "--test",
+   "restart_resume",
+   "--test",
+   "session_history",
+   "--test",
+   "local_import",
+   "--test",
+   "board_tools_e2e",
+   "--test",
+   "board_store_e2e",
+   "--test",
+   "automations_e2e"
+  ],
+  "exit_code": 0,
+  "expected_exit_code": 0,
+  "seconds": 79,
+  "output": "engine-suites-summary.txt",
+  "proof": "scripted peers through real adapter/engine/journal paths; 107 passed, 2 live-gated ignored"
+ }
+]

@@ -1,0 +1,4152 @@
+{
+  "evidenceKind": "sw00-live-engine-baseline",
+  "port": 59777,
+  "capturedAt": "2026-10-11T15:30:24.337Z",
+  "captured": true,
+  "engine": {
+    "deviceId": "70acfa1e-7bb2-4869-a754-320e4b223219",
+    "workspaceScope": "local",
+    "capabilities": [
+      "luna-owner-ipc-v1",
+      "message-queue-v1",
+      "message-queue-actions-v1",
+      "message-queue-attachments-v1",
+      "message-queue-clean-attachment-text-v1",
+      "message-queue-edit-lease-v1",
+      "task-identity-v1",
+      "session-history-search-v1",
+      "side-chat-task-commands-v1",
+      "side-chat-persistence-v1",
+      "context-transfer-v1",
+      "task-work-v1",
+      "chat-workbench-v1",
+      "remote-auth-v1"
+    ]
+  },
+  "spaces": [
+    {
+      "id": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "path": "~/workspace",
+      "gitDetected": false,
+      "executionDefaults": {}
+    },
+    {
+      "id": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "path": "~/workspace/code/personal/luna",
+      "gitDetected": true,
+      "executionDefaults": {}
+    }
+  ],
+  "chats": [
+    {
+      "id": "00a9b04d-85c9-4be6-b529-aa3cda018059",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "codex",
+      "providerAccountId": "codex-native",
+      "model": "gpt-6-luna",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-07T02:48:53.039Z",
+      "runtime": {
+        "providerDelivery": "codexMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "codexMcpTools",
+          "contractVersion": 1,
+          "contractHash": "9e55a1815528bcbf9bde17770c12dde41b643674b04da13ccafd5e237797b533",
+          "acceptedAtMs": 1791341326802,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 626
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 569
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1036
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "040c9d93-3a23-4628-be3c-271de9448a09",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "user",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": false,
+      "lastMessageAt": null,
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": "No provider session has acknowledged a LUNA runtime contract yet.",
+        "transition": "newBinding",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": null
+      }
+    },
+    {
+      "id": "0737558d-3ca3-4db4-a17e-afe7885b1130",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T19:58:18.222Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "3ddd91526c48168833ca3eb5867e103816decba966924898609284d174dd1561",
+          "acceptedAtMs": 1791316679053,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 939
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "07aca86d-6c32-4557-afb5-6d7c094baf3d",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-07T02:48:48.330Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "6782be52349c1ab3642166f80ae7232caaa8c3775f6fb6f6820bbff41a748654",
+          "acceptedAtMs": 1791341324776,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 569
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1050
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "1a6243ed-92a1-411f-8e7a-b4cdebb99cf7",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:02:09.137Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "8a655abf21127683ba181c77410b200679fe314094cd7fac153a2ce813762771",
+          "acceptedAtMs": 1791316757313,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 936
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "22a3f0ad-f62e-4104-9e92-9fab839f0c48",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": true,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:32:21.731Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "9d256a99391a9f064df6e6d0067643553719188be841c2a14eff9e9e6bfe653d",
+          "acceptedAtMs": 1791318693092,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 537
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1044
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2e716c47-2f45-400b-9a62-959c29ac4ed3",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "user",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": false,
+      "lastMessageAt": null,
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": "No provider session has acknowledged a LUNA runtime contract yet.",
+        "transition": "newBinding",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": null
+      }
+    },
+    {
+      "id": "609413d2-dc3a-4ba2-a2ad-6ce3de03fc61",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-08T10:47:48.416Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "1d614f3b6bb0583757ec422997cac8a6c7fa3f8ed0cfd6b23f06851fa53be42f",
+          "acceptedAtMs": 1791456031645,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "ask_user",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "LUNA questions",
+              "source": "lunaCore",
+              "characterCount": 1013
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 936
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6b04b441-8585-4cc4-a4f1-4120d7db8017",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-08T10:41:07.195Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "6a3bc61ff80af0ea6251ed706bc3da3a47da9b128661ffee6c0ec1a5913af374",
+          "acceptedAtMs": 1791456060550,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "ask_user",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "LUNA questions",
+              "source": "lunaCore",
+              "characterCount": 1013
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 939
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7900fac1-2334-43b1-9d7a-1268f171e88a",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": true,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:29:16.746Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "d4791602fd33e2fd5fd5385a42456cf4abf70f9b435c3f721c327e3077322006",
+          "acceptedAtMs": 1791318539966,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 569
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1064
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7ba1138f-7940-4495-b846-af54fbffa69e",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "user",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": false,
+      "lastMessageAt": null,
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": "No provider session has acknowledged a LUNA runtime contract yet.",
+        "transition": "newBinding",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": null
+      }
+    },
+    {
+      "id": "814161df-267a-48b4-a2b9-6a9a53710cc0",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": {
+        "createdBy": "user",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": false,
+      "lastMessageAt": null,
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": "No provider session has acknowledged a LUNA runtime contract yet.",
+        "transition": "newBinding",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": null
+      }
+    },
+    {
+      "id": "81b6fe87-5f89-4bfc-b231-b24ff8098b67",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": true,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "codex",
+      "providerAccountId": "codex-native",
+      "model": "gpt-6-astra",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:32:18.772Z",
+      "runtime": {
+        "providerDelivery": "codexMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "codexMcpTools",
+          "contractVersion": 1,
+          "contractHash": "37d32744a8868396c57cb655f3682decebc4018807c84be115a3b9e47925d4d5",
+          "acceptedAtMs": 1791318687582,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 626
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 537
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1034
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "83291b97-c57d-4ed8-b72c-a90468a1b3af",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "codex",
+      "providerAccountId": "codex-native",
+      "model": "gpt-6-astra",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-07T02:48:49.095Z",
+      "runtime": {
+        "providerDelivery": "codexMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "codexMcpTools",
+          "contractVersion": 1,
+          "contractHash": "02cbb8647c9ce3c328bb21a7588978204049f17ecce5af1f82a73d7442b00502",
+          "acceptedAtMs": 1791341321515,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 626
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 569
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1039
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "90d9e801-ba9c-4a57-881b-1e0539566959",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": {
+        "createdBy": "user",
+        "permissionCeiling": "full"
+      },
+      "harness": "claude-code",
+      "providerAccountId": "claude-native",
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": false,
+      "lastMessageAt": null,
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": "No provider session has acknowledged a LUNA runtime contract yet.",
+        "transition": "newBinding",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": null
+      }
+    },
+    {
+      "id": "bc5fee0a-e6ab-4a69-918e-51fea35aeab2",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-07T02:49:06.730Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "b6a0651df6352b480818f98708c47f8776144ffab729599d7204879838bc6681",
+          "acceptedAtMs": 1791341308497,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 923
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cde15444-e10a-4cf5-be23-79b2ea099ee9",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": true,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": {
+        "createdBy": "agent",
+        "permissionCeiling": "full"
+      },
+      "harness": "codex",
+      "providerAccountId": "codex-native",
+      "model": "gpt-6-astra",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:29:15.132Z",
+      "runtime": {
+        "providerDelivery": "codexMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "codexMcpTools",
+          "contractVersion": 1,
+          "contractHash": "6ce5b41609ce20b52c0bde13c0d80938f8ef2fdaf4de02e52c795f8a651c7cab",
+          "acceptedAtMs": 1791318536308,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 626
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 569
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 1054
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d9075a5b-a18d-4e22-96dd-cffa95e70e2e",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-10T02:15:57.372Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "5082db52303c860df4efca053f12f975bb3edbb7691ce58e7e4dcea45ca2453b",
+          "acceptedAtMs": 1791598396414,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "ask_user",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_automation_targets",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads",
+            "board_list",
+            "board_read",
+            "board_execution_options",
+            "board_create",
+            "board_update",
+            "board_move",
+            "board_start",
+            "board_control",
+            "board_convert_chat",
+            "create_side_chat",
+            "create_main_chat",
+            "board_issue_search",
+            "board_issue_import"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 867
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "LUNA questions",
+              "source": "lunaCore",
+              "characterCount": 1013
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 963
+            },
+            {
+              "name": "LUNA board context",
+              "source": "context",
+              "characterCount": 2121
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f2874a95-fa7a-4d96-9142-908a86a3b18e",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T19:57:37.327Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "70b03ff0ff40f9b888b521795d8a3c27d6da23dcd9746d1e777581277a068dba",
+          "acceptedAtMs": 1791316653040,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 937
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f6ca606b-2f3c-4b49-a1c2-72740bfb2ba3",
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "archived": false,
+      "cwd": "~/workspace",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:32:48.303Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "007069f48dc968c1dab0d50250e3568133c7c964eaab79f66cf2c75074e29d5e",
+          "acceptedAtMs": 1791318724383,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 920
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f82212c7-0008-46e1-b2fa-fe37a28a4992",
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "archived": false,
+      "cwd": "~/workspace/code/personal/luna",
+      "child": null,
+      "harness": "claude-code",
+      "providerAccountId": null,
+      "model": "claude-opus-5-5",
+      "permissionMode": "full",
+      "effectivePermissionMode": "full",
+      "sandbox": "workspace-write",
+      "hasProviderSession": true,
+      "lastMessageAt": "2026-10-06T20:30:28.943Z",
+      "runtime": {
+        "providerDelivery": "claudeMcpTools",
+        "unavailableReason": null,
+        "transition": "restartAndResume",
+        "steer": "unavailable",
+        "nativeFork": "checkpoint",
+        "effective": {
+          "delivery": "claudeMcpTools",
+          "contractVersion": 1,
+          "contractHash": "c70499e623a287798e543d3774fb6687da913b39a15fa028ca9935584e369481",
+          "acceptedAtMs": 1791318598846,
+          "restartRequired": true,
+          "attachedTools": [
+            "luna_status",
+            "get_workspace",
+            "manage_workspace",
+            "list_automations",
+            "automation_update",
+            "list_child_models",
+            "create_thread",
+            "list_threads",
+            "read_thread",
+            "send_message_to_thread",
+            "wait_threads"
+          ],
+          "omittedTools": [
+            {
+              "name": "interrupt_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "archive_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "open_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "fork_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            },
+            {
+              "name": "move_thread",
+              "reason": "no verified cross-task command adapter is attached"
+            }
+          ],
+          "instructions": [
+            {
+              "name": "LUNA core",
+              "source": "lunaCore",
+              "characterCount": 631
+            },
+            {
+              "name": "LUNA chat role",
+              "source": "lunaCore",
+              "characterCount": 256
+            },
+            {
+              "name": "luna_status guidance",
+              "source": "tool",
+              "characterCount": 164
+            },
+            {
+              "name": "LUNA context",
+              "source": "context",
+              "characterCount": 936
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "providerPermissionFacts": {
+    "codex": {
+      "supportedModes": [
+        "ask",
+        "auto",
+        "full"
+      ],
+      "supportsWorkspaceSandbox": true,
+      "supportsAutomaticReviewer": true,
+      "supportsLiveModeChange": false,
+      "supportsTaskAllowance": true,
+      "approvalKinds": [
+        "command",
+        "fileChange",
+        "network",
+        "externalPath",
+        "tool"
+      ],
+      "networkControl": "provider sandbox policy",
+      "knownLimitations": [
+        "Mode changes apply at the next safe turn boundary by reconstructing the app-server session.",
+        "Automatic review can be unavailable when account or organization policy disables it; provider startup then fails closed."
+      ]
+    },
+    "claude-code": {
+      "supportedModes": [
+        "ask",
+        "auto",
+        "full"
+      ],
+      "supportsWorkspaceSandbox": true,
+      "supportsAutomaticReviewer": true,
+      "supportsLiveModeChange": false,
+      "supportsTaskAllowance": false,
+      "approvalKinds": [
+        "command",
+        "fileChange",
+        "network",
+        "externalPath",
+        "tool"
+      ],
+      "networkControl": "Claude permission mode and restricted workspace rules",
+      "knownLimitations": [
+        "Escalations returned by native auto review still require the user.",
+        "Ask and Auto run Claude Code restricted: user, project and local settings files are not loaded, so their custom commands, output styles and hooks are unavailable there (the command list shows only what loads). Full loads them.",
+        "Ask and Auto grant the built-in tools of Claude Code 2.1.286 by name, including Bash and WebFetch; Workflow and CronCreate stay unavailable, and tools added by newer CLI versions need an updated grant.",
+        "Auto requires Claude Code 2.1.218 or later plus an eligible account, provider, and model (Fable, Opus 4.6+, or Sonnet 4.6+)."
+      ]
+    }
+  },
+  "inventory": [
+    {
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "provider": "codex",
+      "sessionTaskId": "00a9b04d-85c9-4be6-b529-aa3cda018059",
+      "ms": 110,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "app-creator",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "bb-cli",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "better-design",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "betterstack-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "clipcopy",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex-session-audit",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use-readback",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "hatch-pet",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "infra-monitor-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-mcp-refresh",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-saas-tickets-checker",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-ticket-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "internal-qa-moralis",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "iphone-usb-control",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "kanban-mcp",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "learn-moralis",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "mcp-builder",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-data-api",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-monitor-gitlab-mr",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-streams-api",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-usage-research",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-bases",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-cli",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-markdown",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "screenshot",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "session-manager",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "simple-tasks",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "summarize",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "typesafe-ai",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "workspace-development-conventions",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "xcode-makefiles",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "youtube-transcript",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "app-creator",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "bb-cli",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "better-design",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "betterstack-ops",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "clipcopy",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "codex-session-audit",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "computer-use-readback",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "hatch-pet",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "infra-monitor-ops",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "intercom-mcp-refresh",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "intercom-saas-tickets-checker",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "intercom-ticket-ops",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "internal-qa-moralis",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "iphone-usb-control",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "kanban-mcp",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "learn-moralis",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "mcp-builder",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "moralis-data-api",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "moralis-monitor-gitlab-mr",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "moralis-streams-api",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "moralis-usage-research",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "obsidian-bases",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "obsidian-cli",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "obsidian-markdown",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "screenshot",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "session-manager",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "simple-tasks",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "summarize",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "typesafe-ai",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "workspace-development-conventions",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "xcode-makefiles",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "youtube-transcript",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and session inclusion are unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "documents:documents",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "fp-check:fp-check",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "gh-cli:using-gh-cli",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "i-have-adhd:i-have-adhd",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "imagegen",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "insecure-defaults:insecure-defaults",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "openai-docs",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "pdf:pdf",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "presentations:Presentations",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "review-agent",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "sharp-edges:sharp-edges",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "skill-creator",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "skill-installer",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "spreadsheets:Spreadsheets",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "spreadsheets:excel-live-control",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "template-creator:template-creator",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "visualize:visualize",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "RepoPrompt",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-admin-support",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "node_repl",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "RepoPrompt",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-admin-support",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "node_repl",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        }
+      ]
+    },
+    {
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "provider": "claude-code",
+      "sessionTaskId": "bc5fee0a-e6ab-4a69-918e-51fea35aeab2",
+      "ms": 4757,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "bb-cli",
+          "kind": "skill",
+          "source": "Claude config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "Claude config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "claude.ai Claude Docs",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 8,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Gmail",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 23,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Google Calendar",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 9,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Google Drive",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Claude reports it needs authentication for this project (claudeai scope). Ask/Auto chats: needs authentication. Full access chats: needs authentication. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "needsAuth",
+            "transport": "claudeai-proxy",
+            "toolCount": 0,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "needsAuth"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "needsAuth"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Intercom",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 15,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Slack",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 13,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Spotify",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Claude reports it needs authentication for this project (claudeai scope). Ask/Auto chats: needs authentication. Full access chats: needs authentication. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "needsAuth",
+            "transport": "claudeai-proxy",
+            "toolCount": 0,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "needsAuth"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "needsAuth"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "user",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (user scope). Ask/Auto chats: not loaded (LUNA starts these with Claude's restricted mode). Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "http",
+            "toolCount": 3,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": null
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "spaceId": "4569c9d7-d824-4024-bdfe-860aec17435e",
+      "provider": "opencode",
+      "sessionTaskId": null,
+      "ms": 434,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "OpenCode config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        }
+      ]
+    },
+    {
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "provider": "codex",
+      "sessionTaskId": "cde15444-e10a-4cf5-be23-79b2ea099ee9",
+      "ms": 208,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "app-creator",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "bb-cli",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "better-design",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "betterstack-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "clipcopy",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex-session-audit",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use-readback",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "hatch-pet",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "infra-monitor-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-mcp-refresh",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-saas-tickets-checker",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "intercom-ticket-ops",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "internal-qa-moralis",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "iphone-usb-control",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "kanban-mcp",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "learn-moralis",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "mcp-builder",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-data-api",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-monitor-gitlab-mr",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-streams-api",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-usage-research",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-bases",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-cli",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "obsidian-markdown",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "screenshot",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "session-manager",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "simple-tasks",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "summarize",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "typesafe-ai",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "workspace-development-conventions",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "xcode-makefiles",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "youtube-transcript",
+          "kind": "skill",
+          "source": "Codex home / skills",
+          "scope": "global",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill disabled for the selected workspace.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "commit-and-push",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "test-audit",
+          "kind": "skill",
+          "source": "project / .agents/skills",
+          "scope": "project",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.",
+          "owner": "unknown"
+        },
+        {
+          "name": "documents:documents",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "fp-check:fp-check",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "gh-cli:using-gh-cli",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "i-have-adhd:i-have-adhd",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "imagegen",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "insecure-defaults:insecure-defaults",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "openai-docs",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "pdf:pdf",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "presentations:Presentations",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "review-agent",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "sharp-edges:sharp-edges",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": false,
+          "attached": null,
+          "reason": "Reported disabled by Codex.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "skill-creator",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "skill-installer",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "spreadsheets:Spreadsheets",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "spreadsheets:excel-live-control",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "template-creator:template-creator",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "visualize:visualize",
+          "kind": "skill",
+          "source": "Codex app-server / skills/list",
+          "scope": "provider",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Reported enabled by Codex; selected-session inclusion is unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "RepoPrompt",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-admin-support",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "node_repl",
+          "kind": "mcpServer",
+          "source": "Codex home / config.toml",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "RepoPrompt",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "codex",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "computer-use",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "moralis-admin-support",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "node_repl",
+          "kind": "mcpServer",
+          "source": "Codex app-server / config/read",
+          "scope": "selected workspace",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        }
+      ]
+    },
+    {
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "provider": "claude-code",
+      "sessionTaskId": "d9075a5b-a18d-4e22-96dd-cffa95e70e2e",
+      "ms": 4432,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "bb-cli",
+          "kind": "skill",
+          "source": "Claude config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "Claude config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "test-audit",
+          "kind": "skill",
+          "source": "project / .claude/skills",
+          "scope": "project",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        },
+        {
+          "name": "claude.ai Claude Docs",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 8,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Gmail",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 23,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Google Calendar",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 9,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Google Drive",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Claude reports it needs authentication for this project (claudeai scope). Ask/Auto chats: needs authentication. Full access chats: needs authentication. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "needsAuth",
+            "transport": "claudeai-proxy",
+            "toolCount": 0,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "needsAuth"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "needsAuth"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Intercom",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 15,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Slack",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (claudeai scope). Ask/Auto chats: connected. Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "claudeai-proxy",
+            "toolCount": 13,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "connected"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "claude.ai Spotify",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "claudeai",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Claude reports it needs authentication for this project (claudeai scope). Ask/Auto chats: needs authentication. Full access chats: needs authentication. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "needsAuth",
+            "transport": "claudeai-proxy",
+            "toolCount": 0,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": "needsAuth"
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "needsAuth"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        },
+        {
+          "name": "executor",
+          "kind": "mcpServer",
+          "source": "Claude CLI / mcp_status",
+          "scope": "user",
+          "configured": true,
+          "available": true,
+          "attached": null,
+          "reason": "Claude reports it connected for this project (user scope). Ask/Auto chats: not loaded (LUNA starts these with Claude's restricted mode). Full access chats: connected. Selected-chat attachment is unknown until that chat's Claude session starts while LUNA runs.",
+          "owner": "providerNative",
+          "mcp": {
+            "status": "connected",
+            "transport": "http",
+            "toolCount": 3,
+            "error": null,
+            "launches": [
+              {
+                "modes": [
+                  "ask",
+                  "auto"
+                ],
+                "restricted": true,
+                "status": null
+              },
+              {
+                "modes": [
+                  "full"
+                ],
+                "restricted": false,
+                "status": "connected"
+              }
+            ],
+            "session": null,
+            "appSupport": {
+              "kind": "readSupported"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "spaceId": "60f48b42-5ee3-4e44-aea0-cf78e7b8ad47",
+      "provider": "opencode",
+      "sessionTaskId": null,
+      "ms": 446,
+      "error": null,
+      "unavailableReason": null,
+      "items": [
+        {
+          "name": "use-railway",
+          "kind": "skill",
+          "source": "OpenCode config / skills",
+          "scope": "global",
+          "configured": true,
+          "available": null,
+          "attached": null,
+          "reason": "Found on disk; provider availability and selected-session attachment are unverified.",
+          "owner": "providerNative"
+        }
+      ]
+    }
+  ]
+}

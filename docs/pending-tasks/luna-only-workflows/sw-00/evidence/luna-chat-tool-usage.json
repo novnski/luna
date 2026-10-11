@@ -1,0 +1,139 @@
+[
+ {
+  "chat": "00a9b04d-85c9-4be6-b529-aa3cda018059",
+  "harness": "codex",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "0737558d-3ca3-4db4-a17e-afe7885b1130",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "Bash": 1,
+   "Read": 1,
+   "SendUserFile": 1
+  }
+ },
+ {
+  "chat": "07aca86d-6c32-4557-afb5-6d7c094baf3d",
+  "harness": "claude-code",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "1a6243ed-92a1-411f-8e7a-b4cdebb99cf7",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "Agent": 11
+  }
+ },
+ {
+  "chat": "22a3f0ad-f62e-4104-9e92-9fab839f0c48",
+  "harness": "claude-code",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {
+   "Bash": 3
+  }
+ },
+ {
+  "chat": "609413d2-dc3a-4ba2-a2ad-6ce3de03fc61",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "6b04b441-8585-4cc4-a4f1-4120d7db8017",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "7900fac1-2334-43b1-9d7a-1268f171e88a",
+  "harness": "claude-code",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "81b6fe87-5f89-4bfc-b231-b24ff8098b67",
+  "harness": "codex",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {
+   "exec": 6
+  }
+ },
+ {
+  "chat": "83291b97-c57d-4ed8-b72c-a90468a1b3af",
+  "harness": "codex",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "bc5fee0a-e6ab-4a69-918e-51fea35aeab2",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "mcp__luna": 16,
+   "ToolSearch": 1
+  }
+ },
+ {
+  "chat": "cde15444-e10a-4cf5-be23-79b2ea099ee9",
+  "harness": "codex",
+  "child": true,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "d9075a5b-a18d-4e22-96dd-cffa95e70e2e",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "mcp__luna": 26,
+   "Bash": 13,
+   "ToolSearch": 5
+  }
+ },
+ {
+  "chat": "f2874a95-fa7a-4d96-9142-908a86a3b18e",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {}
+ },
+ {
+  "chat": "f6ca606b-2f3c-4b49-a1c2-72740bfb2ba3",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "mcp__luna": 13,
+   "Bash": 4,
+   "ToolSearch": 3
+  }
+ },
+ {
+  "chat": "f82212c7-0008-46e1-b2fa-fe37a28a4992",
+  "harness": "claude-code",
+  "child": false,
+  "transcripts": 1,
+  "toolNames": {
+   "mcp__luna": 11,
+   "Bash": 4,
+   "ToolSearch": 2
+  }
+ }
+]

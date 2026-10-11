@@ -1,0 +1,47 @@
+{
+ "captured_at": "2026-10-11T15:26:37+00:00",
+ "source": "83ede04b28fdb760c62eb1dc1d91ebf9388a1689",
+ "plan_added_in": "7b269800d7f8934626608c9cdee5255fe0f7e9ba",
+ "plan_planning_baseline": {
+  "recorded": "06ea5cd56ad1c5874921413b020a54f3cedb0c27",
+  "resolvable_in_this_repository": false
+ },
+ "runtime_drift_since_plan": "crates/ui only (24 files: right rail, child-chat pane, related chats, fixtures); no engine, harness, proto or rpc change",
+ "os": "27.0.1 (26A434)",
+ "arch": "arm64",
+ "cpu": "Apple M3 Max",
+ "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+ "node": "v24.14.1",
+ "mbx": "mbx 1.18.0",
+ "providers": {
+  "codex": {
+   "cli": "codex-cli 0.160.0",
+   "executable": "/opt/homebrew/bin/codex",
+   "adapter_validated": "0.154.0 (VALIDATED_CODEX_CLI_VERSION; not enforced at runtime)",
+   "login": "ChatGPT (codex login status)",
+   "luna_account_id": "codex-native"
+  },
+  "claude-code": {
+   "cli": "2.1.293 (Claude Code)",
+   "executable": "~/.local/bin/claude",
+   "adapter_recorded": "2.1.286 (RECORDED_CLI_VERSION, CERTIFIED_ECHO_VERSION)",
+   "login": {
+    "authMethod": "claude.ai",
+    "apiProvider": "firstParty",
+    "subscriptionType": "max"
+   },
+   "luna_account_id": "claude-native (9 older chats: default home, null account id)"
+  },
+  "opencode": {
+   "cli": "opencode v2.0.24",
+   "executable": "~/.opencode/bin/opencode",
+   "switching_scope": "outside the two-provider switching set; IC keeps its all-provider requirement"
+  }
+ },
+ "luna_app": {
+  "bundle": "target/luna-macos-dev/LUNA Dev.app",
+  "ipc_port": 59777,
+  "role": "primary (read-only IPC; no chat created, no message sent)"
+ },
+ "credentials": "none recorded; account facts are type labels only"
+}

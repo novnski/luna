@@ -7,6 +7,8 @@ Queue ownership: SW-00–SW-16. Preserve linked implementation owners across IC,
 
 **Requested:** 2026-10-10, Europe/Bucharest. **Planning baseline:** `06ea5cd56ad1c5874921413b020a54f3cedb0c27`. Recheck current source and provider capabilities in SW-00 before implementation.
 
+**SW-00 baseline (11 October, `83ede04b`):** [provider/mode facts and effective delivery](sw-00/README.md), [contract owners and required workflows](sw-00/ownership.md) and [failure, media and helper-control contracts](sw-00/contracts.md). Later tickets start from these facts instead of the planning snapshot.
+
 ## Outcome and scope
 
 Iulian can carry his recurring desktop work through LUNA: investigate Moralis support and infrastructure using current evidence, implement and verify code, coordinate requested helpers, inspect and revise visual artifacts, preserve past context, and follow scheduled work. LUNA remains the interface over native provider engines; this plan does not replace Claude/Codex inference or introduce another orchestrator.
