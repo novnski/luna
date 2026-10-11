@@ -77,8 +77,11 @@ fn main() -> anyhow::Result<()> {
     ))?;
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
+    // The UI attaches over IPC only to an engine that owns its data root
+    // (919935bd), so it boots against the engine's root; `data` keeps the UI
+    // settings and themes apart.
     let boot = EngineBootConfig {
-        data_dir: data.clone(),
+        data_dir: temp.path().join("engine"),
         ipc_port,
         edge_url: String::new(),
         edge_token: None,
