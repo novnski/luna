@@ -1,0 +1,42 @@
+{
+  "luna": {
+    "path": "/Users/iulian/workspace/code/personal/luna",
+    "sha": "71d5db137e5bbfda13893278e558a7b0ce34ea79",
+    "source_files": 73,
+    "physical_lines": 19483,
+    "status": ""
+  },
+  "zeron": {
+    "path": "/Users/iulian/workspace/code/personal/zeron",
+    "sha": "40091d469aa8a3f1ab1ec7cb404957b742940278",
+    "source_files": 135,
+    "physical_lines": 46631,
+    "status": "",
+    "official_remote": "git@github.com:zeronsh/zeron.git",
+    "fetched_update": "already at official main; no new commits"
+  },
+  "t3": {
+    "path": "/Users/iulian/workspace/code/personal/t3code",
+    "sha": "477282263a9115f911380b5aec7d4973267e4edc",
+    "source_files": 1441,
+    "physical_lines": 291614,
+    "status": "?? docs/research/",
+    "commits_since_prior_audit": 14,
+    "prior_audit_referenced_paths": 201,
+    "changed_prior_reference_paths": [
+      "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "apps/server/src/auth/RpcAuthorization.ts",
+      "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "apps/server/src/ws.ts",
+      "docs/user/install.md",
+      "packages/client-runtime/src/operations/commands.ts"
+    ],
+    "preserved_untracked": {
+      "docs/research/codex-comparison.md": "2e77ebd981ee91cc108a35ffaa9ce3f933cd17cc26384916f9c55e91e5a198de"
+    },
+    "excluded_documentation_templates": [
+      "<path>"
+    ]
+  }
+}

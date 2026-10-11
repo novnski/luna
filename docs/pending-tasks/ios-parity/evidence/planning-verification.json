@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-11",
+  "scope": "Source comparison and task planning; no native runtime acceptance",
+  "luna_baseline": "71d5db137e5bbfda13893278e558a7b0ce34ea79",
+  "local_links_checked": 98,
+  "broken_links": [],
+  "captured_source_hashes_checked": 1649,
+  "changed_captured_sources": [],
+  "t3_untracked_files_preserved": 1,
+  "catalog_total": 105,
+  "groups": 11,
+  "new_ios_tasks": 15,
+  "fresh_store_restore": "passed",
+  "next": "CORE-00",
+  "existing_evidence_preserved": 90,
+  "intentional_status_changes": [
+    "RM-08: deferred -> ready",
+    "RM-09: deferred -> ready",
+    "RM-11: deferred -> ready"
+  ],
+  "native_app_builds_or_tests_run": false,
+  "commands": [
+    "python3 scripts/pending_tasks.py validate",
+    "python3 scripts/pending_tasks.py --state-dir <fresh directory> status",
+    "python3 scripts/pending_tasks.py --state-dir <fresh directory> next",
+    "verify source and untracked-file hashes against saved manifests",
+    "check local documentation targets",
+    "git diff --check"
+  ],
+  "existing_definition_changes": [
+    "RM-00",
+    "RM-01",
+    "RM-02",
+    "RM-03",
+    "RM-04",
+    "RM-05",
+    "RM-06",
+    "RM-07",
+    "RM-08",
+    "RM-09",
+    "RM-10",
+    "RM-11",
+    "RM-12",
+    "RM-13"
+  ]
+}

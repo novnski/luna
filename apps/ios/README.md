@@ -1,5 +1,11 @@
 # Luna for iOS
 
+The current-source comparison and pending migration live in
+[Native iOS parity](../../docs/pending-tasks/ios-parity/README.md). The guide
+below describes the existing edge-backed client. Direct paired-Mac control,
+current host admission and the Rust/native migration have separate pending
+acceptance; a synced command row alone does not certify provider execution.
+
 A native SwiftUI viewport onto the luna mesh. The phone is a **peer
 device**: it joins the same Loro CRDT rooms as every other device (workspace
 doc + per-chat session docs over the edge's Durable Objects), renders the

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 27,
+  "revision": 44,
   "inventory_date": "2026-10-11",
   "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
   "groups": [
@@ -93,6 +93,43 @@
         ],
         "M4": [
           "RM-07"
+        ]
+      }
+    },
+    {
+      "id": "ios",
+      "title": "Native iOS parity and release",
+      "milestones": {
+        "Native foundation": [
+          "IOS-00",
+          "RM-03"
+        ],
+        "Complete direct V1": [
+          "IOS-01",
+          "IOS-02",
+          "IOS-03",
+          "IOS-04",
+          "IOS-09",
+          "RM-07"
+        ],
+        "Expanded phone workflows": [
+          "IOS-05",
+          "IOS-06",
+          "IOS-07",
+          "IOS-08",
+          "IOS-10",
+          "RM-08",
+          "RM-09",
+          "RM-11"
+        ],
+        "Optional voice and awareness": [
+          "IOS-11",
+          "IOS-12",
+          "IOS-13",
+          "RM-12"
+        ],
+        "Parity and release assessment": [
+          "IOS-14"
         ]
       }
     },
@@ -1449,7 +1486,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "M0 inventory, reviewed authority/wire/native contracts and harmless pinned-TLS physical-iPhone prototype are complete.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1496,7 +1536,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Headed app hosts bounded HTTPS/WS with exact paired principal, typed operation admission, profile-owned TLS and revoke/disable barriers.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1546,7 +1589,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Control this Mac enable/Add QR/manual/refresh/revoke UI pairs the actual phone with scoped Keychain session and honest route status.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1586,7 +1632,8 @@
       "depends_on": [
         "RM-01",
         "RM-02",
-        "CORE-05"
+        "CORE-05",
+        "IOS-00"
       ],
       "resources": [
         "remote/projections",
@@ -1600,9 +1647,12 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
-      "outcome": "M2 phone shows real host tasks and bounded incremental history with authenticated reconnect, cursor repair and explicit stale cache.",
+      "outcome": "M2 owns host-authoritative project/task snapshots, one shared connection/cache/reconnect runtime and a minimal native read proof through IOS-00; full native transcript/shell is IOS-01/02 and remains required by RM-07.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "criteria": [
         {
@@ -1612,12 +1662,12 @@
         },
         {
           "id": "client",
-          "text": "One Rust core plus native transport/lifecycle adapters bound host-keyed cache/queues and reject stale generations.",
+          "text": "Use IOS-00 and CORE-05 for one owned client runtime with immutable/coalesced projections, native transport/lifecycle adapters, bounded host-keyed cache/queues and stale-generation refusal; preserve delivery independently of open views.",
           "weight": 1
         },
         {
           "id": "verification",
-          "text": "Actual Mac-to-phone long transcript, background/network/restart/snapshot repair retain exact rows and drafts with honest offline state.",
+          "text": "A real minimal native read/stream slice proves Mac task identity and background/network/restart/cursor repair with explicit stale cache; IOS-01/02 separately prove full native rendering/UX for RM-07.",
           "weight": 1
         },
         {
@@ -1650,7 +1700,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Phone task lifecycle/send/queue/steer/stop uses exact host grants and durable idempotent receipts, never executable synced rows.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1662,12 +1715,12 @@
         },
         {
           "id": "outbox",
-          "text": "Same ID/payload returns original receipt; changed payload fails; lost reply queries outcome without silent fresh-ID resend.",
+          "text": "Same ID/payload returns original receipt; changed payload fails; lost reply queries outcome. Keep pre-creation input as a draft, queue behind accepted worktree setup, and hold work after failed/cancelled setup. Persist/reconcile delivery across suspension independently of the visible chat.",
           "weight": 1
         },
         {
           "id": "verification",
-          "text": "RP-10-RP-15/RP-20 races show single execution, correct queue/offline semantics and supported provider-specific controls.",
+          "text": "RP-10-RP-15/RP-20 client/service and actual-provider races prove one execution and correct queue/setup/unknown states. IOS-03 owns full native composer UX and remains required by RM-07.",
           "weight": 1
         },
         {
@@ -1686,12 +1739,13 @@
       "status": "ready",
       "aliases": [],
       "depends_on": [
-        "RM-04"
+        "RM-04",
+        "CORE-04"
       ],
       "resources": [
         "engine/permissions",
         "rpc/remote",
-        "ios/interactions"
+        "client/ffi"
       ],
       "sources": [
         "docs/pending-tasks/control-this-mac/README.md",
@@ -1700,14 +1754,17 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
-      "outcome": "M3 phone choices reflect real host capability and exact outstanding questions/approvals while credentials remain on Mac.",
+      "outcome": "M3 owns actual host provider/account/options/policy and exact question/approval decision admission, including dynamic providers; IOS-04 owns the complete native picker/interaction UI.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "criteria": [
         {
           "id": "capability",
-          "text": "Host catalogs and requested/effective permission modes replace misleading static/legacy phone policy.",
+          "text": "Project actual dynamic host/provider/account/options and requested/effective permissions; legacy phone sandbox/autoApprove or static fallback catalogs never establish executable capability.",
           "weight": 1
         },
         {
@@ -1717,7 +1774,7 @@
         },
         {
           "id": "verification",
-          "text": "RP-16-RP-18 use actual provider-facing allowed/denied question and approval flows after reconnect.",
+          "text": "RP-16-RP-18 prove actual provider request/decision correlation and refusal through the native/SDK contract slice; IOS-04 supplies complete native UI acceptance before RM-07 closes.",
           "weight": 1
         },
         {
@@ -1736,7 +1793,8 @@
       "status": "ready",
       "aliases": [],
       "depends_on": [
-        "RM-04"
+        "RM-04",
+        "IOS-02"
       ],
       "resources": [
         "engine/assets",
@@ -1750,7 +1808,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "M3/M4 bounded uploads and read-only host files/diffs retain exact content/checkout identity and task-specific grants.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1762,7 +1823,7 @@
         },
         {
           "id": "files",
-          "text": "Tree/search/preview/generated media and revision diff refuse traversal/symlink/ignored/private/wrong-task/large output bypass.",
+          "text": "Deliver first native file-name tree/read/preview and exact revision diff inside IOS-02, with typed host metadata and generated-media access. Refuse path/symlink/private/ignored/task/budget bypass; ZI-05/IOS-07 own source-text search and IOS-06 owns richer content.",
           "weight": 1
         },
         {
@@ -1792,7 +1853,12 @@
         "RM-03",
         "RM-04",
         "RM-05",
-        "RM-06"
+        "RM-06",
+        "IOS-01",
+        "IOS-02",
+        "IOS-03",
+        "IOS-04",
+        "IOS-09"
       ],
       "resources": [
         "ios/transcript",
@@ -1807,14 +1873,17 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "M4 and the full M0-M4 feature pass physical native rendering/lifecycle and actual direct nearby/cellular route evidence without undeclared relays.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "criteria": [
         {
           "id": "native",
-          "text": "Owned native rendering migration proves stable long transcript/keyboard/dynamic-type/AX behavior with measured budgets.",
+          "text": "Consume IOS-01/02/03/04/09 native migration and real-device input/AX/performance evidence; a shared SDK probe or inherited Swift screen alone cannot close the first release.",
           "weight": 1
         },
         {
@@ -1840,10 +1909,11 @@
       "group": "remote",
       "priority": 2,
       "order": 37,
-      "status": "deferred",
+      "status": "ready",
       "aliases": [],
       "depends_on": [
-        "RM-07"
+        "RM-07",
+        "IOS-02"
       ],
       "resources": [
         "terminal/host",
@@ -1856,7 +1926,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Later phone terminal consumes existing scoped backend with exact session lifetime, bounded stream, keys/resize/reconnect and read-only mode.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1884,10 +1957,12 @@
       "group": "remote",
       "priority": 2,
       "order": 38,
-      "status": "deferred",
+      "status": "ready",
       "aliases": [],
       "depends_on": [
-        "RM-06"
+        "RM-06",
+        "RM-07",
+        "IOS-02"
       ],
       "resources": [
         "engine/git",
@@ -1900,7 +1975,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Later branch/worktree/fork/rewind/review/commit/push/PR controls retain host checkout identity and explicit sensitive grants.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1944,7 +2022,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Later bounded remote sessions specify ownership, capture/input/privacy/OS grants and consume IC app contracts without generic desktop-sharing assumptions.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1972,11 +2053,13 @@
       "group": "remote",
       "priority": 2,
       "order": 40,
-      "status": "deferred",
+      "status": "ready",
       "aliases": [],
       "depends_on": [
         "RM-04",
-        "RM-05"
+        "RM-05",
+        "RM-07",
+        "IOS-02"
       ],
       "resources": [
         "ios/operations",
@@ -1989,7 +2072,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "Later phone scheduler/settings/usage/provider/update views reuse host owners with stronger administration policy and safe reconnect.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -2013,7 +2099,7 @@
     },
     {
       "id": "RM-12",
-      "title": "Decide and deliver optional awareness, voice and extensions",
+      "title": "Select optional awareness and voice service contracts",
       "group": "remote",
       "priority": 2,
       "order": 41,
@@ -2034,19 +2120,22 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
-      "outcome": "Optional push/voice/share/widget features have explicit owned services, platform/signing/privacy/dedup decisions separate from direct V1.",
+      "outcome": "Define and, when selected, establish owned cross-client awareness/registration/privacy and voice protocol contracts. IOS-10 owns native sharing; IOS-11/12/13 own optional native dictation, live voice and awareness implementation.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "criteria": [
         {
           "id": "decision",
-          "text": "Record chosen requirements and service/platform/locale/signing/account/retention boundaries; no implicit APNs/cloud scope.",
+          "text": "Record selected optional requirements and owned service/platform/signing/registration/voice/retention boundaries; preserve direct-only V1 and one native owner per IOS ticket.",
           "weight": 1
         },
         {
           "id": "verification",
-          "text": "Selected RP-36-RP-38 pass actual native/platform acceptance with expired/stale/retry/dedup states.",
+          "text": "Verify selected host/service capability, authorization, publish/registration/expiry and protocol contracts with retained API evidence. Complete native dictation/call/APNs/widget proof belongs to IOS-11/12/13; do not mark mobile parity from service setup.",
           "weight": 1
         },
         {
@@ -2081,7 +2170,10 @@
         "docs/pending-tasks/control-this-mac/validation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/implementation-plan.md",
         "docs/pending-tasks/t3-remote-mobile/validation-plan.md",
-        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md"
+        "docs/pending-tasks/t3-remote-mobile/gap-matrix.md",
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
       ],
       "outcome": "M5 extensions are separately chosen programs preserving host authority across browser/Android/tailnet/SSH/cloud routes.",
       "resume": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -4341,6 +4433,781 @@
         {
           "id": "handoff",
           "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-00",
+      "title": "Establish the owned iOS SDK facade and migration build",
+      "group": "ios",
+      "priority": 0,
+      "order": 300,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-05",
+        "RM-00"
+      ],
+      "resources": [
+        "ios/build",
+        "client/ffi"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Deliver a LUNA-owned versioned Rust/Swift boundary with native transport and preserved app/data identity, ready for RM-03's shared runtime.",
+      "resume": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define SDK/ABI/actor/cancellation and old-edge/direct-profile migration contracts while retaining bundle/signing and the iOS 26 floor.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Wire owned simulator/device builds and generated bindings through LUNA's locked build policy; perform one real typed descriptor/read and cancellation without a test-only API or second runtime.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P01 retains actual build/library/binding identities, typed native read/cancel, independent migration/readback and license/provenance decisions.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-01",
+      "title": "Deliver the shared native iOS transcript pipeline",
+      "group": "ios",
+      "priority": 1,
+      "order": 301,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-00",
+        "RM-03"
+      ],
+      "resources": [
+        "ios/transcript",
+        "client/layout",
+        "ui/markdown"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Use shared immutable projections and native rendering to preserve transcript behavior while meeting measured LUNA performance and layout budgets.",
+      "resume": "Read the IOS-01 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Record current Swift/native baselines and font/Unicode/row/anchor/lifetime failures; existing incremental caches and row reuse are not presumed broken.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Adapt shared parsing/layout, stable display models, viewport queries and coalesced native updates; preserve follow, selection, tools/images, width/theme and main-thread ownership.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P02 real long-transcript/font/CoreText/range/gesture/offscreen/navigation evidence compares baseline and candidate on supported physical hardware.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-02",
+      "title": "Build adaptive phone and iPad shell and appearance",
+      "group": "ios",
+      "priority": 1,
+      "order": 302,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-00",
+        "RM-03"
+      ],
+      "resources": [
+        "ios/shell",
+        "ios/settings",
+        "ios/threads"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Provide native phone/iPad navigation and useful organization/settings over the same authoritative host records with truthful error and offline states.",
+      "resume": "Read the IOS-02 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define scene/selection/draft/host/profile ownership, route recovery, basic list organization and local theme preference migration.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement native shell/split routing, basic filtering and supported list actions, dark/light/system and accessible settings using existing LUNA theme/data owners.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P03 physical/native invalid/deleted/offline routes, rotation/split, keyboard/AX/large-text and restart preserve exact task selection and drafts without fixture fallback.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-03",
+      "title": "Complete native composer, context and queue interactions",
+      "group": "ios",
+      "priority": 1,
+      "order": 303,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-00",
+        "RM-04",
+        "RM-05",
+        "RM-06"
+      ],
+      "resources": [
+        "ios/composer",
+        "ios/attachments",
+        "client/ffi"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Native input and queue UI truthfully reflects host-admitted commands, exact worktree preparation and typed attachment/context state.",
+      "resume": "Read the IOS-03 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Use RM-04's single outbox/receipt/setup contract and RM-06 typed assets/metadata; distinguish draft, pending, accepted, running, held and completed.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement native send/follow-up/steer/Stop, leased queue edits/actions, typed context chips and bounded upload/retry/cancel while retaining keyboard/IME drafts.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P04/P05 actual native interactions plus independent provider/receipt/checkout/hash readback prove no duplicate or wrong-checkout execution across suspension, loss and failed setup.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-04",
+      "title": "Expose actual host providers, permissions and interactions",
+      "group": "ios",
+      "priority": 1,
+      "order": 304,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-02",
+        "RM-05",
+        "CORE-04"
+      ],
+      "resources": [
+        "ios/pickers",
+        "ios/interactions",
+        "ios/composer"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Phone model/account/options and question/approval controls use current host capabilities, including independently installed provider plugins.",
+      "resume": "Read the IOS-04 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Bind requested/effective policy, provider/account/options and exact request/revision/decision to the current host; static fallback metadata is not runnable authority.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Build generic native picker/questions/approvals with stale/offline/missing capabilities, secret handling and host-side settlement; keep provider binaries and credentials on the host.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P06 real allowed/denied/changed/revoked/replayed request and new/missing plugin cases retain native UI and authoritative provider decision evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-05",
+      "title": "Add native Board, Side chats and helper supervision",
+      "group": "ios",
+      "priority": 1,
+      "order": 305,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-07",
+        "IOS-02",
+        "SW-10"
+      ],
+      "resources": [
+        "ios/board",
+        "engine/board",
+        "rpc/remote"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Phone users can operate and follow existing Board/ticket/Side-chat/helper workflows through a narrow paired-phone authority path.",
+      "resume": "Read the IOS-05 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define exact board/project/task/run/parent scope and required remote method/intent policy; preserve existing fixed-parent/reviewer and external-write boundaries.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Build native Board detail/control/evidence and Side-chat/helper navigation using current engine operations, with no duplicate worker/store or owner-IPC grant.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P07 phone create/start/retry/continue/Stop/reviewer/helper/lifecycle journeys retain authoritative receipts and untouched unrelated work.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-06",
+      "title": "Complete rich native content and renderer compatibility",
+      "group": "ios",
+      "priority": 2,
+      "order": 306,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-01",
+        "RM-06",
+        "IC-3",
+        "IC-4",
+        "CORE-14",
+        "CORE-15",
+        "ZI-03"
+      ],
+      "resources": [
+        "ios/transcript",
+        "ios/content",
+        "engine/assets",
+        "rpc/remote"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Phone rich tool/media/HTML/MCP App presentation consumes shared typed content and original-session authority with safe lifecycle and fallbacks.",
+      "resume": "Read the IOS-06 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Map canonical checklist/content/asset/renderer and privacy contracts, supported platform primitives and unknown/disabled/old-reader behavior.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement native inline/fullscreen tool/media/video/HTML/app surfaces and controls over IC/CORE owners; preserve exact session, source/export and offscreen disposal.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P08 actual native media/app interactions, restart/scroll/disable and allowed/declined/stale/cross-task tests retain asset/frame/authority hashes and truthful unavailable states.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-07",
+      "title": "Add native conversation Find and scoped history/file search",
+      "group": "ios",
+      "priority": 2,
+      "order": 307,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-01",
+        "IOS-02",
+        "RM-06",
+        "IC-5",
+        "ZI-05"
+      ],
+      "resources": [
+        "ios/search",
+        "ios/transcript",
+        "ios/files"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Native search reaches complete authorized conversation/history or owning-host source content and navigates to the exact message/file range.",
+      "resume": "Read the IOS-07 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Reuse IC-5/ZI-05 and existing history semantics with distinct scopes, generation, Unicode ranges and explicit partial/offline completeness.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement native query/results/highlight/navigation across offscreen rows and file lines, preserving folds/focus/drafts and exact host/checkout.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P09 independent text/file oracles and real native navigation verify long history, streaming, changed/deleted files, cancellation and stale/wrong-host refusals.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-08",
+      "title": "Refine foreground attention and safe task navigation",
+      "group": "ios",
+      "priority": 2,
+      "order": 308,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-07",
+        "IOS-02",
+        "IOS-04"
+      ],
+      "resources": [
+        "ios/attention",
+        "ios/shell",
+        "rpc/remote"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Foreground phone activity, lifecycle controls and deep links reflect authoritative task state without granting actions or stealing focus.",
+      "resume": "Read the IOS-08 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define seen/unread, running/needs-input/result state, permitted lifecycle actions and validated saved-host/profile routes; APNs remains a separate owner.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement meaningful badges/attention and supported pin/settle/snooze/wake/archive/delete navigation through host contracts; keep urgent requests actionable.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P03/P07 native cold/warm/deleted/offline links, status races, restart and active/uncertain deletion refusals retain exact receipts and user context.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-09",
+      "title": "Certify native first-release iPhone and iPad quality",
+      "group": "ios",
+      "priority": 1,
+      "order": 309,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-01",
+        "IOS-02",
+        "IOS-03",
+        "IOS-04",
+        "RM-06"
+      ],
+      "resources": [
+        "qa/ios-native",
+        "ios"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Required first-release native input, accessibility, lifecycle and performance are proven on real devices for RM-07's product gate.",
+      "resume": "Read the IOS-09 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Record supported device/OS/build/host data and baseline budgets, separating simulator, native pixels, physical networking and provider proof.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Exercise phone/iPad orientation/split, VoiceOver/Dynamic Type/reduced motion, keyboard/IME, long transcripts, media and in-flight background/network transitions; repair current owner failures.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P01-P07/P10 required device traces, AX/pixels, exact draft/receipt state and measured performance/lifetime budgets pass before RM-07 closes.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-10",
+      "title": "Add durable native share-sheet intake",
+      "group": "ios",
+      "priority": 2,
+      "order": 310,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IOS-03",
+        "RM-06",
+        "RM-07"
+      ],
+      "resources": [
+        "ios/sharing",
+        "ios/attachments",
+        "ios/build"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "An owned signed Share extension reliably turns supported external content into a scoped durable draft and deliberate send.",
+      "resume": "Read the IOS-10 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define bounded content IDs, app-group/signing, persistence/ack/cleanup, destination and explicit send/cancel contracts.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement cold/warm share inbox, typed attachments and deduplication through existing client/assets; keep OS extension identity distinct from desktop plugin execution.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P11 actual signed share-sheet/inbox/destination/send and refused/cancelled/replayed/terminated cases retain independent content and cleanup readback.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-11",
+      "title": "Select and implement on-device dictation and microphone preferences",
+      "group": "ios",
+      "priority": 2,
+      "order": 311,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "SW-16",
+        "IOS-03"
+      ],
+      "resources": [
+        "ios/audio",
+        "ios/composer",
+        "ios/settings"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Once selected, supported native dictation produces a controlled draft with honest device/locale/model and microphone-route behavior.",
+      "resume": "Read the IOS-11 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Select supported device/locale/model and data policy; define permission, preparation, interruption, cancellation and routing failures before code.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement record/stop/cancel/transcribe-to-draft and microphone preference using actual availability; preserve existing text/cursor and avoid silent send or service fallback.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P12 physical supported/unavailable/denied/route-change/interrupted cases retain audio lifetime, capability and draft readback.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-12",
+      "title": "Select and deliver host-owned live conversational voice",
+      "group": "ios",
+      "priority": 2,
+      "order": 312,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "SW-16",
+        "RM-12",
+        "IOS-04",
+        "RM-07"
+      ],
+      "resources": [
+        "ios/audio",
+        "engine/voice",
+        "rpc/remote"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Once selected and supported, the phone owns media while an exact host/provider owns one explicit voice call and its actions.",
+      "resume": "Read the IOS-12 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Choose verified provider/transport/trust and call/credential/lifecycle contract; Zeron's implementation is a reference, not LUNA capability proof.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement explicit native start/mute/end/route/interruption/drop handling and exact host session reconciliation; add activity UI only through the selected IOS-13 contract.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P12 real host/provider/phone calls and denied/drop/stop/route cases prove no silent reconnect, duplicate session or action.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-13",
+      "title": "Select and deliver owned push, Live Activities and widgets",
+      "group": "ios",
+      "priority": 2,
+      "order": 313,
+      "status": "deferred",
+      "aliases": [],
+      "depends_on": [
+        "RM-12",
+        "IOS-08",
+        "RM-07"
+      ],
+      "resources": [
+        "ios/awareness",
+        "ios/build",
+        "services/awareness"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "Once selected, signed native awareness surfaces receive bounded authoritative activity through owned registration/APNs/service contracts.",
+      "resume": "Read the IOS-13 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define selected surfaces, permissions/token/account/host lifecycle, foreground or supported remote start, privacy/expiry and independent service ownership.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement native registration/preferences/suppression/tap routing and stale-aware activity/widget projections with LUNA-owned IDs and credentials.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "P12 physical delivery/update/end/rotation/revoke/stale/cold-start evidence independently correlates host/service/APNs/device state; registration alone cannot pass.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "IOS-14",
+      "title": "Assess expanded iOS parity and release readiness",
+      "group": "ios",
+      "priority": 1,
+      "order": 314,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "RM-07",
+        "RM-08",
+        "RM-09",
+        "RM-11",
+        "IOS-05",
+        "IOS-06",
+        "IOS-07",
+        "IOS-08",
+        "IOS-09",
+        "IOS-10"
+      ],
+      "resources": [
+        "qa/ios-release"
+      ],
+      "sources": [
+        "docs/pending-tasks/ios-parity/README.md",
+        "docs/pending-tasks/ios-parity/research.md",
+        "docs/pending-tasks/ios-parity/parity-matrix.md",
+        "docs/pending-tasks/ios-parity/implementation.md",
+        "docs/pending-tasks/ios-parity/verification.md",
+        "docs/pending-tasks/ios-parity/backlog-integration.md"
+      ],
+      "outcome": "The selected expanded phone/tablet feature set has real native, host, compatibility and release evidence with remaining optional gaps visible.",
+      "resume": "Read the IOS-14 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Assemble the source-mapped required matrix and owner evidence; keep optional audio/awareness, browser/device and other-client programs explicit unless selected.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Run actual signed-build native workflows, old-data upgrade, host/SDK mismatch, terminal/Git/operations and post-restart performance using owned release tooling.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "All required P01-P11 and RM product/tool gates pass with exact source/build/device/provider hashes; missing required behavior blocks completion and no partial result is labeled full parity.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
           "weight": 1
         }
       ]

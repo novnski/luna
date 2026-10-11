@@ -4,20 +4,26 @@ This is proposed work. Task IDs below coordinate additions to the existing [Cont
 
 ## Ownership and ordering
 
+The [native iOS ownership refinement](../ios-parity/backlog-integration.md)
+now separates RM host/shared-client contracts from full IOS presentation. The
+catalog contains current dependencies. RM-03/04/05 require a minimal native/SDK
+contract proof; IOS-01–04 own the complete native surfaces, and RM-07 requires
+their acceptance. A thin probe never certifies the full phone product.
+
 | Task | Phase / priority | Dependencies | Existing owner to extend |
 | --- | --- | --- | --- |
 | RM-00 | M0, P0 | None | Control this Mac inventory, failure specification and implementation baseline |
 | RM-01 | M1, P0 | RM-00 | RemoteAuthStore, RemoteRpcService, headed engine host controller |
 | RM-02 | M1, P0 | RM-01 | Desktop Connections and native phone enrollment |
-| RM-03 | M2, P0 | RM-01/RM-02 | Host task/project projections and mobile rendering |
+| RM-03 | M2, P0 | RM-01/RM-02, CORE-05, IOS-00 | Host task/project projections and shared client runtime; full rendering IOS-01/02 |
 | RM-04 | M3, P0 | RM-03 | Engine task commands, admission and durable receipts |
-| RM-05 | M3, P0 | RM-04 | Provider capabilities, permissions, input and approval lifecycle |
-| RM-06 | M3–M4, P1 | RM-04 | Attachments, files, artifacts and checkout diffs |
-| RM-07 | M4, P1 | RM-02–RM-06 | Native rendering migration, power and direct route diagnostics |
-| RM-08 | Later, P2 | M0–M4 acceptance | Existing terminal service and phone terminal UI |
-| RM-09 | Later, P2 | RM-06 | Existing source control/worktree/review operations |
+| RM-05 | M3, P0 | RM-04, CORE-04 | Host capabilities, policy and decision contract; full native interaction IOS-04 |
+| RM-06 | M3–M4, P1 | RM-04, IOS-02 | Attachments, files, artifacts and first native file/diff surface |
+| RM-07 | M4, P1 | RM-02–RM-06, IOS-01–04/09 | Overall native release, power and direct route acceptance |
+| RM-08 | Expanded iOS wave, P2 | RM-07, IOS-02 | Existing terminal service and phone terminal UI |
+| RM-09 | Expanded iOS wave, P2 | RM-06/RM-07, IOS-02 | Existing source control/worktree/review operations |
 | RM-10 | Later, P2 | M0–M4 acceptance | Existing host browser/device/integration owners |
-| RM-11 | Later, P2 | RM-04/RM-05 | Existing scheduler, settings, usage and maintenance APIs |
+| RM-11 | Expanded iOS wave, P2 | RM-04/RM-05/RM-07, IOS-02 | Existing scheduler, settings, usage and maintenance APIs; read projections first |
 | RM-12 | Later, P2 | M0–M4 acceptance + product decision | Owned activity/push/native extension service |
 | RM-13 | Later, P2 | Reliable direct client + product decision | Optional route/account/host catalog; Android/browser clients |
 
@@ -59,6 +65,11 @@ Key caches by host/profile/task and validate on load. Bound cache retention, str
 
 Completion: same Mac tasks appear on phone, long transcripts stay usable, background/network/restart recovery preserves stable row ordering, and stale cached data is clearly labeled. Extend existing transcript/queue tests rather than duplicating renderer behavior checks.
 
+The RM-03 acceptance is the shared-runtime/projection boundary through a minimal
+native read surface. Full native layout/gesture/performance and shell migration
+belong to IOS-01/02 and remain required by RM-07. Consume IOS-00's owned SDK/FFI
+instead of a second Swift-only connection implementation.
+
 ## RM-04 — Project/task command admission and outbox reconciliation
 
 Expose existing host operations for create/open/continue/archive/restore and run/follow-up/queue edit/remove/reorder/steer/interrupt through explicit remote authority. Never turn a remotely inserted registry/doc row into permission. The current exact local executable-grant guard must remain effective; the new host RPC creates its admission record only after authorization.
@@ -69,6 +80,12 @@ Project creation/worktree choices reuse existing owners. Account/host selection 
 
 Completion: RP-10–RP-15 and RP-20 races show one execution, correct queue semantics and explicit stale/unsupported errors for Codex, Claude and OpenCode where supported.
 
+Add the latest T3 setup race: before host creation retain the draft; accepted
+worktree preparation queues follow-ups behind setup; failed/cancelled setup
+holds them instead of dispatching in the main checkout. Adapt Zeron's durable,
+viewport-independent delivery/ACK lessons to LUNA receipts, not its edge nudge
+protocol. IOS-03 owns the complete native composer/queue UX over this contract.
+
 ## RM-05 — Provider capabilities, effective policy, approvals and questions
 
 Use the Mac's actual harness/account/model/options catalog. Phone static fallbacks cannot masquerade as host capability. Show requested and effective permissions where they differ, locked provider ownership, supported steer/restart/fork options and unavailable features. Provider credentials remain on the execution host.
@@ -77,6 +94,11 @@ Add approval projection and native approve/deny/action UI; current iOS question 
 
 Completion: RP-16–RP-18 exercise actual provider-facing question and approval flows with a controlled permitted action, refusal and stale-response rejection. Preserve final command/request/decision trace; a generic dialog fixture is insufficient.
 
+RM-05 owns host capability/request/decision admission and its native/SDK probe;
+IOS-04 owns the complete picker/question/approval presentation. Static fallback
+catalogs never establish runnable capability, including for new host provider
+plugins. Both layers remain required for RM-07.
+
 ## RM-06 — Attachments, context, files and diffs
 
 Reuse image UX and host attachment storage; add bounded task-owned file/media upload with content hash, retry/cancel, resumable behavior only where specified, and staging/orphan cleanup. Authorization must cover task and destination, not just an arbitrary filesystem path. Keep attachment references and exact bytes through queued edits and lost replies.
@@ -84,6 +106,11 @@ Reuse image UX and host attachment storage; add bounded task-owned file/media up
 Deliver workspace tree/search/read previews and checkout/task-associated diff before write/Git controls. Support generated image/artifact retrieval and explicit file-link scope. Prevent traversal, symlink escape, ignored-file policy bypass, task/profile substitution and unbounded large/binary output. Existing desktop ignored-file trust policy is not an automatic default for a separately paired phone.
 
 Workspace context selection, slash commands/skills and rich tool bodies use host/provider capability. HTML/MCP Apps renderer or search work stays under [interactive chat surfaces](../interactive-chat-surfaces/README.md); phone integration consumes its reviewed contract.
+
+Expose bounded typed file metadata from the owning host for native file/context
+chips; a client-guessed suffix or path is not an authorization fact. IOS-03/06
+consume it. RM-06 owns the first phone file/diff workbench within IOS-02's shell;
+advanced native content and interactive app lifecycle belong to IOS-06.
 
 Completion: hash-verified image/file upload, wrong-task/path rejection, exact revision diff, file/media preview and large-output behavior on a physical phone. This does not require a phone text editor: T3's inspected file surface is itself read-only.
 
@@ -120,6 +147,10 @@ Reuse scheduler/automation, project defaults, usage, provider management and upd
 Keep local phone preferences/cache cleanup separate from host data deletion. Credential/account changes and access administration are higher authority than ordinary task control. RP-33–RP-35 own acceptance; do not build another scheduler or update service.
 
 ## RM-12 — Awareness, voice, sharing and native extensions
+
+This remains the optional cross-client service/registration/privacy contract.
+Native share intake is IOS-10; dictation, live voice and push/widgets are
+IOS-11/12/13. Their detailed native implementation is not duplicated here.
 
 Foreground attention belongs in direct V1. APNs/FCM delivery and Live Activities/widgets are later explicit service work: choose an owned service, signing/account model, minimal activity schema, expiry, retries/dedup, per-device registration/rotation/unregister and data retention. A direct socket cannot promise reliable iOS background execution.
 

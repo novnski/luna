@@ -1,9 +1,9 @@
 # Pending task checkpoint
 
-Generated 2026-10-11T02:56:38+03:00.
+Generated 2026-10-11T03:44:39+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **0.0% accepted**, **0/60 Done**.
+Active scope: **0.0% accepted**, **0/75 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
 Next eligible: CORE-00, ZI-01, ZI-03, ZI-04, ZI-05
@@ -120,20 +120,40 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-16 — Decide optional voice, paired phone and offline requirements](luna-only-workflows/README.md) | deferred | 0.0% | — |
+| [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-05 — Expose actual provider policy, questions and approvals on phone](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-06 — Add task-owned phone attachments, files and checkout diffs](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-07 — Accept the complete native direct-Mac first release](control-this-mac/README.md) | ready | 0.0% | — |
-| [RM-08 — Add separately granted native phone terminal](control-this-mac/README.md) | deferred | 0.0% | — |
-| [RM-09 — Expose guarded phone Git and broader thread lifecycle](control-this-mac/README.md) | deferred | 0.0% | — |
 | [RM-10 — Expose explicitly owned browser/device/integration remote sessions](control-this-mac/README.md) | deferred | 0.0% | — |
-| [RM-11 — Add scoped phone operations and administration views](control-this-mac/README.md) | deferred | 0.0% | — |
-| [RM-12 — Decide and deliver optional awareness, voice and extensions](control-this-mac/README.md) | deferred | 0.0% | — |
+| [RM-12 — Select optional awareness and voice service contracts](control-this-mac/README.md) | deferred | 0.0% | — |
 | [RM-13 — Decide optional routes, multi-host and additional clients](control-this-mac/README.md) | deferred | 0.0% | — |
-| [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | ready | 0.0% | — |
-| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | ready | 0.0% | — |
-| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-08 — Add separately granted native phone terminal](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-09 — Expose guarded phone Git and broader thread lifecycle](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-11 — Add scoped phone operations and administration views](control-this-mac/README.md) | ready | 0.0% | — |
+
+## Native iOS parity and release
+
+| Ticket | Status | Accepted | Owner / last worker |
+| --- | --- | --- | --- |
+| [IOS-00 — Establish the owned iOS SDK facade and migration build](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-01 — Deliver the shared native iOS transcript pipeline](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-02 — Build adaptive phone and iPad shell and appearance](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-03 — Complete native composer, context and queue interactions](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-04 — Expose actual host providers, permissions and interactions](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-05 — Add native Board, Side chats and helper supervision](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-06 — Complete rich native content and renderer compatibility](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-07 — Add native conversation Find and scoped history/file search](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-08 — Refine foreground attention and safe task navigation](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-09 — Certify native first-release iPhone and iPad quality](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-10 — Add durable native share-sheet intake](ios-parity/README.md) | ready | 0.0% | — |
+| [IOS-11 — Select and implement on-device dictation and microphone preferences](ios-parity/README.md) | deferred | 0.0% | — |
+| [IOS-12 — Select and deliver host-owned live conversational voice](ios-parity/README.md) | deferred | 0.0% | — |
+| [IOS-13 — Select and deliver owned push, Live Activities and widgets](ios-parity/README.md) | deferred | 0.0% | — |
+| [IOS-14 — Assess expanded iOS parity and release readiness](ios-parity/README.md) | ready | 0.0% | — |
 
 ## Real operations and local recurrence
 

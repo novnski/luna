@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "catalog_hash": "bf3849ac8cdcc4259eb57bb390d6a0bbb23286bad23b5f31a9139ce72421b2ca",
-  "created_at": 1791676598.812691,
+  "catalog_hash": "b65d8bb29d971b26432046cf186e529cad9d88740dcd3bdb2422d42b6fd5401b",
+  "created_at": 1791679479.2909582,
   "summary": {
     "counts": {
       "blocked": 1,
@@ -10,7 +10,7 @@
       "done": 5,
       "in_progress": 0,
       "paused": 0,
-      "ready": 59,
+      "ready": 74,
       "review": 0
     },
     "groups": [
@@ -214,11 +214,11 @@
           ]
         },
         "title": "One direct paired-Mac product",
-        "tasks": 8,
+        "tasks": 11,
         "done": 0,
-        "remaining": 8,
+        "remaining": 11,
         "accepted_units": 0,
-        "total_units": 31,
+        "total_units": 40,
         "acceptance_percent": 0.0,
         "milestone_status": {
           "M0": {
@@ -257,6 +257,97 @@
         }
       },
       {
+        "id": "ios",
+        "milestones": {
+          "Complete direct V1": [
+            "IOS-01",
+            "IOS-02",
+            "IOS-03",
+            "IOS-04",
+            "IOS-09",
+            "RM-07"
+          ],
+          "Expanded phone workflows": [
+            "IOS-05",
+            "IOS-06",
+            "IOS-07",
+            "IOS-08",
+            "IOS-10",
+            "RM-08",
+            "RM-09",
+            "RM-11"
+          ],
+          "Native foundation": [
+            "IOS-00",
+            "RM-03"
+          ],
+          "Optional voice and awareness": [
+            "IOS-11",
+            "IOS-12",
+            "IOS-13",
+            "RM-12"
+          ],
+          "Parity and release assessment": [
+            "IOS-14"
+          ]
+        },
+        "title": "Native iOS parity and release",
+        "tasks": 12,
+        "done": 0,
+        "remaining": 12,
+        "accepted_units": 0,
+        "total_units": 48,
+        "acceptance_percent": 0.0,
+        "milestone_status": {
+          "Complete direct V1": {
+            "done": false,
+            "members": [
+              "IOS-01",
+              "IOS-02",
+              "IOS-03",
+              "IOS-04",
+              "IOS-09",
+              "RM-07"
+            ]
+          },
+          "Expanded phone workflows": {
+            "done": false,
+            "members": [
+              "IOS-05",
+              "IOS-06",
+              "IOS-07",
+              "IOS-08",
+              "IOS-10",
+              "RM-08",
+              "RM-09",
+              "RM-11"
+            ]
+          },
+          "Native foundation": {
+            "done": false,
+            "members": [
+              "IOS-00",
+              "RM-03"
+            ]
+          },
+          "Optional voice and awareness": {
+            "done": false,
+            "members": [
+              "IOS-11",
+              "IOS-12",
+              "IOS-13",
+              "RM-12"
+            ]
+          },
+          "Parity and release assessment": {
+            "done": false,
+            "members": [
+              "IOS-14"
+            ]
+          }
+        }
+      },
+      {
         "id": "operations",
         "title": "Real operations and local recurrence",
         "tasks": 3,
@@ -281,11 +372,11 @@
     ],
     "expired_claims": [],
     "active_scope": {
-      "tasks": 60,
+      "tasks": 75,
       "done": 0,
-      "remaining": 60,
+      "remaining": 75,
       "accepted_units": 0,
-      "total_units": 234,
+      "total_units": 291,
       "acceptance_percent": 0.0
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
@@ -527,116 +618,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.95883
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-02",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958873
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-04",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958909
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-05",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958922
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-06",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.9589381
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-07",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958954
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-08",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.958972
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-09",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.9589891
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-10",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959004
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-11",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959021
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-12",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959033
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-13",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.9590452
     },
     {
       "attempts": 0,
@@ -1122,36 +1103,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "RM-00",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958842
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-01",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958855
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-03",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958892
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "AW-01",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1267,6 +1218,296 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "deferred",
       "updated_at": 1791673834.95928
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-00",
+      "last_worker": null,
+      "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679477.561812
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-01",
+      "last_worker": null,
+      "note": "Read the IOS-01 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679477.653402
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-02",
+      "last_worker": null,
+      "note": "Read the IOS-02 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679477.746384
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-03",
+      "last_worker": null,
+      "note": "Read the IOS-03 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679477.8381598
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-04",
+      "last_worker": null,
+      "note": "Read the IOS-04 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679477.9310489
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-05",
+      "last_worker": null,
+      "note": "Read the IOS-05 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.0240908
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-06",
+      "last_worker": null,
+      "note": "Read the IOS-06 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.120092
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-07",
+      "last_worker": null,
+      "note": "Read the IOS-07 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.215399
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-08",
+      "last_worker": null,
+      "note": "Read the IOS-08 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.312762
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-09",
+      "last_worker": null,
+      "note": "Read the IOS-09 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.410166
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-10",
+      "last_worker": null,
+      "note": "Read the IOS-10 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.5082629
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-11",
+      "last_worker": null,
+      "note": "Read the IOS-11 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "deferred",
+      "updated_at": 1791679478.607039
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-12",
+      "last_worker": null,
+      "note": "Read the IOS-12 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "deferred",
+      "updated_at": 1791679478.713665
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-13",
+      "last_worker": null,
+      "note": "Read the IOS-13 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "deferred",
+      "updated_at": 1791679478.813094
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-14",
+      "last_worker": null,
+      "note": "Read the IOS-14 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "ready",
+      "updated_at": 1791679478.911985
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-00",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958842
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-01",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958855
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-02",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958873
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-03",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958892
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-04",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958909
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-05",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958922
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-06",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.9589381
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-07",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "ready",
+      "updated_at": 1791673834.958954
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-10",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959004
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-12",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.959033
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-13",
+      "last_worker": null,
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "deferred",
+      "updated_at": 1791673834.9590452
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-08",
+      "last_worker": null,
+      "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+      "status": "ready",
+      "updated_at": 1791679479.072226
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-09",
+      "last_worker": null,
+      "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+      "status": "ready",
+      "updated_at": 1791679479.145694
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-11",
+      "last_worker": null,
+      "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+      "status": "ready",
+      "updated_at": 1791679479.217224
     }
   ],
   "events": [
@@ -2267,6 +2508,312 @@
       "action": "catalog_update",
       "detail": {
         "revision": 27
+      }
+    },
+    {
+      "seq": 112,
+      "task": "IOS-00",
+      "at": 1791679477.561854,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 29
+      }
+    },
+    {
+      "seq": 113,
+      "task": "IOS-01",
+      "at": 1791679477.653439,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 30
+      }
+    },
+    {
+      "seq": 114,
+      "task": "IOS-02",
+      "at": 1791679477.7464352,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 31
+      }
+    },
+    {
+      "seq": 115,
+      "task": "IOS-03",
+      "at": 1791679477.838219,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 32
+      }
+    },
+    {
+      "seq": 116,
+      "task": "IOS-04",
+      "at": 1791679477.931104,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 33
+      }
+    },
+    {
+      "seq": 117,
+      "task": "IOS-05",
+      "at": 1791679478.02413,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 34
+      }
+    },
+    {
+      "seq": 118,
+      "task": "IOS-06",
+      "at": 1791679478.120149,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 35
+      }
+    },
+    {
+      "seq": 119,
+      "task": "IOS-07",
+      "at": 1791679478.215446,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 36
+      }
+    },
+    {
+      "seq": 120,
+      "task": "IOS-08",
+      "at": 1791679478.312814,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 37
+      }
+    },
+    {
+      "seq": 121,
+      "task": "IOS-09",
+      "at": 1791679478.410208,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 38
+      }
+    },
+    {
+      "seq": 122,
+      "task": "IOS-10",
+      "at": 1791679478.508319,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 39
+      }
+    },
+    {
+      "seq": 123,
+      "task": "IOS-11",
+      "at": 1791679478.607088,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 40
+      }
+    },
+    {
+      "seq": 124,
+      "task": "IOS-12",
+      "at": 1791679478.713717,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 41
+      }
+    },
+    {
+      "seq": 125,
+      "task": "IOS-13",
+      "at": 1791679478.8131368,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 42
+      }
+    },
+    {
+      "seq": 126,
+      "task": "IOS-14",
+      "at": 1791679478.912034,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 43
+      }
+    },
+    {
+      "seq": 127,
+      "task": "RM-00",
+      "at": 1791679478.995168,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 128,
+      "task": "RM-01",
+      "at": 1791679478.9952,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 129,
+      "task": "RM-02",
+      "at": 1791679478.99522,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 130,
+      "task": "RM-03",
+      "at": 1791679478.995239,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 131,
+      "task": "RM-04",
+      "at": 1791679478.995255,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 132,
+      "task": "RM-05",
+      "at": 1791679478.995274,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 133,
+      "task": "RM-06",
+      "at": 1791679478.995289,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 134,
+      "task": "RM-07",
+      "at": 1791679478.995305,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 135,
+      "task": "RM-08",
+      "at": 1791679478.995318,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 136,
+      "task": "RM-09",
+      "at": 1791679478.995331,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 137,
+      "task": "RM-10",
+      "at": 1791679478.9953449,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 138,
+      "task": "RM-11",
+      "at": 1791679478.99536,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 139,
+      "task": "RM-12",
+      "at": 1791679478.9953768,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 140,
+      "task": "RM-13",
+      "at": 1791679478.9953952,
+      "action": "catalog_update",
+      "detail": {
+        "revision": 44
+      }
+    },
+    {
+      "seq": 141,
+      "task": "RM-08",
+      "at": 1791679479.072304,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 142,
+      "task": "RM-09",
+      "at": 1791679479.14575,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 143,
+      "task": "RM-11",
+      "at": 1791679479.2172859,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
+        "status": "ready",
+        "worker": null
       }
     }
   ]

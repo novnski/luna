@@ -11,6 +11,11 @@ application when the installed extension API already supports its needs.
 Existing providers, browser features and the diff workbench should become
 ordinary first-party consumers of those public contracts.
 
+The [native iOS parity program](../ios-parity/README.md) consumes CORE-05 through
+IOS-00/RM-03 and CORE-04 through IOS-04. It owns full phone presentation and
+physical acceptance; CORE-21 still owns shared host/client compatibility rather
+than duplicating a phone runtime or claiming a complete mobile migration.
+
 The recommended approach is an incremental core reconstruction: preserve the
 existing durable behavior, extract its authority and lifecycle boundaries,
 publish the contracts, prove one independently installed provider, then move

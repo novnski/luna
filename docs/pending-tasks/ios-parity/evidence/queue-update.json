@@ -1,0 +1,35 @@
+{
+  "new_ios_tickets": 15,
+  "new_ready": 12,
+  "new_deferred": 3,
+  "total": 105,
+  "groups": 11,
+  "revision": 44,
+  "existing_evidence_and_attempts_preserved": 90,
+  "unchanged_existing_statuses": 87,
+  "intentionally_activated": [
+    "RM-08",
+    "RM-09",
+    "RM-11"
+  ],
+  "new_dependency_gate_targets": 7,
+  "counts": {
+    "blocked": 1,
+    "cancelled": 0,
+    "deferred": 25,
+    "done": 5,
+    "in_progress": 0,
+    "paused": 0,
+    "ready": 74,
+    "review": 0
+  },
+  "active_scope": {
+    "tasks": 75,
+    "done": 0,
+    "remaining": 75,
+    "accepted_units": 0,
+    "total_units": 291,
+    "acceptance_percent": 0.0
+  },
+  "next": "CORE-00"
+}

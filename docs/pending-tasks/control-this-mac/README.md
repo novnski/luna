@@ -127,4 +127,10 @@ Recheck these contracts before implementation. Source review and supplied screen
 
 ## T3 remote/mobile research supplement
 
+The subsequent [native iOS parity program](../ios-parity/README.md) refreshes
+both Zeron and T3 source, adds IOS-00–IOS-14, and separates full native UI from
+the shared RM client/authority contracts. RM-07 now aggregates IOS-01–04/09.
+Terminal/Git/ordinary administration reuse RM-08/09/11 in a later parity wave;
+the direct-only/no-relay V1 boundary is unchanged.
+
 The [11 October 2026 research package](../t3-remote-mobile/README.md) audits pinned T3 and current LUNA source with ten agents. Its [gap matrix](../t3-remote-mobile/gap-matrix.md), [RM tasks](../t3-remote-mobile/implementation-plan.md), and [expanded E2E scenarios](../t3-remote-mobile/validation-plan.md) supplement this plan. This package remains the owner of M0–M4, the existing native stack direction, and direct-only/no-relay V1. The research implements no milestone and certifies no live phone control.

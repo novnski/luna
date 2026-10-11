@@ -1,0 +1,1230 @@
+{
+  "prior_sha": "a8bdfdb54181fb5c9d43f2747112c137a804d016",
+  "current_sha": "477282263a9115f911380b5aec7d4973267e4edc",
+  "referenced_paths": 201,
+  "excluded_documentation_templates": [
+    "<path>"
+  ],
+  "counts": {
+    "unchanged": 194,
+    "changed": 7,
+    "missing": 0
+  },
+  "changed_paths_reviewed": [
+    "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+    "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+    "apps/server/src/auth/RpcAuthorization.ts",
+    "apps/server/src/orchestration-v2/Orchestrator.ts",
+    "apps/server/src/ws.ts",
+    "docs/user/install.md",
+    "packages/client-runtime/src/operations/commands.ts"
+  ],
+  "paths": [
+    {
+      "path": ".env.example",
+      "old_object": "fc67dcef94780dfe74e17ff0c7e1573f9598e2b8",
+      "new_object": "fc67dcef94780dfe74e17ff0c7e1573f9598e2b8",
+      "state": "unchanged"
+    },
+    {
+      "path": "AGENTS.md",
+      "old_object": "3d1c49d519023e3288b7f5143543aaf96495a30c",
+      "new_object": "3d1c49d519023e3288b7f5143543aaf96495a30c",
+      "state": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "old_object": "8aa78f81b9ad72753cde7a8d3106ef8c7a8f0697",
+      "new_object": "8aa78f81b9ad72753cde7a8d3106ef8c7a8f0697",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/desktop/src/app/DesktopApp.ts",
+      "old_object": "a6906099dbd5f275c2be94a75b72f61e04953025",
+      "new_object": "a6906099dbd5f275c2be94a75b72f61e04953025",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/desktop/src/backend/DesktopBackendConfiguration.ts",
+      "old_object": "b306975beb24b49dab4faa6bddd16ce7c3e43e83",
+      "new_object": "b306975beb24b49dab4faa6bddd16ce7c3e43e83",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/desktop/src/backend/DesktopBackendPool.ts",
+      "old_object": "139c0ef49bbc28d5a7ed0723690f6e13a36a94a1",
+      "new_object": "139c0ef49bbc28d5a7ed0723690f6e13a36a94a1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/desktop/src/backend/tailscaleEndpointProvider.ts",
+      "old_object": "7dff0b61b372db1c2add5ba595696d64ef79e0d6",
+      "new_object": "7dff0b61b372db1c2add5ba595696d64ef79e0d6",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/README.md",
+      "old_object": "20f98c6c9e34e732aac15529902b920c98f07c82",
+      "new_object": "20f98c6c9e34e732aac15529902b920c98f07c82",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/app.config.ts",
+      "old_object": "57717d2d845899bbc546cfc82729814700110462",
+      "new_object": "57717d2d845899bbc546cfc82729814700110462",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/eas.json",
+      "old_object": "2947275d106e44f5cea07935c4fc4d5ee3cb7e80",
+      "new_object": "2947275d106e44f5cea07935c4fc4d5ee3cb7e80",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/modules/t3-agent-notifications/android/src/main/java/expo/modules/t3agentnotifications/AgentNotifications.kt",
+      "old_object": "5c7cd2e43560c3d99bb941185e40c9981b1ccb94",
+      "new_object": "5c7cd2e43560c3d99bb941185e40c9981b1ccb94",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/modules/t3-terminal/README.md",
+      "old_object": "51586a5402a89c5fddb138352b5f3e245d4f471d",
+      "new_object": "51586a5402a89c5fddb138352b5f3e245d4f471d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/Stack.tsx",
+      "old_object": "c089945ccc8f5ab1f2bd20b421fead06cc9bec9d",
+      "new_object": "c089945ccc8f5ab1f2bd20b421fead06cc9bec9d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/components/ComposerAttachmentButton.tsx",
+      "old_object": "b6b3d6e78a49517ab6d0245d73503f49173b77c7",
+      "new_object": "b6b3d6e78a49517ab6d0245d73503f49173b77c7",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/app-state-wakeups.test.ts",
+      "old_object": "4e8bdf1edf4a7ceff126a89b3d545365b7e4356b",
+      "new_object": "4e8bdf1edf4a7ceff126a89b3d545365b7e4356b",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/app-state-wakeups.ts",
+      "old_object": "185ff744958edf57bcdfb8797ccf09aae84b97dc",
+      "new_object": "185ff744958edf57bcdfb8797ccf09aae84b97dc",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/background-activity.ts",
+      "old_object": "80e185b9e05d3c4a34a90e91048290bf86c90f97",
+      "new_object": "80e185b9e05d3c4a34a90e91048290bf86c90f97",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/catalog-store.ts",
+      "old_object": "6a4fcd35f6d6a519760ac21409bbaff77f32921a",
+      "new_object": "6a4fcd35f6d6a519760ac21409bbaff77f32921a",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/environment-cache-store.test.ts",
+      "old_object": "4514c20e8564d096924826ddf296da23dae53d1e",
+      "new_object": "4514c20e8564d096924826ddf296da23dae53d1e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/environment-cache-store.ts",
+      "old_object": "653aded1657df5ab66e8c668c6eca7d5e757e1af",
+      "new_object": "653aded1657df5ab66e8c668c6eca7d5e757e1af",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/migration.test.ts",
+      "old_object": "5cb17bd5bf71bb5a0e4f4f34808215755313faf2",
+      "new_object": "5cb17bd5bf71bb5a0e4f4f34808215755313faf2",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/migration.ts",
+      "old_object": "3df01fe7ca000ea60b0ef96a42acc5dbe62941d5",
+      "new_object": "3df01fe7ca000ea60b0ef96a42acc5dbe62941d5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/onboarding.ts",
+      "old_object": "5e443dfac82d919550989b30891922586830cc4b",
+      "new_object": "5e443dfac82d919550989b30891922586830cc4b",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/platform.ts",
+      "old_object": "e8817de69eeb2a6fcf0b32d775fd4b339349430c",
+      "new_object": "e8817de69eeb2a6fcf0b32d775fd4b339349430c",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/runtime.ts",
+      "old_object": "e86b6acdaec3177f21e0d7cfe1603336b8ccb9cf",
+      "new_object": "e86b6acdaec3177f21e0d7cfe1603336b8ccb9cf",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/connection/storage.ts",
+      "old_object": "0bb20a769ed8836717197c726323120d22e93c47",
+      "new_object": "0bb20a769ed8836717197c726323120d22e93c47",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/androidNotifications.ts",
+      "old_object": "73f84434d89d090093fdd5d3fc644cc87dc6a7c7",
+      "new_object": "73f84434d89d090093fdd5d3fc644cc87dc6a7c7",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/foregroundNotificationBehavior.ts",
+      "old_object": "9ea77169dfea73d7166e3aa46d98d61c362d381b",
+      "new_object": "9ea77169dfea73d7166e3aa46d98d61c362d381b",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/notificationNavigation.ts",
+      "old_object": "099fb505599020df24075a74826cd310a7c26f76",
+      "new_object": "099fb505599020df24075a74826cd310a7c26f76",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/notificationPayload.ts",
+      "old_object": "e568ca8b6cd432b93fc1c7850e5e78f20d57fafc",
+      "new_object": "e568ca8b6cd432b93fc1c7850e5e78f20d57fafc",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/notificationPermissions.ts",
+      "old_object": "eddee8b250919133e19a320475015fa4f49b5222",
+      "new_object": "eddee8b250919133e19a320475015fa4f49b5222",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/registrationPayload.ts",
+      "old_object": "629ec5f60abbe1bc9986bc31060c3a54c881ebf1",
+      "new_object": "629ec5f60abbe1bc9986bc31060c3a54c881ebf1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/agent-awareness/remoteRegistration.ts",
+      "old_object": "7ed7ddc8bae1b9e21cd4b55f332f4184da7e72f5",
+      "new_object": "7ed7ddc8bae1b9e21cd4b55f332f4184da7e72f5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
+      "old_object": "eacd5544ea02db1941a42782c2a90db73a5cba89",
+      "new_object": "eacd5544ea02db1941a42782c2a90db73a5cba89",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/browser/BrowserPreviewRouteScreen.tsx",
+      "old_object": "1d4f3fb3ea288231df5e6780bc7040199fae64b9",
+      "new_object": "1d4f3fb3ea288231df5e6780bc7040199fae64b9",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/browser/BrowserTabMenu.tsx",
+      "old_object": "cd55e2d0307a37913aff0fd0d78aaad9b0f83b83",
+      "new_object": "cd55e2d0307a37913aff0fd0d78aaad9b0f83b83",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/browser/PreviewStreamWebView.tsx",
+      "old_object": "27063f24f1b30f7181eec3ada4a8885a768d5133",
+      "new_object": "27063f24f1b30f7181eec3ada4a8885a768d5133",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/cloud/CloudAuthProvider.tsx",
+      "old_object": "fffdd2343044f753e14acd6286d7aa93bcb3fc27",
+      "new_object": "fffdd2343044f753e14acd6286d7aa93bcb3fc27",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/cloud/dpop.ts",
+      "old_object": "f258a6376e5bf6e13adf1f55cd5d2e0e4ee33fe8",
+      "new_object": "f258a6376e5bf6e13adf1f55cd5d2e0e4ee33fe8",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/cloud/managedRelayLayer.ts",
+      "old_object": "16d55106c1497d3aefbc5fd16b9efe84703b78bb",
+      "new_object": "16d55106c1497d3aefbc5fd16b9efe84703b78bb",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
+      "old_object": "f4a682c6c14c357f9876b4ee1e9cd4b63928b764",
+      "new_object": "f4a682c6c14c357f9876b4ee1e9cd4b63928b764",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
+      "old_object": "81d48a94848c0484d1120f744c14a1a43d90f219",
+      "new_object": "81d48a94848c0484d1120f744c14a1a43d90f219",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/connection/pairing.test.ts",
+      "old_object": "1939276847949fbe439db9ee3b6442d655f90fce",
+      "new_object": "1939276847949fbe439db9ee3b6442d655f90fce",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/connection/pairing.ts",
+      "old_object": "ee9e4b9ec8f3cc63b67ef384250be1709271da0a",
+      "new_object": "ee9e4b9ec8f3cc63b67ef384250be1709271da0a",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/connection/useConnectionController.ts",
+      "old_object": "6445a6ff71cbec69304f1003b51bf00e871c9824",
+      "new_object": "6445a6ff71cbec69304f1003b51bf00e871c9824",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/devices/DevicePreviewRouteScreen.tsx",
+      "old_object": "874fa33320c573a56c7f3d98fac4ae9aebaecbfe",
+      "new_object": "874fa33320c573a56c7f3d98fac4ae9aebaecbfe",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/devices/DeviceStreamWebView.tsx",
+      "old_object": "c8831c59520237b9cf9394f1984c3f209576f5dc",
+      "new_object": "c8831c59520237b9cf9394f1984c3f209576f5dc",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/devices/threadDevicePreviews.ts",
+      "old_object": "aaf87ca9784e1a94751ada3aa6194c4568526fc2",
+      "new_object": "aaf87ca9784e1a94751ada3aa6194c4568526fc2",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/files/FileTreeBrowser.tsx",
+      "old_object": "4d313b47b49fcb851c58b95898f78fa1ac2d8129",
+      "new_object": "4d313b47b49fcb851c58b95898f78fa1ac2d8129",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/files/SourceFileSurface.tsx",
+      "old_object": "928da8b0f5435dea452ed8d59a16535e46407aeb",
+      "new_object": "928da8b0f5435dea452ed8d59a16535e46407aeb",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
+      "old_object": "ca9adeaea165093f4522a240ca92ef464bc45d42",
+      "new_object": "ca9adeaea165093f4522a240ca92ef464bc45d42",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/files/useFileTreeEntries.ts",
+      "old_object": "1553736dcdbd55f92f1b05ba5a0944b99fe7c122",
+      "new_object": "1553736dcdbd55f92f1b05ba5a0944b99fe7c122",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/home/HomeRouteScreen.tsx",
+      "old_object": "cd8af281c9f51bdaf814d16d41d4f4ed9ccf2ec6",
+      "new_object": "cd8af281c9f51bdaf814d16d41d4f4ed9ccf2ec6",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "old_object": "389a1f0bf0d81a3e98b6199c374b6bf8c671d596",
+      "new_object": "389a1f0bf0d81a3e98b6199c374b6bf8c671d596",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/home/home-list-filter-menu.ts",
+      "old_object": "ac53e427d21f355b16ac1b21431150dd0ea4941a",
+      "new_object": "ac53e427d21f355b16ac1b21431150dd0ea4941a",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/home/useThreadListActions.ts",
+      "old_object": "964c12a7189f2b1fb17021d42ffa4ce0e342d0ea",
+      "new_object": "964c12a7189f2b1fb17021d42ffa4ce0e342d0ea",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/projects/AddProjectScreen.tsx",
+      "old_object": "cc02851cb6ef364ea1832586ca38ccf7e205e795",
+      "new_object": "cc02851cb6ef364ea1832586ca38ccf7e205e795",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/review/ReviewCommentComposerSheet.tsx",
+      "old_object": "74ccc8cf0bcbc5b8a915a133c3af6ec1ccbdf262",
+      "new_object": "74ccc8cf0bcbc5b8a915a133c3af6ec1ccbdf262",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/review/ReviewSheet.tsx",
+      "old_object": "8fe1e8b785fc7cadef7e78987245e26520204b01",
+      "new_object": "8fe1e8b785fc7cadef7e78987245e26520204b01",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/review/reviewModel.ts",
+      "old_object": "d2e6c1254617957a34a771f84ae040d59e1da54e",
+      "new_object": "d2e6c1254617957a34a771f84ae040d59e1da54e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/review/useReviewSections.ts",
+      "old_object": "d7c91941abc20683500726cb9019ef2c4bb283eb",
+      "new_object": "d7c91941abc20683500726cb9019ef2c4bb283eb",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/EnvironmentRoutesSection.tsx",
+      "old_object": "17b6bcadd880b59fc6e79dd327b3d3bdc042baf6",
+      "new_object": "17b6bcadd880b59fc6e79dd327b3d3bdc042baf6",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsEnvironmentDetailRouteScreen.tsx",
+      "old_object": "1065a860a5e4c1856350204355e7ca1d99b8d07f",
+      "new_object": "1065a860a5e4c1856350204355e7ca1d99b8d07f",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsFollowUpRouteScreen.tsx",
+      "old_object": "253c64c0465a20ae6d026ed091b0fcde146fe9ca",
+      "new_object": "253c64c0465a20ae6d026ed091b0fcde146fe9ca",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx",
+      "old_object": "25c2e03d46f7366a92e3e5fd706e565fb72cc85e",
+      "new_object": "25c2e03d46f7366a92e3e5fd706e565fb72cc85e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsProjectOverviewRouteScreen.tsx",
+      "old_object": "29377b42dd837631566399c5ba71ad566b82ab29",
+      "new_object": "29377b42dd837631566399c5ba71ad566b82ab29",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsProviderAccountsRouteScreen.tsx",
+      "old_object": "e0f3e2ecc69ec1a0364f94821cc13902d86536fa",
+      "new_object": "e0f3e2ecc69ec1a0364f94821cc13902d86536fa",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
+      "old_object": "adb6551cf5fa19dfce405afb23295944794ddfb8",
+      "new_object": "adb6551cf5fa19dfce405afb23295944794ddfb8",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx",
+      "old_object": "e9cc8563f2a9a692609f85e277461e609b98d092",
+      "new_object": "e9cc8563f2a9a692609f85e277461e609b98d092",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/settings/SettingsServerControlsRouteScreen.tsx",
+      "old_object": "ae4f43b5fb376b2895ba939cf88ae388c1cdc90e",
+      "new_object": "ae4f43b5fb376b2895ba939cf88ae388c1cdc90e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/sharing/IncomingShareProvider.tsx",
+      "old_object": "e25a3d5b92bd922cdd6e21be1aad7780274eea1d",
+      "new_object": "e25a3d5b92bd922cdd6e21be1aad7780274eea1d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/shortcuts/appShortcuts.ts",
+      "old_object": "3d2d9614db47f90ebd82b66d20530e51ebe7416e",
+      "new_object": "3d2d9614db47f90ebd82b66d20530e51ebe7416e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/shortcuts/useAppShortcuts.ts",
+      "old_object": "30b4e169889f2ecfaf5673d84f4869229beef5a5",
+      "new_object": "30b4e169889f2ecfaf5673d84f4869229beef5a5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/terminal/NativeTerminalSurface.tsx",
+      "old_object": "f150dcb3300e7e7b4ca8ec579e964ecd64c26c54",
+      "new_object": "f150dcb3300e7e7b4ca8ec579e964ecd64c26c54",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx",
+      "old_object": "70579053bd9398692b05d52cb4b3e3ae698ff2f5",
+      "new_object": "70579053bd9398692b05d52cb4b3e3ae698ff2f5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/terminal/useTerminalGridSync.ts",
+      "old_object": "1ad8922fcbee6167d67525610bb067c7955031b0",
+      "new_object": "1ad8922fcbee6167d67525610bb067c7955031b0",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
+      "old_object": "8330a6b1b54f79363d63006fd48951f8d664a4ac",
+      "new_object": "8330a6b1b54f79363d63006fd48951f8d664a4ac",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+      "old_object": "cfb12bfd72a89a0695dab77dce4151babd97f997",
+      "new_object": "cfb12bfd72a89a0695dab77dce4151babd97f997",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/NewTaskRouteScreen.tsx",
+      "old_object": "1a5323281c47ee2ffc70100f926f86a3d3a5bcf0",
+      "new_object": "1a5323281c47ee2ffc70100f926f86a3d3a5bcf0",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
+      "old_object": "1d082515172d3966920a081647aa5e041d2e2724",
+      "new_object": "1d082515172d3966920a081647aa5e041d2e2724",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadComposer.tsx",
+      "old_object": "6873926fd5dd18c375434f3225cae68b2496789f",
+      "new_object": "6873926fd5dd18c375434f3225cae68b2496789f",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
+      "old_object": "a3d7a6f4e0c6a9eb3084c67c9136c9cb2f51d4c6",
+      "new_object": "e4f489115f3ad53eba6af473eb9ef732244315fc",
+      "state": "changed"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadFeed.tsx",
+      "old_object": "ee0c4711b03bc304c0dfe9790009985fa0f64f70",
+      "new_object": "ee0c4711b03bc304c0dfe9790009985fa0f64f70",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.android.tsx",
+      "old_object": "718513201cd379bec69381f530f7633aae826b84",
+      "new_object": "718513201cd379bec69381f530f7633aae826b84",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadGitControls.tsx",
+      "old_object": "257fe6272de54a1dc2d5b2021fc91b7364e3c7ff",
+      "new_object": "257fe6272de54a1dc2d5b2021fc91b7364e3c7ff",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadHeader.tsx",
+      "old_object": "9b0696a5d3f7e0cf32ac7407b98ac6e72bc35f7d",
+      "new_object": "9b0696a5d3f7e0cf32ac7407b98ac6e72bc35f7d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
+      "old_object": "5aa56b3d272324639d8500f34a7b64cbbdf008ef",
+      "new_object": "5aa56b3d272324639d8500f34a7b64cbbdf008ef",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadRouteScreen.tsx",
+      "old_object": "8a579fc9a2f64d2eff2f88405a61fb40f8233050",
+      "new_object": "9f27cab56e280166b961cdf459c68205a086cb01",
+      "state": "changed"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
+      "old_object": "00fa9c6ed9c75c7c762ef0247ea60394e5e25fdc",
+      "new_object": "00fa9c6ed9c75c7c762ef0247ea60394e5e25fdc",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/git/GitBranchesSheet.tsx",
+      "old_object": "13d1c37f0fcc0fbea6d709550ef9dd5be3132928",
+      "new_object": "13d1c37f0fcc0fbea6d709550ef9dd5be3132928",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/git/GitCommitSheet.tsx",
+      "old_object": "5a04951b4665ee4c16b9cf5413b2cb2c1ad31e77",
+      "new_object": "5a04951b4665ee4c16b9cf5413b2cb2c1ad31e77",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/git/GitConfirmSheet.tsx",
+      "old_object": "3c695fef8616a2e625be7f348c8e0af04c9a7b94",
+      "new_object": "3c695fef8616a2e625be7f348c8e0af04c9a7b94",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
+      "old_object": "1741c527d91d292404c2e52e76d7d59144e79ee3",
+      "new_object": "1741c527d91d292404c2e52e76d7d59144e79ee3",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
+      "old_object": "d7596305cff2c811a08ee1490186c8368a6b1c0f",
+      "new_object": "d7596305cff2c811a08ee1490186c8368a6b1c0f",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/threads/use-composer-command-menu.ts",
+      "old_object": "a02b95b50666d271402c637f8fbf106f65ce87f4",
+      "new_object": "a02b95b50666d271402c637f8fbf106f65ce87f4",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/updates/app-updates.ts",
+      "old_object": "5f8a110beaf638b1eb7ed756a3b31f92a5dea725",
+      "new_object": "5f8a110beaf638b1eb7ed756a3b31f92a5dea725",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/usage/UsageRouteScreen.tsx",
+      "old_object": "99ac66db0fd273d14af95975532418ad36a30aa6",
+      "new_object": "99ac66db0fd273d14af95975532418ad36a30aa6",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/voice-input/ComposerDictationControl.tsx",
+      "old_object": "ab5476aa4ce22b4105c1a3119105283812cc73e1",
+      "new_object": "ab5476aa4ce22b4105c1a3119105283812cc73e1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/voice-input/GlobalVoiceInputControl.tsx",
+      "old_object": "e08afc06a15f2c51f92417053f9c4031acdd6d14",
+      "new_object": "e08afc06a15f2c51f92417053f9c4031acdd6d14",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/features/voice-input/VoiceInputProvider.tsx",
+      "old_object": "6dce9118070003d10329962461d1d929e7da6158",
+      "new_object": "6dce9118070003d10329962461d1d929e7da6158",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/lib/composerImages.ts",
+      "old_object": "8fc821d2d26fe834d11b00893dfc091983d507d0",
+      "new_object": "8fc821d2d26fe834d11b00893dfc091983d507d0",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/lib/connection.ts",
+      "old_object": "5919a805ddd2e6655b1a8c68813b12b801de2c84",
+      "new_object": "5919a805ddd2e6655b1a8c68813b12b801de2c84",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/lib/copyTextWithHaptic.ts",
+      "old_object": "3e57b2f8fbe373fd21c6a759773780296d06d3c4",
+      "new_object": "3e57b2f8fbe373fd21c6a759773780296d06d3c4",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/lib/mobileTheme.ts",
+      "old_object": "4159232fe7abf91b3194514027613bc059a799f7",
+      "new_object": "4159232fe7abf91b3194514027613bc059a799f7",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/native/voiceTranscription.ios.ts",
+      "old_object": "216b9e958dd66b95dc104e8c34f9a2627f3feced",
+      "new_object": "216b9e958dd66b95dc104e8c34f9a2627f3feced",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/native/voiceTranscription.ts",
+      "old_object": "e003064ae3f841694492d248eaf93ea9b66a037e",
+      "new_object": "e003064ae3f841694492d248eaf93ea9b66a037e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/persistence/mobile-database.ts",
+      "old_object": "7c7b6bc5dedf7cd50511cbec9642219379bf8bcf",
+      "new_object": "7c7b6bc5dedf7cd50511cbec9642219379bf8bcf",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/persistence/mobile-secure-storage.ts",
+      "old_object": "44ad2900d89bfb5af12f364f01657ef22e40f2a1",
+      "new_object": "44ad2900d89bfb5af12f364f01657ef22e40f2a1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/persistence/mobile-storage.ts",
+      "old_object": "3a8dd2d97b8f69329ca532882c864e85a64119ee",
+      "new_object": "3a8dd2d97b8f69329ca532882c864e85a64119ee",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/device.ts",
+      "old_object": "9183f8effdfb4d9e326f3a10fc583e265f36f8d5",
+      "new_object": "9183f8effdfb4d9e326f3a10fc583e265f36f8d5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/preview.ts",
+      "old_object": "597e66ea7762c99939d42ddc26a4c7a1765a80d3",
+      "new_object": "597e66ea7762c99939d42ddc26a4c7a1765a80d3",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/threads.ts",
+      "old_object": "c056ce417f922becb3864d9d03bb26cda19f95c9",
+      "new_object": "c056ce417f922becb3864d9d03bb26cda19f95c9",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/use-remote-environment-registry.ts",
+      "old_object": "d2d654b05f141ac7914252bad7a707049fd76f2f",
+      "new_object": "d2d654b05f141ac7914252bad7a707049fd76f2f",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/use-selected-thread-git-actions.ts",
+      "old_object": "2b9a18620c29284681af28c9e429a83691548dbe",
+      "new_object": "2b9a18620c29284681af28c9e429a83691548dbe",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/use-selected-thread-requests.ts",
+      "old_object": "eeb5a017f0674bfc32351c62ba9636ef62bb7452",
+      "new_object": "eeb5a017f0674bfc32351c62ba9636ef62bb7452",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/use-terminal-session.ts",
+      "old_object": "39cc971fad1eaf84e16a29c25b6432ab3d3f0a5d",
+      "new_object": "39cc971fad1eaf84e16a29c25b6432ab3d3f0a5d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/use-thread-outbox-drain.ts",
+      "old_object": "66744fa0c92765eeab314402c229442547ebe907",
+      "new_object": "66744fa0c92765eeab314402c229442547ebe907",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/state/workspace.ts",
+      "old_object": "edc253e243a6f966b875bddc1ea6304493cac980",
+      "new_object": "edc253e243a6f966b875bddc1ea6304493cac980",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/widgets/SubscriptionUsage.tsx",
+      "old_object": "78197cd2858ea0e3e8815c76490b7a039a6ef807",
+      "new_object": "78197cd2858ea0e3e8815c76490b7a039a6ef807",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.android.ts",
+      "old_object": "406772d3d530bdba410990d15156fa926cd91475",
+      "new_object": "406772d3d530bdba410990d15156fa926cd91475",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/mobile/src/widgets/publishSubscriptionUsage.ios.ts",
+      "old_object": "c386f927f9425490bde7d19f16122972b3f8d30f",
+      "new_object": "c386f927f9425490bde7d19f16122972b3f8d30f",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/assets/AssetAccess.ts",
+      "old_object": "303137c149cdf82ce51afccff3cb0de2c76583bd",
+      "new_object": "303137c149cdf82ce51afccff3cb0de2c76583bd",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/assets/MediaFile.ts",
+      "old_object": "12265521b39ce10d42e65c6c9d68bd78711fb531",
+      "new_object": "12265521b39ce10d42e65c6c9d68bd78711fb531",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/EnvironmentAuth.test.ts",
+      "old_object": "a85db0fd14923a4c0803eb0b9694e3cace684b51",
+      "new_object": "a85db0fd14923a4c0803eb0b9694e3cace684b51",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/EnvironmentAuth.ts",
+      "old_object": "d66cdbb62c3650f0fd3317daa93b8915773d941a",
+      "new_object": "d66cdbb62c3650f0fd3317daa93b8915773d941a",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/PairingGrantStore.test.ts",
+      "old_object": "5b6a4900567aadc3c45bb1b144687aeb153a7475",
+      "new_object": "5b6a4900567aadc3c45bb1b144687aeb153a7475",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/PairingGrantStore.ts",
+      "old_object": "d3f5bf7ef8e5e126b9d80dd138166f34b5c741e5",
+      "new_object": "d3f5bf7ef8e5e126b9d80dd138166f34b5c741e5",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "old_object": "9c6243fde2300b8ab9599fe563da3810da17aa07",
+      "new_object": "405c9eee2eea9dd2a62cecb43683ae5bec5c67e5",
+      "state": "changed"
+    },
+    {
+      "path": "apps/server/src/auth/SessionStore.ts",
+      "old_object": "9570785d9f93d1c21efb4885b1185deb601b0e1e",
+      "new_object": "9570785d9f93d1c21efb4885b1185deb601b0e1e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/http.ts",
+      "old_object": "c0d2946813f914de325359b83c4a33cc444cabcc",
+      "new_object": "c0d2946813f914de325359b83c4a33cc444cabcc",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/auth/utils.ts",
+      "old_object": "3da688e22cca01d934e7b3f0770b046f0056d7d3",
+      "new_object": "3da688e22cca01d934e7b3f0770b046f0056d7d3",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/cli/pair.ts",
+      "old_object": "debac218a9838416d583cca86988546580fb9867",
+      "new_object": "debac218a9838416d583cca86988546580fb9867",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/cli/server.ts",
+      "old_object": "8c8dd9237cb912dcc63e58a066875bdc1b2b25e1",
+      "new_object": "8c8dd9237cb912dcc63e58a066875bdc1b2b25e1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/cli/service.ts",
+      "old_object": "7a5dd733747806aef38dd9aad8056ac828f63d38",
+      "new_object": "7a5dd733747806aef38dd9aad8056ac828f63d38",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/device/DeviceHubProxy.ts",
+      "old_object": "b7821e063ddd6f9c6bd7fa472b86e164c0a02ae6",
+      "new_object": "b7821e063ddd6f9c6bd7fa472b86e164c0a02ae6",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "old_object": "60589ac9106f086e59acbd8c16e29ed9bc50e288",
+      "new_object": "60589ac9106f086e59acbd8c16e29ed9bc50e288",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/git/GitManager.ts",
+      "old_object": "e2ae3109b2fe84da94296fed389b5aa67c4ef6fa",
+      "new_object": "e2ae3109b2fe84da94296fed389b5aa67c4ef6fa",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/http.ts",
+      "old_object": "de4ce26cc915d4576624b6064c0255f9107fd940",
+      "new_object": "de4ce26cc915d4576624b6064c0255f9107fd940",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+      "old_object": "ddfc54b533205bea832e1a32d9d6069e53ae692e",
+      "new_object": "ddfc54b533205bea832e1a32d9d6069e53ae692e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/orchestration-v2/EventSink.ts",
+      "old_object": "039d1872da6f1c6b31fcd5ccf5875bf5ef35961d",
+      "new_object": "039d1872da6f1c6b31fcd5ccf5875bf5ef35961d",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+      "old_object": "908fe09467748fdf06162163b6fac7b37697ea06",
+      "new_object": "e3f5f72665b3564e6a9178743016f55ac7f912ca",
+      "state": "changed"
+    },
+    {
+      "path": "apps/server/src/orchestration-v2/ThreadMessageIntake.ts",
+      "old_object": "c8f65fd0340afba36aceeed11c896a06334d8181",
+      "new_object": "c8f65fd0340afba36aceeed11c896a06334d8181",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/persistence/AuthPairingLinks.ts",
+      "old_object": "623fc8159db926b7008a16e974bdaa22b676febd",
+      "new_object": "623fc8159db926b7008a16e974bdaa22b676febd",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/preview/ServerBrowserStream.ts",
+      "old_object": "b2960c2401efa454b42f0f1c5151ad05e4d4af55",
+      "new_object": "b2960c2401efa454b42f0f1c5151ad05e4d4af55",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/relay/AgentAwarenessRelay.ts",
+      "old_object": "f4d3e7b5772380634e84bbb8b6b15f0fee3ea1e1",
+      "new_object": "f4d3e7b5772380634e84bbb8b6b15f0fee3ea1e1",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/serviceLauncher.ts",
+      "old_object": "cfdd3d75b57ee7cb7ebca52dd3ae126460664dc9",
+      "new_object": "cfdd3d75b57ee7cb7ebca52dd3ae126460664dc9",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/terminal/Manager.ts",
+      "old_object": "a109cf5d7540304fb7ad124b8ebe4aa35ff7ebdd",
+      "new_object": "a109cf5d7540304fb7ad124b8ebe4aa35ff7ebdd",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "old_object": "c1a01b963a508deb760a32649f8018340a4510fd",
+      "new_object": "6deb654772f24cd5b23e580a0130b6b45cebf593",
+      "state": "changed"
+    },
+    {
+      "path": "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "old_object": "443ac6e0288aed027dc26d5a195a52183a52265e",
+      "new_object": "443ac6e0288aed027dc26d5a195a52183a52265e",
+      "state": "unchanged"
+    },
+    {
+      "path": "apps/web/src/hostedPairing.ts",
+      "old_object": "f3f056522bf7d490db1c2dca8587e832b7b459b5",
+      "new_object": "f3f056522bf7d490db1c2dca8587e832b7b459b5",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/internals/connection-runtime.md",
+      "old_object": "35c8b0a7365837aa1e9c00e28aea744f8e12ae21",
+      "new_object": "35c8b0a7365837aa1e9c00e28aea744f8e12ae21",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/internals/environment-auth.md",
+      "old_object": "132b65548125543e14dee24854f2be2aeac7b33f",
+      "new_object": "132b65548125543e14dee24854f2be2aeac7b33f",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/internals/overview.md",
+      "old_object": "149bcf57dff01173d42c0ffd0f70e0adb009a540",
+      "new_object": "149bcf57dff01173d42c0ffd0f70e0adb009a540",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/internals/remote.md",
+      "old_object": "3f9e64b03cf10e51adb4c07923c5ee46936f3c84",
+      "new_object": "3f9e64b03cf10e51adb4c07923c5ee46936f3c84",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/internals/t3-connect.md",
+      "old_object": "c3597cd0642a36c0346a8d93d0aff60fd168229a",
+      "new_object": "c3597cd0642a36c0346a8d93d0aff60fd168229a",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/operations/connect-setup.md",
+      "old_object": "899d5c4a33a8e9d52dcd51cd5607481170f97c33",
+      "new_object": "899d5c4a33a8e9d52dcd51cd5607481170f97c33",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/background-service.md",
+      "old_object": "9964fba54f74c83f8ba4b15f493ff76392ad5481",
+      "new_object": "9964fba54f74c83f8ba4b15f493ff76392ad5481",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/composer.md",
+      "old_object": "831a8ac9792d14b22a8f53d3ece08ce02677af1d",
+      "new_object": "831a8ac9792d14b22a8f53d3ece08ce02677af1d",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/devices.md",
+      "old_object": "a87770853a2d54d6db83b27bb8157a418f370147",
+      "new_object": "a87770853a2d54d6db83b27bb8157a418f370147",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/install.md",
+      "old_object": "67df94217ac36877626708e678569a962844413a",
+      "new_object": "2a5023e9253eb78559d819011b70e1fd9abe6cc2",
+      "state": "changed"
+    },
+    {
+      "path": "docs/user/remote-access.md",
+      "old_object": "231823f13dcc9d954552e03ccd0a7ce1b194c832",
+      "new_object": "231823f13dcc9d954552e03ccd0a7ce1b194c832",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/source-control.md",
+      "old_object": "741a90aa128c8664d31c53e3e6e2b8e093177594",
+      "new_object": "741a90aa128c8664d31c53e3e6e2b8e093177594",
+      "state": "unchanged"
+    },
+    {
+      "path": "docs/user/terminal.md",
+      "old_object": "73413803bef8c386d524a84ade4f679631ef7c61",
+      "new_object": "73413803bef8c386d524a84ade4f679631ef7c61",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/README.md",
+      "old_object": "350140c9b1049b2bcff7e39825d8c292a9496c40",
+      "new_object": "350140c9b1049b2bcff7e39825d8c292a9496c40",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/src/agentActivity/AgentActivityPublisher.ts",
+      "old_object": "61a420dd78584570f48d37b9e8229352ebc85e62",
+      "new_object": "61a420dd78584570f48d37b9e8229352ebc85e62",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/src/agentActivity/Devices.ts",
+      "old_object": "da6e410618cd2e812fb0f34ce708f7d6338899cb",
+      "new_object": "da6e410618cd2e812fb0f34ce708f7d6338899cb",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/src/agentActivity/FcmClient.ts",
+      "old_object": "0bec2a8a60a5b376fb63a79898b1cf6939aa0e22",
+      "new_object": "0bec2a8a60a5b376fb63a79898b1cf6939aa0e22",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/src/environments/ManagedEndpointProvider.ts",
+      "old_object": "eb6b7b7b73a97247da60d52d37684d412ca5a299",
+      "new_object": "eb6b7b7b73a97247da60d52d37684d412ca5a299",
+      "state": "unchanged"
+    },
+    {
+      "path": "infra/relay/src/http/Api.ts",
+      "old_object": "69a48f8f6b810eeeaf2ca22132f36e52b9425220",
+      "new_object": "69a48f8f6b810eeeaf2ca22132f36e52b9425220",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/authorization/remote.ts",
+      "old_object": "425d95d3ac170c4d4d73186d2cc1e95ae4e28d39",
+      "new_object": "425d95d3ac170c4d4d73186d2cc1e95ae4e28d39",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/authorization/service.ts",
+      "old_object": "780c3a77fdc0d2f7cb3ad53665559f009d2d6b57",
+      "new_object": "780c3a77fdc0d2f7cb3ad53665559f009d2d6b57",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/compatibility.ts",
+      "old_object": "c0ec739e55e0dd408320dec87501a179d6bc86c6",
+      "new_object": "c0ec739e55e0dd408320dec87501a179d6bc86c6",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/driver.ts",
+      "old_object": "d34bc1a9ba49a4efbaae9d96c3dbc2f7b23a401f",
+      "new_object": "d34bc1a9ba49a4efbaae9d96c3dbc2f7b23a401f",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/layer.ts",
+      "old_object": "7c6d1d6e9a498d68bf604c23cd406c27bedd42b8",
+      "new_object": "7c6d1d6e9a498d68bf604c23cd406c27bedd42b8",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "old_object": "da2981b48aca72b10e119e4d6271e99e9a4f71b1",
+      "new_object": "da2981b48aca72b10e119e4d6271e99e9a4f71b1",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/presentation.ts",
+      "old_object": "9015a755133e5bc4d9740596d5ce81e76e165556",
+      "new_object": "9015a755133e5bc4d9740596d5ce81e76e165556",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/registry.test.ts",
+      "old_object": "821e244fd544f7bc9c7de801a74646aefd51466e",
+      "new_object": "821e244fd544f7bc9c7de801a74646aefd51466e",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/registry.ts",
+      "old_object": "9b48e60463036694bee4d92b3dcaca7fc3f757a5",
+      "new_object": "9b48e60463036694bee4d92b3dcaca7fc3f757a5",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/resolver.ts",
+      "old_object": "a70a7531a79955500a6f289c4bbb06fd4ce9b4a4",
+      "new_object": "a70a7531a79955500a6f289c4bbb06fd4ce9b4a4",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/routes.test.ts",
+      "old_object": "3079294305c74b2c637ba704620070381d944a29",
+      "new_object": "3079294305c74b2c637ba704620070381d944a29",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/routes.ts",
+      "old_object": "4691aa9389d8cb40c775a51de5e0c5821993ea6a",
+      "new_object": "4691aa9389d8cb40c775a51de5e0c5821993ea6a",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/supervisor.test.ts",
+      "old_object": "37adf87c1b47c6ad7406eb2b88fac37bbc6f6f20",
+      "new_object": "37adf87c1b47c6ad7406eb2b88fac37bbc6f6f20",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/connection/supervisor.ts",
+      "old_object": "67f8daae691ab5d592e1801326eb98c3ce1ba939",
+      "new_object": "67f8daae691ab5d592e1801326eb98c3ce1ba939",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/operations/commands.ts",
+      "old_object": "aec86014071e530bd0fbf82e30eaa5817f5a24df",
+      "new_object": "08047638c1d5fe099c7ab51190f8ccd678f2a574",
+      "state": "changed"
+    },
+    {
+      "path": "packages/client-runtime/src/platform/storageDocument.ts",
+      "old_object": "99a187c6c3334a86d7df0a5cff15eb959460cd58",
+      "new_object": "99a187c6c3334a86d7df0a5cff15eb959460cd58",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/preview/serverBrowserStream.ts",
+      "old_object": "34a3786976d070a7731db26ff4c978d83819fa5a",
+      "new_object": "34a3786976d070a7731db26ff4c978d83819fa5a",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "old_object": "c11a49897b88006d4d4177502572d365bb1e22bf",
+      "new_object": "c11a49897b88006d4d4177502572d365bb1e22bf",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/rpc/session.ts",
+      "old_object": "9f83e7c6019dcffc8af7b81747637f2451cf2b53",
+      "new_object": "9f83e7c6019dcffc8af7b81747637f2451cf2b53",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/shell-sync.test.ts",
+      "old_object": "b20d3e9cda199430daa56066ab8fbb2701fd6ef6",
+      "new_object": "b20d3e9cda199430daa56066ab8fbb2701fd6ef6",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/shell.ts",
+      "old_object": "dbc4405a9faa0311cb7d3099a4fab2dd9fe62d01",
+      "new_object": "dbc4405a9faa0311cb7d3099a4fab2dd9fe62d01",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/terminal.ts",
+      "old_object": "8a3e3e7490302f75ec4026eec5e7f1c479066167",
+      "new_object": "8a3e3e7490302f75ec4026eec5e7f1c479066167",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/threadCommands.ts",
+      "old_object": "0bb601b643b48f31731ea8d8ed6cc758130eda3a",
+      "new_object": "0bb601b643b48f31731ea8d8ed6cc758130eda3a",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/threads-sync.test.ts",
+      "old_object": "b78377b2b1ecafc3bb45500fd2b102ced510d7c7",
+      "new_object": "b78377b2b1ecafc3bb45500fd2b102ced510d7c7",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/client-runtime/src/state/threads.ts",
+      "old_object": "a6e31cf40c4a8f1e32cf69f73fde8ba7f722bd14",
+      "new_object": "a6e31cf40c4a8f1e32cf69f73fde8ba7f722bd14",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/contracts/src/auth.ts",
+      "old_object": "e206163869c48918dc634801975386873ac88264",
+      "new_object": "e206163869c48918dc634801975386873ac88264",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/contracts/src/clientRpcPermissions.ts",
+      "old_object": "c84169e6e33f61b93dafba71810f4882af9aed3a",
+      "new_object": "c84169e6e33f61b93dafba71810f4882af9aed3a",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/contracts/src/environment.ts",
+      "old_object": "2a61480a907be40c75f04bee5542330be779578d",
+      "new_object": "2a61480a907be40c75f04bee5542330be779578d",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/contracts/src/project.ts",
+      "old_object": "baff3dc827059dd0ebe8103f1087855cc5ebccb3",
+      "new_object": "baff3dc827059dd0ebe8103f1087855cc5ebccb3",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/shared/src/remote.ts",
+      "old_object": "55698568fb9efe1e39a05a38760820cd4f671368",
+      "new_object": "55698568fb9efe1e39a05a38760820cd4f671368",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/ssh/src/tunnel.ts",
+      "old_object": "6d70e381c04a46a8b024bb0f1bf7d9d244c5e235",
+      "new_object": "6d70e381c04a46a8b024bb0f1bf7d9d244c5e235",
+      "state": "unchanged"
+    },
+    {
+      "path": "packages/tailscale/src/tailscale.ts",
+      "old_object": "e3579891b4c6e4155700a67b847a45ac2ae17f34",
+      "new_object": "e3579891b4c6e4155700a67b847a45ac2ae17f34",
+      "state": "unchanged"
+    }
+  ]
+}

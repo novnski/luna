@@ -2,14 +2,15 @@
 
 Inventory date: **11 October 2026**. Original source cut:
 `c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9`; the added core/SDK/plugin audit uses
-`2838125e42646b5d5ba86a3f8dfbdd93922ec60d`. This is a scheduling and ownership
+`2838125e42646b5d5ba86a3f8dfbdd93922ec60d`, and the iOS parity refresh uses LUNA
+`71d5db137e5bbfda13893278e558a7b0ce34ea79`. This is a scheduling and ownership
 audit of the pending specifications, supplemented by targeted current-source
 checks. It does not certify future runtime behavior or repeat every historical
 live acceptance run.
 
-There are **90 catalog entries**: **59 Ready**, **1 Blocked**, **25 Deferred**,
+There are **105 catalog entries**: **74 Ready**, **1 Blocked**, **25 Deferred**,
 and **5 shipped Board references**. Active acceptance coverage starts at 0%
-for the 60 active-scope tasks. Source research and mockups do not count as
+for the 75 active-scope tasks. Source research and mockups do not count as
 implementation acceptance. Later status is maintained by the CLI and its
 dated [checkpoint](progress.md), rather than these initial counts.
 
@@ -24,7 +25,8 @@ dated [checkpoint](progress.md), rather than these initial counts.
 | `navigation` | IC-5, SW-11, ZI-04, ZI-05; deferred AW-01 | Interactive surfaces owns conversation Find; Zeron owns typed file activation and workspace text search; LUNA-only consumes Find/import/global history; research owns settings destinations. |
 | `workspace` | ZI-01, ZI-02; deferred AW-02/04/05/06/07/09/11/15 | Zeron owns concrete Git snapshot/registry growth defects. [Workspace research](agent-workspace-app-research/README.md) owns audit-first context, commands, routes, layouts, Git guidance, diagnostics, portable config and companion ideas. |
 | `orchestration` | SW-10, SW-12; deferred AW-03/10, PB-4A–PB-4D; PB-0/1/1R/2/3 references | [Board](devin-project-board/README.md) owns shipped ticket/chat/review identity; LUNA-only adds supervision/certification. One future owner handles groups/templates/trackers/workflow expansion. |
-| `remote` | RM-00–RM-07; deferred RM-08–RM-13, SW-16 | [Control this Mac](control-this-mac/README.md) owns architecture and M0–M4. [T3 audit](t3-remote-mobile/README.md) adds RM requirements, lane reports, gap matrix and expanded physical acceptance. |
+| `remote` | RM-00–RM-09, RM-11; deferred RM-10/12/13, SW-16 | [Control this Mac](control-this-mac/README.md) owns M0–M4; [T3 audit](t3-remote-mobile/README.md) supplies detail. Native screens now have IOS owners, and RM-08/09/11 are scheduled after RM-07. |
+| `ios` | IOS-00–IOS-10, IOS-14; deferred IOS-11–IOS-13 | [Native iOS parity](ios-parity/README.md) compares fresh Zeron/T3/LUNA source and owns native build/facade, rendering, presentation, integration and device/release acceptance. |
 | `operations` | SW-04, SW-08, SW-13 | LUNA-only owns evidence-to-draft, exact-target computer use and actual local recurrence journeys. |
 | `release` | SW-15, UP-01 | Switching acceptance consumes owned evidence. [Updater trial](github-release-updater-two-version-trial.md) remains blocked by its recorded access/release prerequisite, which must be checked fresh before unblocking. |
 
@@ -154,6 +156,13 @@ An old chat, research artifact or unregistered external worker cannot be
 detected reliably from the repository ledger alone.
 
 ## Future intake and maintenance
+
+The iOS request adds IOS-00–IOS-14 and refines seven RM prerequisite sets. It
+preserves all 90 preceding tickets' evidence/attempts and deliberately activates
+RM-08/09/11 for the post-V1 phone parity wave. The other 87 preceding statuses
+stay unchanged. Native UI/service ownership is mapped in
+[the iOS integration guide](ios-parity/backlog-integration.md); no second remote
+client, queue, renderer backend or provider implementation is added by the plan.
 
 The later core request added 24 records without replacing the original 66 or
 changing their recorded status/evidence. Twenty existing tasks gained specific

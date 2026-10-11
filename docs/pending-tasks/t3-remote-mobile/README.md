@@ -5,6 +5,11 @@ Queue ownership: RM-00–RM-13. This package supplements Control this Mac; the c
 
 **Status:** source research complete; implementation pending. Prepared on 11 October 2026, Europe/Bucharest. This package implements no remote feature and certifies no running mobile or host deployment.
 
+**Latest iOS supplement:** [Zeron/T3/LUNA native parity](../ios-parity/README.md)
+refreshes T3 to `477282263a`, adds the current Zeron comparison and IOS-00–IOS-14,
+and refines RM/native ownership. The older pinned lane reports below remain
+historical evidence; use the supplement for the fresh delta and queue ordering.
+
 T3's main advantage is an environment-centered remote product: the machine runs agents and owns files, terminals and durable work; native mobile, browser and desktop clients send scoped commands and follow authoritative state through a common client runtime. LUNA already has many of the backend pieces and an iOS transcript client. Its main missing connection is a complete direct, paired-Mac product with host-admitted task operations and the phone screens that expose existing host capabilities.
 
 ## Reading order
