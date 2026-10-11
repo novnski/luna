@@ -105,7 +105,9 @@ jobs:
 
   macos-frame-recovery:
     runs-on: macos-latest
-    timeout-minutes: 45
+    # The browser step passing again means the preview and frame-recovery
+    # steps run too; the steps before them alone took 44 minutes.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Rust toolchain
