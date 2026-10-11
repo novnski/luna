@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791745606.834257,
+  "created_at": 1791760023.791658,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 11,
+      "done": 12,
       "in_progress": 0,
       "paused": 0,
-      "ready": 69,
+      "ready": 68,
       "review": 0
     },
     "groups": [
@@ -58,11 +58,11 @@
         },
         "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 2,
-        "remaining": 22,
-        "accepted_units": 8,
+        "done": 3,
+        "remaining": 21,
+        "accepted_units": 12,
         "total_units": 96,
-        "acceptance_percent": 8.3,
+        "acceptance_percent": 12.5,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -373,15 +373,15 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 6,
-      "remaining": 70,
-      "accepted_units": 23,
+      "done": 7,
+      "remaining": 69,
+      "accepted_units": 27,
       "total_units": 296,
-      "acceptance_percent": 7.8
+      "acceptance_percent": 9.1
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-02",
+      "CORE-03",
       "SW-12",
       "IC-0",
       "ZI-01",
@@ -780,16 +780,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-02",
-      "last_worker": null,
-      "note": "Read the CORE-02 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676596.9321651
     },
     {
       "attempts": 0,
@@ -2054,6 +2044,119 @@
       "note": "RM-00 delivered at afd8455b: rebased contract and failure cases, luna-remote pinned descriptor host, luna-mobile UniFFI core and RemoteProbe app; physical iPhone LAN run 51/51 including wrong-identity failures and native-callback lifetime cases.",
       "status": "done",
       "updated_at": 1791745606.743625
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791752113.809977,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+              "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+              "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+              "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+              "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+            }
+          ],
+          "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+        },
+        "delivery": {
+          "at": 1791752113.906645,
+          "evidence": [
+            {
+              "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+              "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+            },
+            {
+              "ref": ".github/workflows/ui-tests.yml",
+              "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+            }
+          ],
+          "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+        },
+        "handoff": {
+          "at": 1791760023.556009,
+          "evidence": [
+            {
+              "ref": "commit:03aea51adcc14a675d072695b5d30db81ce98874"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-routing.json",
+              "sha256": "0c2f60cc2d407f7886a6581a12df2e587b0408c6eb7adbf4e388e0283cee2e71"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+              "sha256": "b0c9f228227975ddc42ac05d1cc327d98a3dd3ab8ea47a257c47767caf49b536"
+            }
+          ],
+          "note": "Delivered on origin/main (4ce0c484 + evidence 03aea51a; remote readback matches). CI run 38178958258 executed the routed fixture step on Linux (all fixture examples compile, featured test 1/1, 21 embedded tests, 20 passed; the portability failure fixed in a19deb8c); independent steps proven on 38174188313. Follow-up fixes resolved the CI baseline (claude_goals race f1dcc78a, browser fixtures 9b6edce2/bd2021a2, codex_subagents f7b76be8, libc 1219c58c, macOS timeout 88d98323); one timing-flaky iOS layout test flagged separately. LUNA Dev refreshed (PID 36842, IPC 59777, codesign strict ok)."
+        },
+        "verification": {
+          "at": 1791752114.018773,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+              "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+              "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+              "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+              "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+              "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+            }
+          ],
+          "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+        },
+        {
+          "ref": "commit:03aea51adcc14a675d072695b5d30db81ce98874"
+        }
+      ],
+      "id": "CORE-02",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791756331.596164,
+        "expires_at": 1791763531.596164,
+        "heartbeat_at": 1791756331.596164,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "CORE-02 delivered: ledgers rebased (one circular keeper loss restored), named test-only paths resolved with owner decisions (3 retired with live rules re-homed, backup activation kept as gap, 2 observations to SW-01), stale unrouted suites repaired, fixtures/backup_restore routed into CI with independent steps; engine 965/0, harness 338, five mutation proofs; CI routing verified on GitHub.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+        }
+      ],
+      "status": "done",
+      "updated_at": 1791760023.691684
     }
   ],
   "events": [
@@ -6501,6 +6604,746 @@
           "claimed_at": 1791742920.734682,
           "expires_at": 1791748921.365484,
           "heartbeat_at": 1791745321.365484,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 200,
+      "task": "CORE-02",
+      "at": 1791746991.2476559,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-02 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791750591.2475688,
+          "heartbeat_at": 1791746991.2475688,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 201,
+      "task": "CORE-02",
+      "at": 1791749937.848213,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-02 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791753537.848088,
+          "heartbeat_at": 1791749937.848088,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 202,
+      "task": "CORE-02",
+      "at": 1791752113.8102982,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791753537.848088,
+          "heartbeat_at": 1791749937.848088,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 203,
+      "task": "CORE-02",
+      "at": 1791752113.918856,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791753537.848088,
+          "heartbeat_at": 1791749937.848088,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 204,
+      "task": "CORE-02",
+      "at": 1791752114.0191722,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791753537.848088,
+          "heartbeat_at": 1791749937.848088,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 205,
+      "task": "CORE-02",
+      "at": 1791752114.116336,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expired": false,
+          "expires_at": 1791755714.116241,
+          "heartbeat_at": 1791752114.1162398,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 206,
+      "task": "CORE-02",
+      "at": 1791756331.494506,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+          }
+        ],
+        "note": "Lease lapsed while the same session (claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b) waited on CI and fixed follow-ups; no other worker exists. CORE-02 is delivered at 4ce0c484 with contract/delivery/verification checked; only the handoff (CI routing evidence) remains.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791746991.2475688,
+          "expires_at": 1791755714.116241,
+          "heartbeat_at": 1791752114.1162398,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 207,
+      "task": "CORE-02",
+      "at": 1791756331.596339,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+          }
+        ],
+        "note": "Lease lapsed while the same session (claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b) waited on CI and fixed follow-ups; no other worker exists. CORE-02 is delivered at 4ce0c484 with contract/delivery/verification checked; only the handoff (CI routing evidence) remains.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791756331.596164,
+          "expired": false,
+          "expires_at": 1791763531.596164,
+          "heartbeat_at": 1791756331.596164,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 208,
+      "task": "CORE-02",
+      "at": 1791760023.569655,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "handoff": {
+            "at": 1791760023.556009,
+            "evidence": [
+              {
+                "ref": "commit:03aea51adcc14a675d072695b5d30db81ce98874"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-routing.json",
+                "sha256": "0c2f60cc2d407f7886a6581a12df2e587b0408c6eb7adbf4e388e0283cee2e71"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "b0c9f228227975ddc42ac05d1cc327d98a3dd3ab8ea47a257c47767caf49b536"
+              }
+            ],
+            "note": "Delivered on origin/main (4ce0c484 + evidence 03aea51a; remote readback matches). CI run 38178958258 executed the routed fixture step on Linux (all fixture examples compile, featured test 1/1, 21 embedded tests, 20 passed; the portability failure fixed in a19deb8c); independent steps proven on 38174188313. Follow-up fixes resolved the CI baseline (claude_goals race f1dcc78a, browser fixtures 9b6edce2/bd2021a2, codex_subagents f7b76be8, libc 1219c58c, macOS timeout 88d98323); one timing-flaky iOS layout test flagged separately. LUNA Dev refreshed (PID 36842, IPC 59777, codesign strict ok)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+          }
+        ],
+        "note": "Delivered on origin/main (4ce0c484 + evidence 03aea51a; remote readback matches). CI run 38178958258 executed the routed fixture step on Linux (all fixture examples compile, featured test 1/1, 21 embedded tests, 20 passed; the portability failure fixed in a19deb8c); independent steps proven on 38174188313. Follow-up fixes resolved the CI baseline (claude_goals race f1dcc78a, browser fixtures 9b6edce2/bd2021a2, codex_subagents f7b76be8, libc 1219c58c, macOS timeout 88d98323); one timing-flaky iOS layout test flagged separately. LUNA Dev refreshed (PID 36842, IPC 59777, codesign strict ok).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791756331.596164,
+          "expired": false,
+          "expires_at": 1791763531.596164,
+          "heartbeat_at": 1791756331.596164,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 209,
+      "task": "CORE-02",
+      "at": 1791760023.692082,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791752113.809977,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/ledger-rebase.md",
+                "sha256": "2047d658ab496a2256f0582e280ab1d1bf04c51379838fc4518a4936d45a43b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json",
+                "sha256": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json",
+                "sha256": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/failures.md",
+                "sha256": "b3d1a7cbe8df0d763ff34717c7434629d58f42cd1a6acf1f97fc96c7fe3722f8"
+              }
+            ],
+            "note": "Ledgers rebased (audit base e4a0f534 rewritten; landed at ecd541d4): 24 retained-absent rows all mapped (20 lane renames, 4 later product changes), 4 missing keepers classified (1 circular cross-lane loss), 4 name collisions; non-test callers checked for every named seam; baseline failures recorded (engine 5, UI fixture 1, CI afd8455b 3 jobs, LunaUITests 1) with causes and isolated reruns; CI/native target ownership mapped."
+          },
+          "delivery": {
+            "at": 1791752113.906645,
+            "evidence": [
+              {
+                "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857"
+              },
+              {
+                "ref": ".github/workflows/ui-tests.yml",
+                "sha256": "7d2d035664c44dadd1ee2676d92a1fe338c7a9eab24ace576a17c3af5025a0ae"
+              }
+            ],
+            "note": "Owner-approved: retired integration_actions, unwired interrupt and cross-task grants; re-homed 5 live projection/cursor tests onto the approved-queue path and the generic-answers test onto LunaSend; restored the lost evaluate_command Skip row; repaired backup_restore schema pins and a stale fixture; routed UI fixtures, feature-gated lib test and backup_restore into CI with independent steps; LunaUITests local runner; SW-01 owns two observations; backup activation kept as owner gap. Provider peers and wire contracts untouched (harness 338 = 338)."
+          },
+          "handoff": {
+            "at": 1791760023.556009,
+            "evidence": [
+              {
+                "ref": "commit:03aea51adcc14a675d072695b5d30db81ce98874"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ci-routing.json",
+                "sha256": "0c2f60cc2d407f7886a6581a12df2e587b0408c6eb7adbf4e388e0283cee2e71"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/README.md",
+                "sha256": "b0c9f228227975ddc42ac05d1cc327d98a3dd3ab8ea47a257c47767caf49b536"
+              }
+            ],
+            "note": "Delivered on origin/main (4ce0c484 + evidence 03aea51a; remote readback matches). CI run 38178958258 executed the routed fixture step on Linux (all fixture examples compile, featured test 1/1, 21 embedded tests, 20 passed; the portability failure fixed in a19deb8c); independent steps proven on 38174188313. Follow-up fixes resolved the CI baseline (claude_goals race f1dcc78a, browser fixtures 9b6edce2/bd2021a2, codex_subagents f7b76be8, libc 1219c58c, macOS timeout 88d98323); one timing-flaky iOS layout test flagged separately. LUNA Dev refreshed (PID 36842, IPC 59777, codesign strict ok)."
+          },
+          "verification": {
+            "at": 1791752114.018773,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/suite-counts.json",
+                "sha256": "39f3b517693948a55521f31944adfcda3c34ac972f930f8c3b9dac38af208729"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json",
+                "sha256": "1d20feaebaad3e675fba8ddff14107556b7ac26e671ec57bc3dfe2efd5f01691"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/mutations-M3.json",
+                "sha256": "011e1a093356d9985e02d6468b320b2924fecfffd45d344eceb9cd9e838f3510"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json",
+                "sha256": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-02/evidence/commands.json",
+                "sha256": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6"
+              }
+            ],
+            "note": "E04: before/after same flags: engine 1001 passed + 5 failed -> 965 passed/0 failed (41 retired, 5 repaired), harness 338 -> 338, UI fixtures 20+1 failed -> 21, featured lib 1, doc 99; five mutation proofs (Skip row, M1 save lock, M2 import lock, M3 send classifier, M4 manifest schema) each caught by its keeper and restored byte-for-byte; keeper-missing 4 -> 3 with no new loss; no deletion quota."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:4ce0c48493ee89112903a0873e0cf266ff8356a7"
+          },
+          {
+            "ref": "commit:03aea51adcc14a675d072695b5d30db81ce98874"
+          }
+        ],
+        "note": "CORE-02 delivered: ledgers rebased (one circular keeper loss restored), named test-only paths resolved with owner decisions (3 retired with live rules re-homed, backup activation kept as gap, 2 observations to SW-01), stale unrouted suites repaired, fixtures/backup_restore routed into CI with independent steps; engine 965/0, harness 338, five mutation proofs; CI routing verified on GitHub.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791756331.596164,
+          "expires_at": 1791763531.596164,
+          "heartbeat_at": 1791756331.596164,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
