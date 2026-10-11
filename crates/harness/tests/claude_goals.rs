@@ -166,6 +166,30 @@ fn stdin_texts(fixture: &Fixture) -> Vec<String> {
         .collect()
 }
 
+/// What a failing run saw: each transcript under the config dir with its goal
+/// rows, the working directory and the event kinds, so a failure that only
+/// one platform reproduces explains itself in the CI log.
+fn transcript_diagnostics(fixture: &Fixture, events: &[AgentEvent]) -> String {
+    let mut out = format!("cwd {}\n", fixture.cwd.display());
+    let projects = std::fs::read_dir(fixture.config.join("projects"));
+    for project in projects.into_iter().flatten().flatten() {
+        for file in std::fs::read_dir(project.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let text = std::fs::read_to_string(file.path()).unwrap_or_default();
+            let rows = text.lines().filter(|l| l.contains("goal_status")).count();
+            out += &format!("transcript {} goal rows {rows}\n", file.path().display());
+        }
+    }
+    let kinds: Vec<String> = events
+        .iter()
+        .map(|event| format!("{event:?}").chars().take(100).collect())
+        .collect();
+    out + &format!("events {kinds:#?}")
+}
+
 fn evidence(name: &str, events: &[AgentEvent], fixture: &Fixture) {
     let Some(dir) = std::env::var_os("LUNA_CC14_EVIDENCE_DIR") else {
         return;
@@ -483,7 +507,12 @@ async fn resumed_session_seeds_claudes_restored_goal() {
     let events = run_once(&fixture, resumed).await;
     evidence("goal-resume-seed", &events, &fixture);
     let changes = goals(&events);
-    assert_eq!(changes.len(), 2, "{changes:#?}");
+    assert_eq!(
+        changes.len(),
+        2,
+        "{changes:#?}\n{}",
+        transcript_diagnostics(&fixture, &events)
+    );
     let seeded = changes[0].0.as_ref().expect("seeded from the record");
     assert_eq!(seeded.status, GoalStatus::Active);
     assert_eq!(seeded.objective, condition);
