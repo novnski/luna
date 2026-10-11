@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-11T05:26:58+03:00.
+Generated 2026-10-11T18:32:23+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **1.4% accepted**, **1/75 Done**.
+Active scope: **2.7% accepted**, **2/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: SW-00, CORE-02, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: SW-05, CORE-01, CORE-02, SW-12, ZI-01, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -45,8 +45,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | --- | --- | --- | --- |
 | [SW-02 — Deliver scoped Claude MCP access in Ask/Auto](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-03 — Deliver approved skills in intended permission modes](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [SW-00 — Rebase shared capability, ownership and acceptance baseline](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | ready | 0.0% | — |
+| [SW-00 — Rebase shared capability, ownership and acceptance baseline](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
 
 ## Transcript trust, recovery and current checklist
 
@@ -71,6 +71,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [SW-09 — Present authorized visual tool results through shared references](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [IC-0 — Prove shared artifacts, provider and Find contracts](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-1 — Build one immutable artifact service and isolated renderer](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
+| [ART-01 — Collect generated deliverables in a per-chat Artifacts panel](chat-artifacts/README.md) | ready | 0.0% | — |
 
 ## Find, source navigation and context migration
 

@@ -8,11 +8,11 @@ audit of the pending specifications, supplemented by targeted current-source
 checks. It does not certify future runtime behavior or repeat every historical
 live acceptance run.
 
-There are **105 catalog entries**: **74 Ready**, **1 Blocked**, **25 Deferred**,
-and **5 shipped Board references**. Active acceptance coverage starts at 0%
-for the 75 active-scope tasks. Source research and mockups do not count as
-implementation acceptance. Later status is maintained by the CLI and its
-dated [checkpoint](progress.md), rather than these initial counts.
+There are **106 catalog entries** with intake states of **75 Ready**,
+**1 Blocked**, **25 Deferred** and **5 shipped Board references**; 76 tasks are
+in active scope. Source research and mockups do not count as implementation
+acceptance. Current status and coverage are maintained by the CLI and its
+dated [checkpoint](progress.md), rather than these initial states.
 
 ## Workstreams and source ownership
 
@@ -21,7 +21,7 @@ dated [checkpoint](progress.md), rather than these initial counts.
 | `core-platform` | CORE-00–CORE-23 | [Extensible core](extensible-core/README.md): public contracts/SDK, supervised plugin runtime, dynamic providers/UI/content, feature extraction and measured migration gates. |
 | `integration` | SW-00–SW-03 | [LUNA-only workflows](luna-only-workflows/README.md): actual capability, effective tool/skill inventory and scoped provider delivery. |
 | `transcript` | SW-05, SW-06, ZI-03; deferred AW-08 | LUNA-only owns ordinary chronology/recovery certification; [Zeron improvements](zeron-upstream-improvements/README.md) owns current checklist wire/fold/presentation; workspace research owns optional preferences. |
-| `artifacts` | IC-0–IC-4, IC-6, SW-07, SW-09; deferred SW-14, AW-12 | [Interactive surfaces](interactive-chat-surfaces/README.md) owns HTML storage/isolation/provider tools/MCP Apps; LUNA-only adds returned media and real user journeys; research adds only optional annotation. |
+| `artifacts` | ART-01, IC-0–IC-4, IC-6, SW-07, SW-09; deferred SW-14, AW-12 | [Per-chat Artifacts](chat-artifacts/README.md) owns generated deliverable discovery/index/panel on desktop and iOS. [Interactive surfaces](interactive-chat-surfaces/README.md) owns HTML storage/isolation/provider tools/MCP Apps; LUNA-only adds returned media and real user journeys; research adds only optional annotation. |
 | `navigation` | IC-5, SW-11, ZI-04, ZI-05; deferred AW-01 | Interactive surfaces owns conversation Find; Zeron owns typed file activation and workspace text search; LUNA-only consumes Find/import/global history; research owns settings destinations. |
 | `workspace` | ZI-01, ZI-02; deferred AW-02/04/05/06/07/09/11/15 | Zeron owns concrete Git snapshot/registry growth defects. [Workspace research](agent-workspace-app-research/README.md) owns audit-first context, commands, routes, layouts, Git guidance, diagnostics, portable config and companion ideas. |
 | `orchestration` | SW-10, SW-12; deferred AW-03/10, PB-4A–PB-4D; PB-0/1/1R/2/3 references | [Board](devin-project-board/README.md) owns shipped ticket/chat/review identity; LUNA-only adds supervision/certification. One future owner handles groups/templates/trackers/workflow expansion. |
@@ -51,6 +51,11 @@ flatten research into incomplete standalone tickets.
    IC-4 owns the MCP Apps bridge; optional SW-14 consumes it. AW-12 adds only
    missing selection/annotation after SW-08/09. No second blob store, renderer,
    app bridge or computer-use connection is planned.
+   ART-01 adds the separately requested generated-deliverable collection after
+   IC-1, ZI-04, IOS-02 and RM-06. It consumes CORE-14 transitively, uses the same
+   assets on desktop/phone, and excludes ordinary code/web files. It owns the
+   collection journey; IC/SW/IOS keep their existing renderer and transport
+   contracts. Existing active tickets are not rewritten or made dependent on it.
 3. **Distinct search scopes share navigation.** IC-5 owns selected conversation
    bodies, current global history owns cross-chat metadata/import, ZI-05 owns
    checkout source text, and AW-01 owns setting names/aliases/row destinations.

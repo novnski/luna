@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "catalog_hash": "b65d8bb29d971b26432046cf186e529cad9d88740dcd3bdb2422d42b6fd5401b",
-  "created_at": 1791685618.623966,
+  "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
+  "created_at": 1791732743.63986,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 6,
+      "done": 7,
       "in_progress": 0,
       "paused": 0,
       "ready": 73,
@@ -16,36 +16,7 @@
     "groups": [
       {
         "id": "core-platform",
-        "title": "Extensible core, SDK and plugin platform",
         "milestones": {
-          "Foundation": [
-            "CORE-00",
-            "CORE-01",
-            "CORE-02",
-            "CORE-03",
-            "CORE-04",
-            "CORE-05"
-          ],
-          "First independent provider": [
-            "CORE-06",
-            "CORE-07",
-            "CORE-08"
-          ],
-          "Existing providers": [
-            "CORE-09",
-            "CORE-10",
-            "CORE-11"
-          ],
-          "Workbench and content": [
-            "CORE-12",
-            "CORE-13",
-            "CORE-14",
-            "CORE-15"
-          ],
-          "Feature packages": [
-            "CORE-16",
-            "CORE-17"
-          ],
           "Authoring and lifecycle": [
             "CORE-18",
             "CORE-19"
@@ -55,8 +26,37 @@
             "CORE-21",
             "CORE-22",
             "CORE-23"
+          ],
+          "Existing providers": [
+            "CORE-09",
+            "CORE-10",
+            "CORE-11"
+          ],
+          "Feature packages": [
+            "CORE-16",
+            "CORE-17"
+          ],
+          "First independent provider": [
+            "CORE-06",
+            "CORE-07",
+            "CORE-08"
+          ],
+          "Foundation": [
+            "CORE-00",
+            "CORE-01",
+            "CORE-02",
+            "CORE-03",
+            "CORE-04",
+            "CORE-05"
+          ],
+          "Workbench and content": [
+            "CORE-12",
+            "CORE-13",
+            "CORE-14",
+            "CORE-15"
           ]
         },
+        "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
         "done": 1,
         "remaining": 23,
@@ -64,49 +64,6 @@
         "total_units": 96,
         "acceptance_percent": 4.2,
         "milestone_status": {
-          "Foundation": {
-            "done": false,
-            "members": [
-              "CORE-00",
-              "CORE-01",
-              "CORE-02",
-              "CORE-03",
-              "CORE-04",
-              "CORE-05"
-            ]
-          },
-          "First independent provider": {
-            "done": false,
-            "members": [
-              "CORE-06",
-              "CORE-07",
-              "CORE-08"
-            ]
-          },
-          "Existing providers": {
-            "done": false,
-            "members": [
-              "CORE-09",
-              "CORE-10",
-              "CORE-11"
-            ]
-          },
-          "Workbench and content": {
-            "done": false,
-            "members": [
-              "CORE-12",
-              "CORE-13",
-              "CORE-14",
-              "CORE-15"
-            ]
-          },
-          "Feature packages": {
-            "done": false,
-            "members": [
-              "CORE-16",
-              "CORE-17"
-            ]
-          },
           "Authoring and lifecycle": {
             "done": false,
             "members": [
@@ -122,6 +79,49 @@
               "CORE-22",
               "CORE-23"
             ]
+          },
+          "Existing providers": {
+            "done": false,
+            "members": [
+              "CORE-09",
+              "CORE-10",
+              "CORE-11"
+            ]
+          },
+          "Feature packages": {
+            "done": false,
+            "members": [
+              "CORE-16",
+              "CORE-17"
+            ]
+          },
+          "First independent provider": {
+            "done": false,
+            "members": [
+              "CORE-06",
+              "CORE-07",
+              "CORE-08"
+            ]
+          },
+          "Foundation": {
+            "done": false,
+            "members": [
+              "CORE-00",
+              "CORE-01",
+              "CORE-02",
+              "CORE-03",
+              "CORE-04",
+              "CORE-05"
+            ]
+          },
+          "Workbench and content": {
+            "done": false,
+            "members": [
+              "CORE-12",
+              "CORE-13",
+              "CORE-14",
+              "CORE-15"
+            ]
           }
         }
       },
@@ -129,11 +129,11 @@
         "id": "integration",
         "title": "Provider access, effective tools and skills",
         "tasks": 4,
-        "done": 0,
-        "remaining": 4,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 3,
+        "accepted_units": 4,
         "total_units": 16,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 25.0,
         "milestone_status": {}
       },
       {
@@ -150,11 +150,11 @@
       {
         "id": "artifacts",
         "title": "Shared visual artifacts, HTML and MCP Apps",
-        "tasks": 8,
+        "tasks": 9,
         "done": 0,
-        "remaining": 8,
+        "remaining": 9,
         "accepted_units": 0,
-        "total_units": 29,
+        "total_units": 34,
         "acceptance_percent": 0.0,
         "milestone_status": {}
       },
@@ -193,7 +193,6 @@
       },
       {
         "id": "remote",
-        "title": "One direct paired-Mac product",
         "milestones": {
           "M0": [
             "RM-00"
@@ -214,6 +213,7 @@
             "RM-07"
           ]
         },
+        "title": "One direct paired-Mac product",
         "tasks": 11,
         "done": 0,
         "remaining": 11,
@@ -258,12 +258,7 @@
       },
       {
         "id": "ios",
-        "title": "Native iOS parity and release",
         "milestones": {
-          "Native foundation": [
-            "IOS-00",
-            "RM-03"
-          ],
           "Complete direct V1": [
             "IOS-01",
             "IOS-02",
@@ -282,6 +277,10 @@
             "RM-09",
             "RM-11"
           ],
+          "Native foundation": [
+            "IOS-00",
+            "RM-03"
+          ],
           "Optional voice and awareness": [
             "IOS-11",
             "IOS-12",
@@ -292,6 +291,7 @@
             "IOS-14"
           ]
         },
+        "title": "Native iOS parity and release",
         "tasks": 12,
         "done": 0,
         "remaining": 12,
@@ -299,13 +299,6 @@
         "total_units": 48,
         "acceptance_percent": 0.0,
         "milestone_status": {
-          "Native foundation": {
-            "done": false,
-            "members": [
-              "IOS-00",
-              "RM-03"
-            ]
-          },
           "Complete direct V1": {
             "done": false,
             "members": [
@@ -328,6 +321,13 @@
               "RM-08",
               "RM-09",
               "RM-11"
+            ]
+          },
+          "Native foundation": {
+            "done": false,
+            "members": [
+              "IOS-00",
+              "RM-03"
             ]
           },
           "Optional voice and awareness": {
@@ -372,17 +372,19 @@
     ],
     "expired_claims": [],
     "active_scope": {
-      "tasks": 75,
-      "done": 1,
+      "tasks": 76,
+      "done": 2,
       "remaining": 74,
-      "accepted_units": 4,
-      "total_units": 291,
-      "acceptance_percent": 1.4
+      "accepted_units": 8,
+      "total_units": 296,
+      "acceptance_percent": 2.7
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-00",
+      "SW-05",
+      "CORE-01",
       "CORE-02",
+      "SW-12",
       "ZI-01",
       "ZI-03",
       "ZI-04",
@@ -1034,16 +1036,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "SW-00",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.9583218
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "SW-01",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1501,6 +1493,16 @@
       "updated_at": 1791679479.217224
     },
     {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "ART-01",
+      "last_worker": null,
+      "note": "Read ART-01, inspect prerequisite evidence and partial work, then refresh the pinned T3/BB source and Codex documented/native comparison. Trace current provider output through shared asset references to desktop/iOS open paths; record classification, revision and authority failure contracts before implementation.",
+      "status": "ready",
+      "updated_at": 1791684328.836394
+    },
+    {
       "attempts": 1,
       "blocker": null,
       "checks": {
@@ -1605,6 +1607,104 @@
       "note": "Completed the measured baseline and four feasibility decisions. See core-00/results.md and decision.md; production migration remains CORE-01 onward. Baseline idle CPU 2.72% exceeds 1% target; hosted CI billing and unmeasured platforms/compositor/live providers remain explicit limits. Delivered d2c0e60f on verified origin/main and refreshed LUNA Dev.",
       "status": "done",
       "updated_at": 1791685582.718726
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "baseline": {
+          "at": 1791732710.667278,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+              "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+              "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+              "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+              "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+              "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+              "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+            }
+          ],
+          "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+        },
+        "contract": {
+          "at": 1791732710.862176,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/contracts.md",
+              "sha256": "4c8730ee2a2a3af16f7246be0f4f8ada07783ba840c75ca5fafd328564a41a0d"
+            }
+          ],
+          "note": "Expected failures recorded by category (4 observed live); SW-09 consumes IC-0 shared/CORE-14 references and existing host byte routes only; helper stop = existing interrupt_thread name over PreviewStopTaskWork/StopTaskWork receipts; no adapters implemented"
+        },
+        "handoff": {
+          "at": 1791732739.646739,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/commands.json",
+              "sha256": "b406ed28e8e687cdf05c5d1629cbe76283f318b4ba41d92aa4dcd97cf6cfc4bc"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/sha256.json",
+              "sha256": "de943bdb7af7162b423b866c6689cb331b8fca58c86910af74e2bde5e78dde4e"
+            },
+            {
+              "ref": "commit:74b1a466431006b7f54742146ad57dd6e1cee327"
+            }
+          ],
+          "note": "Commands/exit codes/timings in evidence/commands.json; committed + local raw evidence hashed in evidence/sha256.json; limitations recorded; no runtime code changed (docs + two read-only QA runners), so no LUNA Dev refresh; delivered on main 74b1a466, origin/main readback matches"
+        },
+        "ownership": {
+          "at": 1791732710.764558,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/ownership.md",
+              "sha256": "7e192663f44770fe0385167fb432287f696f8023cb28d569c5f24a1eb3dae2d8"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/engine-suites-summary.txt",
+              "sha256": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-chat-tool-usage.json",
+              "sha256": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a"
+            }
+          ],
+          "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected"
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:74b1a466431006b7f54742146ad57dd6e1cee327"
+        }
+      ],
+      "id": "SW-00",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791731497.930258,
+        "expires_at": 1791739734.238312,
+        "heartbeat_at": 1791732534.2383108,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "Baseline, owner map, workflow set and contracts delivered. Key facts: Claude Ask/Auto lack Executor (claude.ai connectors load); Codex MCP has no readback; all existing contracts restartRequired; CLI drift checked (no tool/method breakage). Live E01 nonce/resume proof is SW-01. Status checkpoint commit pending: progress.json also carries the uncommitted ART-01 intake.",
+      "status": "done",
+      "updated_at": 1791732739.771764
     }
   ],
   "events": [
@@ -2983,6 +3083,15 @@
       }
     },
     {
+      "seq": 146,
+      "task": "ART-01",
+      "at": 1791684328.836461,
+      "action": "catalog_add",
+      "detail": {
+        "revision": 45
+      }
+    },
+    {
       "seq": 147,
       "task": "CORE-00",
       "at": 1791684453.201493,
@@ -3702,6 +3811,530 @@
           "heartbeat_at": 1791685279.0248,
           "owner": "Codex",
           "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 156,
+      "task": "SW-00",
+      "at": 1791731497.9303439,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791735097.930258,
+          "heartbeat_at": 1791731497.930258,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 157,
+      "task": "SW-00",
+      "at": 1791731729.153714,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791735329.153642,
+          "heartbeat_at": 1791731729.153642,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 158,
+      "task": "SW-00",
+      "at": 1791732201.3896,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739401.389507,
+          "heartbeat_at": 1791732201.389507,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 159,
+      "task": "SW-00",
+      "at": 1791732373.1032262,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739573.1031392,
+          "heartbeat_at": 1791732373.1031392,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 160,
+      "task": "SW-00",
+      "at": 1791732534.2383842,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 161,
+      "task": "SW-00",
+      "at": 1791732710.667655,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791732710.667278,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+                "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+                "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+                "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+                "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+                "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+                "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+              }
+            ],
+            "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+          }
+        },
+        "criterion": "baseline",
+        "evidence": null,
+        "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 162,
+      "task": "SW-00",
+      "at": 1791732710.764839,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791732710.667278,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+                "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+                "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+                "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+                "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+                "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+                "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+              }
+            ],
+            "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+          },
+          "ownership": {
+            "at": 1791732710.764558,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/ownership.md",
+                "sha256": "7e192663f44770fe0385167fb432287f696f8023cb28d569c5f24a1eb3dae2d8"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/engine-suites-summary.txt",
+                "sha256": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-chat-tool-usage.json",
+                "sha256": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a"
+              }
+            ],
+            "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected"
+          }
+        },
+        "criterion": "ownership",
+        "evidence": null,
+        "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 163,
+      "task": "SW-00",
+      "at": 1791732710.862326,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791732710.667278,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+                "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+                "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+                "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+                "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+                "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+                "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+              }
+            ],
+            "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+          },
+          "contract": {
+            "at": 1791732710.862176,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/contracts.md",
+                "sha256": "4c8730ee2a2a3af16f7246be0f4f8ada07783ba840c75ca5fafd328564a41a0d"
+              }
+            ],
+            "note": "Expected failures recorded by category (4 observed live); SW-09 consumes IC-0 shared/CORE-14 references and existing host byte routes only; helper stop = existing interrupt_thread name over PreviewStopTaskWork/StopTaskWork receipts; no adapters implemented"
+          },
+          "ownership": {
+            "at": 1791732710.764558,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/ownership.md",
+                "sha256": "7e192663f44770fe0385167fb432287f696f8023cb28d569c5f24a1eb3dae2d8"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/engine-suites-summary.txt",
+                "sha256": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-chat-tool-usage.json",
+                "sha256": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a"
+              }
+            ],
+            "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected"
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Expected failures recorded by category (4 observed live); SW-09 consumes IC-0 shared/CORE-14 references and existing host byte routes only; helper stop = existing interrupt_thread name over PreviewStopTaskWork/StopTaskWork receipts; no adapters implemented",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 164,
+      "task": "SW-00",
+      "at": 1791732739.6592379,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791732710.667278,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+                "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+                "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+                "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+                "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+                "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+                "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+              }
+            ],
+            "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+          },
+          "contract": {
+            "at": 1791732710.862176,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/contracts.md",
+                "sha256": "4c8730ee2a2a3af16f7246be0f4f8ada07783ba840c75ca5fafd328564a41a0d"
+              }
+            ],
+            "note": "Expected failures recorded by category (4 observed live); SW-09 consumes IC-0 shared/CORE-14 references and existing host byte routes only; helper stop = existing interrupt_thread name over PreviewStopTaskWork/StopTaskWork receipts; no adapters implemented"
+          },
+          "handoff": {
+            "at": 1791732739.646739,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/commands.json",
+                "sha256": "b406ed28e8e687cdf05c5d1629cbe76283f318b4ba41d92aa4dcd97cf6cfc4bc"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/sha256.json",
+                "sha256": "de943bdb7af7162b423b866c6689cb331b8fca58c86910af74e2bde5e78dde4e"
+              },
+              {
+                "ref": "commit:74b1a466431006b7f54742146ad57dd6e1cee327"
+              }
+            ],
+            "note": "Commands/exit codes/timings in evidence/commands.json; committed + local raw evidence hashed in evidence/sha256.json; limitations recorded; no runtime code changed (docs + two read-only QA runners), so no LUNA Dev refresh; delivered on main 74b1a466, origin/main readback matches"
+          },
+          "ownership": {
+            "at": 1791732710.764558,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/ownership.md",
+                "sha256": "7e192663f44770fe0385167fb432287f696f8023cb28d569c5f24a1eb3dae2d8"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/engine-suites-summary.txt",
+                "sha256": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-chat-tool-usage.json",
+                "sha256": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a"
+              }
+            ],
+            "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected"
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes/timings in evidence/commands.json; committed + local raw evidence hashed in evidence/sha256.json; limitations recorded; no runtime code changed (docs + two read-only QA runners), so no LUNA Dev refresh; delivered on main 74b1a466, origin/main readback matches",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expired": false,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 165,
+      "task": "SW-00",
+      "at": 1791732739.771958,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791732710.667278,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/README.md",
+                "sha256": "9fed667cbd44f67b10cc1311edc096163c199b6d2189a2e25b73e1942641ca6e"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/platform.json",
+                "sha256": "c9f1fa22e0535288255cd401c46989b67dd809acc6403b9027e3d4a9139bd131"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-live-baseline.json",
+                "sha256": "a10c26ee1f4e2178c9b47adc427ba485a2a956bcc34e548f60e6ee9c38cd27b4"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/claude-launch-probe.json",
+                "sha256": "bf6185e0c73ce7d2fb4fb2782c74c7157bab6e7f2172452cfe912f3fd3fc89b2"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/codex-method-drift.json",
+                "sha256": "b22c5383b55ad653a018b245c5f60c917301f0e353e692a76cdd891ab4eea586"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/native-mode-usage.json",
+                "sha256": "97e72eed5bd3064cce58d460da865e04a2dd18d7cd16bf250795a392b8fceeb1"
+              }
+            ],
+            "note": "SHA 83ede04b; Codex 0.160.0 (pin 0.154.0, all 63 used methods present), Claude 2.1.293 (tool grant/MCP scope unchanged vs 2.1.286), OpenCode 2.0.24; accounts ChatGPT + claude.ai max; selected modes Codex Ask+Full, Claude Ask+Full (Auto secondary) from native usage; existing-chat contracts all restartRequired; Claude Executor not loaded in Ask/Auto; Codex MCP unverified; resumed delivery unproven live (SW-01)"
+          },
+          "contract": {
+            "at": 1791732710.862176,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/contracts.md",
+                "sha256": "4c8730ee2a2a3af16f7246be0f4f8ada07783ba840c75ca5fafd328564a41a0d"
+              }
+            ],
+            "note": "Expected failures recorded by category (4 observed live); SW-09 consumes IC-0 shared/CORE-14 references and existing host byte routes only; helper stop = existing interrupt_thread name over PreviewStopTaskWork/StopTaskWork receipts; no adapters implemented"
+          },
+          "handoff": {
+            "at": 1791732739.646739,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/commands.json",
+                "sha256": "b406ed28e8e687cdf05c5d1629cbe76283f318b4ba41d92aa4dcd97cf6cfc4bc"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/sha256.json",
+                "sha256": "de943bdb7af7162b423b866c6689cb331b8fca58c86910af74e2bde5e78dde4e"
+              },
+              {
+                "ref": "commit:74b1a466431006b7f54742146ad57dd6e1cee327"
+              }
+            ],
+            "note": "Commands/exit codes/timings in evidence/commands.json; committed + local raw evidence hashed in evidence/sha256.json; limitations recorded; no runtime code changed (docs + two read-only QA runners), so no LUNA Dev refresh; delivered on main 74b1a466, origin/main readback matches"
+          },
+          "ownership": {
+            "at": 1791732710.764558,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/ownership.md",
+                "sha256": "7e192663f44770fe0385167fb432287f696f8023cb28d569c5f24a1eb3dae2d8"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/engine-suites-summary.txt",
+                "sha256": "cc2f5501d696de523950120a7f31e9a04408c9be08c9f9a3390c008781b14513"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-00/evidence/luna-chat-tool-usage.json",
+                "sha256": "ba3a3a6f7316f010f6985c3a95ee9dba07b377accf84bc23de767fb1a28c366a"
+              }
+            ],
+            "note": "E01-E19 mapped to one existing owner each with gap class (implementation/verification/external/optional); 13 named engine suites rerun green (107 pass, 2 live-gated ignored); native runner env/args pinned; 8 required + 3 optional journeys selected"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:74b1a466431006b7f54742146ad57dd6e1cee327"
+          }
+        ],
+        "note": "Baseline, owner map, workflow set and contracts delivered. Key facts: Claude Ask/Auto lack Executor (claude.ai connectors load); Codex MCP has no readback; all existing contracts restartRequired; CLI drift checked (no tool/method breakage). Live E01 nonce/resume proof is SW-01. Status checkpoint commit pending: progress.json also carries the uncommitted ART-01 intake.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791731497.930258,
+          "expires_at": 1791739734.238312,
+          "heartbeat_at": 1791732534.2383108,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
       }
     }

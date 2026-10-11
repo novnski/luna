@@ -40,6 +40,11 @@ Follow the repository [AGENTS.md](../../../AGENTS.md), [test-audit skill](../../
 
 Not included: an artifact library, document collaboration, editable revision history, artifact-template skill authoring, external-agent OAuth, webhook automations, in-app app marketplaces, cross-conversation full-text search, regex search, replacement of the existing orchestrator, or arbitrary JavaScript execution against LUNA APIs. Public CDN dependencies and live network data in ordinary HTML replies are deferred; agents can embed data and library code within the documented limits.
 
+The separately requested [ART-01 per-chat Artifacts panel](../chat-artifacts/README.md)
+collects generated document/media deliverables using this package's shared
+storage and CORE-14 references. It owns collection/discovery and desktop/iOS
+retrieval; it does not expand IC's HTML renderer scope into a global library.
+
 ## Current LUNA foundations and actual gaps
 
 | Existing owner | Reusable foundation | Work still needed |

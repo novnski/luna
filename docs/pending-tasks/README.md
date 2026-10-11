@@ -20,16 +20,19 @@ contains the contracts; `status` reads live ownership across linked worktrees.
 The report is a dated checkpoint. [templates/task.json](templates/task.json)
 and `add` admit new tasks without losing progress.
 
-## Planned scope, updated 11 October 2026
+## Catalog intake scope, updated 11 October 2026
+
+These are catalog intake states; current claims and acceptance are in the
+live queue and [generated checkpoint](progress.md).
 
 | State | Entries | Meaning |
 | --- | ---: | --- |
-| Ready | 74 | Concrete specified work; dependencies/resources determine eligibility. |
+| Ready | 75 | Concrete specified work; dependencies/resources determine eligibility. |
 | Blocked | 1 | Real updater trial awaiting its recorded external prerequisites. |
 | Deferred | 25 | Later client extensions, optional journeys and research ideas awaiting bounded scope decisions. |
 | Done references | 5 | Shipped PB-0/1/1R/2/3; excluded from active progress. |
 
-**105 entries across 11 workstreams; 75 active-scope tasks, 0% accepted completion at this planning update.** Progress measures
+**106 entries across 11 workstreams; 76 active-scope tasks.** Progress measures
 evidenced acceptance criteria, not estimated time. The default first ticket is
 **CORE-00**, the measured core/extension baseline. The new
 [core, SDK and plugin program](extensible-core/README.md) adds 24 tasks and
@@ -40,6 +43,11 @@ The [native iOS parity program](ios-parity/README.md) adds IOS-00–IOS-14 using
 fresh Zeron/T3 source, and schedules existing RM-08/09/11 after the complete
 direct release. Optional dictation, live voice and push/widgets stay Deferred.
 
+[ART-01 — Per-chat Artifacts](chat-artifacts/README.md) adds automatic collection
+of generated documents, PDFs, spreadsheets, presentations and images, desktop
+and iOS retrieval, and a source-backed T3/BB/Codex comparison. It reuses the
+shared asset service and excludes ordinary source/scripts/web files.
+
 ## Detailed specifications
 
 | Source package | Queue ownership |
@@ -47,6 +55,7 @@ direct release. Optional dictation, live voice and push/widgets stay Deferred.
 | [Extensible core, SDK and plugins](extensible-core/README.md) | CORE-00–CORE-23: stable core/client contracts, independent providers, UI/content extensions, feature extraction, lifecycle and measured acceptance. |
 | [LUNA-only workflows](luna-only-workflows/README.md) | SW-00–SW-16: integration, operations, transcript/recovery, helper and switching journeys; consumes shared feature owners. |
 | [Interactive surfaces](interactive-chat-surfaces/README.md) | IC-0–IC-6: shared storage/renderer, all-provider HTML, MCP Apps, conversation Find and integrated acceptance. |
+| [Per-chat Artifacts](chat-artifacts/README.md) | ART-01: generated deliverable registration/index, desktop panel and native iOS collection; consumes IC-1, CORE-14, ZI-04 and remote file ownership. |
 | [Useful Zeron changes](zeron-upstream-improvements/README.md) | ZI-01–ZI-05: bounded snapshots/registry, current checklist, typed file navigation and workspace text search. |
 | [Control this Mac](control-this-mac/README.md) + [T3 remote/mobile audit](t3-remote-mobile/README.md) | One RM-00–RM-13 chain. RM-07 aggregates native IOS acceptance; RM-08/09/11 form the later parity wave, while RM-10/12/13 remain deferred. |
 | [Native iOS parity](ios-parity/README.md) | IOS-00–IOS-14: owned SDK facade, native renderer/shell/composer/interactions, Board/content/search/sharing, device acceptance and optional audio/awareness. RM-08/09/11 remain the single terminal/Git/administration owners. |

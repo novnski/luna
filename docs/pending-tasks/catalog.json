@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 44,
+  "revision": 45,
   "inventory_date": "2026-10-11",
   "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
   "groups": [
@@ -5209,6 +5209,69 @@
           "id": "handoff",
           "text": "Run relevant locked Rust/Xcode/build/E2E/lint/format/review checks; preserve and hash real evidence, respect native app/data isolation, complete required LUNA Dev handoff after Mac code changes, and deliver verified main plus queue checkpoint.",
           "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "ART-01",
+      "title": "Collect generated deliverables in a per-chat Artifacts panel",
+      "group": "artifacts",
+      "priority": 1,
+      "order": 315,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "IC-1",
+        "ZI-04",
+        "IOS-02",
+        "RM-06"
+      ],
+      "resources": [
+        "proto",
+        "engine/assets",
+        "engine/workspace-files",
+        "doc/parts",
+        "harness",
+        "rpc",
+        "ui/artifacts",
+        "ui/files",
+        "ui/transcript",
+        "ios/files",
+        "ios/content"
+      ],
+      "sources": [
+        "docs/pending-tasks/chat-artifacts/README.md",
+        "docs/pending-tasks/interactive-chat-surfaces/implementation.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/ios-parity/implementation.md"
+      ],
+      "outcome": "Generated documents, PDFs, spreadsheets, presentations and images are automatically discoverable in a persistent per-chat Artifacts collection on desktop and iOS, without collecting ordinary scripts/source/web files or searching transcript paths.",
+      "resume": "Read ART-01, inspect prerequisite evidence and partial work, then refresh the pinned T3/BB source and Codex documented/native comparison. Trace current provider output through shared asset references to desktop/iOS open paths; record classification, revision and authority failure contracts before implementation.",
+      "criteria": [
+        {
+          "id": "contract",
+          "weight": 1,
+          "text": "Record source/version-pinned T3/BB/Codex observed versus unverified comparison, existing LUNA owners, classification/publication/revision/authority decisions and pre-code failure contracts."
+        },
+        {
+          "id": "capture",
+          "weight": 1,
+          "text": "A01-A03 prove real Codex/Claude/OpenCode generated deliverable capture including shell-created files, exclusions, authorized immutable bytes, idempotency/revisions and restart/fork/deletion/missing-file behavior."
+        },
+        {
+          "id": "experience",
+          "weight": 1,
+          "text": "A04-A05 prove discover/preview/open/export/source navigation from the desktop panel and same-index native iOS collection, preserving focus and handling offline/reconnect and denied access."
+        },
+        {
+          "id": "verification",
+          "weight": 1,
+          "text": "Retain repeatable owner-boundary E2E results with independent inclusion/byte/authority oracles, real provider and native/physical-device evidence, measured bounded behavior and hashed artifacts; no mock-only completion."
+        },
+        {
+          "id": "handoff",
+          "weight": 1,
+          "text": "Complete applicable focused builds/E2Es/lint/format/review, refresh and verify LUNA Dev after runtime changes, deliver verified origin/main and checkpoint exact accepted criteria and limitations."
         }
       ]
     }
