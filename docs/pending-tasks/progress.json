@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791740109.556215,
+  "created_at": 1791742786.83114,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 9,
+      "done": 10,
       "in_progress": 0,
       "paused": 0,
-      "ready": 71,
+      "ready": 70,
       "review": 0
     },
     "groups": [
@@ -58,11 +58,11 @@
         },
         "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 1,
-        "remaining": 23,
-        "accepted_units": 4,
+        "done": 2,
+        "remaining": 22,
+        "accepted_units": 8,
         "total_units": 96,
-        "acceptance_percent": 4.2,
+        "acceptance_percent": 8.3,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -373,17 +373,18 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 4,
-      "remaining": 72,
-      "accepted_units": 16,
+      "done": 5,
+      "remaining": 71,
+      "accepted_units": 20,
       "total_units": 296,
-      "acceptance_percent": 5.4
+      "acceptance_percent": 6.8
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-01",
+      "RM-00",
       "CORE-02",
       "SW-12",
+      "IC-0",
       "ZI-01",
       "ZI-03",
       "ZI-04",
@@ -780,16 +781,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-01",
-      "last_worker": null,
-      "note": "Read the CORE-01 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676596.856716
     },
     {
       "attempts": 0,
@@ -1888,6 +1879,104 @@
       "note": "Certified E07/E08 live on Codex 0.160 and Claude 2.1.293; fixed a reproduced Claude defect (steer queued past the result was lost) in the turn ledger with regression E11b; added S9S live steer scenario. Follow-up: steer refusal reason text for non-steer rows is misleading.",
       "status": "done",
       "updated_at": 1791740109.4581912
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791742659.761806,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+              "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+            },
+            {
+              "ref": "crates/rpc/contract/v1/operations.json",
+              "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+              "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+            }
+          ],
+          "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+        },
+        "delivery": {
+          "at": 1791742659.853954,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/evidence/c3-equivalence.json",
+              "sha256": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/evidence/sha256.json",
+              "sha256": "0bebc1d6c3aa3771c6e6943d32cf92f7f8715f60b0a1ab69f847a3115a22ab9e"
+            },
+            {
+              "ref": "crates/rpc/tests/contract.rs",
+              "sha256": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175"
+            }
+          ],
+          "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged"
+        },
+        "handoff": {
+          "at": 1791742779.665036,
+          "evidence": [
+            {
+              "ref": "commit:ccfabbe73c6b581c8649b152cf4f6b1e48aba739"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+              "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+            }
+          ],
+          "note": "Delivered on origin/main at ccfabbe7 (remote readback matches). Consumers IC-0 and RM-00 read docs/pending-tasks/extensible-core/core-01/contract.md; per-operation schemas/typed errors/SDKs are CORE-05, ProviderRef adoption CORE-04, limits CORE-06/07. LUNA Dev runs this build."
+        },
+        "verification": {
+          "at": 1791742659.951227,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/evidence/reader-report.json",
+              "sha256": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-before/frames.json",
+              "sha256": "cf395ecab353034a725914e048237203c5271c076873d397f65f554175e0ddeb"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-after/frames.json",
+              "sha256": "d020bed62c8f6b7d28015265c6f7b0fabbcca9fac2f408f0affee9ef916adfb4"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+              "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+            }
+          ],
+          "note": "E03: real headless-engine wire before/after validated by independent Python jsonschema (C5/C9), reordered-key identity (C7), payload hashes reproduced independently (C6b), unchanged receipts (C6), shared id table Rust==schema (C8), remote denied calls via engine remote_auth E2E (C2), uncatalogued method refused on live app (C1)"
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:ccfabbe73c6b581c8649b152cf4f6b1e48aba739"
+        },
+        {
+          "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+          "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+        }
+      ],
+      "id": "CORE-01",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791740835.676694,
+        "expires_at": 1791756508.1625988,
+        "heartbeat_at": 1791742108.1625988,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "CORE-01 delivered at ccfabbe7: one reviewed 251-row operation catalog drives remote policy, forwarding, streams, deadlines and readiness; engine fails closed on uncatalogued methods; schemars-generated contract/v1 with CI drift test; independent Python reader validates real wire captures.",
+      "status": "done",
+      "updated_at": 1791742786.739008
     }
   ],
   "events": [
@@ -5479,6 +5568,456 @@
           "claimed_at": 1791736988.2973702,
           "expires_at": 1791753727.726951,
           "heartbeat_at": 1791739327.726951,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 183,
+      "task": "CORE-01",
+      "at": 1791740835.6767879,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-01 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791744435.676694,
+          "heartbeat_at": 1791740835.676694,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 184,
+      "task": "CORE-01",
+      "at": 1791741861.938886,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-01 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756261.938806,
+          "heartbeat_at": 1791741861.938806,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 185,
+      "task": "CORE-01",
+      "at": 1791742108.162678,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-01 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 186,
+      "task": "CORE-01",
+      "at": 1791742659.7620878,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791742659.761806,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              },
+              {
+                "ref": "crates/rpc/contract/v1/operations.json",
+                "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+                "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+              }
+            ],
+            "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 187,
+      "task": "CORE-01",
+      "at": 1791742659.854197,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791742659.761806,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              },
+              {
+                "ref": "crates/rpc/contract/v1/operations.json",
+                "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+                "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+              }
+            ],
+            "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+          },
+          "delivery": {
+            "at": 1791742659.853954,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/c3-equivalence.json",
+                "sha256": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/sha256.json",
+                "sha256": "0bebc1d6c3aa3771c6e6943d32cf92f7f8715f60b0a1ab69f847a3115a22ab9e"
+              },
+              {
+                "ref": "crates/rpc/tests/contract.rs",
+                "sha256": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175"
+              }
+            ],
+            "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged"
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 188,
+      "task": "CORE-01",
+      "at": 1791742659.9514828,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791742659.761806,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              },
+              {
+                "ref": "crates/rpc/contract/v1/operations.json",
+                "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+                "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+              }
+            ],
+            "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+          },
+          "delivery": {
+            "at": 1791742659.853954,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/c3-equivalence.json",
+                "sha256": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/sha256.json",
+                "sha256": "0bebc1d6c3aa3771c6e6943d32cf92f7f8715f60b0a1ab69f847a3115a22ab9e"
+              },
+              {
+                "ref": "crates/rpc/tests/contract.rs",
+                "sha256": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175"
+              }
+            ],
+            "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged"
+          },
+          "verification": {
+            "at": 1791742659.951227,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/reader-report.json",
+                "sha256": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-before/frames.json",
+                "sha256": "cf395ecab353034a725914e048237203c5271c076873d397f65f554175e0ddeb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-after/frames.json",
+                "sha256": "d020bed62c8f6b7d28015265c6f7b0fabbcca9fac2f408f0affee9ef916adfb4"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+                "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+              }
+            ],
+            "note": "E03: real headless-engine wire before/after validated by independent Python jsonschema (C5/C9), reordered-key identity (C7), payload hashes reproduced independently (C6b), unchanged receipts (C6), shared id table Rust==schema (C8), remote denied calls via engine remote_auth E2E (C2), uncatalogued method refused on live app (C1)"
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "E03: real headless-engine wire before/after validated by independent Python jsonschema (C5/C9), reordered-key identity (C7), payload hashes reproduced independently (C6b), unchanged receipts (C6), shared id table Rust==schema (C8), remote denied calls via engine remote_auth E2E (C2), uncatalogued method refused on live app (C1)",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 189,
+      "task": "CORE-01",
+      "at": 1791742779.675714,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791742659.761806,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              },
+              {
+                "ref": "crates/rpc/contract/v1/operations.json",
+                "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+                "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+              }
+            ],
+            "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+          },
+          "delivery": {
+            "at": 1791742659.853954,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/c3-equivalence.json",
+                "sha256": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/sha256.json",
+                "sha256": "0bebc1d6c3aa3771c6e6943d32cf92f7f8715f60b0a1ab69f847a3115a22ab9e"
+              },
+              {
+                "ref": "crates/rpc/tests/contract.rs",
+                "sha256": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175"
+              }
+            ],
+            "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged"
+          },
+          "handoff": {
+            "at": 1791742779.665036,
+            "evidence": [
+              {
+                "ref": "commit:ccfabbe73c6b581c8649b152cf4f6b1e48aba739"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              }
+            ],
+            "note": "Delivered on origin/main at ccfabbe7 (remote readback matches). Consumers IC-0 and RM-00 read docs/pending-tasks/extensible-core/core-01/contract.md; per-operation schemas/typed errors/SDKs are CORE-05, ProviderRef adoption CORE-04, limits CORE-06/07. LUNA Dev runs this build."
+          },
+          "verification": {
+            "at": 1791742659.951227,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/reader-report.json",
+                "sha256": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-before/frames.json",
+                "sha256": "cf395ecab353034a725914e048237203c5271c076873d397f65f554175e0ddeb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-after/frames.json",
+                "sha256": "d020bed62c8f6b7d28015265c6f7b0fabbcca9fac2f408f0affee9ef916adfb4"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+                "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+              }
+            ],
+            "note": "E03: real headless-engine wire before/after validated by independent Python jsonschema (C5/C9), reordered-key identity (C7), payload hashes reproduced independently (C6b), unchanged receipts (C6), shared id table Rust==schema (C8), remote denied calls via engine remote_auth E2E (C2), uncatalogued method refused on live app (C1)"
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Delivered on origin/main at ccfabbe7 (remote readback matches). Consumers IC-0 and RM-00 read docs/pending-tasks/extensible-core/core-01/contract.md; per-operation schemas/typed errors/SDKs are CORE-05, ProviderRef adoption CORE-04, limits CORE-06/07. LUNA Dev runs this build.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expired": false,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 190,
+      "task": "CORE-01",
+      "at": 1791742786.739176,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791742659.761806,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              },
+              {
+                "ref": "crates/rpc/contract/v1/operations.json",
+                "sha256": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/failures.md",
+                "sha256": "1272c659e0b7724003e46e7c72be8c611ae88858615ba3b1dacd29addb693a15"
+              }
+            ],
+            "note": "Operation catalog (251 rows: namespaced luna.core id+version, query/command/watch kind, unary/stream/streamAfterReady reply, local/device target, localOnly/remoteBootstrap/remote(scope) authority, forward deadline); envelope/receipt/error/frame/cancellation/limit contract and namespaced/legacy id rules published; wire method names unchanged"
+          },
+          "delivery": {
+            "at": 1791742659.853954,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/c3-equivalence.json",
+                "sha256": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/sha256.json",
+                "sha256": "0bebc1d6c3aa3771c6e6943d32cf92f7f8715f60b0a1ab69f847a3115a22ab9e"
+              },
+              {
+                "ref": "crates/rpc/tests/contract.rs",
+                "sha256": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175"
+              }
+            ],
+            "note": "schemars-generated contract/v1 (catalog + 11 schemas) with CI drift test; remote policy, forwarding, forwarded streams, deadlines and readiness frame read the catalog with 0 differences vs pre-change sources; engine refuses uncatalogued methods; no method granted or renamed; historical payload hashes unchanged"
+          },
+          "handoff": {
+            "at": 1791742779.665036,
+            "evidence": [
+              {
+                "ref": "commit:ccfabbe73c6b581c8649b152cf4f6b1e48aba739"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/contract.md",
+                "sha256": "94c0f0c08cd6fa3bff4732a2868db6acf26c946f31f40a262ebe5403969c9b01"
+              }
+            ],
+            "note": "Delivered on origin/main at ccfabbe7 (remote readback matches). Consumers IC-0 and RM-00 read docs/pending-tasks/extensible-core/core-01/contract.md; per-operation schemas/typed errors/SDKs are CORE-05, ProviderRef adoption CORE-04, limits CORE-06/07. LUNA Dev runs this build."
+          },
+          "verification": {
+            "at": 1791742659.951227,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/reader-report.json",
+                "sha256": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-before/frames.json",
+                "sha256": "cf395ecab353034a725914e048237203c5271c076873d397f65f554175e0ddeb"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/evidence/wire-after/frames.json",
+                "sha256": "d020bed62c8f6b7d28015265c6f7b0fabbcca9fac2f408f0affee9ef916adfb4"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+                "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+              }
+            ],
+            "note": "E03: real headless-engine wire before/after validated by independent Python jsonschema (C5/C9), reordered-key identity (C7), payload hashes reproduced independently (C6b), unchanged receipts (C6), shared id table Rust==schema (C8), remote denied calls via engine remote_auth E2E (C2), uncatalogued method refused on live app (C1)"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:ccfabbe73c6b581c8649b152cf4f6b1e48aba739"
+          },
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-01/README.md",
+            "sha256": "a54a9ce4a73ad7b3d4ca543d955f0c2c19b8cfa8ed53d81a074d0314f7c7dcbc"
+          }
+        ],
+        "note": "CORE-01 delivered at ccfabbe7: one reviewed 251-row operation catalog drives remote policy, forwarding, streams, deadlines and readiness; engine fails closed on uncatalogued methods; schemars-generated contract/v1 with CI drift test; independent Python reader validates real wire captures.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791740835.676694,
+          "expires_at": 1791756508.1625988,
+          "heartbeat_at": 1791742108.1625988,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
