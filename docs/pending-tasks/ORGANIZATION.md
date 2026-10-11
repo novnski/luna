@@ -1,14 +1,15 @@
 # How the pending work fits together
 
-Inventory date: **11 October 2026**. Source cut:
-`c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9`. This is a scheduling and ownership
+Inventory date: **11 October 2026**. Original source cut:
+`c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9`; the added core/SDK/plugin audit uses
+`2838125e42646b5d5ba86a3f8dfbdd93922ec60d`. This is a scheduling and ownership
 audit of the pending specifications, supplemented by targeted current-source
 checks. It does not certify future runtime behavior or repeat every historical
 live acceptance run.
 
-There are **66 catalog entries**: **35 Ready**, **1 Blocked**, **25 Deferred**,
+There are **90 catalog entries**: **59 Ready**, **1 Blocked**, **25 Deferred**,
 and **5 shipped Board references**. Active acceptance coverage starts at 0%
-for the 36 active-scope tasks. Source research and mockups do not count as
+for the 60 active-scope tasks. Source research and mockups do not count as
 implementation acceptance. Later status is maintained by the CLI and its
 dated [checkpoint](progress.md), rather than these initial counts.
 
@@ -16,6 +17,7 @@ dated [checkpoint](progress.md), rather than these initial counts.
 
 | Group | Canonical queue tickets | Detailed specification ownership |
 | --- | --- | --- |
+| `core-platform` | CORE-00–CORE-23 | [Extensible core](extensible-core/README.md): public contracts/SDK, supervised plugin runtime, dynamic providers/UI/content, feature extraction and measured migration gates. |
 | `integration` | SW-00–SW-03 | [LUNA-only workflows](luna-only-workflows/README.md): actual capability, effective tool/skill inventory and scoped provider delivery. |
 | `transcript` | SW-05, SW-06, ZI-03; deferred AW-08 | LUNA-only owns ordinary chronology/recovery certification; [Zeron improvements](zeron-upstream-improvements/README.md) owns current checklist wire/fold/presentation; workspace research owns optional preferences. |
 | `artifacts` | IC-0–IC-4, IC-6, SW-07, SW-09; deferred SW-14, AW-12 | [Interactive surfaces](interactive-chat-surfaces/README.md) owns HTML storage/isolation/provider tools/MCP Apps; LUNA-only adds returned media and real user journeys; research adds only optional annotation. |
@@ -78,9 +80,10 @@ flatten research into incomplete standalone tickets.
 
 ## What can start and what must wait
 
-The default first ticket is **SW-00**, the current capability/ownership baseline.
-RM-00 can be independently eligible while provider baseline work runs. Concrete
-ZI-01 snapshot isolation is also initially eligible; ZI-02 follows ZI-01 to
+The default first ticket is **CORE-00**, the current execution/performance and
+extension-boundary baseline. SW-00 follows it for actual provider/mode inventory;
+CORE-01 then supplies shared public contracts. RM-00 now waits for CORE-01.
+Concrete ZI-01 snapshot isolation remains independently eligible; ZI-02 follows ZI-01 to
 preserve the source plan's first/second delivery order. Later claims obey the
 graph and resource reservations, rather than whoever notices a document first.
 
@@ -114,7 +117,9 @@ flowchart LR
   RM06 --> RM07
 ```
 
-The diagram shows the main chains, not every hard prerequisite. `show`,
+The diagram shows the original feature chains, not every hard prerequisite.
+The [core backlog integration](extensible-core/backlog-integration.md) adds the
+CORE prerequisite layer and shared ownership decisions. `show`,
 `status` and `claim` use the full graph in `catalog.json`. IC-5 implements its
 independent Find contract after IC-0; IC-6 integrates artifact titles after
 IC-3. RM-06 consumes already delivered artifact/search capabilities only if
@@ -149,6 +154,12 @@ An old chat, research artifact or unregistered external worker cannot be
 detected reliably from the repository ledger alone.
 
 ## Future intake and maintenance
+
+The later core request added 24 records without replacing the original 66 or
+changing their recorded status/evidence. Twenty existing tasks gained specific
+contract prerequisites, detailed in the core integration map. Deferred product
+ideas remain Deferred; shipped Board references remain Done. No app runtime
+or provider migration is claimed by the planning update.
 
 Use [WORKFLOW.md](WORKFLOW.md) and [the task template](templates/task.json).
 Choose the existing group, add a group only for a distinct coherent workstream,

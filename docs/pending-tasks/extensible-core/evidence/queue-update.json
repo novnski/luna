@@ -1,0 +1,27 @@
+{
+  "added": 24,
+  "total": 90,
+  "groups": 10,
+  "catalog_revision": 27,
+  "preserved_existing_states": 66,
+  "new_gate_targets": 20,
+  "active_scope": {
+    "tasks": 60,
+    "done": 0,
+    "remaining": 60,
+    "accepted_units": 0,
+    "total_units": 234,
+    "acceptance_percent": 0.0
+  },
+  "counts": {
+    "blocked": 1,
+    "cancelled": 0,
+    "deferred": 25,
+    "done": 5,
+    "in_progress": 0,
+    "paused": 0,
+    "ready": 59,
+    "review": 0
+  },
+  "next": "CORE-00"
+}

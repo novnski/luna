@@ -1,23 +1,52 @@
 # Pending task checkpoint
 
-Generated 2026-10-11T02:15:04+03:00.
+Generated 2026-10-11T02:56:38+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **0.0% accepted**, **0/36 Done**.
+Active scope: **0.0% accepted**, **0/60 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: SW-00, RM-00, IC-0, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: CORE-00, ZI-01, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
+
+## Extensible core, SDK and plugin platform
+
+| Ticket | Status | Accepted | Owner / last worker |
+| --- | --- | --- | --- |
+| [CORE-00 — Freeze core invariants and measured execution baselines](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-01 — Publish canonical domain and operation contracts](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-02 — Reorganize tests around retained public contract owners](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-03 — Extract cohesive engine services and supervised lifetimes](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-04 — Make provider IDs, capabilities and discovery dynamic](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-07 — Implement extension supervision and capability broker](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-09 — Extract Codex into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-10 — Extract Claude Code into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-12 — Introduce native UI contribution and view-model contracts](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-13 — Ship independent theme and alternate-sidebar examples](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-14 — Add durable extension content and renderer registration](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-15 — Prove a plugin video renderer on unchanged app bytes](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-16 — Extract browser product behavior into a feature package](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-17 — Extract diff and Git workbench behavior into a feature package](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-18 — Build and validate plugins from inside LUNA](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-21 — Verify platform, host and client compatibility](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-22 — Retire replaced internals and enforce dependency boundaries](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-20 — Certify performance and bounded resource lifetime](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-23 — Certify the integrated extensible application](extensible-core/README.md) | ready | 0.0% | — |
 
 ## Provider access, effective tools and skills
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [SW-00 — Rebase shared capability, ownership and acceptance baseline](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-02 — Deliver scoped Claude MCP access in Ask/Auto](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-03 — Deliver approved skills in intended permission modes](luna-only-workflows/README.md) | ready | 0.0% | — |
+| [SW-00 — Rebase shared capability, ownership and acceptance baseline](luna-only-workflows/README.md) | ready | 0.0% | — |
+| [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | ready | 0.0% | — |
 
 ## Transcript trust, recovery and current checklist
 
@@ -33,15 +62,15 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-07 — Certify the complete visual artifact iteration journey](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [SW-09 — Present authorized visual tool results through shared references](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-14 — Certify one additional connected-app workflow](luna-only-workflows/README.md) | deferred | 0.0% | — |
-| [IC-0 — Prove shared artifacts, provider and Find contracts](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
-| [IC-1 — Build one immutable artifact service and isolated renderer](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-2 — Deliver HTML preview/publish in all three providers](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-3 — Connect durable inline visuals to native transcript lifecycle](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-4 — Host live MCP Apps on their original session](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-6 — Complete HTML, MCP Apps and Find integrated acceptance](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [AW-12 — Selected-element visual feedback and annotation attachments](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
+| [SW-09 — Present authorized visual tool results through shared references](luna-only-workflows/README.md) | ready | 0.0% | — |
+| [IC-0 — Prove shared artifacts, provider and Find contracts](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
+| [IC-1 — Build one immutable artifact service and isolated renderer](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 
 ## Find, source navigation and context migration
 
@@ -59,12 +88,12 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | --- | --- | --- | --- |
 | [ZI-01 — Isolate and bound Latest turn snapshots](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
 | [ZI-02 — Bound workspace registry history without losing offline intent](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
+| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-02 — Task context header and useful startup/empty state](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-04 — Visible project commands, run state and actual service URLs](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-05 — Small model loadout and action-class routes](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-06 — Named Focus, Build and Review layout presets](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-07 — Fresh next Git/review action with a reason](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
-| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-15 — Optional floating task companion](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 
@@ -74,10 +103,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | --- | --- | --- | --- |
 | [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [AW-03 — Attention presentation and source navigation](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
-| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | deferred | 0.0% | — |
-| [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4C — Reusable ticket and action templates](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4D — Bounded dependency dispatch and durable workflow stages](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-0 — Shipped Board baseline: PB-0](devin-project-board/README.md) | done (reference) | 100.0% | — |
@@ -85,16 +111,16 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [PB-1R — Shipped Board baseline: PB-1R](devin-project-board/README.md) | done (reference) | 100.0% | — |
 | [PB-2 — Shipped Board baseline: PB-2](devin-project-board/README.md) | done (reference) | 100.0% | — |
 | [PB-3 — Shipped Board baseline: PB-3](devin-project-board/README.md) | done (reference) | 100.0% | — |
+| [AW-03 — Attention presentation and source navigation](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
+| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
+| [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
 
 ## One direct paired-Mac product
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-16 — Decide optional voice, paired phone and offline requirements](luna-only-workflows/README.md) | deferred | 0.0% | — |
-| [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | ready | 0.0% | — |
-| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | ready | 0.0% | — |
-| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-05 — Expose actual provider policy, questions and approvals on phone](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-06 — Add task-owned phone attachments, files and checkout diffs](control-this-mac/README.md) | ready | 0.0% | — |
@@ -105,6 +131,9 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-11 — Add scoped phone operations and administration views](control-this-mac/README.md) | deferred | 0.0% | — |
 | [RM-12 — Decide and deliver optional awareness, voice and extensions](control-this-mac/README.md) | deferred | 0.0% | — |
 | [RM-13 — Decide optional routes, multi-host and additional clients](control-this-mac/README.md) | deferred | 0.0% | — |
+| [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | ready | 0.0% | — |
+| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
 
 ## Real operations and local recurrence
 

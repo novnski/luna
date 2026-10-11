@@ -1,0 +1,309 @@
+{
+  "baseline": "2838125e42646b5d5ba86a3f8dfbdd93922ec60d",
+  "method": "Tracked owned source only; physical lines include tests/comments. Test attributes are a textual count, not test quality or executed cases. Vendor omitted.",
+  "source_files": 989,
+  "total_lines": 721372,
+  "largest_files": [
+    {
+      "path": "crates/ui/src/shell.rs",
+      "lines": 21594,
+      "bytes": 909648,
+      "sha256": "f13e416c651cb87c9e70a7d8f9cf0e32a1a7a0fc33bc3531598791028fa7455e",
+      "test_attributes": 81,
+      "harness_id_mentions": 32
+    },
+    {
+      "path": "crates/ui/src/composer.rs",
+      "lines": 18132,
+      "bytes": 770115,
+      "sha256": "14caf0758111ead3be45688210171351904534273e69008f07a948f09ef54b28",
+      "test_attributes": 92,
+      "harness_id_mentions": 4
+    },
+    {
+      "path": "crates/engine/src/sessions.rs",
+      "lines": 16591,
+      "bytes": 690506,
+      "sha256": "babec9c609964e3aad49b23846e52346bf8d41d649260e4c4e7d041bbf0b53b5",
+      "test_attributes": 58,
+      "harness_id_mentions": 110
+    },
+    {
+      "path": "crates/ui/src/transcript.rs",
+      "lines": 16283,
+      "bytes": 688934,
+      "sha256": "562b0c4ccc0bb08f9533ca1ed6b7a5e6638573436b2d7411a1c10654cf5b1849",
+      "test_attributes": 106,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/engine/src/rpc.rs",
+      "lines": 13640,
+      "bytes": 599807,
+      "sha256": "eff509ebf14efe6e08d6e92844ed057265e3ad4adbb594d166ef43d717a5492a",
+      "test_attributes": 19,
+      "harness_id_mentions": 59
+    },
+    {
+      "path": "crates/ui/src/pickers.rs",
+      "lines": 10836,
+      "bytes": 457280,
+      "sha256": "98b38460850717f146e10f13e87f952ee182d67fc5db3c40178c3fd914dd9d31",
+      "test_attributes": 28,
+      "harness_id_mentions": 109
+    },
+    {
+      "path": "crates/engine/src/doc_host.rs",
+      "lines": 9896,
+      "bytes": 422899,
+      "sha256": "0a145db04e61e45f066f2796edf06ae6ad4aa8ce0ba06bd20c32013c4fc1f298",
+      "test_attributes": 26,
+      "harness_id_mentions": 12
+    },
+    {
+      "path": "crates/ui/examples/chat-workbench-fixture.rs",
+      "lines": 6793,
+      "bytes": 416822,
+      "sha256": "49ff34846095480debdca87eec6b99af41bd7404f83f3c95001bab449b4f1f16",
+      "test_attributes": 0,
+      "harness_id_mentions": 13
+    },
+    {
+      "path": "crates/ui/src/changes.rs",
+      "lines": 6743,
+      "bytes": 254079,
+      "sha256": "5ab08406d5d22dae4d7ca8942267f0fb383de0052f8dc93faa857ad694bcdf3b",
+      "test_attributes": 36,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/sync/src/store.rs",
+      "lines": 6452,
+      "bytes": 245967,
+      "sha256": "0fcd18929d6cff700fde35ed4043ef36d9c93846b98e70e319aefa7f2904f36a",
+      "test_attributes": 26,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/engine/tests/task_commands.rs",
+      "lines": 6427,
+      "bytes": 215401,
+      "sha256": "8ec76e3052a44c0df591a60e297a8a525e2b6be2593b13deac49b4a86bd2f74f",
+      "test_attributes": 40,
+      "harness_id_mentions": 38
+    },
+    {
+      "path": "crates/ui/src/state.rs",
+      "lines": 6218,
+      "bytes": 251742,
+      "sha256": "37e1b4a7abde66ed80c053b98618c1810740b165851a9bbf449917c3f43389e6",
+      "test_attributes": 56,
+      "harness_id_mentions": 17
+    },
+    {
+      "path": "crates/ui/src/shell/spaces.rs",
+      "lines": 5405,
+      "bytes": 222199,
+      "sha256": "d3a2dc43a74fc70c646b84ae2f133ccb08669f5a07f8e09c6761bc120418e7b8",
+      "test_attributes": 13,
+      "harness_id_mentions": 6
+    },
+    {
+      "path": "crates/ui/src/automations.rs",
+      "lines": 5396,
+      "bytes": 214059,
+      "sha256": "363489b684fa1158b16f54417014b94716d0aa72461b2ebdb9a043eca96cfe33",
+      "test_attributes": 0,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/ui/src/history.rs",
+      "lines": 5311,
+      "bytes": 200941,
+      "sha256": "f1a983c53b28fe86e6a870c53a9a03bf78a350b1afa95799fb6d4fa1238ae74f",
+      "test_attributes": 36,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/engine/tests/e2e.rs",
+      "lines": 5111,
+      "bytes": 176688,
+      "sha256": "08cfba398033cffaca26b3bfe0b1ff77d2b738ccf229b6978ba772cb32175ee3",
+      "test_attributes": 33,
+      "harness_id_mentions": 41
+    },
+    {
+      "path": "crates/ui/src/files/preview.rs",
+      "lines": 4765,
+      "bytes": 184826,
+      "sha256": "bb57c54b6e063957ad27fbd35637a88a6bc107b0f2b25fe6c24dccb0efb2bb13",
+      "test_attributes": 28,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/ui/src/shell/workbench.rs",
+      "lines": 4301,
+      "bytes": 173877,
+      "sha256": "ec86a8413aeb34c9642073d276f584d6a5e1a03b5bec507a164bb866327499ba",
+      "test_attributes": 0,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/harness/tests/codex.rs",
+      "lines": 4214,
+      "bytes": 146157,
+      "sha256": "f3b859d18250c31eff53a2a3f5cd74fe675ed5fe9832d12a1b849600be995ae4",
+      "test_attributes": 82,
+      "harness_id_mentions": 4
+    },
+    {
+      "path": "crates/ui/src/settings/appearance.rs",
+      "lines": 3896,
+      "bytes": 149628,
+      "sha256": "64ed7c3c6362f95eac9feb0732730070e662b24d41a83cae0ceb9b13bfd259ad",
+      "test_attributes": 13,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/ui/src/shell/board/detail.rs",
+      "lines": 3867,
+      "bytes": 153962,
+      "sha256": "f7a15d499f15c65ec19aee710afab19a68f22544125e81b51714565616114de9",
+      "test_attributes": 0,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/ui/src/theme.rs",
+      "lines": 3800,
+      "bytes": 155683,
+      "sha256": "d1ed59ba8bd37c2a3d32d0de3bd975c29df656491c4688a7172580d343466244",
+      "test_attributes": 34,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/engine/src/workspace_host.rs",
+      "lines": 3771,
+      "bytes": 157602,
+      "sha256": "7dfa264fc5e01fed090895009a699b1e5793c75e7da83dbdb854ee016e262987",
+      "test_attributes": 22,
+      "harness_id_mentions": 2
+    },
+    {
+      "path": "crates/ui/examples/board-detail-fixture.rs",
+      "lines": 3578,
+      "bytes": 141233,
+      "sha256": "1c1c795ca219cf4dbeb7bec898d4b83eb10418334c3514939125f09ac43e6092",
+      "test_attributes": 0,
+      "harness_id_mentions": 15
+    },
+    {
+      "path": "crates/ui/src/settings.rs",
+      "lines": 3557,
+      "bytes": 139643,
+      "sha256": "e02332b6fe75434b0c2adf732575a605502624df57c0d0035247df6f8eed5981",
+      "test_attributes": 52,
+      "harness_id_mentions": 1
+    },
+    {
+      "path": "crates/harness/src/codex/mod.rs",
+      "lines": 3548,
+      "bytes": 147040,
+      "sha256": "8d7da6bba16af0942c2718259c6104142e591b71ad7acfcc3f8f0adae4ed258e",
+      "test_attributes": 6,
+      "harness_id_mentions": 5
+    },
+    {
+      "path": "crates/engine/src/backup.rs",
+      "lines": 3518,
+      "bytes": 130552,
+      "sha256": "f80aecd41cf583220fab8fa4eafcee440bbf8bd555cba6f7a6919c956bc677a8",
+      "test_attributes": 3,
+      "harness_id_mentions": 0
+    },
+    {
+      "path": "crates/ui/examples/workbench-performance-fixture.rs",
+      "lines": 3291,
+      "bytes": 147540,
+      "sha256": "ae98fc0e9529f01c87a9e393a55503e5d6ae9b48180cc85bee5664f69077160e",
+      "test_attributes": 0,
+      "harness_id_mentions": 3
+    },
+    {
+      "path": "crates/engine/tests/pane_chat.rs",
+      "lines": 3281,
+      "bytes": 123044,
+      "sha256": "9d9284057ee23002603ce6277677ee1430e81a216e2e959a1116a683b6a4ab28",
+      "test_attributes": 12,
+      "harness_id_mentions": 40
+    },
+    {
+      "path": "crates/ui/examples/board-page-fixture.rs",
+      "lines": 3257,
+      "bytes": 128315,
+      "sha256": "f78b61abd07539b96dd06a78ca285bf0a37e8dad8fd95a6f35bd6215ecfe123d",
+      "test_attributes": 0,
+      "harness_id_mentions": 2
+    }
+  ],
+  "direct_workspace_dependencies": {
+    "Cargo.toml": [],
+    "crates/ui/Cargo.toml": [
+      "luna-proto",
+      "luna-doc",
+      "luna-engine",
+      "luna-harness",
+      "luna-rpc",
+      "luna-update",
+      "luna-syntax",
+      "luna-theme"
+    ],
+    "crates/proto/Cargo.toml": [],
+    "crates/update/Cargo.toml": [],
+    "crates/harness/Cargo.toml": [
+      "luna-proto"
+    ],
+    "crates/theme/Cargo.toml": [],
+    "crates/doc/Cargo.toml": [
+      "luna-proto"
+    ],
+    "crates/preview/Cargo.toml": [
+      "luna-proto"
+    ],
+    "crates/sync/Cargo.toml": [
+      "luna-doc",
+      "luna-proto"
+    ],
+    "crates/syntax/Cargo.toml": [],
+    "crates/rpc/Cargo.toml": [
+      "luna-proto",
+      "luna-sync"
+    ],
+    "crates/engine/Cargo.toml": [
+      "luna-preview",
+      "luna-proto",
+      "luna-doc",
+      "luna-sync",
+      "luna-harness",
+      "luna-rpc",
+      "luna-update"
+    ],
+    "apps/luna-headless/Cargo.toml": [
+      "luna-engine",
+      "luna-rpc",
+      "luna-proto"
+    ],
+    "apps/luna-relay/Cargo.toml": [
+      "luna-rpc",
+      "luna-proto"
+    ],
+    "apps/luna/Cargo.toml": [
+      "luna-engine",
+      "luna-proto",
+      "luna-rpc",
+      "luna-ui",
+      "luna-update"
+    ]
+  },
+  "harness_id_usage_files": 255,
+  "harness_id_mentions": 1744
+}

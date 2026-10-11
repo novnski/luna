@@ -1,9 +1,53 @@
 {
   "schema_version": 1,
-  "revision": 1,
+  "revision": 27,
   "inventory_date": "2026-10-11",
   "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
   "groups": [
+    {
+      "id": "core-platform",
+      "title": "Extensible core, SDK and plugin platform",
+      "milestones": {
+        "Foundation": [
+          "CORE-00",
+          "CORE-01",
+          "CORE-02",
+          "CORE-03",
+          "CORE-04",
+          "CORE-05"
+        ],
+        "First independent provider": [
+          "CORE-06",
+          "CORE-07",
+          "CORE-08"
+        ],
+        "Existing providers": [
+          "CORE-09",
+          "CORE-10",
+          "CORE-11"
+        ],
+        "Workbench and content": [
+          "CORE-12",
+          "CORE-13",
+          "CORE-14",
+          "CORE-15"
+        ],
+        "Feature packages": [
+          "CORE-16",
+          "CORE-17"
+        ],
+        "Authoring and lifecycle": [
+          "CORE-18",
+          "CORE-19"
+        ],
+        "Certification and cleanup": [
+          "CORE-20",
+          "CORE-21",
+          "CORE-22",
+          "CORE-23"
+        ]
+      }
+    },
     {
       "id": "integration",
       "title": "Provider access, effective tools and skills"
@@ -70,7 +114,9 @@
       "order": 0,
       "status": "ready",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-00"
+      ],
       "resources": [
         "planning/provider-baseline"
       ],
@@ -113,7 +159,8 @@
       "status": "ready",
       "aliases": [],
       "depends_on": [
-        "SW-00"
+        "SW-00",
+        "CORE-04"
       ],
       "resources": [
         "engine/runtime-tools",
@@ -489,7 +536,8 @@
       "aliases": [],
       "depends_on": [
         "SW-00",
-        "IC-0"
+        "IC-0",
+        "CORE-14"
       ],
       "resources": [
         "engine/assets",
@@ -853,7 +901,9 @@
       "order": 17,
       "status": "ready",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-01"
+      ],
       "resources": [
         "planning/artifacts",
         "ui/browser"
@@ -898,7 +948,8 @@
       "status": "ready",
       "aliases": [],
       "depends_on": [
-        "IC-0"
+        "IC-0",
+        "CORE-14"
       ],
       "resources": [
         "engine/assets",
@@ -1259,7 +1310,8 @@
         "harness/normalization",
         "doc/parts",
         "ui/transcript",
-        "ui/composer"
+        "ui/composer",
+        "proto"
       ],
       "sources": [
         "docs/pending-tasks/zeron-upstream-improvements/README.md",
@@ -1383,7 +1435,9 @@
       "aliases": [
         "M0"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-01"
+      ],
       "resources": [
         "planning/remote",
         "remote/prototype"
@@ -1426,7 +1480,8 @@
       "status": "ready",
       "aliases": [],
       "depends_on": [
-        "RM-00"
+        "RM-00",
+        "CORE-03"
       ],
       "resources": [
         "engine/commands",
@@ -1530,7 +1585,8 @@
       ],
       "depends_on": [
         "RM-01",
-        "RM-02"
+        "RM-02",
+        "CORE-05"
       ],
       "resources": [
         "remote/projections",
@@ -2055,7 +2111,9 @@
       "order": 43,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/settings"
       ],
@@ -2098,7 +2156,9 @@
       "order": 44,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/shell",
         "ui/composer"
@@ -2142,7 +2202,9 @@
       "order": 45,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/activity"
       ],
@@ -2185,7 +2247,9 @@
       "order": 46,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/project-commands"
       ],
@@ -2228,7 +2292,9 @@
       "order": 47,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "engine/defaults",
         "ui/harnesses"
@@ -2272,7 +2338,9 @@
       "order": 48,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/layout"
       ],
@@ -2315,7 +2383,9 @@
       "order": 49,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "engine/git",
         "ui/changes"
@@ -2360,7 +2430,8 @@
       "status": "deferred",
       "aliases": [],
       "depends_on": [
-        "ZI-03"
+        "ZI-03",
+        "CORE-12"
       ],
       "resources": [
         "ui/transcript",
@@ -2450,7 +2521,9 @@
       "order": 52,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-03"
+      ],
       "resources": [
         "engine/admission",
         "ui/activity"
@@ -2494,7 +2567,9 @@
       "order": 53,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-01"
+      ],
       "resources": [
         "engine/project-config",
         "ui/project-commands"
@@ -2585,7 +2660,9 @@
       "order": 55,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-12"
+      ],
       "resources": [
         "ui/windows"
       ],
@@ -2678,7 +2755,10 @@
       "order": 57,
       "status": "deferred",
       "aliases": [],
-      "depends_on": [],
+      "depends_on": [
+        "CORE-05",
+        "CORE-06"
+      ],
       "resources": [
         "engine/board",
         "engine/tracker"
@@ -3033,6 +3113,1237 @@
         }
       ],
       "blocker": "Planning record says intended clients cannot anonymously access this private repository and no published Releases exist. Revalidate access/assets before unblocking; queue setup did not publish releases or change visibility."
+    },
+    {
+      "id": "CORE-00",
+      "title": "Freeze core invariants and measured execution baselines",
+      "group": "core-platform",
+      "priority": 0,
+      "order": -100,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "planning/core",
+        "qa/core-baseline"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Establish current invariants, performance budgets and narrow runtime/UI feasibility before reconstructing the core.",
+      "resume": "Read the CORE-00 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Record current source/runtime/platform and existing contract owners; separate baseline failures and consume this source audit without repeating it.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Demonstrate versioned worker handshake, bounded Wasm host-call cancellation, dynamic native contribution and unknown-plugin fallback; record the chosen technical ADR and numeric budgets.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E01/E02 retain reproducible current workloads, raw metrics and prototype receipts; source counts or historical traces are not current performance proof.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-01",
+      "title": "Publish canonical domain and operation contracts",
+      "group": "core-platform",
+      "priority": 0,
+      "order": 101,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-00",
+        "SW-00"
+      ],
+      "resources": [
+        "proto",
+        "rpc",
+        "engine/runtime-tools"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Provide versioned typed domain/operation identities, authority metadata, schemas and compatibility rules for all clients and extension boundaries.",
+      "resume": "Read the CORE-01 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define query/command/watch, target/principal, error, receipt, cancellation and limit contracts with stable namespaced IDs and legacy wire compatibility.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Generate schema/operation and policy-coverage metadata; preserve handler-owned authorization, existing method spellings and historical payload hashes.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E03 independent old/new/cross-language and denied-method cases prove compatibility and authority before IC/RM consumers build against the contract.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-02",
+      "title": "Reorganize tests around retained public contract owners",
+      "group": "core-platform",
+      "priority": 0,
+      "order": 102,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-00"
+      ],
+      "resources": [
+        "qa/tests",
+        "engine",
+        "harness",
+        "ui"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Rebase the recent audit and move or consolidate touched tests around real boundaries while preserving independently useful regression proof.",
+      "resume": "Read the CORE-02 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Rebase current R/F/C/D ledgers, non-test callers, exact failure contracts, baseline failures and CI/native target ownership for each touched area.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Move retained keepers and resolve named test-only seams or unrouted examples through test-audit; retain distinct provider peers and legitimate wire/parser contracts.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E04 retains before/after commands, observed failures, selected independent mutation/refusal proof and actual route mapping; no deletion quota or self-asserting replacement suite.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-03",
+      "title": "Extract cohesive engine services and supervised lifetimes",
+      "group": "core-platform",
+      "priority": 0,
+      "order": 103,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-02"
+      ],
+      "resources": [
+        "engine",
+        "rpc"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Separate engine composition, admission, runs, projections and owned resources while retaining one authoritative profile and durable recovery path.",
+      "resume": "Read the CORE-03 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Specify service ports, write/instance ownership, start/stop order, cancellation, backpressure and stale-epoch behavior before extraction.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Extract bounded owners from EngineCore/sessions/doc_host/RPC; preserve receipts, native execution identity, journaling and efficient in-process paths.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E05 existing public command/restart/identity/race keepers pass with independent store, sequence, process and lock readback before old paths are removed.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-04",
+      "title": "Make provider IDs, capabilities and discovery dynamic",
+      "group": "core-platform",
+      "priority": 0,
+      "order": 104,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-03"
+      ],
+      "resources": [
+        "proto",
+        "engine",
+        "harness",
+        "ui/pickers"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Allow stable provider identities and live registry updates without adding a compiled enum branch or corrupting old conversations.",
+      "resume": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define legacy aliases, unknown/retired provider reads and exact host/account/executable/generation provenance.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Introduce dynamic registry/capability/model projections and picker updates while retaining built-in compatibility registrations and original task/session bindings.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E06 migration, missing provider, namespace collision and stale-catalog native scenarios preserve history/account/permissions through restart.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-05",
+      "title": "Deliver public typed SDKs and unified CLI operations",
+      "group": "core-platform",
+      "priority": 0,
+      "order": 105,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-03"
+      ],
+      "resources": [
+        "sdk",
+        "rpc",
+        "apps/cli",
+        "ui/client"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "App, CLI and independent Rust/TypeScript SDK clients use the same typed authorized operations and durable receipts.",
+      "resume": "Read the CORE-05 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define SDK/API versioning, runtime validation, watch disposal/cursor repair, error and unknown-outcome semantics from CORE-01.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Publish generated typed clients and schemas, extend CLI discovery/control and move one complete app use case onto the same boundary without private engine imports.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E03/E07 independent clients exercise the same allowed/denied operation and compare exact receipts, state and subscription cleanup; preserve inspect JSON compatibility.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-06",
+      "title": "Add extension manifests, local packages and explicit grants",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 106,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-03"
+      ],
+      "resources": [
+        "extensions/packages",
+        "engine/profile",
+        "engine/permissions",
+        "ui/extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Install validated immutable extension candidates outside the app bundle and enable only the exact compatible package with explicit grants.",
+      "resume": "Read the CORE-06 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Specify IDs/hashes/API/platform/runtime/dependencies, contribution namespace and settings/data/trust scopes; separate install from execution.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement staged local validation/install, disabled candidates, explicit enable/disable and grant persistence with protected inspection/management.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E08 real package bytes prove traversal/symlink/hash/dependency refusals, no code execution on install and correct profile/crash-restart grant behavior.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-07",
+      "title": "Implement extension supervision and capability broker",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 107,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-06"
+      ],
+      "resources": [
+        "extensions/runtime",
+        "engine/runtime-tools",
+        "engine/permissions",
+        "platform/process"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Run portable logic and native provider workers through versioned supervised instances with accurately enforced authority and resource limits.",
+      "resume": "Read the CORE-07 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Pin the CORE-00 runtime/trust decision, handshake/version/hash rules and server-owned plugin-instance/target/grant principal.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement narrow broker imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine without exposing owner IPC.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E09 actual denied/forged-target/hang/flood/crash/restart cases retain OS process/resource and unchanged unrelated-work readback; no false native-sandbox claim.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-08",
+      "title": "Prove a new provider plugin without updating the app",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 108,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-04",
+        "CORE-05",
+        "CORE-07"
+      ],
+      "resources": [
+        "extensions/providers",
+        "harness",
+        "ui/pickers",
+        "engine/runtime-tools"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "An externally authored SDK-only provider package can be enabled, list real models and complete a task in the normal picker on unchanged app bytes.",
+      "resume": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Implement mandatory/optional provider conformance profiles with exact run/input/approval/Stop/continuity and unsupported-capability semantics.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Create and install an external package for an actual selected CLI using public SDKs only; wire registry/model updates and real execution.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E10 retains native picker/run/control/failure evidence, original provider identities and before/after app/bundle hashes; a catalog row alone does not pass.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-09",
+      "title": "Extract Codex into a first-party provider package",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 109,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-08",
+        "CORE-02"
+      ],
+      "resources": [
+        "harness/normalization",
+        "harness/codex",
+        "engine/providers",
+        "extensions/providers/codex"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Codex runs through an independently versioned public provider worker while preserving its current native protocol and policy behavior.",
+      "resume": "Read the CORE-09 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Map Codex-specific account/catalog/update/policy facts and every retained native wire contract to public SDK/broker operations.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Package the real adapter; preserve tool/media/child identity, steering, native history, usage, credentials and permissions without core/picker name shortcuts.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E11 Codex peers and real fresh/resumed/old-chat/version-pinned update/refusal scenarios pass before retiring the original registration.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-10",
+      "title": "Extract Claude Code into a first-party provider package",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 110,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-08",
+        "CORE-02"
+      ],
+      "resources": [
+        "harness/normalization",
+        "harness/claude",
+        "engine/providers",
+        "extensions/providers/claude"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Claude's public provider package retains stream-json, writer/resume protection, actual mode eligibility and existing extension/tool semantics.",
+      "resume": "Read the CORE-10 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Map current Claude contracts and SW-02/03 evidence or honest unresolved limitations, including auxiliary subprocess cwd/authority.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Package the adapter and provider-owned settings/account operations; preserve Ask/Auto/Full ceilings, questions/goals/history/images and native ownership.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E11 provider-specific peers plus live current capabilities and refusal modes pass with old chats preserved; extraction never certifies unavailable Auto/MCP behavior.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-11",
+      "title": "Extract OpenCode into a first-party provider package",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 111,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-08",
+        "CORE-02"
+      ],
+      "resources": [
+        "harness/normalization",
+        "harness/opencode",
+        "engine/providers",
+        "extensions/providers/opencode"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "OpenCode 2 uses the public worker contract while preserving HTTP/SSE ordering, permission readback, native child and uncertain-delivery behavior.",
+      "resume": "Read the CORE-11 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Record current OpenCode 2 capability/version/server/port ownership and actual model-variant/account semantics.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Package the existing adapter under supervised lifecycle with core-owned admission; retain exact SSE/event/session/permission and recovery behavior.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E11 retained peers and real run/steer/stop/reconnect/late-event cases pass; no retired OpenCode 1 or ACP path is reintroduced.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-12",
+      "title": "Introduce native UI contribution and view-model contracts",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 112,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-03",
+        "CORE-05",
+        "CORE-06",
+        "CORE-07"
+      ],
+      "resources": [
+        "ui",
+        "extensions/ui"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Stable registered commands, settings, sidebar and panel contributions use authorized native view models while the host owns rendering, focus and recovery.",
+      "resume": "Read the CORE-12 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define contribution IDs/placement/context/lifetime/fallback and protected host UI; no plugin GPUI entities or synchronous work on render callbacks.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Migrate selected built-in shell surfaces to the same public contribution/client interfaces and support bounded declarative external views/actions.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E12 native add/remove/restart/unknown-layout/focus/AX/draft/stale-callback tests retain exact task identity and accessible permission/safe-mode controls.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-13",
+      "title": "Ship independent theme and alternate-sidebar examples",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 113,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-12"
+      ],
+      "resources": [
+        "ui/shell",
+        "ui/theme",
+        "extensions/ui"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Users can enable a theme/layout and alternate sidebar using public contributions and return to the default without losing context or updating the app.",
+      "resume": "Read the CORE-13 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Reuse existing theme formats/tokens, preference scope and host task/project projection; keep appearance separate from execution privileges.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Build external example packages for grouping/order/badges/actions and preview/enable/disable with a reachable known-good layout.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E12 no-app-update native keyboard/AX/narrow/reduced-motion and malformed/removed/excessive-update cases preserve selection and drafts.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-14",
+      "title": "Add durable extension content and renderer registration",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 114,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-01",
+        "CORE-03",
+        "CORE-12",
+        "IC-0"
+      ],
+      "resources": [
+        "proto",
+        "doc/parts",
+        "engine/assets",
+        "ui/transcript",
+        "extensions/renderers"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Namespaced content and renderer references survive restart, removal and older readers with exact asset authority and safe fallback.",
+      "resume": "Read the CORE-14 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Agree the generic envelope/registration against IC-0's shared asset contract and existing privacy/omission rules.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement stable part IDs, bounded metadata, owner references and renderer resolution/lifetime; leave concrete HTML storage/isolation to IC-1.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E13 old/new/mobile unknown-content, fork/delete/rollback/restart and actual native projection/denied asset reads preserve durable content without leaking payloads.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-15",
+      "title": "Prove a plugin video renderer on unchanged app bytes",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 115,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-14",
+        "IC-1",
+        "CORE-07"
+      ],
+      "resources": [
+        "extensions/renderers/video",
+        "ui/transcript",
+        "ui/browser",
+        "engine/assets"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "An independently enabled renderer plays and seeks authorized chat video with bounded visible lifetime and useful offline/disabled fallback.",
+      "resume": "Read the CORE-15 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Choose the IC isolated surface or the CORE-00-proven host media primitive and define format/platform/asset/lifecycle limits.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Create the SDK-only renderer with playback/seek/export, offscreen disposal and accessible controls through existing authorized media services.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E13 real native playback/seek/scroll/restart/disable retains media/app hashes, independent action/frame readback and resource samples.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-16",
+      "title": "Extract browser product behavior into a feature package",
+      "group": "core-platform",
+      "priority": 2,
+      "order": 116,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-12",
+        "CORE-07"
+      ],
+      "resources": [
+        "ui/browser",
+        "ui/shell",
+        "extensions/browser",
+        "platform/browser"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Browser chrome, commands and product state become public contributions over a narrow host-owned native browser service.",
+      "resume": "Read the CORE-16 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define native-view/thread/storage/permission and exact tab/host lifecycle boundaries separately from offline HTML/MCP Apps.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Package browser product behavior while preserving WebKit/WebKitGTK mechanics, previews, downloads/navigation, keyboard and ordinary browser isolation.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E14 retained native browser/preview plus disable/update/restart/focus/host scenarios pass without internal shell access or accidental app-tool bridge.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-17",
+      "title": "Extract diff and Git workbench behavior into a feature package",
+      "group": "core-platform",
+      "priority": 2,
+      "order": 117,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-12",
+        "CORE-03",
+        "ZI-01"
+      ],
+      "resources": [
+        "ui/changes",
+        "ui/shell",
+        "engine/diffs",
+        "engine/git",
+        "extensions/diff"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Diff/review/Git workbench contributions consume typed checkout/snapshot operations with unchanged core authority and freshness.",
+      "resume": "Read the CORE-17 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define comparison/line/base/root contracts and consume ZI-01 private bounded snapshots; preserve dirty/unsaved and mutation grants.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Package diff/review presentation and workflows using public host operations, preserving all current comparison modes and actual Git results.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E14 independent Git/index/ref/patch oracle and native navigation/update/disable/restart evidence prove exact target and refusal behavior.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-18",
+      "title": "Build and validate plugins from inside LUNA",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 118,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-05",
+        "CORE-08",
+        "CORE-12",
+        "CORE-14"
+      ],
+      "resources": [
+        "sdk/devtools",
+        "extensions/authoring",
+        "engine/runtime-tools",
+        "ui/extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "A LUNA agent can scaffold, test and preview a real external plugin that the user deliberately enables for normal app use.",
+      "resume": "Read the CORE-18 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Provide public provider/command/sidebar/renderer templates, toolchain discovery and disposable dev-host/conformance contracts.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Connect in-app authoring to SDK/CLI packaging and exact hashed candidate preview; keep code generation, testing, enablement and publishing distinct.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E15 actual request-to-external-project-to-tests-to-preview-to-user-enable journey runs through normal picker/UI; declined or changed candidates cannot self-activate.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-19",
+      "title": "Complete plugin updates, rollback, removal and safe mode",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 119,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-06",
+        "CORE-07"
+      ],
+      "resources": [
+        "extensions/packages",
+        "extensions/runtime",
+        "engine/profile",
+        "ui/extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Plugin version changes and failures preserve active runs, grants, compatible data and a protected recovery path.",
+      "resume": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Specify active version pins, drain/stop and unknown-delivery reconciliation, dependency/API compatibility, expanded grants and data migrations.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Implement atomic staged update, explicit activation, quarantine, rollback compatibility, separate uninstall/data erasure and offline safe mode.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E08/E09/E16 failed install/update, active run, crash, migration rollback and protected recovery retain independent package/process/state/grant evidence.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-21",
+      "title": "Verify platform, host and client compatibility",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 121,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-05",
+        "CORE-08",
+        "CORE-12",
+        "CORE-14",
+        "CORE-19"
+      ],
+      "resources": [
+        "qa/core-platforms",
+        "rpc/remote",
+        "client/runtime",
+        "platform"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Execution-host plugins and client presentations retain exact identity, authority and compatible fallbacks across supported environments.",
+      "resume": "Read the CORE-21 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Define per-platform/runtime support and host/client installation, credential, capability and old/mobile-reader boundaries.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Exercise two hosts with different packages/versions and missing renderers using supported existing scopes; keep unavailable direct task operations refused until RM delivers them.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E03/E07/E16 real supported platform builds/native cases and independent two-host/version/state readback pass; unavailable evidence remains a certification blocker.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-22",
+      "title": "Retire replaced internals and enforce dependency boundaries",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 122,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-09",
+        "CORE-10",
+        "CORE-11",
+        "CORE-13",
+        "CORE-15",
+        "CORE-16",
+        "CORE-17",
+        "CORE-21"
+      ],
+      "resources": [
+        "engine",
+        "harness",
+        "ui",
+        "sdk",
+        "extensions"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Core and views no longer depend on concrete provider/feature internals, while supported historical data and the default app remain intact.",
+      "resume": "Read the CORE-22 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Identify superseded paths and actual consumers using retained acceptance, preserving required wire aliases and compatibility readers.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Remove proven-replaced registration/private imports/seams; split remaining concentration by domain/lifetime and build extensions against published SDK artifacts.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E04/E05/E11/E12/E14 keepers, independent package builds and current dependency evidence prove no hidden privileged built-in shortcut or lost default feature.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-20",
+      "title": "Certify performance and bounded resource lifetime",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 120,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-22"
+      ],
+      "resources": [
+        "qa/core-performance",
+        "extensions/runtime",
+        "ui",
+        "engine"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "Measured total application and extension performance meets the current workload budgets after extraction and cleanup.",
+      "resume": "Read the CORE-20 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Reproduce CORE-00 hardware/data/build/provider/cache baselines and account for core plus workers and native graphics separately.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Measure latency quantiles, startup/idle/activation, CPU/footprint/wakeups, queues/watchers/cleanup and build/test cost; repair failed budgets at their owner.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E02 final traces/raw samples/hashes and exact budget deltas demonstrate results; moving memory to workers or shrinking source files earns no optimization claim.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "CORE-23",
+      "title": "Certify the integrated extensible application",
+      "group": "core-platform",
+      "priority": 1,
+      "order": 123,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [
+        "CORE-18",
+        "CORE-19",
+        "CORE-20",
+        "CORE-21",
+        "CORE-22"
+      ],
+      "resources": [
+        "qa/core-release"
+      ],
+      "sources": [
+        "docs/pending-tasks/extensible-core/README.md",
+        "docs/pending-tasks/extensible-core/source-audit.md",
+        "docs/pending-tasks/extensible-core/architecture.md",
+        "docs/pending-tasks/extensible-core/implementation.md",
+        "docs/pending-tasks/extensible-core/verification.md",
+        "docs/pending-tasks/extensible-core/backlog-integration.md"
+      ],
+      "outcome": "The signed app supports real external provider, UI and media extensions plus extracted defaults, safe lifecycle and measured performance through public APIs.",
+      "resume": "Read the CORE-23 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "Assemble required E01-E16 evidence, compatibility and current/old-data scenarios without claiming unrelated deferred marketplace/mobile delivery.",
+          "weight": 1
+        },
+        {
+          "id": "delivery",
+          "text": "Run actual native provider creation/enable/use, custom sidebar, plugin video, browser/diff and controlled update/disable/rollback/restart journeys.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "E01-E16 required owners pass with real supported paths and unchanged app/bundle hashes during plugin-only changes; no hidden special build or private registration.",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete required focused build/E2E/lint/format/review, retain hashed evidence and limitations, refresh and verify LUNA Dev after runtime changes, and deliver verified origin/main plus queue checkpoint.",
+          "weight": 1
+        }
+      ]
     }
   ]
 }

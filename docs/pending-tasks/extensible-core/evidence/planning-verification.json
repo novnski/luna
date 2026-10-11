@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-11",
+  "baseline_commit": "2838125e42646b5d5ba86a3f8dfbdd93922ec60d",
+  "scope": "Source architecture investigation and pending-task documentation only",
+  "core_tickets": 24,
+  "queue_total": 90,
+  "queue_groups": 10,
+  "original_ticket_states_preserved": 66,
+  "dependency_gate_targets": 20,
+  "markdown_file_links_checked": 95,
+  "broken_links": [],
+  "captured_source_hashes_checked": 989,
+  "changed_captured_source_files": [],
+  "fresh_store_snapshot_restore": "passed",
+  "fresh_store_next": "CORE-00",
+  "counts": {
+    "blocked": 1,
+    "cancelled": 0,
+    "deferred": 25,
+    "done": 5,
+    "in_progress": 0,
+    "paused": 0,
+    "ready": 59,
+    "review": 0
+  },
+  "active_acceptance": {
+    "tasks": 60,
+    "done": 0,
+    "remaining": 60,
+    "accepted_units": 0,
+    "total_units": 234,
+    "acceptance_percent": 0.0
+  },
+  "runtime_or_performance_tests_run": false,
+  "live_inspect": {
+    "exit_code": 3,
+    "result": "local Dev engine on 127.0.0.1:59777 unavailable; no app launched"
+  },
+  "commands": [
+    "python3 scripts/pending_tasks.py validate",
+    "python3 scripts/pending_tasks.py --state-dir <fresh local directory> status",
+    "python3 scripts/pending_tasks.py --state-dir <fresh local directory> next",
+    "verify referenced local files and per-file SHA-256 inventory",
+    "git diff --check"
+  ]
+}

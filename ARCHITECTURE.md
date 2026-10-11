@@ -1,5 +1,13 @@
 # luna — Architecture
 
+> This document retains the initial architecture and historical assumptions.
+> Current core/SDK/plugin reconstruction is specified in
+> [Extensible core](docs/pending-tasks/extensible-core/README.md), with a
+> [current-source audit](docs/pending-tasks/extensible-core/source-audit.md).
+> The historical “no backwards compatibility required” statement below does
+> not apply to that migration: existing users, providers, data and clients must
+> retain their supported behavior.
+
 A ground-up native rewrite of [luna](../luna) — a multi-device controller for coding agents
 (Claude Code / Codex) — in Rust, with a gpui UI. Fresh app; no backwards compatibility required.
 

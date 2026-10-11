@@ -37,7 +37,7 @@ python3 scripts/pending_tasks.py list --status paused
 `list` defaults to compact rows; `list --full` includes contracts. `show` returns the full ticket. `history`
 returns its durable events. `status` shows counts, acceptance coverage, expired
 claims, next eligible tickets and the remote milestones. Supply `--group` to
-`list`, `next` or `claim` to scope selection; see the nine group IDs in status.
+`list`, `next` or `claim` to scope selection; see the current group IDs in status.
 
 The root [agent instructions](../../AGENTS.md) make this the default for
 “pick up the next pending task.” A catalog assignment is development scope;

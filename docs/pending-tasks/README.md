@@ -20,24 +20,27 @@ contains the contracts; `status` reads live ownership across linked worktrees.
 The report is a dated checkpoint. [templates/task.json](templates/task.json)
 and `add` admit new tasks without losing progress.
 
-## Initial scope, 11 October 2026
+## Planned scope, updated 11 October 2026
 
 | State | Entries | Meaning |
 | --- | ---: | --- |
-| Ready | 35 | Concrete specified work; dependencies/resources determine eligibility. |
+| Ready | 59 | Concrete specified work; dependencies/resources determine eligibility. |
 | Blocked | 1 | Real updater trial awaiting its recorded external prerequisites. |
 | Deferred | 25 | Later client extensions, optional journeys and research ideas awaiting bounded scope decisions. |
 | Done references | 5 | Shipped PB-0/1/1R/2/3; excluded from active progress. |
 
-**36 active-scope tasks, 0% accepted completion at setup.** Progress measures
+**90 entries across 10 workstreams; 60 active-scope tasks, 0% accepted completion at this planning update.** Progress measures
 evidenced acceptance criteria, not estimated time. The default first ticket is
-**SW-00**, the current capability/ownership baseline. Later status comes from
-the live CLI and generated checkpoint, not these initial counts.
+**CORE-00**, the measured core/extension baseline. The new
+[core, SDK and plugin program](extensible-core/README.md) adds 24 tasks and
+coordinates prerequisite contracts with existing features. Later status comes
+from the live CLI and generated checkpoint, not these planning counts.
 
 ## Detailed specifications
 
 | Source package | Queue ownership |
 | --- | --- |
+| [Extensible core, SDK and plugins](extensible-core/README.md) | CORE-00–CORE-23: stable core/client contracts, independent providers, UI/content extensions, feature extraction, lifecycle and measured acceptance. |
 | [LUNA-only workflows](luna-only-workflows/README.md) | SW-00–SW-16: integration, operations, transcript/recovery, helper and switching journeys; consumes shared feature owners. |
 | [Interactive surfaces](interactive-chat-surfaces/README.md) | IC-0–IC-6: shared storage/renderer, all-provider HTML, MCP Apps, conversation Find and integrated acceptance. |
 | [Useful Zeron changes](zeron-upstream-improvements/README.md) | ZI-01–ZI-05: bounded snapshots/registry, current checklist, typed file navigation and workspace text search. |
