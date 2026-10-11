@@ -697,7 +697,10 @@ final class AppModel {
     /// promise: an upstream host can have the same version without its doc/RPC
     /// surface. Attachments require the stronger queue capability.
     func hostSupportsMessageQueue(_ chat: Chat, attachments: Bool = false) -> Bool {
-        guard demo == nil else { return false }
+        // The offline demo session queues text locally, as its dataset already
+        // does; refusing made a send during a demo reply keep the draft behind
+        // an "update the engine" error. Demo attachments cannot be staged.
+        if demo != nil { return !attachments }
         let capability = attachments
             ? EngineCapability.messageQueueAttachmentsV1
             : EngineCapability.messageQueueV1

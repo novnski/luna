@@ -15,5 +15,10 @@
   "failed": [
    "MobilePolishTests testSendClearsComposerAndKeepsTheNextDraft"
   ]
+ },
+ "afterFix": {
+  "change": "AppModel.hostSupportsMessageQueue: the offline demo session queues text locally",
+  "isolated": "testSendClearsComposerAndKeepsTheNextDraft: 1 run, 0 failures",
+  "full": "LunaTests 113/113, LunaUITests 14/14"
  }
 }

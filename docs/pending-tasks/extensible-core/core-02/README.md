@@ -49,7 +49,7 @@ Source before the change: `5285702d` (11 October 2026). Live status belongs to
 | `harness claude_goals::resumed_session_seeds_claudes_restored_goal` | GitHub Linux (`afd8455b`) | Passes 5/5 isolated on macOS; Linux-specific, not reproduced | Open; harness Claude goals owner needs a Linux reproduction. Still blocking in CI |
 | `linux-browser`: "blur sample did not cover the checkerboard" | GitHub Linux | Native-pixel evidence; the runner reports DRI3/EGL errors | Open; browser fixture owner |
 | `macos-frame-recovery`: "repeated tab/toolbar tooltip disrupted the live page" | GitHub macOS | Native UI fixture | Open; browser fixture owner |
-| `LunaUITests.MobilePolishTests.testSendClearsComposerAndKeepsTheNextDraft` | Local simulator, full and isolated | Deterministic: the composer is not cleared within 3 s after send | Open; iOS composer owner |
+| `LunaUITests.MobilePolishTests.testSendClearsComposerAndKeepsTheNextDraft` | Local simulator, full and isolated | Deterministic: demo mode refused to queue a send made during a reply, so the draft stayed | **Fixed** after CORE-02 (`AppModel.hostSupportsMessageQueue`); LunaTests 113/113, LunaUITests 14/14 |
 
 Nothing is quarantined: each open failure keeps failing loudly where it runs.
 
