@@ -1,0 +1,18 @@
+{
+  "provider": "claude-code",
+  "run": "run-20261011T161500Z-XwZ8HH",
+  "entries": 8,
+  "nativeItems": 17,
+  "lunaItems": 17,
+  "checks": {
+    "N1": true,
+    "N2": true,
+    "N3": true,
+    "N4": true,
+    "N5": true,
+    "N6": true,
+    "N7": true,
+    "N8": true
+  },
+  "passed": true
+}

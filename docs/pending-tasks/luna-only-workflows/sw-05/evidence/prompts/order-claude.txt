@@ -1,0 +1,8 @@
+Transcript-ordering QA. Do exactly these steps in order. Put every sentence on its own line and do not merge steps.
+1. Write: Step one, listing files. Then run the shell command: ls -1
+2. Write: Step two, waiting. Then run: sleep 4; echo second-done
+3. Use the LUNA create_thread tool to start one helper thread whose task is: Reply with exactly: helper-ok. Set reportResults to true and continueParent to false.
+4. Use your Agent (Task) tool to launch one subagent with the instruction: Run the shell command sleep 3; echo child-done and report its output.
+5. Write: Step five, continuing while the helper works. Then run: sleep 12; echo fifth-done
+6. Write: Step six, final check. Then run: echo final
+7. End with the single line: All steps done.

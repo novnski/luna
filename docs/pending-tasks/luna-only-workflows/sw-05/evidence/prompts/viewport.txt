@@ -1,0 +1,1 @@
+Viewport QA. Write the numbered lines 1 to 60, each on its own line, in the form: Line N: steady text for the viewport check. Then run the shell command: sleep 20; echo half-done. Then write lines 61 to 120 in the same form. Then run: sleep 20; echo tail-done. End with the single line: Tail complete.

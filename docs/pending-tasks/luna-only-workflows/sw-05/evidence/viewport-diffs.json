@@ -1,0 +1,288 @@
+{
+ "codex-V1-near-tail-while-streaming": {
+  "region_0.6scale": [
+   240,
+   95,
+   640,
+   380
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "codex-V1-near-tail-while-streaming-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "codex-V1-near-tail-while-streaming-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 3,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 2,
+    "file": "codex-V1-near-tail-while-streaming-2.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 3,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 3,
+    "file": "codex-V1-near-tail-while-streaming-3.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 4,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "codex-V1V2-mid-history-through-turn-end": {
+  "region_0.6scale": [
+   240,
+   95,
+   640,
+   375
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "codex-V1V2-mid-history-through-turn-end-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "codex-V1V2-mid-history-through-turn-end-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 5,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 2,
+    "file": "codex-V1V2-mid-history-through-turn-end-2.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 4,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 3,
+    "file": "codex-V1V2-mid-history-through-turn-end-3.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 4,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "codex-V3-chat-switch-and-back": {
+  "region_0.6scale": [
+   240,
+   95,
+   640,
+   375
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "codex-V3-chat-switch-and-back-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "codex-V3-chat-switch-and-back-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 7,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "claude-V1-near-tail-while-streaming": {
+  "region_0.6scale": [
+   240,
+   95,
+   590,
+   340
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "claude-V1-near-tail-while-streaming-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "claude-V1-near-tail-while-streaming-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 2,
+    "file": "claude-V1-near-tail-while-streaming-2.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 3,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 3,
+    "file": "claude-V1-near-tail-while-streaming-3.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 3,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 4,
+    "file": "claude-V1-near-tail-while-streaming-4.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 4,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "claude-V1V2-mid-history-through-turn-end": {
+  "region_0.6scale": [
+   240,
+   95,
+   590,
+   325
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "claude-V1V2-mid-history-through-turn-end-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "claude-V1V2-mid-history-through-turn-end-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 2,
+    "file": "claude-V1V2-mid-history-through-turn-end-2.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "claude-V3-chat-switch-and-back": {
+  "region_0.6scale": [
+   240,
+   95,
+   590,
+   325
+  ],
+  "frames": [
+   {
+    "frame": 0,
+    "file": "claude-V3-chat-switch-and-back-0.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 0,
+    "changedPixels>16": 0
+   },
+   {
+    "frame": 1,
+    "file": "claude-V3-chat-switch-and-back-1.jpg",
+    "meanAbsDiff": 0.0,
+    "maxDiff": 6,
+    "changedPixels>16": 0
+   }
+  ]
+ },
+ "codex-V4-resize-smaller": {
+  "frames": [
+   "codex-V4-resize-smaller-0.jpg",
+   "codex-V4-resize-smaller-1.jpg"
+  ],
+  "check": "first visible rows identical text before/after (visual readback)"
+ },
+ "claude-V4-resize-fill": {
+  "frames": [
+   "claude-V4-resize-fill-0.jpg",
+   "claude-V4-resize-fill-1.jpg"
+  ],
+  "check": "first visible rows identical text before/after (visual readback)"
+ },
+ "positive_controls": {
+  "codex: composer stop->send across turn end (same series)": {
+   "meanAbsDiff": 24.774,
+   "maxDiff": 221,
+   "frames": [
+    "x0ei91",
+    "ug5zhr"
+   ],
+   "region_0.6scale": [
+    600,
+    425,
+    640,
+    450
+   ]
+  },
+  "claude: composer stop->send across turn end (same series)": {
+   "meanAbsDiff": 35.195,
+   "maxDiff": 227,
+   "frames": [
+    "a8efb1",
+    "f75wa7"
+   ],
+   "region_0.6scale": [
+    565,
+    370,
+    595,
+    395
+   ]
+  },
+  "codex: transcript before vs after the mid-history scroll": {
+   "meanAbsDiff": 39.301,
+   "maxDiff": 230,
+   "frames": [
+    "ug5zhr",
+    "crsi9e"
+   ],
+   "region_0.6scale": [
+    240,
+    95,
+    640,
+    375
+   ]
+  },
+  "claude: transcript before vs after the mid-history scroll": {
+   "meanAbsDiff": 32.597,
+   "maxDiff": 234,
+   "frames": [
+    "a8efb1",
+    "fd0caz"
+   ],
+   "region_0.6scale": [
+    240,
+    95,
+    590,
+    325
+   ]
+  },
+  "codex: Main vs helper tab (V3 switch really changed view)": {
+   "meanAbsDiff": 18.993,
+   "maxDiff": 222,
+   "frames": [
+    "ug5zhr",
+    "o3alln"
+   ],
+   "region_0.6scale": [
+    240,
+    95,
+    640,
+    375
+   ]
+  }
+ }
+}

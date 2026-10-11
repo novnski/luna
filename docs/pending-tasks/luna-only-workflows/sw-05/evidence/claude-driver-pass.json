@@ -1,0 +1,6 @@
+{
+  "scenario": "sw05-claude",
+  "tier": "T3",
+  "provider": "claude-code",
+  "passedAt": "2026-10-11T16:16:41.741Z"
+}

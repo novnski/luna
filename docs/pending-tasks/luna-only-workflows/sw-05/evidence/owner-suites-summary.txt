@@ -1,0 +1,24 @@
+     Running tests/claude_native_agents.rs (target/debug/deps/claude_native_agents-c6bd064605e8a506)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+     Running tests/claude_native_tasks.rs (target/debug/deps/claude_native_tasks-7af9660052834c5d)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+     Running tests/codex_subagents.rs (target/debug/deps/codex_subagents-1b9f83d8a883287f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+     Running tests/timeline_order_e2e.rs (target/debug/deps/timeline_order_e2e-be10c7b4ddfc9581)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.51s
+     Running tests/tool_output.rs (target/debug/deps/tool_output-50aa8d73f285a9a7)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+     Running tests/transcript_salvage.rs (target/debug/deps/transcript_salvage-701157dd91aef76d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.11s
+     Running tests/claude_tool_results.rs (target/debug/deps/claude_tool_results-57a96ee2df3fe970)
+test live_capture_replay_projects_every_received_result ... ignored, needs CC05_REPLAY_FRAMES from a live capture
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.03s
+     Running tests/opencode.rs (target/debug/deps/opencode-153a5df64e94971b)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.63s
+     Running unittests src/lib.rs (target/debug/deps/luna_doc-7c0129015992e6b5)
+test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/transcript_json_decode.rs (target/debug/deps/transcript_json_decode-3be6a61cfc9664cc)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/luna_ui-e04ac344f3d74911)
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 0.05s

@@ -1,0 +1,88 @@
+[
+ {
+  "name": "engine",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test timeline_order_e2e --test codex_subagents --test claude_native_agents --test claude_native_tasks --test tool_output --test transcript_salvage",
+  "exit_code": 0,
+  "seconds": 37
+ },
+ {
+  "name": "harness",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --test claude_tool_results --test opencode",
+  "exit_code": 0,
+  "seconds": 54
+ },
+ {
+  "name": "doc",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-doc",
+  "exit_code": 0,
+  "seconds": 32
+ },
+ {
+  "name": "ui-transcript",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib transcript:: -- --test-threads=1",
+  "exit_code": 0,
+  "seconds": 70
+ },
+ {
+  "name": "qa-build",
+  "command": "LUNA_DEV_APP_NAME='LUNA QA Transcript' LUNA_DEV_BUNDLE_ID=com.novnski.luna.qa.transcript LUNA_DEV_IPC_PORT=59851 LUNA_DEV_DATA_DIR=target/luna-qa-data/transcript scripts/run-macos-dev.sh --build-only",
+  "exit_code": 75,
+  "seconds": 0
+ },
+ {
+  "name": "qa-build",
+  "command": "LUNA_DEV_APP_NAME='LUNA QA Transcript' LUNA_DEV_BUNDLE_ID=com.novnski.luna.qa.transcript LUNA_DEV_IPC_PORT=59851 LUNA_DEV_DATA_DIR=target/luna-qa-data/transcript scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 4
+ },
+ {
+  "name": "live-codex",
+  "command": "node scripts/qa-opencode-live.mjs run --tier T3 --provider codex --scenario sw05-codex --permission-mode full --turn-timeout 420 --prompt-file prompts/order-codex.txt --prompt-file prompts/viewport.txt",
+  "exit_code": 0,
+  "seconds": 127
+ },
+ {
+  "name": "live-claude",
+  "command": "node scripts/qa-opencode-live.mjs run --tier T3 --provider claude-code --scenario sw05-claude --permission-mode full --turn-timeout 420 --prompt-file prompts/order-claude.txt --prompt-file prompts/viewport.txt",
+  "exit_code": 0,
+  "seconds": 101
+ },
+ {
+  "name": "verify-restart-codex",
+  "command": "node scripts/qa-opencode-live.mjs verify-restart --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-codex/run-20261011T161056Z-dRf6IB && node scripts/qa-opencode-live.mjs snapshot --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-codex/run-20261011T161056Z-dRf6IB",
+  "exit_code": 1,
+  "snapshot_exit": 1,
+  "seconds": 0
+ },
+ {
+  "name": "verify-restart-claude",
+  "command": "node scripts/qa-opencode-live.mjs verify-restart --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-claude/run-20261011T161500Z-XwZ8HH && node scripts/qa-opencode-live.mjs snapshot --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-claude/run-20261011T161500Z-XwZ8HH",
+  "exit_code": 1,
+  "snapshot_exit": 1,
+  "seconds": 1
+ },
+ {
+  "name": "verify-restart-codex",
+  "command": "node scripts/qa-opencode-live.mjs verify-restart --provider codex --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-codex/run-20261011T161056Z-dRf6IB; node scripts/qa-opencode-live.mjs snapshot --provider codex --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-codex/run-20261011T161056Z-dRf6IB",
+  "exit_code": 0,
+  "snapshot_exit": 0,
+  "seconds": 1
+ },
+ {
+  "name": "verify-restart-claude",
+  "command": "node scripts/qa-opencode-live.mjs verify-restart --provider claude-code --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-claude/run-20261011T161500Z-XwZ8HH; node scripts/qa-opencode-live.mjs snapshot --provider claude-code --run target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-claude/run-20261011T161500Z-XwZ8HH",
+  "exit_code": 0,
+  "snapshot_exit": 0,
+  "seconds": 0
+ },
+ {
+  "name": "fidelity-codex",
+  "command": "python3 scripts/qa-transcript-fidelity.py target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-codex/run-20261011T161056Z-dRf6IB codex <native transcript>",
+  "exit_code": 0
+ },
+ {
+  "name": "fidelity-claude",
+  "command": "python3 scripts/qa-transcript-fidelity.py target/qa/luna-only-workflows/sw05-20261011T160312Z/live/sw05-claude/run-20261011T161500Z-XwZ8HH claude-code <native transcript>",
+  "exit_code": 0
+ }
+]
