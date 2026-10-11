@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-11T03:44:39+03:00.
+Generated 2026-10-11T05:26:58+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **0.0% accepted**, **0/75 Done**.
+Active scope: **1.4% accepted**, **1/75 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: CORE-00, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: SW-00, CORE-02, ZI-01, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -14,7 +14,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [CORE-00 — Freeze core invariants and measured execution baselines](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-01 — Publish canonical domain and operation contracts](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-02 — Reorganize tests around retained public contract owners](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-03 — Extract cohesive engine services and supervised lifetimes](extensible-core/README.md) | ready | 0.0% | — |
@@ -38,6 +37,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-22 — Retire replaced internals and enforce dependency boundaries](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-20 — Certify performance and bounded resource lifetime](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-23 — Certify the integrated extensible application](extensible-core/README.md) | ready | 0.0% | — |
+| [CORE-00 — Freeze core invariants and measured execution baselines](extensible-core/README.md) | done | 100.0% | Codex |
 
 ## Provider access, effective tools and skills
 

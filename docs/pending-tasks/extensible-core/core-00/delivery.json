@@ -1,0 +1,24 @@
+{
+  "task": "CORE-00",
+  "source_commit": "d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758",
+  "origin_main_verified": "d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758",
+  "verified_at": "2026-10-11T02:26:22.512777+00:00",
+  "local_verification": "65 existing tests, 39 worker handshakes, 80 Wasm calls, native composition/restart/refusal, engine and native scroll baselines; focused build, Clippy, format and syntax passed",
+  "hosted_ci": {
+    "run": 38105109510,
+    "url": "https://github.com/novnski/luna/actions/runs/38105109510",
+    "jobs_executed_steps": 0,
+    "annotations": [
+      {
+        "message": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings",
+        "title": ""
+      },
+      {
+        "message": "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times.",
+        "title": ""
+      }
+    ]
+  },
+  "dev_handoff": "evidence/dev-handoff.json",
+  "concurrent_work_preserved": "Uncommitted ART-01 catalog and documentation changes are outside this delivery. The committed queue checkpoint projects the authoritative state onto the committed catalog; the live full-catalog store remains unchanged by that export."
+}

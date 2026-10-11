@@ -1,22 +1,51 @@
 {
   "schema_version": 1,
   "catalog_hash": "b65d8bb29d971b26432046cf186e529cad9d88740dcd3bdb2422d42b6fd5401b",
-  "created_at": 1791679479.2909582,
+  "created_at": 1791685618.623966,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 5,
+      "done": 6,
       "in_progress": 0,
       "paused": 0,
-      "ready": 74,
+      "ready": 73,
       "review": 0
     },
     "groups": [
       {
         "id": "core-platform",
+        "title": "Extensible core, SDK and plugin platform",
         "milestones": {
+          "Foundation": [
+            "CORE-00",
+            "CORE-01",
+            "CORE-02",
+            "CORE-03",
+            "CORE-04",
+            "CORE-05"
+          ],
+          "First independent provider": [
+            "CORE-06",
+            "CORE-07",
+            "CORE-08"
+          ],
+          "Existing providers": [
+            "CORE-09",
+            "CORE-10",
+            "CORE-11"
+          ],
+          "Workbench and content": [
+            "CORE-12",
+            "CORE-13",
+            "CORE-14",
+            "CORE-15"
+          ],
+          "Feature packages": [
+            "CORE-16",
+            "CORE-17"
+          ],
           "Authoring and lifecycle": [
             "CORE-18",
             "CORE-19"
@@ -26,44 +55,58 @@
             "CORE-21",
             "CORE-22",
             "CORE-23"
-          ],
-          "Existing providers": [
-            "CORE-09",
-            "CORE-10",
-            "CORE-11"
-          ],
-          "Feature packages": [
-            "CORE-16",
-            "CORE-17"
-          ],
-          "First independent provider": [
-            "CORE-06",
-            "CORE-07",
-            "CORE-08"
-          ],
-          "Foundation": [
-            "CORE-00",
-            "CORE-01",
-            "CORE-02",
-            "CORE-03",
-            "CORE-04",
-            "CORE-05"
-          ],
-          "Workbench and content": [
-            "CORE-12",
-            "CORE-13",
-            "CORE-14",
-            "CORE-15"
           ]
         },
-        "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 0,
-        "remaining": 24,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 23,
+        "accepted_units": 4,
         "total_units": 96,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 4.2,
         "milestone_status": {
+          "Foundation": {
+            "done": false,
+            "members": [
+              "CORE-00",
+              "CORE-01",
+              "CORE-02",
+              "CORE-03",
+              "CORE-04",
+              "CORE-05"
+            ]
+          },
+          "First independent provider": {
+            "done": false,
+            "members": [
+              "CORE-06",
+              "CORE-07",
+              "CORE-08"
+            ]
+          },
+          "Existing providers": {
+            "done": false,
+            "members": [
+              "CORE-09",
+              "CORE-10",
+              "CORE-11"
+            ]
+          },
+          "Workbench and content": {
+            "done": false,
+            "members": [
+              "CORE-12",
+              "CORE-13",
+              "CORE-14",
+              "CORE-15"
+            ]
+          },
+          "Feature packages": {
+            "done": false,
+            "members": [
+              "CORE-16",
+              "CORE-17"
+            ]
+          },
           "Authoring and lifecycle": {
             "done": false,
             "members": [
@@ -78,49 +121,6 @@
               "CORE-21",
               "CORE-22",
               "CORE-23"
-            ]
-          },
-          "Existing providers": {
-            "done": false,
-            "members": [
-              "CORE-09",
-              "CORE-10",
-              "CORE-11"
-            ]
-          },
-          "Feature packages": {
-            "done": false,
-            "members": [
-              "CORE-16",
-              "CORE-17"
-            ]
-          },
-          "First independent provider": {
-            "done": false,
-            "members": [
-              "CORE-06",
-              "CORE-07",
-              "CORE-08"
-            ]
-          },
-          "Foundation": {
-            "done": false,
-            "members": [
-              "CORE-00",
-              "CORE-01",
-              "CORE-02",
-              "CORE-03",
-              "CORE-04",
-              "CORE-05"
-            ]
-          },
-          "Workbench and content": {
-            "done": false,
-            "members": [
-              "CORE-12",
-              "CORE-13",
-              "CORE-14",
-              "CORE-15"
             ]
           }
         }
@@ -193,6 +193,7 @@
       },
       {
         "id": "remote",
+        "title": "One direct paired-Mac product",
         "milestones": {
           "M0": [
             "RM-00"
@@ -213,7 +214,6 @@
             "RM-07"
           ]
         },
-        "title": "One direct paired-Mac product",
         "tasks": 11,
         "done": 0,
         "remaining": 11,
@@ -258,7 +258,12 @@
       },
       {
         "id": "ios",
+        "title": "Native iOS parity and release",
         "milestones": {
+          "Native foundation": [
+            "IOS-00",
+            "RM-03"
+          ],
           "Complete direct V1": [
             "IOS-01",
             "IOS-02",
@@ -277,10 +282,6 @@
             "RM-09",
             "RM-11"
           ],
-          "Native foundation": [
-            "IOS-00",
-            "RM-03"
-          ],
           "Optional voice and awareness": [
             "IOS-11",
             "IOS-12",
@@ -291,7 +292,6 @@
             "IOS-14"
           ]
         },
-        "title": "Native iOS parity and release",
         "tasks": 12,
         "done": 0,
         "remaining": 12,
@@ -299,6 +299,13 @@
         "total_units": 48,
         "acceptance_percent": 0.0,
         "milestone_status": {
+          "Native foundation": {
+            "done": false,
+            "members": [
+              "IOS-00",
+              "RM-03"
+            ]
+          },
           "Complete direct V1": {
             "done": false,
             "members": [
@@ -321,13 +328,6 @@
               "RM-08",
               "RM-09",
               "RM-11"
-            ]
-          },
-          "Native foundation": {
-            "done": false,
-            "members": [
-              "IOS-00",
-              "RM-03"
             ]
           },
           "Optional voice and awareness": {
@@ -373,15 +373,16 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 75,
-      "done": 0,
-      "remaining": 75,
-      "accepted_units": 0,
+      "done": 1,
+      "remaining": 74,
+      "accepted_units": 4,
       "total_units": 291,
-      "acceptance_percent": 0.0
+      "acceptance_percent": 1.4
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-00",
+      "SW-00",
+      "CORE-02",
       "ZI-01",
       "ZI-03",
       "ZI-04",
@@ -798,16 +799,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-00",
-      "last_worker": null,
-      "note": "Read the CORE-00 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676596.7828128
     },
     {
       "attempts": 0,
@@ -1508,6 +1499,112 @@
       "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
       "status": "ready",
       "updated_at": 1791679479.217224
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791685466.739498,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+              "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+              "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+              "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+            }
+          ],
+          "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+        },
+        "delivery": {
+          "at": 1791685466.825172,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+              "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+              "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+              "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+              "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+              "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+            }
+          ],
+          "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+        },
+        "handoff": {
+          "at": 1791685582.610683,
+          "evidence": [
+            {
+              "ref": "commit:d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/delivery.json",
+              "sha256": "ee07eef1eef97fec050bb7af6e5423c4ea6f2c031fa0189d1b0ea88667e0fc4e"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/dev-handoff.json",
+              "sha256": "dc5436add22dfde6ef9736d20c5619315aff9b6a7abf0f430faf4f3fd12ee62f"
+            }
+          ],
+          "note": "Reviewed source d2c0e60f delivered and verified on origin/main; local checks passed, primary LUNA Dev refreshed in 2s with exact process/IPC/strict signature. New hosted jobs did not start due account billing; limitation recorded. Final status checkpoint follows as a separate commit."
+        },
+        "verification": {
+          "at": 1791685466.909699,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/results.md",
+              "sha256": "45e36c8ac820cac225394224404fa498986e42912c175594e0f12ec624d12d70"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/sha256.json",
+              "sha256": "8955dd49cd161deb19fe179f9fdec47971fc902798758585c927fd76f2a5ab22"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-00/evidence/metrics.json",
+              "sha256": "3609c619ba5ddc884245b981fc422582ad239d788263df77fdb8f697d87d9798"
+            }
+          ],
+          "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758"
+        },
+        {
+          "ref": "docs/pending-tasks/extensible-core/core-00/delivery.json",
+          "sha256": "ee07eef1eef97fec050bb7af6e5423c4ea6f2c031fa0189d1b0ea88667e0fc4e"
+        }
+      ],
+      "id": "CORE-00",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791684020.055476,
+        "expires_at": 1791699679.0248,
+        "heartbeat_at": 1791685279.0248,
+        "owner": "Codex",
+        "session": "01a12805-2605-7343-b693-94f4360b1f97"
+      },
+      "note": "Completed the measured baseline and four feasibility decisions. See core-00/results.md and decision.md; production migration remains CORE-01 onward. Baseline idle CPU 2.72% exceeds 1% target; hosted CI billing and unmeasured platforms/compositor/live providers remain explicit limits. Delivered d2c0e60f on verified origin/main and refreshed LUNA Dev.",
+      "status": "done",
+      "updated_at": 1791685582.718726
     }
   ],
   "events": [
@@ -2814,6 +2911,798 @@
         "note": "Selected for the requested expanded iOS parity plan on 2026-10-11; implement after RM-07 and IOS-02 using the existing host owner and scoped fixture/live-read acceptance. This does not authorize live external mutations or deployment.",
         "status": "ready",
         "worker": null
+      }
+    },
+    {
+      "seq": 144,
+      "task": "CORE-00",
+      "at": 1791684020.0555599,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-00 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791698420.055476,
+          "heartbeat_at": 1791684020.055476,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 145,
+      "task": "CORE-00",
+      "at": 1791684184.417852,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791684184.417553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "3dbfb97596d1362607c356207adb1384142943780bcf1bccc12dfb982e82978a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/failures.md",
+                "sha256": "523b2affd63d7bf3ce68dc936099e39ffaabe2087a95bd1da7ac05a1fe051724"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "target/qa/core-00/baseline/keepers.json",
+                "sha256": "7cc4bafdfa8d70882a1c13924ac07f580bb54db7da8b140d66ed32901fa8209a"
+              }
+            ],
+            "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791698420.055476,
+          "heartbeat_at": 1791684020.055476,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 147,
+      "task": "CORE-00",
+      "at": 1791684453.201493,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791684184.417553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "3dbfb97596d1362607c356207adb1384142943780bcf1bccc12dfb982e82978a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/failures.md",
+                "sha256": "523b2affd63d7bf3ce68dc936099e39ffaabe2087a95bd1da7ac05a1fe051724"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "target/qa/core-00/baseline/keepers.json",
+                "sha256": "7cc4bafdfa8d70882a1c13924ac07f580bb54db7da8b140d66ed32901fa8209a"
+              }
+            ],
+            "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791698853.201355,
+          "heartbeat_at": 1791684453.201355,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 148,
+      "task": "CORE-00",
+      "at": 1791684931.650472,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791684184.417553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "3dbfb97596d1362607c356207adb1384142943780bcf1bccc12dfb982e82978a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/failures.md",
+                "sha256": "523b2affd63d7bf3ce68dc936099e39ffaabe2087a95bd1da7ac05a1fe051724"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "target/qa/core-00/baseline/keepers.json",
+                "sha256": "7cc4bafdfa8d70882a1c13924ac07f580bb54db7da8b140d66ed32901fa8209a"
+              }
+            ],
+            "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical."
+          },
+          "delivery": {
+            "at": 1791684931.6499178,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "aa59c58fed6bb90cecb5210f65d3e2e44e32ab8aa9cee67fc9ff77a6cdf88591"
+              },
+              {
+                "ref": "target/qa/core-00/wasm-final.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "target/qa/core-00/worker-final/result.json",
+                "sha256": "3a62988792991e4756a8e355f7e42760f2bd6da836a879d5d868feb5fb24c6c0"
+              },
+              {
+                "ref": "target/qa/core-00/native-final/result.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "target/qa/core-00/native-restart-final/result.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              },
+              {
+                "ref": "target/qa/core-00/native-refusal.log",
+                "sha256": "6ee101d5b67f34ed56afd9d3028a315f18a1ff854fdfe60bba00202208f5b966"
+              }
+            ],
+            "note": "Versioned child-process handshake, bounded async Wasmtime cancellation and memory refusal, dynamic native contribution, restart fallback and invalid callback refusal passed. ADR fixes execution profiles, platform trust and numerical budgets; production migration remains later CORE tickets."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Versioned child-process handshake, bounded async Wasmtime cancellation and memory refusal, dynamic native contribution, restart fallback and invalid callback refusal passed. ADR fixes execution profiles, platform trust and numerical budgets; production migration remains later CORE tickets.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791698853.201355,
+          "heartbeat_at": 1791684453.201355,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 149,
+      "task": "CORE-00",
+      "at": 1791685279.0248818,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791684184.417553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "3dbfb97596d1362607c356207adb1384142943780bcf1bccc12dfb982e82978a"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/failures.md",
+                "sha256": "523b2affd63d7bf3ce68dc936099e39ffaabe2087a95bd1da7ac05a1fe051724"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "target/qa/core-00/baseline/keepers.json",
+                "sha256": "7cc4bafdfa8d70882a1c13924ac07f580bb54db7da8b140d66ed32901fa8209a"
+              }
+            ],
+            "note": "Current source and platform pinned; reused unchanged runtime audit; contract owners and pre-code failure ledger recorded. Focused baseline keepers passed; prior timeline observations remain historical."
+          },
+          "delivery": {
+            "at": 1791684931.6499178,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "aa59c58fed6bb90cecb5210f65d3e2e44e32ab8aa9cee67fc9ff77a6cdf88591"
+              },
+              {
+                "ref": "target/qa/core-00/wasm-final.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "target/qa/core-00/worker-final/result.json",
+                "sha256": "3a62988792991e4756a8e355f7e42760f2bd6da836a879d5d868feb5fb24c6c0"
+              },
+              {
+                "ref": "target/qa/core-00/native-final/result.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "target/qa/core-00/native-restart-final/result.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              },
+              {
+                "ref": "target/qa/core-00/native-refusal.log",
+                "sha256": "6ee101d5b67f34ed56afd9d3028a315f18a1ff854fdfe60bba00202208f5b966"
+              }
+            ],
+            "note": "Versioned child-process handshake, bounded async Wasmtime cancellation and memory refusal, dynamic native contribution, restart fallback and invalid callback refusal passed. ADR fixes execution profiles, platform trust and numerical budgets; production migration remains later CORE tickets."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Versioned child-process handshake, bounded async Wasmtime cancellation and memory refusal, dynamic native contribution, restart fallback and invalid callback refusal passed. ADR fixes execution profiles, platform trust and numerical budgets; production migration remains later CORE tickets.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 150,
+      "task": "CORE-00",
+      "at": 1791685466.739709,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791684931.6499178,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "aa59c58fed6bb90cecb5210f65d3e2e44e32ab8aa9cee67fc9ff77a6cdf88591"
+              },
+              {
+                "ref": "target/qa/core-00/wasm-final.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "target/qa/core-00/worker-final/result.json",
+                "sha256": "3a62988792991e4756a8e355f7e42760f2bd6da836a879d5d868feb5fb24c6c0"
+              },
+              {
+                "ref": "target/qa/core-00/native-final/result.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "target/qa/core-00/native-restart-final/result.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              },
+              {
+                "ref": "target/qa/core-00/native-refusal.log",
+                "sha256": "6ee101d5b67f34ed56afd9d3028a315f18a1ff854fdfe60bba00202208f5b966"
+              }
+            ],
+            "note": "Versioned child-process handshake, bounded async Wasmtime cancellation and memory refusal, dynamic native contribution, restart fallback and invalid callback refusal passed. ADR fixes execution profiles, platform trust and numerical budgets; production migration remains later CORE tickets."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 151,
+      "task": "CORE-00",
+      "at": 1791685466.8254452,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791685466.825172,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+                "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              }
+            ],
+            "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 152,
+      "task": "CORE-00",
+      "at": 1791685466.9099112,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791685466.825172,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+                "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              }
+            ],
+            "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+          },
+          "verification": {
+            "at": 1791685466.909699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/results.md",
+                "sha256": "45e36c8ac820cac225394224404fa498986e42912c175594e0f12ec624d12d70"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/sha256.json",
+                "sha256": "8955dd49cd161deb19fe179f9fdec47971fc902798758585c927fd76f2a5ab22"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/metrics.json",
+                "sha256": "3609c619ba5ddc884245b981fc422582ad239d788263df77fdb8f697d87d9798"
+              }
+            ],
+            "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 153,
+      "task": "CORE-00",
+      "at": 1791685466.9939961,
+      "action": "review",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791685466.825172,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+                "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              }
+            ],
+            "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+          },
+          "verification": {
+            "at": 1791685466.909699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/results.md",
+                "sha256": "45e36c8ac820cac225394224404fa498986e42912c175594e0f12ec624d12d70"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/sha256.json",
+                "sha256": "8955dd49cd161deb19fe179f9fdec47971fc902798758585c927fd76f2a5ab22"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/metrics.json",
+                "sha256": "3609c619ba5ddc884245b981fc422582ad239d788263df77fdb8f697d87d9798"
+              }
+            ],
+            "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Evidence and diff reviewed; bounds, independent readback, cleanup and test ownership checked. Source delivery and final status commit remain.",
+        "status": "review",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 154,
+      "task": "CORE-00",
+      "at": 1791685582.621469,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791685466.825172,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+                "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              }
+            ],
+            "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+          },
+          "handoff": {
+            "at": 1791685582.610683,
+            "evidence": [
+              {
+                "ref": "commit:d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/delivery.json",
+                "sha256": "ee07eef1eef97fec050bb7af6e5423c4ea6f2c031fa0189d1b0ea88667e0fc4e"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/dev-handoff.json",
+                "sha256": "dc5436add22dfde6ef9736d20c5619315aff9b6a7abf0f430faf4f3fd12ee62f"
+              }
+            ],
+            "note": "Reviewed source d2c0e60f delivered and verified on origin/main; local checks passed, primary LUNA Dev refreshed in 2s with exact process/IPC/strict signature. New hosted jobs did not start due account billing; limitation recorded. Final status checkpoint follows as a separate commit."
+          },
+          "verification": {
+            "at": 1791685466.909699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/results.md",
+                "sha256": "45e36c8ac820cac225394224404fa498986e42912c175594e0f12ec624d12d70"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/sha256.json",
+                "sha256": "8955dd49cd161deb19fe179f9fdec47971fc902798758585c927fd76f2a5ab22"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/metrics.json",
+                "sha256": "3609c619ba5ddc884245b981fc422582ad239d788263df77fdb8f697d87d9798"
+              }
+            ],
+            "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Reviewed source d2c0e60f delivered and verified on origin/main; local checks passed, primary LUNA Dev refreshed in 2s with exact process/IPC/strict signature. New hosted jobs did not start due account billing; limitation recorded. Final status checkpoint follows as a separate commit.",
+        "status": "review",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expired": false,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
+      }
+    },
+    {
+      "seq": 155,
+      "task": "CORE-00",
+      "at": 1791685582.7188668,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791685466.739498,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/README.md",
+                "sha256": "7e6c78863138870cf28829abc64c99576117a6c472a3ce420c8e855541bb1bd1"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/platform.json",
+                "sha256": "bcb874044ed6fd15230a979073a373fdd09f7f12de1e07fc6dabf29d3ddc10aa"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/baseline-failures.md",
+                "sha256": "0d31639e201bfd37dce39c62ed23944715a289c1f9c15bbdec7ef1ddf90e5b39"
+              }
+            ],
+            "note": "Final source/platform contract and baseline failure ledger reviewed; unchanged runtime audit reused. Historical findings are not current results."
+          },
+          "delivery": {
+            "at": 1791685466.825172,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/decision.md",
+                "sha256": "19158b0493689000fc49e609bd0f6a85aac7971787917e2c00c0953931439f74"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/worker.json",
+                "sha256": "408755204c73aa8fddb72979f9d7cb5868b83cdb46e988a1d60b3742f2f7f19d"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/wasm.json",
+                "sha256": "9a47ffa2cff26502e7e5f73bcd5cd6d2ca37745fe4bc9f24f7e8445a566e6c5c"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native.json",
+                "sha256": "ab6e01534a9bd666f4976e31cd6eb1ea3c1a725f6e946f930d545cfa6f0a60ab"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/native-restart.json",
+                "sha256": "182786bf52ef105fcb0c33e9320e3daca388d76ae7ca95e149ae185c3ce77854"
+              }
+            ],
+            "note": "All four narrow prototypes passed, including real stderr backpressure/draining, async host-call cleanup, native composition/restart and safe fallback; ADR pins budgets and trust without claiming production integration."
+          },
+          "handoff": {
+            "at": 1791685582.610683,
+            "evidence": [
+              {
+                "ref": "commit:d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/delivery.json",
+                "sha256": "ee07eef1eef97fec050bb7af6e5423c4ea6f2c031fa0189d1b0ea88667e0fc4e"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/dev-handoff.json",
+                "sha256": "dc5436add22dfde6ef9736d20c5619315aff9b6a7abf0f430faf4f3fd12ee62f"
+              }
+            ],
+            "note": "Reviewed source d2c0e60f delivered and verified on origin/main; local checks passed, primary LUNA Dev refreshed in 2s with exact process/IPC/strict signature. New hosted jobs did not start due account billing; limitation recorded. Final status checkpoint follows as a separate commit."
+          },
+          "verification": {
+            "at": 1791685466.909699,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/results.md",
+                "sha256": "45e36c8ac820cac225394224404fa498986e42912c175594e0f12ec624d12d70"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/sha256.json",
+                "sha256": "8955dd49cd161deb19fe179f9fdec47971fc902798758585c927fd76f2a5ab22"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-00/evidence/metrics.json",
+                "sha256": "3609c619ba5ddc884245b981fc422582ad239d788263df77fdb8f697d87d9798"
+              }
+            ],
+            "note": "E01/E02 raw current engine, Wasmtime, worker and native scroll/idle measurements sealed with source/binary hashes; 65 keepers passed, one live-provider test ignored. Current idle CPU misses 1% objective; compositor, other platforms and live providers remain explicitly unmeasured."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:d2c0e60fa5501788a0a5fff125f6cb5f0ef3a758"
+          },
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-00/delivery.json",
+            "sha256": "ee07eef1eef97fec050bb7af6e5423c4ea6f2c031fa0189d1b0ea88667e0fc4e"
+          }
+        ],
+        "note": "Completed the measured baseline and four feasibility decisions. See core-00/results.md and decision.md; production migration remains CORE-01 onward. Baseline idle CPU 2.72% exceeds 1% target; hosted CI billing and unmeasured platforms/compositor/live providers remain explicit limits. Delivered d2c0e60f on verified origin/main and refreshed LUNA Dev.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791684020.055476,
+          "expires_at": 1791699679.0248,
+          "heartbeat_at": 1791685279.0248,
+          "owner": "Codex",
+          "session": "01a12805-2605-7343-b693-94f4360b1f97"
+        }
       }
     }
   ]

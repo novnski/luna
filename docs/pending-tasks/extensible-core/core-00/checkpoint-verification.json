@@ -1,0 +1,10 @@
+{
+  "catalog_revision": 44,
+  "tasks": 105,
+  "excluded_uncommitted_ids": [
+    "ART-01"
+  ],
+  "restore_passed": true,
+  "core_00_status": "done",
+  "core_00_progress_percent": 100.0
+}
