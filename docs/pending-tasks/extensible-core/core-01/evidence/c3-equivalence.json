@@ -1,0 +1,52 @@
+{
+ "source": "pre-change HEAD sources (remote_auth::method_policy, engine forwardable/is_stream_method/forward_deadline)",
+ "methods_compared": 251,
+ "catalog_rows": 251,
+ "differences": [],
+ "non_default_deadlines": [
+  [
+   "ApplyUpdate",
+   900
+  ],
+  [
+   "CloneRepo",
+   900
+  ],
+  [
+   "CreateGitHubDraftPr",
+   110
+  ],
+  [
+   "CreateWorktree",
+   120
+  ],
+  [
+   "ExecuteGitAction",
+   150
+  ],
+  [
+   "FetchAll",
+   900
+  ],
+  [
+   "GenerateGitCommitMessage",
+   45
+  ],
+  [
+   "GetGitHubPrDetails",
+   70
+  ],
+  [
+   "GetGitHubPrPreview",
+   70
+  ],
+  [
+   "GetGitPrStatus",
+   70
+  ],
+  [
+   "UpdateProvider",
+   900
+  ]
+ ]
+}

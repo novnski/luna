@@ -25,6 +25,7 @@ const MAX_PAIRING_TTL_SECS: u64 = 600;
 const MAX_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum RemoteScope {
     EnvironmentRead,
@@ -487,51 +488,11 @@ impl RpcService for RemoteRpcService {
     }
 }
 
-/// Known shipped methods are explicitly inventoried in `methods::ALL`; an
-/// unlisted/new method fails closed even if the engine later implements it.
+/// Known shipped methods each have a reviewed row in the operation catalog; an
+/// unlisted/new method fails closed even if the engine later implements it,
+/// and a row without a remote scope stays local-only.
 fn method_policy(method: &str) -> Option<Option<RemoteScope>> {
-    let scope = match method {
-        methods::LOCAL_OWNER_ROOT_CLAIM => None,
-        methods::ENGINE_INFO
-        | methods::ENGINE_READY
-        | methods::LIST_HARNESSES
-        | methods::LIST_MODELS
-        | methods::LIST_COMMANDS
-        | methods::LIST_COMPOSER_CATALOG => Some(RemoteScope::EnvironmentRead),
-        methods::GET_TASK_WORK
-        | methods::WATCH_TASK_WORK
-        | methods::PREVIEW_STOP_TASK_WORK
-        | methods::GET_TASK_IDENTITY
-        | methods::GET_RUNTIME_CONTRACT
-        | methods::GET_TASK_COMMAND_RECEIPT
-        | methods::GET_TASK_COMMAND_SNAPSHOT
-        | methods::WATCH_TASK_COMMANDS
-        | methods::WATCH_DOC_MESSAGES
-        | methods::WATCH_QUEUE => Some(RemoteScope::TasksRead),
-        methods::LIST_REPOS
-        | methods::LIST_BRANCHES
-        | methods::LIST_REFS
-        | methods::LIST_GIT_HISTORY
-        | methods::SEARCH_GIT_HISTORY
-        | methods::LIST_WORKSPACE_DIRECTORY
-        | methods::SEARCH_WORKSPACE_FILES
-        | methods::READ_WORKSPACE_FILE
-        | methods::READ_WORKSPACE_IMAGE
-        | methods::WATCH_WORKSPACE_FILES
-        | methods::GET_CHECKOUT_DIFF
-        | methods::GET_CHECKOUT_FILE_DIFF_TEXT
-        | methods::WATCH_CHECKOUT_DIFFS
-        | methods::WATCH_CHECKOUT_CHANGE_REQUEST
-        | methods::LIST_TERMINALS => Some(RemoteScope::FilesRead),
-        methods::OPEN_TERMINAL
-        | methods::SUBSCRIBE_TERMINAL
-        | methods::WRITE_TERMINAL
-        | methods::RESIZE_TERMINAL
-        | methods::CLOSE_TERMINAL => Some(RemoteScope::TerminalOperate),
-        _ if methods::ALL.contains(&method) => None,
-        _ => return None,
-    };
-    Some(scope)
+    crate::operations::spec(method).map(|op| op.remote_scope())
 }
 
 fn has_duplicate_scopes(scopes: &[RemoteScope]) -> bool {

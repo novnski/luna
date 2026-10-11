@@ -1,0 +1,3053 @@
+{
+  "catalogVersion": 1,
+  "operations": [
+    {
+      "method": "ListAutomations",
+      "id": "luna.core/list-automations",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchAutomations",
+      "id": "luna.core/watch-automations",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListAutomationRuns",
+      "id": "luna.core/list-automation-runs",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewAutomation",
+      "id": "luna.core/preview-automation",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "MutateAutomation",
+      "id": "luna.core/mutate-automation",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetAutomationMutationReceipt",
+      "id": "luna.core/get-automation-mutation-receipt",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardList",
+      "id": "luna.core/board-list",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardRead",
+      "id": "luna.core/board-read",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardCreate",
+      "id": "luna.core/board-create",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardUpdate",
+      "id": "luna.core/board-update",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardRank",
+      "id": "luna.core/board-rank",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardArchive",
+      "id": "luna.core/board-archive",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardDelete",
+      "id": "luna.core/board-delete",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardEvents",
+      "id": "luna.core/board-events",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardWatch",
+      "id": "luna.core/board-watch",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardGetReceipt",
+      "id": "luna.core/board-get-receipt",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardMove",
+      "id": "luna.core/board-move",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardStart",
+      "id": "luna.core/board-start",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardStartBatch",
+      "id": "luna.core/board-start-batch",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardControl",
+      "id": "luna.core/board-control",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardSetStatus",
+      "id": "luna.core/board-set-status",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardSendUpdate",
+      "id": "luna.core/board-send-update",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardExecutionOptions",
+      "id": "luna.core/board-execution-options",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardGenerateTitle",
+      "id": "luna.core/board-generate-title",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardResolveSettings",
+      "id": "luna.core/board-resolve-settings",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardChatIdentity",
+      "id": "luna.core/board-chat-identity",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardChatBadges",
+      "id": "luna.core/board-chat-badges",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardCreateSideChat",
+      "id": "luna.core/board-create-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardCreateMainChat",
+      "id": "luna.core/board-create-main-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardConvertChat",
+      "id": "luna.core/board-convert-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardLinkChat",
+      "id": "luna.core/board-link-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardNavigation",
+      "id": "luna.core/board-navigation",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardReviewStart",
+      "id": "luna.core/board-review-start",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardReviewStatus",
+      "id": "luna.core/board-review-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardReviewCancel",
+      "id": "luna.core/board-review-cancel",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardReviewSubmit",
+      "id": "luna.core/board-review-submit",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardOutcomes",
+      "id": "luna.core/board-outcomes",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringStart",
+      "id": "luna.core/board-authoring-start",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringSend",
+      "id": "luna.core/board-authoring-send",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringRead",
+      "id": "luna.core/board-authoring-read",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringWatch",
+      "id": "luna.core/board-authoring-watch",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringCheckpoint",
+      "id": "luna.core/board-authoring-checkpoint",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringInterrupt",
+      "id": "luna.core/board-authoring-interrupt",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringClose",
+      "id": "luna.core/board-authoring-close",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringDiscard",
+      "id": "luna.core/board-authoring-discard",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardAuthoringList",
+      "id": "luna.core/board-authoring-list",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueSources",
+      "id": "luna.core/board-issue-sources",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueSearch",
+      "id": "luna.core/board-issue-search",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueDetail",
+      "id": "luna.core/board-issue-detail",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueComments",
+      "id": "luna.core/board-issue-comments",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueImport",
+      "id": "luna.core/board-issue-import",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueLink",
+      "id": "luna.core/board-issue-link",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueUnlink",
+      "id": "luna.core/board-issue-unlink",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardSetDependency",
+      "id": "luna.core/board-set-dependency",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueWritebackPreview",
+      "id": "luna.core/board-issue-writeback-preview",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardIssueWriteback",
+      "id": "luna.core/board-issue-writeback",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardToolCatalog",
+      "id": "luna.core/board-tool-catalog",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateRemotePairing",
+      "id": "luna.core/create-remote-pairing",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListRemotePairings",
+      "id": "luna.core/list-remote-pairings",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RevokeRemotePairing",
+      "id": "luna.core/revoke-remote-pairing",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListRemoteSessions",
+      "id": "luna.core/list-remote-sessions",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RevokeRemoteSession",
+      "id": "luna.core/revoke-remote-session",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RedeemRemotePairing",
+      "id": "luna.core/redeem-remote-pairing",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remoteBootstrap"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "AuthenticateRemote",
+      "id": "luna.core/authenticate-remote",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remoteBootstrap"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetBackupStatus",
+      "id": "luna.core/get-backup-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ConfigureBackup",
+      "id": "luna.core/configure-backup",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ConfigureBackupKey",
+      "id": "luna.core/configure-backup-key",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BackupNow",
+      "id": "luna.core/backup-now",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ExportBackup",
+      "id": "luna.core/export-backup",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "InspectBackup",
+      "id": "luna.core/inspect-backup",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StageBackupRestore",
+      "id": "luna.core/stage-backup-restore",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchPreviews",
+      "id": "luna.core/watch-previews",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListHarnesses",
+      "id": "luna.core/list-harnesses",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProviderUpdates",
+      "id": "luna.core/get-provider-updates",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UpdateProvider",
+      "id": "luna.core/update-provider",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 900
+    },
+    {
+      "method": "GetTitleSettings",
+      "id": "luna.core/get-title-settings",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetTitleSettings",
+      "id": "luna.core/set-title-settings",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetHarnessEnabled",
+      "id": "luna.core/set-harness-enabled",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListModels",
+      "id": "luna.core/list-models",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProviderDefaults",
+      "id": "luna.core/get-provider-defaults",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetProviderDefaults",
+      "id": "luna.core/set-provider-defaults",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListComposerCatalog",
+      "id": "luna.core/list-composer-catalog",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListCommands",
+      "id": "luna.core/list-commands",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "QueueCommand",
+      "id": "luna.core/queue-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RelayCommand",
+      "id": "luna.core/relay-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RetryDelivery",
+      "id": "luna.core/retry-delivery",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateSideChat",
+      "id": "luna.core/create-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListSideChats",
+      "id": "luna.core/list-side-chats",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadSideChat",
+      "id": "luna.core/read-side-chat",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SendSideChat",
+      "id": "luna.core/send-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "AnswerSideChat",
+      "id": "luna.core/answer-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UnloadSideChat",
+      "id": "luna.core/unload-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StopSideChat",
+      "id": "luna.core/stop-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RenewSideChat",
+      "id": "luna.core/renew-side-chat",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchDocMessages",
+      "id": "luna.core/watch-doc-messages",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchQueue",
+      "id": "luna.core/watch-queue",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetTaskWork",
+      "id": "luna.core/get-task-work",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchTaskWork",
+      "id": "luna.core/watch-task-work",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewStopTaskWork",
+      "id": "luna.core/preview-stop-task-work",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StopTaskWork",
+      "id": "luna.core/stop-task-work",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchNativeTasks",
+      "id": "luna.core/watch-native-tasks",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListClaudeExternalSessions",
+      "id": "luna.core/list-claude-external-sessions",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "QueueMessage",
+      "id": "luna.core/queue-message",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UpdateQueuedMessage",
+      "id": "luna.core/update-queued-message",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BeginQueuedMessageEdit",
+      "id": "luna.core/begin-queued-message-edit",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RenewQueuedMessageEdit",
+      "id": "luna.core/renew-queued-message-edit",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "FinishQueuedMessageEdit",
+      "id": "luna.core/finish-queued-message-edit",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "MoveQueuedMessage",
+      "id": "luna.core/move-queued-message",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RemoveQueuedMessage",
+      "id": "luna.core/remove-queued-message",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SendQueuedMessageNow",
+      "id": "luna.core/send-queued-message-now",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SteerQueuedMessageNow",
+      "id": "luna.core/steer-queued-message-now",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ProbeSync",
+      "id": "luna.core/probe-sync",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SyncStatus",
+      "id": "luna.core/sync-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchConnectivity",
+      "id": "luna.core/watch-connectivity",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchTransfers",
+      "id": "luna.core/watch-transfers",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchChats",
+      "id": "luna.core/watch-chats",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchDevices",
+      "id": "luna.core/watch-devices",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchSessions",
+      "id": "luna.core/watch-sessions",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchSpaces",
+      "id": "luna.core/watch-spaces",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "Mutate",
+      "id": "luna.core/mutate",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "LocalDevice",
+      "id": "luna.core/local-device",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "EngineInfo",
+      "id": "luna.core/engine-info",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "LocalOwnerRootClaim",
+      "id": "luna.core/local-owner-root-claim",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "EngineReady",
+      "id": "luna.core/engine-ready",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetTaskIdentity",
+      "id": "luna.core/get-task-identity",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewWorkspaceIdentityRepair",
+      "id": "luna.core/preview-workspace-identity-repair",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetRuntimeContract",
+      "id": "luna.core/get-runtime-contract",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewContextTransfer",
+      "id": "luna.core/preview-context-transfer",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListContextTransfers",
+      "id": "luna.core/list-context-transfers",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetContextTransfer",
+      "id": "luna.core/get-context-transfer",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadContextTransferItems",
+      "id": "luna.core/read-context-transfer-items",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetInstructionSettings",
+      "id": "luna.core/get-instruction-settings",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetInstructionSettings",
+      "id": "luna.core/set-instruction-settings",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetIntegrationInventory",
+      "id": "luna.core/get-integration-inventory",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetProviderMcpServerEnabled",
+      "id": "luna.core/set-provider-mcp-server-enabled",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadProviderMcpAppResource",
+      "id": "luna.core/read-provider-mcp-app-resource",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetNativeExtensions",
+      "id": "luna.core/get-native-extensions",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetSkillDocument",
+      "id": "luna.core/get-skill-document",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SaveSkillDocument",
+      "id": "luna.core/save-skill-document",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "InstallSkill",
+      "id": "luna.core/install-skill",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RemoveSkill",
+      "id": "luna.core/remove-skill",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SearchSessionHistory",
+      "id": "luna.core/search-session-history",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetUsageSnapshot",
+      "id": "luna.core/get-usage-snapshot",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RebuildSessionHistory",
+      "id": "luna.core/rebuild-session-history",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetSessionHistoryPolicy",
+      "id": "luna.core/get-session-history-policy",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetSessionHistoryPolicy",
+      "id": "luna.core/set-session-history-policy",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetAttention",
+      "id": "luna.core/get-attention",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ClaimAttentionTransitions",
+      "id": "luna.core/claim-attention-transitions",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "MutateAttention",
+      "id": "luna.core/mutate-attention",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetHistoryCapability",
+      "id": "luna.core/get-history-capability",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListHistoryRecoveries",
+      "id": "luna.core/list-history-recoveries",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewNativeFileRewind",
+      "id": "luna.core/preview-native-file-rewind",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ApplyNativeFileRewind",
+      "id": "luna.core/apply-native-file-rewind",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RefreshTaskBinding",
+      "id": "luna.core/refresh-task-binding",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewProviderTaskImport",
+      "id": "luna.core/preview-provider-task-import",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "AdoptProviderTask",
+      "id": "luna.core/adopt-provider-task",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateChildThread",
+      "id": "luna.core/create-child-thread",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateChildTab",
+      "id": "luna.core/create-child-tab",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetChatWorkbench",
+      "id": "luna.core/get-chat-workbench",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchChatWorkbench",
+      "id": "luna.core/watch-chat-workbench",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "MutateChatWorkbench",
+      "id": "luna.core/mutate-chat-workbench",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ExecuteTaskCommand",
+      "id": "luna.core/execute-task-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetTaskCommandReceipt",
+      "id": "luna.core/get-task-command-receipt",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetTaskCleanup",
+      "id": "luna.core/get-task-cleanup",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProjectCleanup",
+      "id": "luna.core/get-project-cleanup",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetDeletionCleanupSummary",
+      "id": "luna.core/get-deletion-cleanup-summary",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetTaskCommandSnapshot",
+      "id": "luna.core/get-task-command-snapshot",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchTaskCommands",
+      "id": "luna.core/watch-task-commands",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetComposerDraft",
+      "id": "luna.core/get-composer-draft",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SaveComposerDraft",
+      "id": "luna.core/save-composer-draft",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListPromptStash",
+      "id": "luna.core/list-prompt-stash",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SavePromptStash",
+      "id": "luna.core/save-prompt-stash",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "DeletePromptStash",
+      "id": "luna.core/delete-prompt-stash",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BeginDraftSubmission",
+      "id": "luna.core/begin-draft-submission",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SettleDraftSubmission",
+      "id": "luna.core/settle-draft-submission",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StopEngine",
+      "id": "luna.core/stop-engine",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "AuthStatus",
+      "id": "luna.core/auth-status",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListCredentialMetadata",
+      "id": "luna.core/list-credential-metadata",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SignIn",
+      "id": "luna.core/sign-in",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SignInHeadless",
+      "id": "luna.core/sign-in-headless",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CompleteSignIn",
+      "id": "luna.core/complete-sign-in",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SignOut",
+      "id": "luna.core/sign-out",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListOrgs",
+      "id": "luna.core/list-orgs",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateOrg",
+      "id": "luna.core/create-org",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SelectOrg",
+      "id": "luna.core/select-org",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "LocalImportStatus",
+      "id": "luna.core/local-import-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ImportLocalWorkspace",
+      "id": "luna.core/import-local-workspace",
+      "version": 1,
+      "kind": "command",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListRepos",
+      "id": "luna.core/list-repos",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "AddRepo",
+      "id": "luna.core/add-repo",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CloneRepo",
+      "id": "luna.core/clone-repo",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 900
+    },
+    {
+      "method": "CreateRepo",
+      "id": "luna.core/create-repo",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListBranches",
+      "id": "luna.core/list-branches",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListRefs",
+      "id": "luna.core/list-refs",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListGitHistory",
+      "id": "luna.core/list-git-history",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SearchGitHistory",
+      "id": "luna.core/search-git-history",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ResolveGitAvatars",
+      "id": "luna.core/resolve-git-avatars",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "FetchAll",
+      "id": "luna.core/fetch-all",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 900
+    },
+    {
+      "method": "SwitchRef",
+      "id": "luna.core/switch-ref",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListFolders",
+      "id": "luna.core/list-folders",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListDrives",
+      "id": "luna.core/list-drives",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SearchFiles",
+      "id": "luna.core/search-files",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListWorkspaceDirectory",
+      "id": "luna.core/list-workspace-directory",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SearchWorkspaceFiles",
+      "id": "luna.core/search-workspace-files",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadWorkspaceImage",
+      "id": "luna.core/read-workspace-image",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadWorkspaceFile",
+      "id": "luna.core/read-workspace-file",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WriteWorkspaceFile",
+      "id": "luna.core/write-workspace-file",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchWorkspaceFiles",
+      "id": "luna.core/watch-workspace-files",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CreateWorktree",
+      "id": "luna.core/create-worktree",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 120
+    },
+    {
+      "method": "DeleteWorktree",
+      "id": "luna.core/delete-worktree",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProjectCommands",
+      "id": "luna.core/get-project-commands",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SaveProjectCommands",
+      "id": "luna.core/save-project-commands",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ProjectCommandStatus",
+      "id": "luna.core/project-command-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RunProjectCommand",
+      "id": "luna.core/run-project-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StopProjectCommand",
+      "id": "luna.core/stop-project-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RetryProjectCommand",
+      "id": "luna.core/retry-project-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "OpenTerminal",
+      "id": "luna.core/open-terminal",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "terminal-operate"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SubscribeTerminal",
+      "id": "luna.core/subscribe-terminal",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "terminal-operate"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WriteTerminal",
+      "id": "luna.core/write-terminal",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "terminal-operate"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ResizeTerminal",
+      "id": "luna.core/resize-terminal",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "terminal-operate"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CloseTerminal",
+      "id": "luna.core/close-terminal",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "terminal-operate"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListTerminals",
+      "id": "luna.core/list-terminals",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchCheckoutDiffs",
+      "id": "luna.core/watch-checkout-diffs",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchCheckoutChangeRequest",
+      "id": "luna.core/watch-checkout-change-request",
+      "version": 1,
+      "kind": "watch",
+      "reply": "streamAfterReady",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetCheckoutDiff",
+      "id": "luna.core/get-checkout-diff",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetCheckoutFileDiffText",
+      "id": "luna.core/get-checkout-file-diff-text",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetGitActionPreview",
+      "id": "luna.core/get-git-action-preview",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ExecuteGitAction",
+      "id": "luna.core/execute-git-action",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 150
+    },
+    {
+      "method": "GenerateGitCommitMessage",
+      "id": "luna.core/generate-git-commit-message",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 45
+    },
+    {
+      "method": "GetGitHubPrPreview",
+      "id": "luna.core/get-git-hub-pr-preview",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 70
+    },
+    {
+      "method": "GetGitHubPrDetails",
+      "id": "luna.core/get-git-hub-pr-details",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 70
+    },
+    {
+      "method": "CreateGitHubDraftPr",
+      "id": "luna.core/create-git-hub-draft-pr",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 110
+    },
+    {
+      "method": "GetGitPrStatus",
+      "id": "luna.core/get-git-pr-status",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 70
+    },
+    {
+      "method": "ListGitCheckpoints",
+      "id": "luna.core/list-git-checkpoints",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "DiffGitCheckpoint",
+      "id": "luna.core/diff-git-checkpoint",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PreviewGitCheckpointRestore",
+      "id": "luna.core/preview-git-checkpoint-restore",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RestoreGitCheckpoint",
+      "id": "luna.core/restore-git-checkpoint",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListAgentAccounts",
+      "id": "luna.core/list-agent-accounts",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ActivateAgentAccount",
+      "id": "luna.core/activate-agent-account",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "RenameAgentAccount",
+      "id": "luna.core/rename-agent-account",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ForgetAgentAccount",
+      "id": "luna.core/forget-agent-account",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StartAgentLogin",
+      "id": "luna.core/start-agent-login",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CompleteAgentLogin",
+      "id": "luna.core/complete-agent-login",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "PollAgentLogin",
+      "id": "luna.core/poll-agent-login",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CancelAgentLogin",
+      "id": "luna.core/cancel-agent-login",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UploadChunk",
+      "id": "luna.core/upload-chunk",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UploadCommit",
+      "id": "luna.core/upload-commit",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReadAttachmentChunk",
+      "id": "luna.core/read-attachment-chunk",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "FetchToolBlob",
+      "id": "luna.core/fetch-tool-blob",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "McpElicitationUrl",
+      "id": "luna.core/mcp-elicitation-url",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UpdateStatus",
+      "id": "luna.core/update-status",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ApplyUpdate",
+      "id": "luna.core/apply-update",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 900
+    }
+  ]
+}

@@ -102,10 +102,11 @@ async fn handle_request(
             .await;
         }
         Ok(RpcReply::Stream(mut stream)) => {
-            // Only the versioned checkout-PR stream uses an explicit readiness
-            // frame. Sending it for legacy streams would make older clients remove
-            // their pending stream as if it were a unary response.
-            if method == crate::methods::WATCH_CHECKOUT_CHANGE_REQUEST
+            // Only versioned streams (the catalog's `StreamAfterReady` rows) send
+            // an explicit readiness frame. Sending it for legacy streams would make
+            // older clients remove their pending stream as if it were a unary response.
+            if crate::operations::spec(&method)
+                .is_some_and(|op| op.reply == crate::operations::OperationReply::StreamAfterReady)
                 && send(ServerFrame {
                     id,
                     ok: Some(serde_json::json!({ "stream": true })),

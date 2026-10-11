@@ -19,7 +19,10 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 mod client;
+#[cfg(feature = "schema")]
+pub mod contract;
 pub mod device_room;
+pub mod operations;
 pub mod remote_auth;
 mod server;
 
@@ -766,6 +769,71 @@ pub struct ServerFrame {
     pub item: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+}
+
+// The frame contract (CORE-01): a present `ok` -- including `ok: null` --
+// is success, `err` is failure, `item` is one stream element and `done: true`
+// ends a stream. Exactly one of the four appears. A derived schema cannot say
+// "present but null", so these are written next to the types they describe.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ServerFrame {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ServerFrame".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let others = |keep: &str| {
+            let keys: Vec<serde_json::Value> = ["ok", "err", "item", "done"]
+                .into_iter()
+                .filter(|key| *key != keep)
+                .map(|key| serde_json::json!({ "required": [key] }))
+                .collect();
+            serde_json::json!({ "anyOf": keys })
+        };
+        schemars::json_schema!({
+            "type": "object",
+            "description": "Exactly one of ok (present, may be null: success), err (failure), item (stream element) or done: true (stream end).",
+            "properties": {
+                "id": { "type": "integer", "minimum": 0 },
+                "ok": { "description": "Success value; null is a valid result." },
+                "err": { "type": "string", "description": "Failure text; `unknown method: <m>` and `bad params: <reason>` are stable prefixes." },
+                "item": { "description": "One stream element." },
+                "done": { "const": true }
+            },
+            "required": ["id"],
+            "oneOf": [
+                { "required": ["ok"], "not": others("ok") },
+                { "required": ["err"], "not": others("err") },
+                { "required": ["item"], "not": others("item") },
+                { "required": ["done"], "not": others("done") }
+            ]
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ClientFrame {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ClientFrame".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "description": "A call ({id, method, params}) or the cancellation of a stream ({id, cancel: true}).",
+            "properties": {
+                "id": { "type": "integer", "minimum": 0 },
+                "method": { "type": "string", "description": "A catalogued operation's wire method name." },
+                "params": { "description": "Operation parameters; omitted or null means none." },
+                "cancel": { "const": true }
+            },
+            "required": ["id"],
+            "oneOf": [
+                { "required": ["method"], "not": { "required": ["cancel"] } },
+                { "required": ["cancel"], "not": { "required": ["method"] } }
+            ]
+        })
+    }
 }
 
 // A present `ok: null` is a successful nullable RPC result, not a missing

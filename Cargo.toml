@@ -96,6 +96,8 @@ async-trait = "0.1"
 # serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CORE-01 contract schema generation (optional `schema` feature only).
+schemars = "=1.2.2"
 toml = "0.8.23"
 json5 = "0.4"
 plist = "1"

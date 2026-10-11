@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ServerFrame",
+  "description": "Exactly one of ok (present, may be null: success), err (failure), item (stream element) or done: true (stream end).",
+  "type": "object",
+  "properties": {
+    "done": {
+      "const": true
+    },
+    "err": {
+      "description": "Failure text; `unknown method: <m>` and `bad params: <reason>` are stable prefixes.",
+      "type": "string"
+    },
+    "id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "item": {
+      "description": "One stream element."
+    },
+    "ok": {
+      "description": "Success value; null is a valid result."
+    }
+  },
+  "oneOf": [
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "err"
+            ]
+          },
+          {
+            "required": [
+              "item"
+            ]
+          },
+          {
+            "required": [
+              "done"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "ok"
+            ]
+          },
+          {
+            "required": [
+              "item"
+            ]
+          },
+          {
+            "required": [
+              "done"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "err"
+      ]
+    },
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "ok"
+            ]
+          },
+          {
+            "required": [
+              "err"
+            ]
+          },
+          {
+            "required": [
+              "done"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "item"
+      ]
+    },
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "ok"
+            ]
+          },
+          {
+            "required": [
+              "err"
+            ]
+          },
+          {
+            "required": [
+              "item"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "done"
+      ]
+    }
+  ],
+  "required": [
+    "id"
+  ]
+}

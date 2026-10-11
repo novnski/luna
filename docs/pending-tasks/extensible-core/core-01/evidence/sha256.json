@@ -1,0 +1,59 @@
+{
+ "committed_evidence": {
+  "before-source.txt": "268fac9e828aa72607a103ce5fa6fbb01c345e13a5f7c083a03599fc181d94c2",
+  "c3-equivalence.json": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6",
+  "commands.json": "51de954916cbb1645c4331abc8bd2ef2f7230898bde120a9eee71b2157ab9a05",
+  "reader-report.json": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8",
+  "wire-before/frames.json": "cf395ecab353034a725914e048237203c5271c076873d397f65f554175e0ddeb",
+  "wire-after/frames.json": "d020bed62c8f6b7d28015265c6f7b0fabbcca9fac2f408f0affee9ef916adfb4"
+ },
+ "contract_files": {
+  "crates/rpc/contract/v1/operations.json": "8f1f2be964a05fb1716c88f82613f418a0cf9d3224be9c52c86c4a48bb4712b6",
+  "crates/rpc/contract/v1/schemas/client-frame.json": "14c852208bb43e943cd2190c0f42a375622a163cb958924297c56855cc9be4dc",
+  "crates/rpc/contract/v1/schemas/command-receipt.json": "ff91775039227e74b08d1d86457df4d6a2e7061571b3a964245bc12aab7e4cdf",
+  "crates/rpc/contract/v1/schemas/content-type-id.json": "a5c14b53a1d959eec5715c728690879d6751483a71ec13853ed3119b502e8c59",
+  "crates/rpc/contract/v1/schemas/contribution-id.json": "ead1175d139075b91d5403d6b08bcea6a435af396aa2aeb9b44715b7e552c817",
+  "crates/rpc/contract/v1/schemas/extension-id.json": "360b631e0b257d5362ad3858c877136da7a74cfe81c58edf4e9da8b996ef6ab8",
+  "crates/rpc/contract/v1/schemas/namespaced-id.json": "f32414ee596fa60ff03aaaac02d7373593cb5b7d2632f5374ec2dc6275e8dd0c",
+  "crates/rpc/contract/v1/schemas/operation-catalog.json": "f397368e0b4eb8409aecefa6fa2dda0bc2da3bc9f36a0e45c304302ed907e6fe",
+  "crates/rpc/contract/v1/schemas/provider-ref.json": "29072db6dc9e9ae130caecdc186d7d8d9a28be35963e4c3572b44a6c0ae35b09",
+  "crates/rpc/contract/v1/schemas/server-frame.json": "4a337b7c857a349256ed2439d7478846d8808850b3d57100901b38bf94a06b46",
+  "crates/rpc/contract/v1/schemas/task-command-envelope.json": "da8d6a5845725b10dd6dd3cd1369162a87d2f54a019ecceaf03b1f04c2ef46d8",
+  "crates/rpc/contract/v1/schemas/task-command-read.json": "d848f0ce78db9d6040ae5e274aac9154f8b242379bef11c3f7d73f6a03e8e509"
+ },
+ "sources": {
+  "crates/rpc/src/operations.rs": "7fc1047350202632329b7a44fe618d532aeb335d4c0f937862649c31febb984c",
+  "crates/rpc/src/contract.rs": "92c9483b0e4a94e34bda5e05aad210054b1660845f4ab6840f406356b45895a0",
+  "crates/proto/src/contract.rs": "c7b83ab7e5aac127cb97cdb779c6743f14f1e6055f60af5c4fbdba4914903942",
+  "crates/rpc/tests/contract.rs": "71ff3b8147fef5334c9d84decb48977ce24ec29a35a30037471b2f6c06d11175",
+  "crates/rpc/tests/fixtures/contract-ids.json": "b61978c6a7ccac1ad69bd7ff2cf5c549f3b5b675f0c6e1fc5945464b98e25d08",
+  "scripts/qa-contract-wire.mjs": "ec47ba70c08fd645ad29793d3c8d242c43043d63fadead2aaf889f0562260337",
+  "scripts/qa-contract-reader.py": "ed8c8b8c59744391af3f129e7487a40c50da664b734a24c6df51c09384f596b3"
+ },
+ "local_raw_run": {
+  "directory": "~/workspace/code/personal/luna/target/qa/core-01/core01-20261011T175146Z",
+  "files": {
+   "before-sha.txt": "268fac9e828aa72607a103ce5fa6fbb01c345e13a5f7c083a03599fc181d94c2",
+   "c3-equivalence.json": "c7d3ec144c77e976188d8e8505d157c4541249c0eef8737773a27fa45442edd6",
+   "check-schema.log": "dd4d720a37afb65baf818283b9c946ba9e06eb439dd3a2a643797331d07f3b1a",
+   "clippy.log": "57d164eb089cb3d35f274ed0186b5f821412225b7cb8b84c01a5fd9711d8c7fb",
+   "commands.jsonl": "37dd37a36f415504767dbba3ee37201d7f28bf8f3a2bb825b7e4b2431efa9656",
+   "contract-test-1.log": "c2f545b8a22a4773c833dde979811ba253ac67c4e85a52c6756de00d82ad7e9c",
+   "contract-test-2.log": "1cd774f2423b4590eb3925632987e680fc55cf08a4df3fc4000a69a3ca7dca5c",
+   "contract-test-final.log": "9ce681ca599afe37dd50db62089f351bd752c59c38253aa9f1d583a2bd0a7fe0",
+   "contract-test.log": "da3ba212e9bf5a68a92be13aa782b40202a13046b5bbef771ba7727a1b0b6b2c",
+   "deadline-test.log": "5344e4c4c02ef324fb6c42871a5cc5b55085881afc624230576808e68e71d45a",
+   "engine-tests-2.log": "43eaa60101e9c487c04499b19f0a86a9860639aa9df92317c9788455d8374745",
+   "engine-tests.log": "547e17277364dd71b0a8185d42c6d254f324b021d8f64e5c60dc759cea0da2d9",
+   "fmt.log": "a9b015f806edbabf96ee0aecd7d5685630fa2e4ef8b8b1e328f0a328307a1a5d",
+   "generate.log": "4470567f026c6e7b8ea577f0cbfaadcf0ce15269e2008eb62ad1c7efec7aa3d8",
+   "primary-refresh.log": "5308f15d79af99d65aa937b19c3010f609570778af011dc2eb3473da036c4030",
+   "reader-report.json": "dc09d256677fd35d6cbaed79f09a79ab327d28ae4010cc9fb714fe0b7df84de8",
+   "rpc-proto-tests.log": "c116c5bde7a1dfbbb2f51c8e1bd6b5d18b1af8ae56f158360bba9ba290c54793",
+   "before/engine.log": "85ad16be516c1f1fa3b9cc750a7c6d87a25f29e00176f28715b85e45c77182f3",
+   "before/frames.json": "840a1e3f75651760497404fc86ffe6562b32bd83da11028e27850adb80443381",
+   "after/engine.log": "a68992b14d0d0f3093be7ca69e3ab543a1f358559907b0554cda18530712ef53",
+   "after/frames.json": "2b684674dd989cd30ad09a9b75cba0ef49ed5121a095c01b5049a5c2d172229c"
+  }
+ }
+}

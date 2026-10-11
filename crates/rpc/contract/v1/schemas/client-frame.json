@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClientFrame",
+  "description": "A call ({id, method, params}) or the cancellation of a stream ({id, cancel: true}).",
+  "type": "object",
+  "properties": {
+    "cancel": {
+      "const": true
+    },
+    "id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "method": {
+      "description": "A catalogued operation's wire method name.",
+      "type": "string"
+    },
+    "params": {
+      "description": "Operation parameters; omitted or null means none."
+    }
+  },
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "cancel"
+        ]
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "method"
+        ]
+      },
+      "required": [
+        "cancel"
+      ]
+    }
+  ],
+  "required": [
+    "id"
+  ]
+}

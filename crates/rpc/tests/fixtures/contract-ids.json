@@ -1,0 +1,156 @@
+[
+ {
+  "value": "luna.provider/codex",
+  "accepts": {
+   "namespacedId": true,
+   "providerRef": true
+  },
+  "canonical": "luna.provider/codex",
+  "note": "canonical built-in provider"
+ },
+ {
+  "value": "codex",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": true
+  },
+  "canonical": "luna.provider/codex",
+  "note": "legacy spelling, kept byte-for-byte"
+ },
+ {
+  "value": "claude-code",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": true
+  },
+  "canonical": "luna.provider/claude-code"
+ },
+ {
+  "value": "opencode",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": true
+  },
+  "canonical": "luna.provider/opencode"
+ },
+ {
+  "value": "antigravity",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": true
+  },
+  "canonical": "luna.provider/antigravity",
+  "note": "retired legacy spelling stays readable"
+ },
+ {
+  "value": "acme.tools/new-provider",
+  "accepts": {
+   "namespacedId": true,
+   "providerRef": true
+  },
+  "canonical": "acme.tools/new-provider",
+  "note": "unknown but well-formed: preserved"
+ },
+ {
+  "value": "acme/x1.2_beta-3",
+  "accepts": {
+   "namespacedId": true,
+   "providerRef": true
+  },
+  "canonical": "acme/x1.2_beta-3"
+ },
+ {
+  "value": "Codex",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "ids are lowercase"
+ },
+ {
+  "value": "luna provider/codex",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  }
+ },
+ {
+  "value": "",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  }
+ },
+ {
+  "value": "luna.provider/",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "empty name"
+ },
+ {
+  "value": "/codex",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "empty namespace"
+ },
+ {
+  "value": "luna..x/y",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "empty namespace segment"
+ },
+ {
+  "value": "1acme/x",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "namespace segment starts with a letter"
+ },
+ {
+  "value": "acme/-x",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "name starts with a letter or digit"
+ },
+ {
+  "value": "acme/X",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  }
+ },
+ {
+  "value": "acme.tools/a/b",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "one slash only"
+ },
+ {
+  "value": "a/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "accepts": {
+   "namespacedId": true,
+   "providerRef": true
+  },
+  "canonical": "a/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "note": "exactly 128 bytes"
+ },
+ {
+  "value": "a/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "accepts": {
+   "namespacedId": false,
+   "providerRef": false
+  },
+  "note": "129 bytes"
+ }
+]

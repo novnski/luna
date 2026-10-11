@@ -1,0 +1,559 @@
+[
+ {
+  "label": "engine-info",
+  "request": {
+   "id": 1,
+   "method": "EngineInfo",
+   "params": {}
+  },
+  "requestText": "{\"id\":1,\"method\":\"EngineInfo\",\"params\":{}}",
+  "reply": {
+   "id": 1,
+   "ok": {
+    "deviceId": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "workspaceScope": "local",
+    "profileId": "d289b9b005016e202725b14b14867d03794473dc616450cd91c33baa594002f1",
+    "capabilities": [
+     "luna-owner-ipc-v1",
+     "message-queue-v1",
+     "message-queue-actions-v1",
+     "message-queue-attachments-v1",
+     "message-queue-clean-attachment-text-v1",
+     "message-queue-edit-lease-v1",
+     "task-identity-v1",
+     "session-history-search-v1",
+     "side-chat-task-commands-v1",
+     "side-chat-persistence-v1",
+     "context-transfer-v1",
+     "task-work-v1",
+     "chat-workbench-v1",
+     "remote-auth-v1"
+    ]
+   }
+  }
+ },
+ {
+  "label": "list-harnesses",
+  "request": {
+   "id": 2,
+   "method": "ListHarnesses",
+   "params": {}
+  },
+  "requestText": "{\"id\":2,\"method\":\"ListHarnesses\",\"params\":{}}",
+  "reply": {
+   "id": 2,
+   "ok": [
+    {
+     "id": "mock",
+     "name": "Mock",
+     "supportsSteering": true,
+     "steeringMode": "step-boundary",
+     "reasoningLevels": [
+      "medium"
+     ],
+     "installed": true,
+     "enabled": false
+    },
+    {
+     "id": "claude-code",
+     "name": "Claude Code",
+     "supportsSteering": true,
+     "steeringMode": "step-boundary",
+     "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "installed": true,
+     "enabled": true
+    },
+    {
+     "id": "codex",
+     "name": "Codex",
+     "supportsSteering": true,
+     "steeringMode": "step-boundary",
+     "reasoningLevels": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+     ],
+     "installed": true,
+     "enabled": true
+    },
+    {
+     "id": "opencode",
+     "name": "OpenCode",
+     "supportsSteering": true,
+     "steeringMode": "step-boundary",
+     "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "installed": true,
+     "enabled": true
+    }
+   ]
+  }
+ },
+ {
+  "label": "watch-chats",
+  "request": {
+   "id": 3,
+   "method": "WatchChats",
+   "params": {}
+  },
+  "requestText": "{\"id\":3,\"method\":\"WatchChats\",\"params\":{}}",
+  "reply": {
+   "id": 3,
+   "item": []
+  }
+ },
+ {
+  "label": "create-space",
+  "request": {
+   "id": 4,
+   "method": "Mutate",
+   "params": {
+    "op": "createSpace",
+    "spaceId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "deviceId": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "path": "target/qa/core-01/core01-20261011T175146Z/after/project-xFjbxs",
+    "name": "CORE-01 wire",
+    "gitDetected": false
+   }
+  },
+  "requestText": "{\"id\":4,\"method\":\"Mutate\",\"params\":{\"op\":\"createSpace\",\"spaceId\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\",\"deviceId\":\"33f3df5a-1bea-4e02-8839-f69d0ff4df84\",\"path\":\"target/qa/core-01/core01-20261011T175146Z/after/project-xFjbxs\",\"name\":\"CORE-01 wire\",\"gitDetected\":false}}",
+  "reply": {
+   "id": 4,
+   "ok": {
+    "ok": true
+   }
+  }
+ },
+ {
+  "label": "create-chat",
+  "request": {
+   "id": 5,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-create",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000000,
+    "intent": {
+     "kind": "createChat",
+     "spaceId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+     "cwd": "target/qa/core-01/core01-20261011T175146Z/after/project-xFjbxs",
+     "config": {
+      "harness": "codex",
+      "providerAccountId": null,
+      "model": null,
+      "reasoning": null,
+      "modelOptions": {},
+      "sandbox": "read-only",
+      "permissionMode": "ask",
+      "effectivePermissionMode": "ask"
+     }
+    }
+   }
+  },
+  "requestText": "{\"id\":5,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-create\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000000,\"intent\":{\"kind\":\"createChat\",\"spaceId\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\",\"cwd\":\"target/qa/core-01/core01-20261011T175146Z/after/project-xFjbxs\",\"config\":{\"harness\":\"codex\",\"providerAccountId\":null,\"model\":null,\"reasoning\":null,\"modelOptions\":{},\"sandbox\":\"read-only\",\"permissionMode\":\"ask\",\"effectivePermissionMode\":\"ask\"}}}}",
+  "reply": {
+   "id": 5,
+   "ok": {
+    "commandId": "core01-create",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "createChat",
+    "payloadHash": "6f3de830940ba1636a3eb81d23483782d0120ff08342d66ed05e7187222b3c89",
+    "status": "applied",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 1,
+     "taskSequence": 1
+    },
+    "eventSequence": 1,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "acceptedAtMs": 1791700000000,
+    "committedAtMs": 1791742244195,
+    "observedAtMs": 1791742244195
+   }
+  }
+ },
+ {
+  "label": "rename-without-revision",
+  "request": {
+   "id": 6,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-unfenced",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000001,
+    "intent": {
+     "kind": "rename",
+     "title": "Unfenced"
+    }
+   }
+  },
+  "requestText": "{\"id\":6,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-unfenced\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000001,\"intent\":{\"kind\":\"rename\",\"title\":\"Unfenced\"}}}",
+  "reply": {
+   "id": 6,
+   "ok": {
+    "commandId": "core01-unfenced",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "4b168772ddcfca768a3659916a6a3b0efe64678c9de105d236f98126cc8c3f16",
+    "status": "conflict",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 1,
+     "taskSequence": 2
+    },
+    "eventSequence": 2,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "reason": {
+     "code": "unsupportedOperation",
+     "message": "this mutation requires expectedTaskRevision"
+    },
+    "recoveryAction": "Reload the task command snapshot and retry with a new command id.",
+    "acceptedAtMs": 1791700000001,
+    "committedAtMs": 1791742244197,
+    "observedAtMs": 1791742244197
+   }
+  }
+ },
+ {
+  "label": "rename",
+  "request": {
+   "id": 7,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-rename",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000002,
+    "expectedTaskRevision": 1,
+    "intent": {
+     "kind": "rename",
+     "title": "Wire capture"
+    }
+   }
+  },
+  "requestText": "{\"id\":7,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-rename\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000002,\"expectedTaskRevision\":1,\"intent\":{\"kind\":\"rename\",\"title\":\"Wire capture\"}}}",
+  "reply": {
+   "id": 7,
+   "ok": {
+    "commandId": "core01-rename",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "f97ee9c00c19c95c29eae5300553779092f0a9d388d888cbc0d2133c06cab105",
+    "status": "applied",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 2,
+     "taskSequence": 3
+    },
+    "eventSequence": 3,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "acceptedAtMs": 1791700000002,
+    "committedAtMs": 1791742244199,
+    "observedAtMs": 1791742244199
+   }
+  }
+ },
+ {
+  "label": "rename-reordered-retry",
+  "request": {
+   "params": {
+    "intent": {
+     "title": "Wire capture",
+     "kind": "rename"
+    },
+    "expectedTaskRevision": 1,
+    "issuedAtMs": 1791700000002,
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "clientSessionId": "core01-session",
+    "clientId": "core01-client",
+    "actorId": "core01-actor",
+    "commandId": "core01-rename"
+   },
+   "method": "ExecuteTaskCommand",
+   "id": 8
+  },
+  "requestText": "{\"params\":{\"intent\":{\"title\":\"Wire capture\",\"kind\":\"rename\"},\"expectedTaskRevision\":1,\"issuedAtMs\":1791700000002,\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"clientSessionId\":\"core01-session\",\"clientId\":\"core01-client\",\"actorId\":\"core01-actor\",\"commandId\":\"core01-rename\"},\"method\":\"ExecuteTaskCommand\",\"id\":8}",
+  "reply": {
+   "id": 8,
+   "ok": {
+    "commandId": "core01-rename",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "f97ee9c00c19c95c29eae5300553779092f0a9d388d888cbc0d2133c06cab105",
+    "status": "applied",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 2,
+     "taskSequence": 3
+    },
+    "eventSequence": 3,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "acceptedAtMs": 1791700000002,
+    "committedAtMs": 1791742244199,
+    "observedAtMs": 1791742244199
+   }
+  }
+ },
+ {
+  "label": "rename-id-conflict",
+  "request": {
+   "id": 9,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-rename",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000003,
+    "expectedTaskRevision": 1,
+    "intent": {
+     "kind": "rename",
+     "title": "A different title"
+    }
+   }
+  },
+  "requestText": "{\"id\":9,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-rename\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000003,\"expectedTaskRevision\":1,\"intent\":{\"kind\":\"rename\",\"title\":\"A different title\"}}}",
+  "reply": {
+   "id": 9,
+   "ok": {
+    "commandId": "core01-rename",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "4197cb1a7e56e5af0c65ca281a255c0a6ac392aa6d2438c9cc489e7156417569",
+    "status": "conflict",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 2,
+     "taskSequence": 4
+    },
+    "eventSequence": 4,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "reason": {
+     "code": "commandIdConflict",
+     "message": "command id core01-rename already belongs to task 6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b with payload f97ee9c00c19c95c29eae5300553779092f0a9d388d888cbc0d2133c06cab105"
+    },
+    "recoveryAction": "Mint a new command id for the different target or payload.",
+    "acceptedAtMs": 1791700000003,
+    "committedAtMs": 1791742244200,
+    "observedAtMs": 1791742244200
+   }
+  }
+ },
+ {
+  "label": "rename-stale-revision",
+  "request": {
+   "id": 10,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-stale",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000004,
+    "expectedTaskRevision": 0,
+    "intent": {
+     "kind": "rename",
+     "title": "Stale"
+    }
+   }
+  },
+  "requestText": "{\"id\":10,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-stale\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000004,\"expectedTaskRevision\":0,\"intent\":{\"kind\":\"rename\",\"title\":\"Stale\"}}}",
+  "reply": {
+   "id": 10,
+   "ok": {
+    "commandId": "core01-stale",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "b5c4f8ee11d9eff60a9c67564e76321fd7d49acc8664df6b88f7e0872c436a8d",
+    "status": "conflict",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 2,
+     "taskSequence": 5
+    },
+    "eventSequence": 5,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "reason": {
+     "code": "staleTaskRevision",
+     "message": "expected task revision 0, current revision is 2"
+    },
+    "recoveryAction": "Reload the bounded task snapshot, review the changed state, and retry with a new command id.",
+    "acceptedAtMs": 1791700000004,
+    "observedAtMs": 1791742244200
+   }
+  }
+ },
+ {
+  "label": "pin",
+  "request": {
+   "id": 11,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "commandId": "core01-pin",
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "issuedAtMs": 1791700000005,
+    "expectedTaskRevision": 2,
+    "intent": {
+     "kind": "setPinned",
+     "pinned": true
+    }
+   }
+  },
+  "requestText": "{\"id\":11,\"method\":\"ExecuteTaskCommand\",\"params\":{\"commandId\":\"core01-pin\",\"actorId\":\"core01-actor\",\"clientId\":\"core01-client\",\"clientSessionId\":\"core01-session\",\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\",\"issuedAtMs\":1791700000005,\"expectedTaskRevision\":2,\"intent\":{\"kind\":\"setPinned\",\"pinned\":true}}}",
+  "reply": {
+   "id": 11,
+   "ok": {
+    "commandId": "core01-pin",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "setPinned",
+    "payloadHash": "854b46b94ae6ed39b8052e6cbc636ca9693fe7fa4d2d6b6b79ca801ad7002f08",
+    "status": "applied",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 3,
+     "taskSequence": 6
+    },
+    "eventSequence": 6,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "acceptedAtMs": 1791700000005,
+    "committedAtMs": 1791742244201,
+    "observedAtMs": 1791742244201
+   }
+  }
+ },
+ {
+  "label": "receipt-read",
+  "request": {
+   "id": 12,
+   "method": "GetTaskCommandReceipt",
+   "params": {
+    "commandId": "core01-rename"
+   }
+  },
+  "requestText": "{\"id\":12,\"method\":\"GetTaskCommandReceipt\",\"params\":{\"commandId\":\"core01-rename\"}}",
+  "reply": {
+   "id": 12,
+   "ok": {
+    "commandId": "core01-rename",
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+    "intent": "rename",
+    "payloadHash": "f97ee9c00c19c95c29eae5300553779092f0a9d388d888cbc0d2133c06cab105",
+    "status": "applied",
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 2,
+     "taskSequence": 3
+    },
+    "eventSequence": 3,
+    "actorId": "core01-actor",
+    "clientId": "core01-client",
+    "clientSessionId": "core01-session",
+    "executionEnvironment": "33f3df5a-1bea-4e02-8839-f69d0ff4df84",
+    "acceptedAtMs": 1791700000002,
+    "committedAtMs": 1791742244199,
+    "observedAtMs": 1791742244199
+   }
+  }
+ },
+ {
+  "label": "snapshot-read",
+  "request": {
+   "id": 13,
+   "method": "GetTaskCommandSnapshot",
+   "params": {
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b"
+   }
+  },
+  "requestText": "{\"id\":13,\"method\":\"GetTaskCommandSnapshot\",\"params\":{\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\"}}",
+  "reply": {
+   "id": 13,
+   "ok": {
+    "snapshot": {
+     "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b",
+     "taskRevision": 3,
+     "taskSequence": 6
+    },
+    "events": [],
+    "reloadRequired": false,
+    "hasMore": false
+   }
+  }
+ },
+ {
+  "label": "unknown-method",
+  "request": {
+   "id": 14,
+   "method": "FutureDangerousMethod",
+   "params": {}
+  },
+  "requestText": "{\"id\":14,\"method\":\"FutureDangerousMethod\",\"params\":{}}",
+  "reply": {
+   "id": 14,
+   "err": "unknown method: FutureDangerousMethod"
+  }
+ },
+ {
+  "label": "bad-params",
+  "request": {
+   "id": 15,
+   "method": "ExecuteTaskCommand",
+   "params": {
+    "taskId": "6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b"
+   }
+  },
+  "requestText": "{\"id\":15,\"method\":\"ExecuteTaskCommand\",\"params\":{\"taskId\":\"6f1d2c3b-4a59-4e68-9b7a-0c1d2e3f4a5b\"}}",
+  "reply": {
+   "id": 15,
+   "err": "bad params: missing field `commandId`"
+  }
+ }
+]

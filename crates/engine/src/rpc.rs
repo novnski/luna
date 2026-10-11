@@ -286,27 +286,8 @@ struct QueueCommandParams {
     transfers: Vec<crate::uploads::AttachmentTransfer>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TaskCommandParams {
-    command_id: String,
-    #[serde(default = "default_actor")]
-    actor_id: String,
-    #[serde(default = "default_client")]
-    client_id: String,
-    #[serde(default = "default_client_session")]
-    client_session_id: String,
-    task_id: String,
-    #[serde(default)]
-    expected_task_revision: Option<u64>,
-    #[serde(default)]
-    expected_binding_generation: Option<u32>,
-    #[serde(default)]
-    expected_turn_id: Option<String>,
-    #[serde(default = "crate::now_ms")]
-    issued_at_ms: i64,
-    intent: TaskCommandIntent,
-}
+/// The published `ExecuteTaskCommand` envelope over the engine's private intent.
+type TaskCommandParams = luna_proto::TaskCommandEnvelope<TaskCommandIntent>;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -735,18 +716,6 @@ impl TaskCommandIntent {
                     | Self::SwitchProvider { .. }
             )
     }
-}
-
-fn default_actor() -> String {
-    "local-user".into()
-}
-
-fn default_client() -> String {
-    "local-ui".into()
-}
-
-fn default_client_session() -> String {
-    "legacy".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -7968,128 +7937,21 @@ fn task_intent_from_mutation(mutation: MutateParams) -> Option<(String, TaskComm
 /// update methods get a long leash; worktree creation checks out a full tree;
 /// everything else is interactive and must fail fast.
 fn forward_deadline(method: &str) -> std::time::Duration {
-    use std::time::Duration;
-    match method {
-        methods::CLONE_REPO
-        | methods::FETCH_ALL
-        | methods::APPLY_UPDATE
-        | methods::UPDATE_PROVIDER => Duration::from_secs(15 * 60),
-        methods::EXECUTE_GIT_ACTION => Duration::from_secs(150),
-        methods::GENERATE_GIT_COMMIT_MESSAGE => Duration::from_secs(45),
-        methods::GET_GIT_PR_STATUS
-        | methods::GET_GITHUB_PR_PREVIEW
-        | methods::GET_GITHUB_PR_DETAILS => Duration::from_secs(70),
-        methods::CREATE_GITHUB_DRAFT_PR => Duration::from_secs(110),
-        methods::CREATE_WORKTREE => Duration::from_secs(120),
-        _ => Duration::from_secs(30),
-    }
+    std::time::Duration::from_secs(
+        luna_rpc::operations::spec(method).map_or(30, |op| u64::from(op.forward_deadline_secs)),
+    )
 }
 
-/// ControlRpc methods that honor `targetDeviceId` (feature-inventory §2.1). Extend this
-/// list (plus [`is_stream_method`] for streams) to make more of the surface
-/// device-addressable — the handlers themselves need no changes.
 fn restore_owner_paths_overlap(root: &std::path::Path, other: &std::path::Path) -> bool {
     other.starts_with(root) || root.starts_with(other)
 }
 
+/// ControlRpc methods that honor `targetDeviceId` (feature-inventory §2.1): the
+/// operation catalog's device-addressable rows. Mark a row `DeviceAddressable`
+/// (its reply shape decides stream forwarding) to make more of the surface
+/// device-addressable — the handlers themselves need no changes.
 fn forwardable(method: &str) -> bool {
-    matches!(
-        method,
-        methods::GET_TASK_WORK
-            | methods::WATCH_TASK_WORK
-            | methods::PREVIEW_STOP_TASK_WORK
-            | methods::STOP_TASK_WORK
-            | methods::LIST_HARNESSES
-            | methods::GET_PROVIDER_UPDATES
-            | methods::UPDATE_PROVIDER
-            | methods::GET_USAGE_SNAPSHOT
-            | methods::GET_TITLE_SETTINGS
-            | methods::SET_TITLE_SETTINGS
-            | methods::SET_HARNESS_ENABLED
-            | methods::LIST_MODELS
-            | methods::LIST_COMMANDS
-            | methods::LIST_COMPOSER_CATALOG
-            | methods::QUEUE_COMMAND
-            | methods::CREATE_CHILD_THREAD
-            | methods::EXECUTE_TASK_COMMAND
-            | methods::GET_TASK_COMMAND_RECEIPT
-            | methods::GET_TASK_CLEANUP
-            | methods::GET_TASK_COMMAND_SNAPSHOT
-            | methods::WATCH_TASK_COMMANDS
-            | methods::SEARCH_SESSION_HISTORY
-            | methods::GET_USAGE_SNAPSHOT
-            | methods::REBUILD_SESSION_HISTORY
-            | methods::WATCH_DOC_MESSAGES
-            // The queue lives on the chat doc, and only its host may send from
-            // it — same addressing as the command ledger next door.
-            | methods::WATCH_QUEUE
-            | methods::QUEUE_MESSAGE
-            | methods::UPDATE_QUEUED_MESSAGE
-            | methods::BEGIN_QUEUED_MESSAGE_EDIT
-            | methods::RENEW_QUEUED_MESSAGE_EDIT
-            | methods::FINISH_QUEUED_MESSAGE_EDIT
-            | methods::MOVE_QUEUED_MESSAGE
-            | methods::REMOVE_QUEUED_MESSAGE
-            | methods::SEND_QUEUED_MESSAGE_NOW
-            | methods::STEER_QUEUED_MESSAGE_NOW
-            // Repos/worktrees/folders are device-local filesystem state.
-            | methods::LIST_REPOS
-            | methods::ADD_REPO
-            | methods::CLONE_REPO
-            | methods::CREATE_REPO
-            | methods::LIST_BRANCHES
-            | methods::LIST_REFS
-            | methods::LIST_GIT_HISTORY
-            | methods::SEARCH_GIT_HISTORY
-            | methods::RESOLVE_GIT_AVATARS
-            | methods::FETCH_ALL
-            | methods::SWITCH_REF
-            | methods::LIST_FOLDERS
-            | methods::LIST_DRIVES
-            | methods::SEARCH_FILES
-            | methods::LIST_WORKSPACE_DIRECTORY
-            | methods::SEARCH_WORKSPACE_FILES
-            | methods::READ_WORKSPACE_IMAGE
-            | methods::READ_WORKSPACE_FILE
-            | methods::WRITE_WORKSPACE_FILE
-            | methods::WATCH_WORKSPACE_FILES
-            | methods::CREATE_WORKTREE
-            | methods::DELETE_WORKTREE
-            // Checkout diffs are produced on the device holding the checkout.
-            | methods::WATCH_CHECKOUT_DIFFS
-            | methods::WATCH_CHECKOUT_CHANGE_REQUEST
-            | methods::GET_CHECKOUT_DIFF
-            | methods::GET_CHECKOUT_FILE_DIFF_TEXT
-            | methods::GET_GIT_ACTION_PREVIEW
-            | methods::EXECUTE_GIT_ACTION
-            | methods::GENERATE_GIT_COMMIT_MESSAGE
-            | methods::GET_GIT_PR_STATUS
-            | methods::GET_GITHUB_PR_PREVIEW
-            | methods::GET_GITHUB_PR_DETAILS
-            | methods::CREATE_GITHUB_DRAFT_PR
-            // Terminals live on the chat's host device.
-            | methods::OPEN_TERMINAL
-            | methods::SUBSCRIBE_TERMINAL
-            | methods::WRITE_TERMINAL
-            | methods::RESIZE_TERMINAL
-            | methods::CLOSE_TERMINAL
-            | methods::LIST_TERMINALS
-            // Provider account metadata may be inspected per device. Login,
-            // activation, forgetting, polling, and cancellation remain local
-            // until L29-L31 establish paired authenticated E2EE transport.
-            | methods::LIST_AGENT_ACCOUNTS
-            | methods::GET_RUNTIME_CONTRACT
-            // Uploads/attachments target the chat's host device (the agent reads
-            // the committed file from that device's disk).
-            | methods::UPLOAD_CHUNK
-            | methods::UPLOAD_COMMIT
-            | methods::READ_ATTACHMENT_CHUNK
-            | methods::FETCH_TOOL_BLOB
-            | methods::MCP_ELICITATION_URL
-            // Updates report/apply on the device whose binary they concern.
-            | methods::UPDATE_STATUS
-            | methods::APPLY_UPDATE
-    )
+    luna_rpc::operations::spec(method).is_some_and(|op| op.device_addressable())
 }
 
 fn local_only_credential_method(method: &str) -> bool {
@@ -8119,19 +7981,7 @@ fn local_only_credential_method(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
-    matches!(
-        method,
-        methods::WATCH_TASK_WORK
-            | methods::WATCH_TASK_COMMANDS
-            | methods::WATCH_DOC_MESSAGES
-            | methods::WATCH_AUTOMATIONS
-            | methods::WATCH_QUEUE
-            | methods::SUBSCRIBE_TERMINAL
-            | methods::WATCH_CHECKOUT_DIFFS
-            | methods::WATCH_CHECKOUT_CHANGE_REQUEST
-            | methods::WATCH_WORKSPACE_FILES
-            | methods::UPDATE_STATUS
-    )
+    luna_rpc::operations::spec(method).is_some_and(|op| op.streams())
 }
 
 /// A watch receiver as a stream: current value first, then every change.
@@ -9417,6 +9267,12 @@ impl RpcService for EngineRpc {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
+        // CORE-01: only catalogued operations reach a handler, so a method
+        // added without a reviewed catalog row cannot be called at all.
+        if luna_rpc::operations::spec(method).is_none() {
+            let method = method.to_owned();
+            return Box::pin(async move { Err(RpcError::UnknownMethod(method)) });
+        }
         if board::handles(method) {
             return self.handle_board(method, params);
         }

@@ -1,0 +1,82 @@
+[
+ {
+  "name": "wire-before",
+  "command": "node scripts/qa-contract-wire.mjs <run>/before   (binary built from 40800c6c, before any CORE-01 change)",
+  "exit_code": 0
+ },
+ {
+  "name": "generate-contract",
+  "command": "scripts/cargo.sh run --locked -p luna-rpc --features schema --example contract",
+  "exit_code": 0
+ },
+ {
+  "name": "contract-test-first",
+  "command": "scripts/cargo.sh test --locked -p luna-rpc --features schema --test contract",
+  "exit_code": 101,
+  "note": "drift test caught the clock default embedded in the envelope schema; fixed with a field transform"
+ },
+ {
+  "name": "rpc-proto-tests",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked --no-fail-fast -p luna-rpc -p luna-proto",
+  "exit_code": 0,
+  "result": "69 passed, 1 ignored"
+ },
+ {
+  "name": "engine-tests-first",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked --no-fail-fast -p luna-engine --lib --test task_commands --test device_routing --test message_queue --test task_identity",
+  "exit_code": 101,
+  "result": "488 passed, 1 failed: forward_deadlines_are_tiered_and_bounded (catalog had 30s for four 15-minute forwards; extraction missed `15 * 60`)"
+ },
+ {
+  "name": "c3-equivalence",
+  "command": "python3 <scratch>/extract_before.py (HEAD sources) + catalog comparison -> c3-equivalence.json",
+  "exit_code": 0,
+  "result": "251 methods, 0 differences, 11 non-default deadlines"
+ },
+ {
+  "name": "deadline-test",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --lib forward_deadlines_are_tiered_and_bounded",
+  "exit_code": 0
+ },
+ {
+  "name": "contract-test",
+  "command": "scripts/cargo.sh test --locked -p luna-rpc --features schema --test contract",
+  "exit_code": 0,
+  "result": "3 passed"
+ },
+ {
+  "name": "primary-refresh",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "result": "build 116s, LUNA Dev PID 54659, port 59777, codesign ok"
+ },
+ {
+  "name": "live-app-sanity",
+  "command": "read-only IPC: EngineInfo, WatchChats, WatchSpaces, ListHarnesses, SyncStatus, FutureDangerousMethod",
+  "exit_code": 0,
+  "result": "5 served, FutureDangerousMethod refused"
+ },
+ {
+  "name": "wire-after",
+  "command": "node scripts/qa-contract-wire.mjs <run>/after",
+  "exit_code": 0
+ },
+ {
+  "name": "independent-reader",
+  "command": "agent-python -I scripts/qa-contract-reader.py crates/rpc/contract/v1 crates/rpc/tests/fixtures/contract-ids.json <before>/frames.json <after>/frames.json <report>",
+  "exit_code": 0,
+  "result": "C5/C6/C6b/C7/C8/C9 pass; 5 independent hashes per capture; create-chat hash path-dependent only"
+ },
+ {
+  "name": "engine-tests-2",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked --no-fail-fast -p luna-engine --lib --test remote_auth --test device_routing --test task_commands",
+  "exit_code": 0,
+  "result": "455 passed, 3 ignored"
+ },
+ {
+  "name": "clippy",
+  "command": "scripts/cargo.sh clippy --locked -p luna-proto -p luna-rpc --features luna-rpc/schema --tests --examples",
+  "exit_code": 0,
+  "result": "no warnings in changed rpc/proto files"
+ }
+]

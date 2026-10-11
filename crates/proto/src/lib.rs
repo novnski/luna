@@ -12,6 +12,7 @@ pub mod chat_workbench;
 pub mod composer_catalog;
 pub mod context_control;
 pub mod context_transfer;
+pub mod contract;
 pub mod cross_task_tools;
 pub mod draft;
 pub mod entities;

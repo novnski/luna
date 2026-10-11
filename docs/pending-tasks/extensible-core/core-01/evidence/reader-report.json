@@ -1,0 +1,47 @@
+{
+ "before": {
+  "engine-info": "ok",
+  "list-harnesses": "ok",
+  "watch-chats": "item",
+  "create-space": "ok",
+  "create-chat": "ok",
+  "rename-without-revision": "ok",
+  "rename": "ok",
+  "rename-reordered-retry": "ok",
+  "rename-id-conflict": "ok",
+  "rename-stale-revision": "ok",
+  "pin": "ok",
+  "receipt-read": "ok",
+  "snapshot-read": "ok",
+  "unknown-method": "err",
+  "bad-params": "err"
+ },
+ "independentHashes": {
+  "before": 5,
+  "after": 5
+ },
+ "after": {
+  "engine-info": "ok",
+  "list-harnesses": "ok",
+  "watch-chats": "item",
+  "create-space": "ok",
+  "create-chat": "ok",
+  "rename-without-revision": "ok",
+  "rename": "ok",
+  "rename-reordered-retry": "ok",
+  "rename-id-conflict": "ok",
+  "rename-stale-revision": "ok",
+  "pin": "ok",
+  "receipt-read": "ok",
+  "snapshot-read": "ok",
+  "unknown-method": "err",
+  "bad-params": "err"
+ },
+ "pathDependentHashes": [
+  "create-chat"
+ ],
+ "idRows": 19,
+ "frames": 15,
+ "problems": [],
+ "passed": true
+}

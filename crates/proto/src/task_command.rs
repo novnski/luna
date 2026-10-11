@@ -26,6 +26,7 @@ impl FollowUpBehavior {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandReceiptStatus {
@@ -43,6 +44,7 @@ impl CommandReceiptStatus {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandReasonCode {
@@ -65,6 +67,7 @@ pub enum CommandReasonCode {
     OperationFailed,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandReceiptReason {
@@ -72,6 +75,7 @@ pub struct CommandReceiptReason {
     pub message: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCommandSnapshot {
@@ -86,6 +90,7 @@ pub struct TaskCommandSnapshot {
     pub active_turn_id: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandReceipt {
@@ -116,6 +121,7 @@ pub struct CommandReceipt {
     pub observed_at_ms: i64,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCommandEvent {
@@ -125,6 +131,7 @@ pub struct TaskCommandEvent {
     pub receipt: CommandReceipt,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCommandRead {
@@ -141,4 +148,68 @@ pub struct TaskCommandRead {
     /// More durable events exist after `next_task_sequence`.
     #[serde(default)]
     pub has_more: bool,
+}
+
+/// The public `ExecuteTaskCommand` envelope (CORE-01). `I` is the intent: the
+/// engine uses its private intent type; the published contract uses
+/// [`TaskCommandIntentEnvelope`]. The defaults keep pre-envelope clients valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCommandEnvelope<I> {
+    /// Caller-minted idempotency key: an identical retry returns the original
+    /// receipt; a different payload under the same id is `commandIdConflict`.
+    pub command_id: String,
+    #[serde(default = "default_actor_id")]
+    pub actor_id: String,
+    #[serde(default = "default_client_id")]
+    pub client_id: String,
+    #[serde(default = "default_client_session_id")]
+    pub client_session_id: String,
+    pub task_id: String,
+    #[serde(default)]
+    pub expected_task_revision: Option<u64>,
+    #[serde(default)]
+    pub expected_binding_generation: Option<u32>,
+    #[serde(default)]
+    pub expected_turn_id: Option<String>,
+    /// Client issue time in Unix milliseconds; defaults to the engine's receive time.
+    #[serde(default = "default_issued_at_ms")]
+    #[cfg_attr(feature = "schema", schemars(transform = drop_evaluated_default))]
+    pub issued_at_ms: i64,
+    pub intent: I,
+}
+
+/// A clock default has no stable published value; the field docs state it.
+#[cfg(feature = "schema")]
+fn drop_evaluated_default(schema: &mut schemars::Schema) {
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("default");
+    }
+}
+
+/// A task-command intent as published: a `kind` tag plus that kind's fields.
+/// Unknown kinds are refused by the engine with a receipt, never ignored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TaskCommandIntentEnvelope {
+    pub kind: String,
+    #[serde(flatten)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+fn default_actor_id() -> String {
+    "local-user".into()
+}
+
+fn default_client_id() -> String {
+    "local-ui".into()
+}
+
+fn default_client_session_id() -> String {
+    "legacy".into()
+}
+
+fn default_issued_at_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }

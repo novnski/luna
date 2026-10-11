@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProviderRef",
+  "description": "A legacy provider spelling (kept byte-for-byte) or a namespaced provider id",
+  "anyOf": [
+    {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "cursor",
+        "devin",
+        "grok",
+        "hermes",
+        "pi",
+        "opencode",
+        "antigravity",
+        "mock"
+      ]
+    },
+    {
+      "$ref": "#/$defs/NamespacedId"
+    }
+  ],
+  "$defs": {
+    "NamespacedId": {
+      "description": "namespace/name; unknown ids are preserved verbatim by readers",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*/[a-z0-9][a-z0-9._-]*$"
+    }
+  }
+}

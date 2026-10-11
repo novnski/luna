@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TaskCommandEnvelope",
+  "description": "The public `ExecuteTaskCommand` envelope (CORE-01). `I` is the intent: the\nengine uses its private intent type; the published contract uses\n[`TaskCommandIntentEnvelope`]. The defaults keep pre-envelope clients valid.",
+  "type": "object",
+  "properties": {
+    "actorId": {
+      "type": "string",
+      "default": "local-user"
+    },
+    "clientId": {
+      "type": "string",
+      "default": "local-ui"
+    },
+    "clientSessionId": {
+      "type": "string",
+      "default": "legacy"
+    },
+    "commandId": {
+      "description": "Caller-minted idempotency key: an identical retry returns the original\nreceipt; a different payload under the same id is `commandIdConflict`.",
+      "type": "string"
+    },
+    "expectedBindingGeneration": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "expectedTaskRevision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "default": null,
+      "minimum": 0
+    },
+    "expectedTurnId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "intent": {
+      "$ref": "#/$defs/TaskCommandIntentEnvelope"
+    },
+    "issuedAtMs": {
+      "description": "Client issue time in Unix milliseconds; defaults to the engine's receive time.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "commandId",
+    "taskId",
+    "intent"
+  ],
+  "$defs": {
+    "TaskCommandIntentEnvelope": {
+      "description": "A task-command intent as published: a `kind` tag plus that kind's fields.\nUnknown kinds are refused by the engine with a receipt, never ignored.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    }
+  }
+}

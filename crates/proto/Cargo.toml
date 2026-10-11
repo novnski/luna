@@ -11,3 +11,8 @@ serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 url = "2"
+schemars = { workspace = true, optional = true }
+
+[features]
+# Generates the published JSON Schemas for the contract types (CORE-01).
+schema = ["dep:schemars"]

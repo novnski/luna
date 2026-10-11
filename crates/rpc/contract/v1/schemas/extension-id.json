@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExtensionId",
+  "$ref": "#/$defs/NamespacedId",
+  "$defs": {
+    "NamespacedId": {
+      "description": "namespace/name; unknown ids are preserved verbatim by readers",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*/[a-z0-9][a-z0-9._-]*$"
+    }
+  }
+}

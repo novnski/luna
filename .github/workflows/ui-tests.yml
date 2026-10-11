@@ -50,6 +50,8 @@ jobs:
           cargo test --locked -p luna-harness --tests
       - name: Documents, protocol and RPC contracts
         run: cargo test --locked -p luna-doc -p luna-proto -p luna-rpc
+      - name: Published contract matches the code (CORE-01)
+        run: cargo test --locked -p luna-rpc --features schema --test contract
       - name: Durable session publication and recovery
         run: |
           cargo test --locked -p luna-sync --features mock-server

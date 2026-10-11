@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OperationCatalog",
+  "description": "The `operations.json` document.",
+  "type": "object",
+  "properties": {
+    "catalogVersion": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OperationSpec"
+      }
+    }
+  },
+  "required": [
+    "catalogVersion",
+    "operations"
+  ],
+  "$defs": {
+    "OperationAuthority": {
+      "oneOf": [
+        {
+          "description": "Owner IPC only; a remote device session is refused.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "localOnly"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The unauthenticated remote handshake (pairing redemption and session\nauthentication), handled before any scope check.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "remoteBootstrap"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Callable by a remote device session that holds this scope.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "remote"
+            },
+            "scope": {
+              "$ref": "#/$defs/RemoteScope"
+            }
+          },
+          "required": [
+            "kind",
+            "scope"
+          ]
+        }
+      ]
+    },
+    "OperationKind": {
+      "oneOf": [
+        {
+          "description": "Reads state; no side effect beyond bounded caching.",
+          "type": "string",
+          "const": "query"
+        },
+        {
+          "description": "Changes state, starts work or spends provider capacity.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "Subscribes to a value and its changes.",
+          "type": "string",
+          "const": "watch"
+        }
+      ]
+    },
+    "OperationReply": {
+      "oneOf": [
+        {
+          "description": "One `{id, ok}` or `{id, err}` frame.",
+          "type": "string",
+          "const": "unary"
+        },
+        {
+          "description": "`{id, item}` frames, then `{id, done: true}`; `{id, cancel: true}` ends it.",
+          "type": "string",
+          "const": "stream"
+        },
+        {
+          "description": "A `{id, ok: {\"stream\": true}}` readiness frame, then as [`Self::Stream`].\nOnly versioned streams use it: an older client would read the `ok`\nframe as a unary reply and drop the stream.",
+          "type": "string",
+          "const": "streamAfterReady"
+        }
+      ]
+    },
+    "OperationSpec": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/OperationAuthority"
+        },
+        "forwardDeadlineSecs": {
+          "description": "Reply deadline when a unary call is forwarded to another device.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "id": {
+          "description": "Stable namespaced operation id (`luna.core/<operation>`).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "method": {
+          "description": "Legacy wire method name; never renamed.",
+          "type": "string"
+        },
+        "reply": {
+          "$ref": "#/$defs/OperationReply"
+        },
+        "target": {
+          "$ref": "#/$defs/OperationTarget"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "id",
+        "version",
+        "kind",
+        "reply",
+        "target",
+        "authority",
+        "forwardDeadlineSecs"
+      ]
+    },
+    "OperationTarget": {
+      "oneOf": [
+        {
+          "description": "Always served by the engine that received it.",
+          "type": "string",
+          "const": "local"
+        },
+        {
+          "description": "Honors `targetDeviceId` and is forwarded to that device's engine.",
+          "type": "string",
+          "const": "deviceAddressable"
+        }
+      ]
+    },
+    "RemoteScope": {
+      "type": "string",
+      "enum": [
+        "environment-read",
+        "tasks-read",
+        "files-read",
+        "terminal-operate"
+      ]
+    }
+  }
+}

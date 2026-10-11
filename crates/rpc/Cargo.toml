@@ -20,7 +20,20 @@ tracing.workspace = true
 uuid.workspace = true
 sha2.workspace = true
 getrandom.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# Generates the published operation catalog and JSON Schemas (CORE-01).
+schema = ["dep:schemars", "luna-proto/schema"]
 
 [dev-dependencies]
 luna-doc.workspace = true
 tempfile.workspace = true
+
+[[example]]
+name = "contract"
+required-features = ["schema"]
+
+[[test]]
+name = "contract"
+required-features = ["schema"]

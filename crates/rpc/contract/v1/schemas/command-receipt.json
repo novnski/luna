@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandReceipt",
+  "type": "object",
+  "properties": {
+    "acceptedAtMs": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "actorId": {
+      "type": "string"
+    },
+    "clientId": {
+      "type": "string"
+    },
+    "clientSessionId": {
+      "type": "string"
+    },
+    "commandId": {
+      "type": "string"
+    },
+    "committedAtMs": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "correlationId": {
+      "description": "Engine/provider correlation used to finalize a pending send only after\nthe provider confirms the matching turn/message boundary.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "eventSequence": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "executionEnvironment": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "observedAtMs": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "payloadHash": {
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CommandReceiptReason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recoveryAction": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshot": {
+      "$ref": "#/$defs/TaskCommandSnapshot"
+    },
+    "status": {
+      "$ref": "#/$defs/CommandReceiptStatus"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "commandId",
+    "taskId",
+    "intent",
+    "payloadHash",
+    "status",
+    "snapshot",
+    "actorId",
+    "clientId",
+    "clientSessionId",
+    "acceptedAtMs",
+    "observedAtMs"
+  ],
+  "$defs": {
+    "CommandReasonCode": {
+      "type": "string",
+      "enum": [
+        "commandIdConflict",
+        "staleTaskRevision",
+        "staleBindingGeneration",
+        "staleTurn",
+        "queueRevisionConflict",
+        "queueClaimed",
+        "queueMissing",
+        "activeTurnConflict",
+        "foreignActive",
+        "invalidDestination",
+        "incompatibleWorkspace",
+        "incompatibleEnvironment",
+        "providerAcceptanceUnknown",
+        "transactionFailed",
+        "unsupportedOperation",
+        "operationRejected",
+        "operationFailed"
+      ]
+    },
+    "CommandReceiptReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CommandReasonCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "CommandReceiptStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "applied",
+        "rejected",
+        "conflict",
+        "superseded",
+        "failed"
+      ]
+    },
+    "TaskCommandSnapshot": {
+      "type": "object",
+      "properties": {
+        "activeTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bindingGeneration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bindingId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "taskRevision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "taskSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "taskId",
+        "taskRevision",
+        "taskSequence"
+      ]
+    }
+  }
+}
