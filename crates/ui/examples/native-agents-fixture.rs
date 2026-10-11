@@ -464,7 +464,12 @@ fn main() -> anyhow::Result<()> {
                     );
                     record.insert("nested".into(), nested);
 
-                    // 4. The nested background child with its steer.
+                    // 4. The nested background child with its steers. The
+                    // scenario repeats the opening text as a real
+                    // instruction (a same-text SendMessage) before the
+                    // keywords follow-up; it is not an echo and must keep its
+                    // own row (the engine's claude_native_agents pins the
+                    // same three user messages).
                     window.update(cx, |shell, _, cx| {
                         shell.fixture_open_subagent(sub("toolu_E"), "List token kinds".into(), cx)
                     })?;
@@ -472,7 +477,7 @@ fn main() -> anyhow::Result<()> {
                     for _ in 0..80 {
                         settle(cx, 100).await;
                         steered = readback(window, cx)?;
-                        if open_doc(&steered, &sub("toolu_E")).and_then(|doc| doc["rows"].as_u64()).unwrap_or(0) >= 3 {
+                        if open_doc(&steered, &sub("toolu_E")).and_then(|doc| doc["rows"].as_u64()).unwrap_or(0) >= 4 {
                             break;
                         }
                     }
@@ -481,8 +486,10 @@ fn main() -> anyhow::Result<()> {
                     let e_doc = open_doc(&steered, &sub("toolu_E"))
                         .ok_or_else(|| anyhow::anyhow!("E transcript not open: {steered}"))?;
                     anyhow::ensure!(
-                        e_doc["roles"] == serde_json::json!(["User", "User", "Assistant"])
-                            && e_doc["text"].as_str().is_some_and(|t| t.contains("Include keywords too.")),
+                        e_doc["roles"] == serde_json::json!(["User", "User", "User", "Assistant"])
+                            && e_doc["text"].as_str().is_some_and(|t| {
+                                t.contains("List the token kinds.List the token kinds.Include keywords too.")
+                            }),
                         "E transcript: {e_doc}"
                     );
                     record.insert("steered".into(), steered);

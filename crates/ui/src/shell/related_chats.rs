@@ -492,7 +492,6 @@ impl Shell {
         attention.extend(self.settlement_blocking_task_keys());
         let auto_settle = self.settings.sidebar_auto_settle_after_days;
         let show_harness = self.settings.sidebar_show_harness;
-        let by_device = self.settings.sidebar_organization == SidebarOrganization::ByDevice;
         let edges = self.related_edges(cx);
         let tree = self.related_tree(&parent, &edges, cx);
         let (parent_project, related) = {
@@ -610,11 +609,7 @@ impl Shell {
                     drag: Some(SidebarChatDrag {
                         chat_id: chat.id.clone(),
                         origin: DragOrigin::Related(kind),
-                        scope: if chat.pinned_order.is_some() {
-                            SidebarDragScope::Pinned
-                        } else {
-                            SidebarDragScope::Unpinned(by_device.then(|| chat.device_id.clone()))
-                        },
+                        scope: self.sidebar_drag_scope(&chat),
                         title,
                         project: parent_project.clone().into(),
                         harness: chat.config.as_ref().map(|config| config.harness),

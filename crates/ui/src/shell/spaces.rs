@@ -1990,22 +1990,7 @@ impl Shell {
                     None
                 };
                 slot += 1;
-                let scope = (!activity_view).then(|| {
-                    if chat.pinned_order.is_some() {
-                        SidebarDragScope::Pinned
-                    } else {
-                        SidebarDragScope::Unpinned(if by_project {
-                            // A task reorders only among its own project.
-                            Some(format!(
-                                "project:{}",
-                                chat.space_id.as_deref().unwrap_or_default()
-                            ))
-                        } else {
-                            (organization == SidebarOrganization::ByDevice)
-                                .then(|| chat.device_id.clone())
-                        })
-                    }
-                });
+                let scope = (!activity_view).then(|| self.sidebar_drag_scope(&chat));
                 if let Some(scope) = &scope {
                     drag_rows.push((chat.id.clone(), scope.clone()));
                 }
@@ -2395,6 +2380,26 @@ impl Shell {
         if let Some(probe) = &self.sidebar_probe {
             probe.marks.borrow_mut().insert(key, values());
         }
+    }
+
+    /// Where a task may move on the sidebar: a pin among the pins; an
+    /// unpinned task among its own project in the All projects tree, among
+    /// its own device's tasks when organized by device, else among every
+    /// unpinned task. A row dragged from Related chats uses the same scope,
+    /// so its drop slot matches the sidebar's rows.
+    pub(super) fn sidebar_drag_scope(&self, chat: &luna_proto::Chat) -> SidebarDragScope {
+        if chat.pinned_order.is_some() {
+            return SidebarDragScope::Pinned;
+        }
+        SidebarDragScope::Unpinned(if self.project_tree_view() {
+            Some(format!(
+                "project:{}",
+                chat.space_id.as_deref().unwrap_or_default()
+            ))
+        } else {
+            (self.settings.sidebar_organization == SidebarOrganization::ByDevice)
+                .then(|| chat.device_id.clone())
+        })
     }
 
     /// Record the painted bounds of `el`'s children under `labels` for the
