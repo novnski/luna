@@ -22,8 +22,10 @@ pub(crate) struct Ongoing {
     goals: GoalTracker,
     findings: FindingsTracker,
     schedules: ScheduleTracker,
-    /// The first `init` reads the session record once (resume seed).
+    /// The first `init` reads the session record once (resume seed), as it
+    /// stood before this run could write to it.
     seeded: bool,
+    started_at_ms: i64,
 }
 
 /// Follow-up work a frame needs before its events can be emitted.
@@ -43,6 +45,7 @@ impl Ongoing {
             findings: FindingsTracker::new(),
             schedules: ScheduleTracker::new(),
             seeded: false,
+            started_at_ms: super::goals::now_ms(),
         }
     }
 
@@ -90,8 +93,9 @@ impl Ongoing {
                 let (Some(dir), cwd) = (self.config_dir.clone(), self.cwd.clone()) else {
                     return Vec::new();
                 };
+                let as_of = Some(self.started_at_ms);
                 let readback = tokio::task::spawn_blocking(move || {
-                    super::goals::read_transcript_goal(&dir, &session_id, &cwd)
+                    super::goals::read_transcript_goal_as_of(&dir, &session_id, &cwd, as_of)
                 })
                 .await
                 .ok()

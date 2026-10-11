@@ -658,6 +658,18 @@ pub fn read_transcript_goal(
     session_id: &str,
     cwd: &str,
 ) -> Option<TranscriptGoal> {
+    read_transcript_goal_as_of(config_dir, session_id, cwd, None)
+}
+
+/// The goal record as it stood at `as_of` (unix ms): rows written later are
+/// ignored. A resumed run seeds from the goal it inherited, even when its own
+/// first verdict lands in the transcript before the seed read does.
+pub(crate) fn read_transcript_goal_as_of(
+    config_dir: &Path,
+    session_id: &str,
+    cwd: &str,
+    as_of: Option<i64>,
+) -> Option<TranscriptGoal> {
     let path = transcript_path(config_dir, session_id, cwd)?;
     let mut file = std::fs::File::open(&path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -698,6 +710,9 @@ pub fn read_transcript_goal(
             .get("timestamp")
             .and_then(Value::as_str)
             .and_then(parse_utc_ms);
+        if as_of.zip(at).is_some_and(|(cutoff, at)| at > cutoff) {
+            continue;
+        }
         rows.push((attachment.clone(), at));
     }
     goal_from_rows(&rows)
