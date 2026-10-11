@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
     let app = gpui::Application::with_platform(platform).with_assets(icons::Assets)
         .run_embedded(move |cx| {
             gpui_tokio::init(cx);
+            gpui_base::init(cx);
             let settings = settings::UiSettings::default();
             settings::init(settings.clone(), data.clone(), cx);
             let fonts = typography::register_fonts(cx);
@@ -58,13 +59,21 @@ fn main() -> anyhow::Result<()> {
             theme_library::init(data.clone(), cx);
             appearance::init(appearance::AppearanceMode::Dark, settings.theme_selection,
                 settings.accent, settings.surface, cx);
+            history::init(settings.git_history_columns, settings.git_history_column_widths,
+                settings.git_history_column_order, settings.git_history_author_display, cx);
             composer::init(cx, luna_ui::settings::ComposerSendBehavior::default());
             terminal::panel::init(cx);
-            app_menus::init(cx);
+            // BenchPlatform has no AppKit delegate or native application menu.
+            // The production quit hook requires that delegate; this offscreen
+            // renderer owns shutdown below and must not install the hook.
             let state = cx.new(|_| {
                 let mut state = state::AppState::new();
                 state.connection = luna_proto::view::ConnectionStatus::Ready;
                 state.workspace_scope = Some(luna_proto::WorkspaceScope::Local);
+                state.local_device_id = Some("local".into());
+                state.devices = serde_json::from_value(serde_json::json!([{
+                    "id":"local", "name":"CORE-00 replay", "platform":"macos", "lastSeenAt":null
+                }])).unwrap();
                 state.selected_chat = Some("profile".into());
                 state.selected_space = Some("project".into());
                 state.auto_selected = true;
@@ -72,11 +81,11 @@ fn main() -> anyhow::Result<()> {
                 state.spaces_synced = true;
                 state.spaces = vec![serde_json::from_value(serde_json::json!({
                     "id":"project", "deviceId":"local", "path":"/tmp/resource-profile",
-                    "createdAt":"2026-09-05T00:00:00Z"
+                    "createdAt":chrono::Utc::now()
                 })).unwrap()];
                 state.chats = vec![serde_json::from_value(serde_json::json!({
                     "id":"profile", "deviceId":"local", "spaceId":"project", "title":"Resource profile",
-                    "archived":false, "createdAt":"2026-09-05T00:00:00Z",
+                    "archived":false, "createdAt":chrono::Utc::now(), "lastMessageAt":chrono::Utc::now(),
                     "config":{"harness":"claude-code", "model":"claude-haiku-4-5", "reasoning":null, "sandbox":"workspace-write"}
                 })).unwrap()];
                 let background_chats = std::env::var("LUNA_PROFILE_BACKGROUND_CHATS")
@@ -131,8 +140,15 @@ fn main() -> anyhow::Result<()> {
     let first_at = frames[0].at;
     let mut frames = frames.into_iter().peekable();
     let mut completed_at = None;
+    // CORE-00: draw-loop CPU wall time, not compositor/event-to-paint latency.
+    let mut draw_samples_ms = Vec::new();
+    let mut draw_phases = Vec::new();
+    let scroll_profile = std::env::var_os("LUNA_PROFILE_SCROLL").is_some();
     eprintln!("pid={} phase=replay", std::process::id());
     loop {
+        let draw_started = Instant::now();
+        let elapsed_ms = start.elapsed().as_millis();
+        let scrolling = scroll_profile && (1000..6000).contains(&elapsed_ms);
         objc::rc::autoreleasepool(|| {
             let elapsed = start.elapsed().as_millis() as u64;
             while frames.peek().is_some_and(|f| f.at - first_at <= elapsed) {
@@ -174,6 +190,24 @@ fn main() -> anyhow::Result<()> {
             app.update(|cx| {
                 window
                     .update(cx, |_, window, cx| {
+                        if scrolling {
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position: gpui::point(px(700.), px(400.)),
+                                    delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                        px(0.),
+                                        px(if (elapsed_ms / 1500).is_multiple_of(2) {
+                                            40.
+                                        } else {
+                                            -40.
+                                        }),
+                                    )),
+                                    modifiers: gpui::Modifiers::default(),
+                                    touch_phase: gpui::TouchPhase::Moved,
+                                }),
+                                cx,
+                            );
+                        }
                         window.simulate_next_frame(cx);
                     })
                     .unwrap()
@@ -185,6 +219,14 @@ fn main() -> anyhow::Result<()> {
                     .unwrap()
             });
         });
+        draw_samples_ms.push(draw_started.elapsed().as_secs_f64() * 1000.);
+        draw_phases.push(if scrolling {
+            "scroll"
+        } else if elapsed_ms < 1000 {
+            "startup"
+        } else {
+            "idle"
+        });
         if frames.peek().is_none() && completed_at.is_none() {
             eprintln!("phase=settled elapsed={:?}", start.elapsed());
             completed_at = Some(Instant::now());
@@ -194,7 +236,7 @@ fn main() -> anyhow::Result<()> {
                         window
                             .render_to_image()
                             .unwrap()
-                            .save(output.join("complete.png"))
+                            .save(output.join("initial.png"))
                             .unwrap();
                     })
                     .unwrap()
@@ -205,6 +247,18 @@ fn main() -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(8));
     }
+    // Capture the settled view, after the real splash timer, not its first frame.
+    app.update(|cx| {
+        window
+            .update(cx, |_, window, _| {
+                window
+                    .render_to_image()
+                    .unwrap()
+                    .save(output.join("complete.png"))
+                    .unwrap();
+            })
+            .unwrap()
+    });
     // Opt-in correctness check: a reused transcript scene must match a fresh
     // layout after idle, panel transitions and scrolling. Keep this outside
     // measured phases; screenshot readback and forced refreshes add work.
@@ -340,6 +394,16 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    std::fs::write(
+        output.join("draw-samples.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "boundary": "native offscreen CoreText/Metal draw-loop CPU wall time; no compositor",
+            "samples_ms": draw_samples_ms,
+            "phases": draw_phases,
+            "scroll_profile": scroll_profile,
+            "elapsed_ms": start.elapsed().as_secs_f64() * 1000.
+        }))?,
+    )?;
     eprintln!("elapsed={:?}", start.elapsed());
     drop(state);
     app.update(|cx| cx.quit());

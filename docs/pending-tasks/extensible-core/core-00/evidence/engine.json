@@ -1,0 +1,5427 @@
+{
+  "passed": true,
+  "source": "ffdf7b835cdb87a8ff02a10c48f2e308aa329c36",
+  "sourceBinarySha256": "4cf4bcbf7ac86c852e59ad0d5a84340e43ab06d17ee54db4d9b0d8c6a8779b47",
+  "binarySha256": "c651fd4abe8ebcc48475edfadd0bb63fbb3aebf3f7cade6e31ffbc09f96d0f16",
+  "boundary": "real headless engine + RPC + durable stores, controlled mock provider",
+  "startup": [
+    {
+      "index": 0,
+      "ms": 74.85062500000004,
+      "data": "fresh profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 94748
+    },
+    {
+      "index": 1,
+      "ms": 30.746917000000167,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 94857
+    },
+    {
+      "index": 2,
+      "ms": 31.96770800000013,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 94949
+    },
+    {
+      "index": 3,
+      "ms": 31.94466700000021,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95041
+    },
+    {
+      "index": 4,
+      "ms": 32.403707999999824,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95132
+    },
+    {
+      "index": 5,
+      "ms": 31.75258299999996,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95222
+    },
+    {
+      "index": 6,
+      "ms": 31.854749999999513,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95312
+    },
+    {
+      "index": 7,
+      "ms": 30.143958999999995,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95404
+    },
+    {
+      "index": 8,
+      "ms": 28.713000000000648,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95501
+    },
+    {
+      "index": 9,
+      "ms": 30.96808299999975,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 95591
+    },
+    {
+      "index": 10,
+      "ms": 57.054416999999376,
+      "data": "existing profile",
+      "osCache": "uncontrolled; no purge",
+      "pid": 11215
+    }
+  ],
+  "requests": [
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 1.186166999999955
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.22016599999994924
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.37262500000019827
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.1944579999999405
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3385840000000826
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.177958000000217
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3255420000000413
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.19120799999973315
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3854160000000775
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.17379199999959383
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3313339999999698
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.13695800000004965
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3212499999999636
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.1620840000005046
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.2820419999998194
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.1759170000004815
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.3035840000002281
+    },
+    {
+      "phase": "startup",
+      "method": "StopEngine",
+      "ms": 0.18062499999996362
+    },
+    {
+      "phase": "startup",
+      "method": "EngineReady",
+      "ms": 0.29637499999989814
+    },
+    {
+      "phase": "idle",
+      "method": "EngineInfo",
+      "ms": 40.76983300000029
+    },
+    {
+      "phase": "idle",
+      "method": "Mutate",
+      "ms": 0.6964589999988675
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.6039579999996931
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.5620419999995647
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.17495899999994435
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.4519170000003214
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15870799999902374
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.4662919999991573
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2388329999994312
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.4809999999997672
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2046250000003056
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.7161249999990105
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15829200000007404
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.6947920000002341
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15270799999962037
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.805333000000246
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2102500000000873
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.9016670000000886
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1487909999996191
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.762750000001688
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15754200000083074
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 1.8812909999996918
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.19487499999922875
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.1337079999993875
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.32679100000132166
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.0252089999994496
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1581659999992553
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.3508750000000873
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.14854100000047765
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.719208999998955
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1306250000016007
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.440167000000656
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.11616700000013225
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.563750000001164
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.13641700000152923
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.817166000000725
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1483750000006694
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.658000000001266
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.14858300000014424
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.8424579999991693
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.16941699999915727
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.951875000000655
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.17054099999950267
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.08429199999955
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15583299999889277
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.310209000001123
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1457909999990079
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.312665999999808
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.13962499999979627
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.425499999999374
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.14012499999989814
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.562332999999853
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1494590000002063
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.737124999999651
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15445899999940593
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.815833999999086
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15154200000142737
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.975625000000946
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.3416250000009313
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.892417000000933
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.176792000000205
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.311499999999796
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1540000000004511
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.439790999998877
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1380829999998241
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.750249999999141
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.16670799999883457
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.697833000000173
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.16608300000007148
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.695499999999811
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.13658399999985704
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.896915999999692
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.14800000000104774
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.114999999999782
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15716600000087055
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.819166999999652
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.16683299999931478
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.277042000001529
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.13704199999847333
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 7.2413330000017595
+    },
+    {
+      "phase": "create-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1619589999991149
+    },
+    {
+      "phase": "create-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.563249999999243
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.45275000000037835
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.91662499999984
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.9453340000000026
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.9905830000006972
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 2.1630420000001322
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.18829200000072888
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.276625000000422
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 2.2807080000002316
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.198500000000422
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.30770900000061374
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.19400000000132422
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.790208000000348
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.8006249999998545
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.639083000000028
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.829874999999447
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.768916999999419
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.338832999999795
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.6107499999998254
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6909169999998994
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.7852079999993293
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9980840000007447
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.2052909999983967
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.4117499999993015
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.33641700000043784
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.622124999999869
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.5259579999983544
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9107499999990978
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.0160840000007738
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.2219160000004194
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.377875000000131
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.2806250000012369
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchSessions",
+      "ms": 0.28608300000087183
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6239580000001297
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.7814159999998083
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9706669999995938
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.002375000000029
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.234416000001147
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.7605000000003201
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8355420000007143
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.0020000000004075
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.1061249999984284
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.4119169999994483
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.7806249999994179
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.785916000000725
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.0608329999995476
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.171542000000045
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.4543749999993452
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6604170000009617
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.0563339999989694
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.160249999998996
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.2408749999995052
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.4416669999991427
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8182919999999285
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.2712080000001151
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.6228750000009313
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 2.0235830000001442
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 2.3450419999990118
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8070829999996931
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8939170000012382
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9819580000003043
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.1681250000001455
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.42954199999985576
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8899160000000848
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8733329999995476
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.0204580000008718
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.3007920000000013
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.4289580000004207
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6444590000010066
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8824159999985568
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.1268340000005992
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.170749999999316
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.3826659999995172
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6270830000012211
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9340840000004391
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.9774170000000595
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.6986670000005688
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.8240420000001905
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 0.7628750000003492
+    },
+    {
+      "phase": "multiple-working-chats",
+      "method": "WatchDocMessages",
+      "ms": 1.012125000001106
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 0.6537909999988187
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.22374999999919964
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.274999999999636
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.0599160000001575
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.1239589999986492
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.236125000001266
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.5415000000011787
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.6080000000001746
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.064041999999972
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.2689590000009048
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.4130830000012793
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.083291000000827
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.3967910000010306
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.0460830000010901
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.24324999999953434
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.196374999999534
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.4526249999998981
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.5089589999988675
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.7654579999998532
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.9941249999992579
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.3113329999996495
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.6745419999988371
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.6103750000002037
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.4332500000000437
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.5333750000008877
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.0496249999996508
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.4071670000012091
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.3575000000000728
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.8778330000004644
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.000625000000582
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.5032910000008997
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.1885829999991984
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.3146660000002157
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.076457999999548
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.2574170000007143
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.8162499999998545
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.999041999999463
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.4994999999998981
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15629100000114704
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.551833000001352
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.35791700000118
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 1.989333000001352
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.703125
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.454791000000114
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.924875000000611
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.762125000001106
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.4358329999995476
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.197209000001749
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.587916000000405
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.384915999999066
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.550457999997889
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.19750000000203727
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 2.8198750000010477
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.445416999998997
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.8558329999978014
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.856999999999971
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.251583000001119
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.606708999999682
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.860667000000831
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.675666999999521
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.3614999999990687
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.697958999997354
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.153583000002982
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2284590000017488
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.1274999999986903
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.7017500000001746
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.0298750000001746
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.7103339999994205
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.6275000000023283
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.198457999998936
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.1328749999993306
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.8691670000007434
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.808000000000902
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.029499999996915
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.505417000000307
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2399169999989681
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.655917000000045
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.317125000001397
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.9285000000018044
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.105208000000857
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.196415999998862
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.224041999998008
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 10.864625000001979
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.665667000001122
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.0872920000001614
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.848042000001442
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.3261250000032305
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.18891699999949196
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.0805419999996957
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.793582999998762
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.089459000002535
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.599874999999884
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.42479099999764
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.955540999999357
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 15.262417000001733
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.459083000001556
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.166124999999738
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.3661250000004657
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 2.836209000000963
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.14741700000013225
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.4353749999972933
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.2746250000018335
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.952375000000757
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.7014579999995476
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.2958749999997963
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.395916999998008
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.245167000000947
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.00391700000182
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.586457999997947
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.001582999997481
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.3285829999986163
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.21254200000112178
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.000916999997571
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.8867500000014843
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.709458000001177
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.491416000000754
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.845083000000159
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.11908300000141
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 14.031332999998995
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.34400000000096
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.0179170000010345
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.2509160000008706
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.4228750000002037
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.2089589999995951
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 3.9914999999964493
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.327625000001717
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.030624999999418
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.165167000002839
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.315750000001572
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.483542000001762
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.3432080000020505
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.191875000000437
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.219582999998238
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.74383399999715
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 3.776041000000987
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.17283400000087568
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.209624999999505
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.714457999998558
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.423707999998442
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.488250000002154
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.8064159999994445
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.501000000000204
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 13.606999999999971
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.101167000000714
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.755915999998251
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.861207999998442
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.0286249999990105
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.1632080000017595
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.379832999999053
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.103332999999111
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.733374999999796
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.628042000000278
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.033625000000029
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.170458000000508
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.696875000001455
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.488083000000188
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.763833000000886
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.047417000001587
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.173958999999741
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.18729099999836762
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.55737500000032
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.3530420000024606
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.728333000002749
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.746458000001439
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.733041999999841
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.871208000000479
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 18.049334000003
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.122541999997338
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.192500000001019
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.421374999998079
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.4696250000015425
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.20633299999826704
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.740458000000217
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.648457999999664
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.854792000001908
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.214208000001236
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.4479580000006536
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 11.335416999998415
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 12.78387500000099
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.073458999999275
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.854875000000902
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.439458000000741
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.517875000001368
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.20558399999936228
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.976791999997658
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.332833000000392
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.452292000001762
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 9.25970899999811
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.713958000000275
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 14.619708999998693
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 19.89770800000042
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.020667000000685
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.857625000000553
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.82916699999987
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 4.868249999999534
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.17608299999847077
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 4.843417000000045
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.1634999999987485
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.0054999999993015
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 40.29158300000199
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 11.125082999998995
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 21.19445799999812
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.957750000001397
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 10.049041999998735
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.714292000000569
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.9120419999999285
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.437874999999622
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.16958299999896553
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 6.207957999999053
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.810457999999926
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.305499999998574
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.02100000000064
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 10.30266599999959
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 17.24212500000067
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 10.939665999998397
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 46.713041999999405
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.157749999998487
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.699500000002445
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 5.734290999997029
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.6053749999991851
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 5.6215420000007725
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.775291999998444
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.377291000000696
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.764834000001429
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 11.889000000002852
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 17.252666999997018
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 21.81654200000048
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.48595800000112
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.13575000000128
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.096790999999939
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.124250000000757
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.396333000000595
+    },
+    {
+      "phase": "long-transcript",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.39541599999938626
+    },
+    {
+      "phase": "long-transcript",
+      "method": "ExecuteTaskCommand",
+      "ms": 7.185750000000553
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.892416999999114
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.874999999996362
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.887624999995751
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 11.193208000004233
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 65.02520799999911
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 7.696833000001789
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 11.064750000005006
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 6.68029199999728
+    },
+    {
+      "phase": "long-transcript",
+      "method": "WatchDocMessages",
+      "ms": 8.132582999998704
+    },
+    {
+      "phase": "large-repository",
+      "method": "Mutate",
+      "ms": 0.3056250000008731
+    },
+    {
+      "phase": "large-repository",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.21579200000269338
+    },
+    {
+      "phase": "large-repository",
+      "method": "ExecuteTaskCommand",
+      "ms": 44.41812500000378
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.49820800000452437
+    },
+    {
+      "phase": "large-repository",
+      "method": "GetTaskCommandSnapshot",
+      "ms": 0.15329200000269338
+    },
+    {
+      "phase": "large-repository",
+      "method": "ExecuteTaskCommand",
+      "ms": 0.9728749999994761
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.7372079999986454
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.7282909999994445
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.7097500000018044
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.7302090000011958
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.6690420000013546
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.6734999999971478
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.6595410000008997
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.8391669999982696
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.9387080000014976
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.8742079999938142
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 1.16466699999728
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 1.6225829999966663
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 1.3219590000007884
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.8429160000014235
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.7845830000005662
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.8072079999983544
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.834167000000889
+    },
+    {
+      "phase": "large-repository",
+      "method": "WatchDocMessages",
+      "ms": 0.8239170000015292
+    },
+    {
+      "phase": "settled",
+      "method": "StopEngine",
+      "ms": 0.4310829999958514
+    },
+    {
+      "phase": "settled",
+      "method": "EngineReady",
+      "ms": 0.32433400000445545
+    },
+    {
+      "phase": "settled",
+      "method": "WatchDocMessages",
+      "ms": 8.366000000001804
+    },
+    {
+      "phase": "settled",
+      "method": "StopEngine",
+      "ms": 0.16466700000455603
+    }
+  ],
+  "receipts": [
+    {
+      "commandId": "0a32e2b8-5531-4596-957c-ee1030d895b0",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 1,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937464,
+      "committedAtMs": 1791684937465,
+      "observedAtMs": 1791684937465
+    },
+    {
+      "commandId": "c7b1608f-47ce-475a-94bb-d72c7c81b4a2",
+      "taskId": "8519fd12-0a84-466b-8d47-cfdb7ca0ecb0",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "8519fd12-0a84-466b-8d47-cfdb7ca0ecb0",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 2,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937466,
+      "committedAtMs": 1791684937467,
+      "observedAtMs": 1791684937467
+    },
+    {
+      "commandId": "2fdc9225-ec84-431e-b9ad-484398eb6836",
+      "taskId": "8a216fc0-dcf6-45bd-b21b-c92fad505a7b",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "8a216fc0-dcf6-45bd-b21b-c92fad505a7b",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 3,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937468,
+      "committedAtMs": 1791684937469,
+      "observedAtMs": 1791684937469
+    },
+    {
+      "commandId": "86fce8a3-0444-49af-b7b6-f8b705112031",
+      "taskId": "9c6dc2de-e638-4003-9f5d-b8aec738a4ee",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "9c6dc2de-e638-4003-9f5d-b8aec738a4ee",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 4,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937470,
+      "committedAtMs": 1791684937471,
+      "observedAtMs": 1791684937471
+    },
+    {
+      "commandId": "9b1773de-98b8-4840-8b6e-b58f0edf6ba7",
+      "taskId": "fc0a8442-70ec-4ffa-8b14-e4f3b1764cd4",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "fc0a8442-70ec-4ffa-8b14-e4f3b1764cd4",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 5,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937471,
+      "committedAtMs": 1791684937473,
+      "observedAtMs": 1791684937473
+    },
+    {
+      "commandId": "99a9e143-7654-430f-8808-2c599b8d9663",
+      "taskId": "4ab12f39-9cbc-45ff-94f4-adb255cf4313",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "4ab12f39-9cbc-45ff-94f4-adb255cf4313",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 6,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937473,
+      "committedAtMs": 1791684937474,
+      "observedAtMs": 1791684937474
+    },
+    {
+      "commandId": "ab174f6a-01c8-425a-8262-14abdb6e15b8",
+      "taskId": "29a6a0c6-6579-4cbf-affc-62926fd92278",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "29a6a0c6-6579-4cbf-affc-62926fd92278",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 7,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937475,
+      "committedAtMs": 1791684937476,
+      "observedAtMs": 1791684937476
+    },
+    {
+      "commandId": "6d48a2c0-4e56-4ef4-827c-3f8c3a7d0855",
+      "taskId": "c28e0b43-b9ee-44a5-a769-4c2e974dfc47",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "c28e0b43-b9ee-44a5-a769-4c2e974dfc47",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 8,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937477,
+      "committedAtMs": 1791684937479,
+      "observedAtMs": 1791684937479
+    },
+    {
+      "commandId": "180ccd57-602c-498d-bd60-ce06e996d9c7",
+      "taskId": "42efc642-4037-4cfd-95f8-9d25f2ecb44d",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "42efc642-4037-4cfd-95f8-9d25f2ecb44d",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 9,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937479,
+      "committedAtMs": 1791684937481,
+      "observedAtMs": 1791684937481
+    },
+    {
+      "commandId": "7a076d1e-40d1-4e67-a66d-06348a20d815",
+      "taskId": "0ac915fc-332d-4d73-94c8-fb3854ae1b60",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "0ac915fc-332d-4d73-94c8-fb3854ae1b60",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 10,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937481,
+      "committedAtMs": 1791684937483,
+      "observedAtMs": 1791684937483
+    },
+    {
+      "commandId": "767c4e79-4b1b-412c-ae46-c709cdad9c61",
+      "taskId": "3d986441-1b88-4e49-866d-6f86babc0f4c",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "3d986441-1b88-4e49-866d-6f86babc0f4c",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 11,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937483,
+      "committedAtMs": 1791684937485,
+      "observedAtMs": 1791684937485
+    },
+    {
+      "commandId": "b300e226-4e11-4af5-8b03-034992fec01e",
+      "taskId": "bd485d7b-75f8-4653-b2bf-c8e40a76d69a",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "bd485d7b-75f8-4653-b2bf-c8e40a76d69a",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 12,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937486,
+      "committedAtMs": 1791684937487,
+      "observedAtMs": 1791684937487
+    },
+    {
+      "commandId": "e87c265c-8484-4d51-b9b4-9ae275f648e9",
+      "taskId": "591c020e-5d67-4013-800e-ebf8595bc149",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "591c020e-5d67-4013-800e-ebf8595bc149",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 13,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937488,
+      "committedAtMs": 1791684937490,
+      "observedAtMs": 1791684937490
+    },
+    {
+      "commandId": "430f53d8-d679-4ea1-ac96-9f5689da52bc",
+      "taskId": "90dfc4ae-1176-49b3-a777-60f7371875f4",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "90dfc4ae-1176-49b3-a777-60f7371875f4",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 14,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937490,
+      "committedAtMs": 1791684937493,
+      "observedAtMs": 1791684937493
+    },
+    {
+      "commandId": "b2800f7f-f186-424c-8e9d-c71c03796aab",
+      "taskId": "e31c4417-626f-4de7-9d71-1dc792f68078",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "e31c4417-626f-4de7-9d71-1dc792f68078",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 15,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937493,
+      "committedAtMs": 1791684937496,
+      "observedAtMs": 1791684937496
+    },
+    {
+      "commandId": "b34392fd-db2e-4477-9797-c3c7fefcd7c9",
+      "taskId": "75f77fd5-5a98-488c-9bea-205a1a9fc20f",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "75f77fd5-5a98-488c-9bea-205a1a9fc20f",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 16,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937497,
+      "committedAtMs": 1791684937500,
+      "observedAtMs": 1791684937500
+    },
+    {
+      "commandId": "97dd7e19-11c9-40f4-bca7-992c88b818eb",
+      "taskId": "c120a5af-0787-451a-9cbf-9e21c06b64b3",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "c120a5af-0787-451a-9cbf-9e21c06b64b3",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 17,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937501,
+      "committedAtMs": 1791684937504,
+      "observedAtMs": 1791684937504
+    },
+    {
+      "commandId": "e1d31446-7005-4c3c-a826-6201d11d4dd8",
+      "taskId": "87c5fb14-844b-4909-aca9-92a1de4726e5",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "87c5fb14-844b-4909-aca9-92a1de4726e5",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 18,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937505,
+      "committedAtMs": 1791684937508,
+      "observedAtMs": 1791684937508
+    },
+    {
+      "commandId": "c58b9c50-829f-442d-bd5d-d083b7aa5f8e",
+      "taskId": "e90fd559-8935-433a-81c7-cdfc8815ee0a",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "e90fd559-8935-433a-81c7-cdfc8815ee0a",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 19,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937508,
+      "committedAtMs": 1791684937512,
+      "observedAtMs": 1791684937512
+    },
+    {
+      "commandId": "eacec633-8ca2-4184-9ef1-f5115d0c7a11",
+      "taskId": "fc7dfc48-fc97-40e9-8ccf-bedad52bad24",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "fc7dfc48-fc97-40e9-8ccf-bedad52bad24",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 20,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937512,
+      "committedAtMs": 1791684937516,
+      "observedAtMs": 1791684937516
+    },
+    {
+      "commandId": "d74204e4-9e90-43e7-a2d8-f49de2f9e84f",
+      "taskId": "48ccec5c-3111-4308-bcb3-be45fb1ebce6",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "48ccec5c-3111-4308-bcb3-be45fb1ebce6",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 21,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937517,
+      "committedAtMs": 1791684937520,
+      "observedAtMs": 1791684937520
+    },
+    {
+      "commandId": "c9df3d07-af3b-4ee6-9075-ef835ac53383",
+      "taskId": "847a6565-40e6-49e5-a3b9-f6d53c6b4887",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "847a6565-40e6-49e5-a3b9-f6d53c6b4887",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 22,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937521,
+      "committedAtMs": 1791684937525,
+      "observedAtMs": 1791684937525
+    },
+    {
+      "commandId": "fe979acf-bb53-4fa8-ad6c-95158d5d88ab",
+      "taskId": "0c385e3a-f0b5-4b42-bde7-dea6bd3918d2",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "0c385e3a-f0b5-4b42-bde7-dea6bd3918d2",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 23,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937525,
+      "committedAtMs": 1791684937529,
+      "observedAtMs": 1791684937529
+    },
+    {
+      "commandId": "a90a00c7-e249-41a6-af4e-ddc2764a9c70",
+      "taskId": "da7014b8-c63f-4c6b-a89a-419643cefcd7",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "da7014b8-c63f-4c6b-a89a-419643cefcd7",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 24,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937530,
+      "committedAtMs": 1791684937534,
+      "observedAtMs": 1791684937534
+    },
+    {
+      "commandId": "de3f970b-54fd-4b41-8765-d46cbbfb95b5",
+      "taskId": "b09048f8-7b9e-4a49-b52c-ecba611648e8",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "b09048f8-7b9e-4a49-b52c-ecba611648e8",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 25,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937534,
+      "committedAtMs": 1791684937539,
+      "observedAtMs": 1791684937539
+    },
+    {
+      "commandId": "fa68ebc2-e06d-420f-a2ac-126d33adf4d4",
+      "taskId": "2c1efd07-adba-4122-937b-8a5b7061fdaf",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "2c1efd07-adba-4122-937b-8a5b7061fdaf",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 26,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937539,
+      "committedAtMs": 1791684937543,
+      "observedAtMs": 1791684937543
+    },
+    {
+      "commandId": "ecd409be-da2f-4665-8a9b-456fcda3030a",
+      "taskId": "b067fc1a-fd42-46c2-82fc-06cedab32e18",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "b067fc1a-fd42-46c2-82fc-06cedab32e18",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 27,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937544,
+      "committedAtMs": 1791684937548,
+      "observedAtMs": 1791684937548
+    },
+    {
+      "commandId": "a02a9cc3-52c7-4766-bafe-ab30dc9df4da",
+      "taskId": "67873358-ca9f-4cb6-a603-fcd1afe75bfd",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "67873358-ca9f-4cb6-a603-fcd1afe75bfd",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 28,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937549,
+      "committedAtMs": 1791684937554,
+      "observedAtMs": 1791684937554
+    },
+    {
+      "commandId": "f807e4ce-87f1-44ce-9163-54207293c026",
+      "taskId": "fcc5aa13-6cf7-40f9-b868-de9240d6deab",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "fcc5aa13-6cf7-40f9-b868-de9240d6deab",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 29,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937554,
+      "committedAtMs": 1791684937559,
+      "observedAtMs": 1791684937559
+    },
+    {
+      "commandId": "6b7c18a0-fe16-468b-be13-59a78c7e1b83",
+      "taskId": "223a74f8-9819-4bbf-8ad9-f039eb30be4b",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "223a74f8-9819-4bbf-8ad9-f039eb30be4b",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 30,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937561,
+      "committedAtMs": 1791684937566,
+      "observedAtMs": 1791684937566
+    },
+    {
+      "commandId": "b3522ceb-47b9-437b-a1a2-4e7451998e1e",
+      "taskId": "c0ddabc8-b35a-4256-8b05-c8231ff14ca9",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "c0ddabc8-b35a-4256-8b05-c8231ff14ca9",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 31,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937567,
+      "committedAtMs": 1791684937572,
+      "observedAtMs": 1791684937572
+    },
+    {
+      "commandId": "908187c3-d988-4eb3-bf53-43d4478de6a5",
+      "taskId": "5c8dbcfb-8a87-4353-aa32-b3614d929c93",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "5c8dbcfb-8a87-4353-aa32-b3614d929c93",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 32,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937573,
+      "committedAtMs": 1791684937578,
+      "observedAtMs": 1791684937578
+    },
+    {
+      "commandId": "55b078ab-9afb-4d9a-be19-ae20c17e560f",
+      "taskId": "a8ca1b95-25c6-4562-b532-8cafbad85084",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "a8ca1b95-25c6-4562-b532-8cafbad85084",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 33,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937578,
+      "committedAtMs": 1791684937584,
+      "observedAtMs": 1791684937584
+    },
+    {
+      "commandId": "2baa7c1a-4782-4130-bcd5-4f51810ed220",
+      "taskId": "5cb54b49-80ee-4ebe-a197-2d1f788a5524",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "5cb54b49-80ee-4ebe-a197-2d1f788a5524",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 34,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937584,
+      "committedAtMs": 1791684937590,
+      "observedAtMs": 1791684937590
+    },
+    {
+      "commandId": "793f363b-c0fe-4d64-9dc7-bf4040bcd4f3",
+      "taskId": "8033318a-f418-400e-9cae-57d5814e08a1",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "8033318a-f418-400e-9cae-57d5814e08a1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 35,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937590,
+      "committedAtMs": 1791684937596,
+      "observedAtMs": 1791684937596
+    },
+    {
+      "commandId": "c6d7a9e0-ca44-4408-afd9-cc956d1d162d",
+      "taskId": "264f5c34-ae2e-4dd1-b20c-2b0fd77d7884",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "264f5c34-ae2e-4dd1-b20c-2b0fd77d7884",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 36,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937596,
+      "committedAtMs": 1791684937602,
+      "observedAtMs": 1791684937602
+    },
+    {
+      "commandId": "f635364a-800a-423b-9cb1-fd01c0d72e3b",
+      "taskId": "4c4f2d5a-1ecd-49a8-bdc5-e888e87ac41d",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "4c4f2d5a-1ecd-49a8-bdc5-e888e87ac41d",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 37,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937603,
+      "committedAtMs": 1791684937609,
+      "observedAtMs": 1791684937609
+    },
+    {
+      "commandId": "b76e6a2f-ce9b-42ec-9f2b-9c9ad609c7a9",
+      "taskId": "adafc52e-c43e-4e9e-a31a-dde3a75e677c",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "adafc52e-c43e-4e9e-a31a-dde3a75e677c",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 38,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937610,
+      "committedAtMs": 1791684937615,
+      "observedAtMs": 1791684937615
+    },
+    {
+      "commandId": "25a5d6f4-44fb-4e5e-b2a7-e773f82f2192",
+      "taskId": "082a0d3a-0dd1-411d-8bc4-ee47b1971ba3",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "082a0d3a-0dd1-411d-8bc4-ee47b1971ba3",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 39,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937616,
+      "committedAtMs": 1791684937623,
+      "observedAtMs": 1791684937623
+    },
+    {
+      "commandId": "1a1fd176-48e9-475b-8d97-af375cbcbe0a",
+      "taskId": "448a3f39-b3b4-443e-8112-cf443c05d017",
+      "intent": "createChat",
+      "payloadHash": "1f82a27da10e5c49a120d1cd3aa06de8d4608287bd4c3741af270db905a8795d",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "448a3f39-b3b4-443e-8112-cf443c05d017",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 40,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684937623,
+      "committedAtMs": 1791684937630,
+      "observedAtMs": 1791684937630
+    },
+    {
+      "commandId": "5af91c1d-4fb0-4e58-80a7-f1ee32bc940b",
+      "taskId": "9c6dc2de-e638-4003-9f5d-b8aec738a4ee",
+      "intent": "run",
+      "payloadHash": "f7aab684857d343ec25a852ec839c98c99f82230992aa98374ffbc307151f01f",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "9c6dc2de-e638-4003-9f5d-b8aec738a4ee",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "c2bab7c0-73d3-4bc5-ba85-a5ed649dad36",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684937633,
+      "observedAtMs": 1791684937635
+    },
+    {
+      "commandId": "614c5b9c-e7a4-4194-845d-befb72a40588",
+      "taskId": "8519fd12-0a84-466b-8d47-cfdb7ca0ecb0",
+      "intent": "run",
+      "payloadHash": "398ad3ce1799f5c3bc02b2d72fdb59194862ba4780477eeadb6c384eaa5069c1",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "8519fd12-0a84-466b-8d47-cfdb7ca0ecb0",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "6c095b59-00cc-447f-a288-6007befeeefb",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684937633,
+      "observedAtMs": 1791684937635
+    },
+    {
+      "commandId": "52669c33-eeac-4fdc-a543-bb9853962240",
+      "taskId": "8a216fc0-dcf6-45bd-b21b-c92fad505a7b",
+      "intent": "run",
+      "payloadHash": "7cd459ef2c46ae23a4b59a1f885ba056189d63b59ef684e040a33dd26c0f641d",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "8a216fc0-dcf6-45bd-b21b-c92fad505a7b",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "c2f73cbd-eac8-463a-9b77-63ea5ac9595c",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684937633,
+      "observedAtMs": 1791684937634
+    },
+    {
+      "commandId": "61deecd8-cf07-4820-80ef-b2bd03fec6d2",
+      "taskId": "fc0a8442-70ec-4ffa-8b14-e4f3b1764cd4",
+      "intent": "run",
+      "payloadHash": "16c60869d51411ec9daae949341f447e3b83f3d364704f1e6a6015967c6ccea1",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "fc0a8442-70ec-4ffa-8b14-e4f3b1764cd4",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "506ac0b0-cc32-4761-bc5a-9c318f5716a3",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684937633,
+      "observedAtMs": 1791684937634
+    },
+    {
+      "commandId": "7226b508-4451-4e75-a7e1-b8fb20fc75a0",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "04cdfd50cbd7110e2db3f626e0465d718fc67942e286f535707863486effa812",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "a02df102-e710-4f81-a4e8-04accae5cafa",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684937633,
+      "observedAtMs": 1791684937635
+    },
+    {
+      "commandId": "26b9d84b-d625-4f6e-ae74-bf6c5fb42173",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "2d4c586e821e123e3409e4860c108afe56758e0e46bf57b891891107953930a9",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "f798502c-cc72-433b-9d28-821fbf1a8b0a",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684939086,
+      "observedAtMs": 1791684939087
+    },
+    {
+      "commandId": "a66d117f-3417-44ef-a847-a7c491b5d219",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "1817a0757900351f5ea83a21bf6988169a71d66d4badd00ce781755a874ae0cc",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "fa90ecf9-427c-43f0-b267-5701ce9f1805",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684940127,
+      "observedAtMs": 1791684940131
+    },
+    {
+      "commandId": "92a95e97-d7f0-4ab2-bf53-4a9a8b80e51f",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "bc1f3295048b1aa82fef326dbef58aa4efb718ebeb0270ba64d5564aac00f71e",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "f3c55d50-a41f-4443-98e6-b3d1ce4a27bc",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684941099,
+      "observedAtMs": 1791684941100
+    },
+    {
+      "commandId": "a4113ec7-c06a-4a53-8b51-24077239879f",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "4493d1fb3ac84471b450750e6d09b30c7cfd5dc657a5645cacafcd36a60849c2",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "97e63355-d0bc-4bfa-aed6-caa8aa4c8058",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684942091,
+      "observedAtMs": 1791684942092
+    },
+    {
+      "commandId": "4bc6b08b-7c84-41af-8ac4-0dfa7a9ec3f8",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "175526bff5dc50ba87bdb10a0d9da46bd5137234807b9da3d00d4ce0c91e8f80",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "4defbc76-6853-4995-98f6-1c3613d79ea6",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684943152,
+      "observedAtMs": 1791684943153
+    },
+    {
+      "commandId": "d710e5de-021a-4131-9750-af6c177066c4",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "8c96785c755d1b0d79ca0e9d3c59696d9586271ee85e973bd901e68de3471354",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "a28d3966-3c8e-44d0-9939-facf6c0565c4",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684944136,
+      "observedAtMs": 1791684944137
+    },
+    {
+      "commandId": "d0b50d1a-d0b5-44e7-bbb1-262e6a1464aa",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "52ff167a0ac47bcea077975d41749587912c461686d49853746bd5a69acbfb9b",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "bbcb8f28-90b6-4e05-b2b1-0fa2029f95e2",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684945124,
+      "observedAtMs": 1791684945126
+    },
+    {
+      "commandId": "c350317b-a8ca-4893-9035-bd41acc9fd39",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "7d4aa78742074ef5346dd2ea7d0e335719e9b65c134e6d8876f1d1cb2e514a4b",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "c4e98609-9499-44f3-bace-9c14d3fc242f",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684946110,
+      "observedAtMs": 1791684946111
+    },
+    {
+      "commandId": "00b95472-7c7a-4c62-859e-aca4009dbec3",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "7d3706d7d042644190660e6c23ffed7b6cae988243e30d7748c46f28b84a6a82",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "6850cece-4974-4d1c-a6c9-5cb97bbf03f6",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684947118,
+      "observedAtMs": 1791684947119
+    },
+    {
+      "commandId": "018f55a4-f8b3-4b4a-bd1f-0da265a1a76c",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "229cc34870acd2b1286b2fb405af0763e30ae37372a39297f02f527b4137db33",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "0357f00e-bc74-449a-82bb-c7188af8eb0a",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684948118,
+      "observedAtMs": 1791684948119
+    },
+    {
+      "commandId": "db2c2577-759f-4d04-b5c8-61380e4ee555",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "4d6db36b6b51189495d0eb93d27be64d2172ab6d5f2af21ae9ec4367c26bab04",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "545c7b93-8bd1-4dc9-b270-a1ff9c1e8171",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684949124,
+      "observedAtMs": 1791684949125
+    },
+    {
+      "commandId": "5c48aa65-2628-4094-9260-7eaf93ca8996",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "e59eee2b1c7b3c53561f44cb1607b56fcaa2de3d539b7bd6892aa818bb198b16",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "b87bbf1c-e1e3-42e7-909a-21165a975e1e",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684950130,
+      "observedAtMs": 1791684950132
+    },
+    {
+      "commandId": "1e89772a-642c-415d-b3c0-d92c68fc1990",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "57ce261d50246b953818eba91c8db396d5eaa720d63f15f5180d35c4fdf0d562",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "d93bdae9-2123-4fc5-82a9-dd8d32db5f4f",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684951135,
+      "observedAtMs": 1791684951137
+    },
+    {
+      "commandId": "7b152d84-4883-442f-89dc-e41e0ff13790",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "4581a39bd980988dddd17256c290537416ff85aeea09296f993eb420e6ae9de4",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "c68327bf-53e4-4bed-a066-59da20485791",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684952129,
+      "observedAtMs": 1791684952131
+    },
+    {
+      "commandId": "a8e3b6ab-9661-48cb-a532-1fd25686df98",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "46b9ef9516a5b6d0107225766bc1475b0e4b61bf907949f4f7e3eda722124bd7",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "bf5ca40f-895f-472f-ab79-ace97f66af77",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684953142,
+      "observedAtMs": 1791684953143
+    },
+    {
+      "commandId": "d4f92eaa-42b6-4b55-a83c-5a46e22c51f5",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "59cd08828e285c0d1adb85e66b7e0899a3f2b122cfcfaaa632e60639de1a4348",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "992f8db3-0435-48d8-aa1c-44bc8e2502e5",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684954153,
+      "observedAtMs": 1791684954155
+    },
+    {
+      "commandId": "558265c0-68ee-4bf7-b2a1-156bdb25607e",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "c8b5c4fdd13ab41a70047f8e2156249b6e7607f45a18a3f46941e79634e25990",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "6ce6a2f7-2e9b-4ca2-ba5c-a352e8e540f8",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684955166,
+      "observedAtMs": 1791684955167
+    },
+    {
+      "commandId": "2b265578-194d-4aed-8519-68ce36db5df3",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "fef67da563c673d56669d0cf439e90c5e77c7a736e38a24685d3d43787858c94",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "dbc0308f-56aa-4ce5-8b0e-131dc6ca6a4d",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684956212,
+      "observedAtMs": 1791684956214
+    },
+    {
+      "commandId": "e7dc2d45-dccd-4ffe-88e6-45b7974d8373",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "9ccf859c371d513c0518d25ba3b78b93b7891be69fa836b8d32731a26ddf7e6d",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "2bf2ef6b-65b3-4899-81ff-bcf6e2e57b82",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684957260,
+      "observedAtMs": 1791684957262
+    },
+    {
+      "commandId": "cd0d8c73-ea2f-40b9-bdf1-e8556d58f008",
+      "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+      "intent": "run",
+      "payloadHash": "4975f425de12d64abaa628368f1c2c23921a7a18f3ceb7c06e838548afe44b55",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "7e020198-a904-45a5-b371-29b47c0b39d1",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "ea742cf7-8a9c-48f3-8ffe-9a352c78c1dc",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684958402,
+      "observedAtMs": 1791684958404
+    },
+    {
+      "commandId": "6ef66710-f040-4bfd-b844-bd9575d113ad",
+      "taskId": "f96a71af-7feb-4876-baf4-382296c760a3",
+      "intent": "createChat",
+      "payloadHash": "7fd83d2edfc78b303c2a0f6381dd65b1ed993a55e99c34bffc788d4458ce1262",
+      "status": "applied",
+      "snapshot": {
+        "taskId": "f96a71af-7feb-4876-baf4-382296c760a3",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "eventSequence": 41,
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "acceptedAtMs": 1791684959493,
+      "committedAtMs": 1791684959504,
+      "observedAtMs": 1791684959504
+    },
+    {
+      "commandId": "58480c14-829c-46a9-953e-0c6b650d7074",
+      "taskId": "f96a71af-7feb-4876-baf4-382296c760a3",
+      "intent": "run",
+      "payloadHash": "b3b66487ad477e89d8d36f42829860c161c4a50271a641428e9d3c78ffe3fb65",
+      "status": "pending",
+      "snapshot": {
+        "taskId": "f96a71af-7feb-4876-baf4-382296c760a3",
+        "taskRevision": 1,
+        "taskSequence": 1
+      },
+      "actorId": "core-00-benchmark",
+      "clientId": "core-00",
+      "clientSessionId": "core-00",
+      "executionEnvironment": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+      "correlationId": "05b0710c-4d70-4aa5-896a-a678ab44d58d",
+      "reason": {
+        "code": "providerAcceptanceUnknown",
+        "message": "accepted by the engine; waiting for provider correlation"
+      },
+      "recoveryAction": "Wait for provider acceptance or reconcile before creating a replacement command.",
+      "acceptedAtMs": 1791684959538,
+      "observedAtMs": 1791684959538
+    }
+  ],
+  "samples": [
+    {
+      "at": 1791684932946,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.017321083,
+          "rssMiB": 45.328125,
+          "footprintMiB": 12.423042,
+          "lifetimePeakFootprintMiB": 12.469917,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 12.423042
+    },
+    {
+      "at": 1791684933430,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.017734292,
+          "rssMiB": 45.328125,
+          "footprintMiB": 12.423042,
+          "lifetimePeakFootprintMiB": 12.469917,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 12.423042
+    },
+    {
+      "at": 1791684933953,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.017927333,
+          "rssMiB": 45.328125,
+          "footprintMiB": 12.423042,
+          "lifetimePeakFootprintMiB": 12.469917,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 12.423042
+    },
+    {
+      "at": 1791684934444,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.088567542,
+          "rssMiB": 57.71875,
+          "footprintMiB": 20.188713,
+          "lifetimePeakFootprintMiB": 20.188713,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 20.188713
+    },
+    {
+      "at": 1791684934952,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.093471583,
+          "rssMiB": 59.4375,
+          "footprintMiB": 20.688713,
+          "lifetimePeakFootprintMiB": 20.688713,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 95710,
+          "cpuSeconds": 0.121511583,
+          "rssMiB": 112.671875,
+          "footprintMiB": 46.594872,
+          "lifetimePeakFootprintMiB": 95.891701,
+          "idleWakeups": 0,
+          "executable": "/opt/homebrew/bin/codex"
+        },
+        {
+          "pid": 95734,
+          "cpuSeconds": 0.009100917,
+          "rssMiB": 4.484375,
+          "footprintMiB": 2.09407,
+          "lifetimePeakFootprintMiB": 2.09407,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
+        },
+        {
+          "pid": 95751,
+          "cpuSeconds": 0.003663958,
+          "rssMiB": 3.953125,
+          "footprintMiB": 2.00032,
+          "lifetimePeakFootprintMiB": 2.00032,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git"
+        },
+        {
+          "pid": 95752,
+          "cpuSeconds": 0.012034708,
+          "rssMiB": 8.3125,
+          "footprintMiB": 4.672333,
+          "lifetimePeakFootprintMiB": 4.672333,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git-remote-https"
+        },
+        {
+          "pid": 95711,
+          "cpuSeconds": 0.168901708,
+          "rssMiB": 180.65625,
+          "footprintMiB": 92.907326,
+          "lifetimePeakFootprintMiB": 94.079201,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        },
+        {
+          "pid": 95712,
+          "cpuSeconds": 0.116815667,
+          "rssMiB": 112.03125,
+          "footprintMiB": 45.860519,
+          "lifetimePeakFootprintMiB": 94.969872,
+          "idleWakeups": 0,
+          "executable": "/opt/homebrew/bin/codex"
+        },
+        {
+          "pid": 95750,
+          "cpuSeconds": 0.008251,
+          "rssMiB": 4.5,
+          "footprintMiB": 2.109695,
+          "lifetimePeakFootprintMiB": 2.109695,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
+        },
+        {
+          "pid": 95753,
+          "cpuSeconds": 0.004182167,
+          "rssMiB": 3.96875,
+          "footprintMiB": 2.015945,
+          "lifetimePeakFootprintMiB": 2.015945,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git"
+        },
+        {
+          "pid": 95754,
+          "cpuSeconds": 0.011389333,
+          "rssMiB": 8.203125,
+          "footprintMiB": 4.54731,
+          "lifetimePeakFootprintMiB": 4.54731,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git-remote-https"
+        },
+        {
+          "pid": 95713,
+          "cpuSeconds": 0.159619458,
+          "rssMiB": 180.53125,
+          "footprintMiB": 93.172997,
+          "lifetimePeakFootprintMiB": 94.110497,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        }
+      ],
+      "aggregateFootprintMiB": 316.66409999999996
+    },
+    {
+      "at": 1791684935470,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.107785875,
+          "rssMiB": 61.375,
+          "footprintMiB": 20.579338,
+          "lifetimePeakFootprintMiB": 21.235588,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 95710,
+          "cpuSeconds": 0.139847875,
+          "rssMiB": 115.125,
+          "footprintMiB": 47.876122,
+          "lifetimePeakFootprintMiB": 95.891701,
+          "idleWakeups": 0,
+          "executable": "/opt/homebrew/bin/codex"
+        },
+        {
+          "pid": 95712,
+          "cpuSeconds": 0.142794792,
+          "rssMiB": 115.046875,
+          "footprintMiB": 47.938644,
+          "lifetimePeakFootprintMiB": 94.969872,
+          "idleWakeups": 0,
+          "executable": "/opt/homebrew/bin/codex"
+        },
+        {
+          "pid": 95713,
+          "cpuSeconds": 0.454105542,
+          "rssMiB": 219.40625,
+          "footprintMiB": 126.766769,
+          "lifetimePeakFootprintMiB": 126.798019,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        },
+        {
+          "pid": 95788,
+          "cpuSeconds": 1.670497667,
+          "rssMiB": 17.203125,
+          "footprintMiB": 14.359924,
+          "lifetimePeakFootprintMiB": 14.359924,
+          "idleWakeups": 0,
+          "executable": "rg"
+        },
+        {
+          "pid": 95789,
+          "cpuSeconds": 0.041244583,
+          "rssMiB": 29.4375,
+          "footprintMiB": 12.750618,
+          "lifetimePeakFootprintMiB": 12.750618,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.opencode/bin/opencode"
+        }
+      ],
+      "aggregateFootprintMiB": 270.27141499999993
+    },
+    {
+      "at": 1791684935987,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.177044958,
+          "rssMiB": 79.75,
+          "footprintMiB": 37.985611,
+          "lifetimePeakFootprintMiB": 37.985611,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 95710,
+          "cpuSeconds": 0.176478458,
+          "rssMiB": 119.171875,
+          "footprintMiB": 50.985497,
+          "lifetimePeakFootprintMiB": 95.891701,
+          "idleWakeups": 0,
+          "executable": "/opt/homebrew/bin/codex"
+        },
+        {
+          "pid": 95713,
+          "cpuSeconds": 0.834381833,
+          "rssMiB": 276.078125,
+          "footprintMiB": 147.844917,
+          "lifetimePeakFootprintMiB": 171.657417,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        },
+        {
+          "pid": 95788,
+          "cpuSeconds": 7.208131583,
+          "rssMiB": 17.328125,
+          "footprintMiB": 14.250549,
+          "lifetimePeakFootprintMiB": 14.453674,
+          "idleWakeups": 0,
+          "executable": "rg"
+        },
+        {
+          "pid": 95806,
+          "cpuSeconds": 0.342374,
+          "rssMiB": 150.078125,
+          "footprintMiB": 84.922905,
+          "lifetimePeakFootprintMiB": 84.922905,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.opencode/bin/opencode"
+        }
+      ],
+      "aggregateFootprintMiB": 335.989479
+    },
+    {
+      "at": 1791684936457,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.22157625,
+          "rssMiB": 84.390625,
+          "footprintMiB": 39.563736,
+          "lifetimePeakFootprintMiB": 39.563736,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 95713,
+          "cpuSeconds": 1.131606917,
+          "rssMiB": 285.71875,
+          "footprintMiB": 140.71994,
+          "lifetimePeakFootprintMiB": 171.657417,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        },
+        {
+          "pid": 95788,
+          "cpuSeconds": 12.2653805,
+          "rssMiB": 20.921875,
+          "footprintMiB": 15.797447,
+          "lifetimePeakFootprintMiB": 16.438049,
+          "idleWakeups": 0,
+          "executable": "rg"
+        },
+        {
+          "pid": 95806,
+          "cpuSeconds": 0.892178875,
+          "rssMiB": 322.25,
+          "footprintMiB": 201.50119,
+          "lifetimePeakFootprintMiB": 201.50119,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.opencode/bin/opencode"
+        }
+      ],
+      "aggregateFootprintMiB": 397.582313
+    },
+    {
+      "at": 1791684936958,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.232088167,
+          "rssMiB": 85.15625,
+          "footprintMiB": 40.048111,
+          "lifetimePeakFootprintMiB": 40.048111,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 95713,
+          "cpuSeconds": 1.665301667,
+          "rssMiB": 299.359375,
+          "footprintMiB": 128.84494,
+          "lifetimePeakFootprintMiB": 171.657417,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/.local/bin/claude"
+        },
+        {
+          "pid": 95788,
+          "cpuSeconds": 17.99229425,
+          "rssMiB": 21.3125,
+          "footprintMiB": 12.672447,
+          "lifetimePeakFootprintMiB": 16.438049,
+          "idleWakeups": 0,
+          "executable": "rg"
+        }
+      ],
+      "aggregateFootprintMiB": 181.56549800000002
+    },
+    {
+      "at": 1791684937462,
+      "phase": "idle",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.24545275,
+          "rssMiB": 86.3125,
+          "footprintMiB": 41.079361,
+          "lifetimePeakFootprintMiB": 41.079361,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 41.079361
+    },
+    {
+      "at": 1791684937958,
+      "phase": "multiple-working-chats",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.570626083,
+          "rssMiB": 117.671875,
+          "footprintMiB": 45.376259,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 45.376259
+    },
+    {
+      "at": 1791684938464,
+      "phase": "multiple-working-chats",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.659525458,
+          "rssMiB": 120.859375,
+          "footprintMiB": 46.782509,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 97383,
+          "cpuSeconds": 0.057990083,
+          "rssMiB": 3.3125,
+          "footprintMiB": 3.031502,
+          "lifetimePeakFootprintMiB": 3.031502,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        },
+        {
+          "pid": 97384,
+          "cpuSeconds": 0.015659042,
+          "rssMiB": 1.203125,
+          "footprintMiB": 1.125229,
+          "lifetimePeakFootprintMiB": 1.125229,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        }
+      ],
+      "aggregateFootprintMiB": 50.93924
+    },
+    {
+      "at": 1791684938960,
+      "phase": "multiple-working-chats",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.773516417,
+          "rssMiB": 124.765625,
+          "footprintMiB": 47.970009,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 47.970009
+    },
+    {
+      "at": 1791684939476,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.826338875,
+          "rssMiB": 125.421875,
+          "footprintMiB": 48.141884,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 48.141884
+    },
+    {
+      "at": 1791684939971,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.863020833,
+          "rssMiB": 125.765625,
+          "footprintMiB": 48.173134,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 48.173134
+    },
+    {
+      "at": 1791684940476,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.950565375,
+          "rssMiB": 127.1875,
+          "footprintMiB": 49.079384,
+          "lifetimePeakFootprintMiB": 50.391884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.079384
+    },
+    {
+      "at": 1791684940974,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 0.985537625,
+          "rssMiB": 128.625,
+          "footprintMiB": 50.141884,
+          "lifetimePeakFootprintMiB": 50.501259,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.141884
+    },
+    {
+      "at": 1791684941484,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.059677042,
+          "rssMiB": 129.296875,
+          "footprintMiB": 50.470009,
+          "lifetimePeakFootprintMiB": 50.751259,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.470009
+    },
+    {
+      "at": 1791684941980,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.0971115,
+          "rssMiB": 129.40625,
+          "footprintMiB": 49.891884,
+          "lifetimePeakFootprintMiB": 50.751259,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.891884
+    },
+    {
+      "at": 1791684942487,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.187589958,
+          "rssMiB": 130.765625,
+          "footprintMiB": 50.329384,
+          "lifetimePeakFootprintMiB": 50.751259,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.329384
+    },
+    {
+      "at": 1791684942979,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.226859542,
+          "rssMiB": 131.03125,
+          "footprintMiB": 50.548134,
+          "lifetimePeakFootprintMiB": 50.751259,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 345,
+          "cpuSeconds": 0.075234708,
+          "rssMiB": 4.5,
+          "footprintMiB": 4.219002,
+          "lifetimePeakFootprintMiB": 4.219002,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        },
+        {
+          "pid": 346,
+          "cpuSeconds": 0.014719125,
+          "rssMiB": 1.203125,
+          "footprintMiB": 1.125229,
+          "lifetimePeakFootprintMiB": 1.125229,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        }
+      ],
+      "aggregateFootprintMiB": 55.89236499999999
+    },
+    {
+      "at": 1791684943491,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.3182035,
+          "rssMiB": 133.28125,
+          "footprintMiB": 50.954384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.954384
+    },
+    {
+      "at": 1791684943990,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.360222667,
+          "rssMiB": 133.515625,
+          "footprintMiB": 50.845009,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.845009
+    },
+    {
+      "at": 1791684944483,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.459360333,
+          "rssMiB": 134.453125,
+          "footprintMiB": 50.329384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.329384
+    },
+    {
+      "at": 1791684944993,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.493015333,
+          "rssMiB": 134.578125,
+          "footprintMiB": 50.173134,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.173134
+    },
+    {
+      "at": 1791684945496,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.609033375,
+          "rssMiB": 135.8125,
+          "footprintMiB": 49.938759,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.938759
+    },
+    {
+      "at": 1791684945999,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.651014125,
+          "rssMiB": 136.125,
+          "footprintMiB": 49.298134,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.298134
+    },
+    {
+      "at": 1791684946505,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.762567208,
+          "rssMiB": 136.5625,
+          "footprintMiB": 49.626259,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.626259
+    },
+    {
+      "at": 1791684947005,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.807937583,
+          "rssMiB": 136.9375,
+          "footprintMiB": 49.782509,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.782509
+    },
+    {
+      "at": 1791684947496,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.921299792,
+          "rssMiB": 137.953125,
+          "footprintMiB": 49.673134,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.673134
+    },
+    {
+      "at": 1791684948005,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 1.968845792,
+          "rssMiB": 138.3125,
+          "footprintMiB": 49.329384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.329384
+    },
+    {
+      "at": 1791684948512,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.092258958,
+          "rssMiB": 138.953125,
+          "footprintMiB": 49.938759,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 49.938759
+    },
+    {
+      "at": 1791684949010,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.14374725,
+          "rssMiB": 139.265625,
+          "footprintMiB": 50.001259,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.001259
+    },
+    {
+      "at": 1791684949515,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.278110792,
+          "rssMiB": 140.28125,
+          "footprintMiB": 50.454384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.454384
+    },
+    {
+      "at": 1791684950015,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.324763458,
+          "rssMiB": 141.125,
+          "footprintMiB": 50.720009,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.720009
+    },
+    {
+      "at": 1791684950519,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.46266125,
+          "rssMiB": 141.484375,
+          "footprintMiB": 50.501259,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.501259
+    },
+    {
+      "at": 1791684951019,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.516192917,
+          "rssMiB": 141.578125,
+          "footprintMiB": 50.563759,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.563759
+    },
+    {
+      "at": 1791684951522,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.652784458,
+          "rssMiB": 142.109375,
+          "footprintMiB": 50.423134,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.423134
+    },
+    {
+      "at": 1791684952012,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.710433583,
+          "rssMiB": 142.28125,
+          "footprintMiB": 50.532509,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.532509
+    },
+    {
+      "at": 1791684952525,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.858708375,
+          "rssMiB": 142.609375,
+          "footprintMiB": 50.704384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.704384
+    },
+    {
+      "at": 1791684953023,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 2.914554208,
+          "rssMiB": 142.75,
+          "footprintMiB": 50.657509,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.657509
+    },
+    {
+      "at": 1791684953528,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.06568675,
+          "rssMiB": 143.265625,
+          "footprintMiB": 50.891884,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 50.891884
+    },
+    {
+      "at": 1791684954031,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.119314792,
+          "rssMiB": 143.5,
+          "footprintMiB": 51.079384,
+          "lifetimePeakFootprintMiB": 51.532509,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.079384
+    },
+    {
+      "at": 1791684954528,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.304478458,
+          "rssMiB": 144.625,
+          "footprintMiB": 51.485634,
+          "lifetimePeakFootprintMiB": 51.735634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.485634
+    },
+    {
+      "at": 1791684955035,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.371992458,
+          "rssMiB": 144.84375,
+          "footprintMiB": 51.485634,
+          "lifetimePeakFootprintMiB": 51.735634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.485634
+    },
+    {
+      "at": 1791684955530,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.533414708,
+          "rssMiB": 145.84375,
+          "footprintMiB": 51.876259,
+          "lifetimePeakFootprintMiB": 52.141884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.876259
+    },
+    {
+      "at": 1791684956031,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.602822458,
+          "rssMiB": 146.203125,
+          "footprintMiB": 51.595009,
+          "lifetimePeakFootprintMiB": 52.141884,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.595009
+    },
+    {
+      "at": 1791684956521,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.78831825,
+          "rssMiB": 147.703125,
+          "footprintMiB": 52.157509,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.157509
+    },
+    {
+      "at": 1791684957036,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 3.853880042,
+          "rssMiB": 148.171875,
+          "footprintMiB": 52.032509,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.032509
+    },
+    {
+      "at": 1791684957528,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.020257083,
+          "rssMiB": 149.1875,
+          "footprintMiB": 51.985634,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.985634
+    },
+    {
+      "at": 1791684958035,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.093886042,
+          "rssMiB": 149.1875,
+          "footprintMiB": 51.954384,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.954384
+    },
+    {
+      "at": 1791684958541,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.256518417,
+          "rssMiB": 149.921875,
+          "footprintMiB": 51.688759,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 9349,
+          "cpuSeconds": 0.032487042,
+          "rssMiB": 2.390625,
+          "footprintMiB": 2.109627,
+          "lifetimePeakFootprintMiB": 2.109627,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        }
+      ],
+      "aggregateFootprintMiB": 53.798386
+    },
+    {
+      "at": 1791684959048,
+      "phase": "long-transcript",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.362297667,
+          "rssMiB": 150.53125,
+          "footprintMiB": 51.595009,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.595009
+    },
+    {
+      "at": 1791684959537,
+      "phase": "large-repository",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.485495833,
+          "rssMiB": 151.71875,
+          "footprintMiB": 52.126282,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.126282
+    },
+    {
+      "at": 1791684960041,
+      "phase": "large-repository",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.697233458,
+          "rssMiB": 152.28125,
+          "footprintMiB": 51.73568,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 9972,
+          "cpuSeconds": 0.242286833,
+          "rssMiB": 8.0625,
+          "footprintMiB": 4.015945,
+          "lifetimePeakFootprintMiB": 4.015945,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
+        },
+        {
+          "pid": 10026,
+          "cpuSeconds": 0.237913292,
+          "rssMiB": 9.28125,
+          "footprintMiB": 5.234695,
+          "lifetimePeakFootprintMiB": 5.234695,
+          "idleWakeups": 0,
+          "executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
+        }
+      ],
+      "aggregateFootprintMiB": 60.986320000000006
+    },
+    {
+      "at": 1791684960551,
+      "phase": "large-repository",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.73625725,
+          "rssMiB": 152.46875,
+          "footprintMiB": 51.92318,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.92318
+    },
+    {
+      "at": 1791684961042,
+      "phase": "large-repository",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.78028325,
+          "rssMiB": 152.796875,
+          "footprintMiB": 51.595055,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.595055
+    },
+    {
+      "at": 1791684961552,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.80196875,
+          "rssMiB": 152.890625,
+          "footprintMiB": 51.657555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.657555
+    },
+    {
+      "at": 1791684962047,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.814414958,
+          "rssMiB": 152.90625,
+          "footprintMiB": 51.67318,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.67318
+    },
+    {
+      "at": 1791684962562,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.860657667,
+          "rssMiB": 153.140625,
+          "footprintMiB": 51.845055,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.845055
+    },
+    {
+      "at": 1791684963049,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.875261542,
+          "rssMiB": 153.203125,
+          "footprintMiB": 51.813805,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.813805
+    },
+    {
+      "at": 1791684963562,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.892614333,
+          "rssMiB": 153.546875,
+          "footprintMiB": 51.54818,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.54818
+    },
+    {
+      "at": 1791684964080,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.893030833,
+          "rssMiB": 153.546875,
+          "footprintMiB": 51.54818,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.54818
+    },
+    {
+      "at": 1791684964574,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.93141075,
+          "rssMiB": 153.78125,
+          "footprintMiB": 51.782555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.782555
+    },
+    {
+      "at": 1791684965082,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.931896042,
+          "rssMiB": 153.78125,
+          "footprintMiB": 51.782555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.782555
+    },
+    {
+      "at": 1791684965558,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.951901833,
+          "rssMiB": 154.125,
+          "footprintMiB": 51.907555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.907555
+    },
+    {
+      "at": 1791684966082,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.959958292,
+          "rssMiB": 154.15625,
+          "footprintMiB": 51.938805,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.938805
+    },
+    {
+      "at": 1791684966591,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.985686208,
+          "rssMiB": 154.453125,
+          "footprintMiB": 52.17318,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.17318
+    },
+    {
+      "at": 1791684967096,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.986304208,
+          "rssMiB": 154.453125,
+          "footprintMiB": 52.17318,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.17318
+    },
+    {
+      "at": 1791684967568,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 4.999327333,
+          "rssMiB": 154.453125,
+          "footprintMiB": 52.17318,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        },
+        {
+          "pid": 11009,
+          "cpuSeconds": 0.066924333,
+          "rssMiB": 4.078125,
+          "footprintMiB": 3.797127,
+          "lifetimePeakFootprintMiB": 3.797127,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        },
+        {
+          "pid": 11010,
+          "cpuSeconds": 0.017313833,
+          "rssMiB": 1.203125,
+          "footprintMiB": 1.125229,
+          "lifetimePeakFootprintMiB": 1.125229,
+          "idleWakeups": 0,
+          "executable": "/usr/sbin/lsof"
+        }
+      ],
+      "aggregateFootprintMiB": 57.095536
+    },
+    {
+      "at": 1791684968098,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.009274417,
+          "rssMiB": 154.546875,
+          "footprintMiB": 52.04818,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.04818
+    },
+    {
+      "at": 1791684968599,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.030477833,
+          "rssMiB": 154.5625,
+          "footprintMiB": 52.032555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.032555
+    },
+    {
+      "at": 1791684969098,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.030857208,
+          "rssMiB": 154.5625,
+          "footprintMiB": 52.032555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.032555
+    },
+    {
+      "at": 1791684969592,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.031238875,
+          "rssMiB": 154.5625,
+          "footprintMiB": 52.032555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.032555
+    },
+    {
+      "at": 1791684970083,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.047571042,
+          "rssMiB": 154.734375,
+          "footprintMiB": 52.032555,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 52.032555
+    },
+    {
+      "at": 1791684970607,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.070605958,
+          "rssMiB": 154.734375,
+          "footprintMiB": 51.95443,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.95443
+    },
+    {
+      "at": 1791684971112,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.071270625,
+          "rssMiB": 154.734375,
+          "footprintMiB": 51.95443,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.95443
+    },
+    {
+      "at": 1791684971455,
+      "phase": "settled",
+      "processes": [
+        {
+          "pid": 95591,
+          "cpuSeconds": 5.071397042,
+          "rssMiB": 154.734375,
+          "footprintMiB": 51.95443,
+          "lifetimePeakFootprintMiB": 52.485634,
+          "idleWakeups": 0,
+          "executable": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/engine-final/luna-measured"
+        }
+      ],
+      "aggregateFootprintMiB": 51.95443
+    }
+  ],
+  "shutdowns": [
+    {
+      "pid": 94748,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 94857,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 94949,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95041,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95132,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95222,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95312,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95404,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95501,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 95591,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    },
+    {
+      "pid": 11215,
+      "exitCode": 0,
+      "signal": null,
+      "descendantsAfterEngineExit": [],
+      "descendantsAfterCleanup": []
+    }
+  ],
+  "chatCount": 41,
+  "requestedConcurrentChats": 5,
+  "observedConcurrentChats": 2,
+  "transcriptEntries": 42,
+  "transcriptBytes": 171734,
+  "restored": true,
+  "largeRepositoryTrackedFiles": 3013,
+  "limitations": [
+    "No live provider or network throughput",
+    "No UI/GPU or event-to-paint metric",
+    "Large repository registration/run, not a Git diff or search benchmark"
+  ]
+}

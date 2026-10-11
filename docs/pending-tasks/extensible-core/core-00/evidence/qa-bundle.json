@@ -1,0 +1,11 @@
+{
+  "bundle": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA QA Core Baseline.app",
+  "bundle_id": "com.novnski.luna.qa.core-baseline",
+  "ipc_port": "59850",
+  "data_dir": "/Users/iulian/workspace/code/personal/luna/target/qa/core-00/app-data",
+  "executable_sha256": "4cf4bcbf7ac86c852e59ad0d5a84340e43ab06d17ee54db4d9b0d8c6a8779b47",
+  "strict_signature_verified": true,
+  "running_before_cleanup": false,
+  "data_preserved": true,
+  "build_seconds": 103
+}

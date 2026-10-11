@@ -1,0 +1,16 @@
+{
+  "captured_at": "2026-10-11T02:23:19.790179+00:00",
+  "build_seconds": 2,
+  "pid": 12606,
+  "executable": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna",
+  "ipc_port": 59777,
+  "strict_signature_verified": true,
+  "engine_ready": {
+    "id": 1,
+    "ok": {
+      "ready": true
+    }
+  },
+  "executable_sha256": "2b3351ed4abf7d7c1c12c6244016fc2bb136d74b2f0698ae8ff6371d779c58dc",
+  "data_preserved": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/data"
+}

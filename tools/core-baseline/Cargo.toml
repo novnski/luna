@@ -1,0 +1,17 @@
+[package]
+name = "luna-core-runtime-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Isolated feasibility tool: never linked into LUNA or its public SDK.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+wasmtime = { version = "=49.0.2", default-features = false, features = ["std", "runtime", "cranelift", "async", "wat", "anyhow"] }
+
+[profile.dev]
+debug = 0

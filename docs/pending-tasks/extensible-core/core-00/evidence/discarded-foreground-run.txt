@@ -1,0 +1,10 @@
+file:///Users/iulian/workspace/code/personal/luna/scripts/resource-profile.mjs:187
+        streamError = Error(`Native window validation failed: ${reason}`);
+                      ^
+
+Error: Native window validation failed: Profiled app is no longer foreground; discard this run
+    at Timeout.<anonymous> (file:///Users/iulian/workspace/code/personal/luna/scripts/resource-profile.mjs:187:23)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+
+Node.js v24.14.1

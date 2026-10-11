@@ -1,0 +1,20 @@
+{
+  "command": [
+    "scripts/cargo.sh",
+    "test",
+    "--locked",
+    "-p",
+    "luna-engine",
+    "--test",
+    "task_commands",
+    "--test",
+    "local_profiles",
+    "--test",
+    "restart_resume",
+    "--test",
+    "timeline_order_e2e"
+  ],
+  "exit_code": 0,
+  "seconds": 90.83452010154724,
+  "source": "ffdf7b835cdb87a8ff02a10c48f2e308aa329c36"
+}

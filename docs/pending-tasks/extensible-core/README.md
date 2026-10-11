@@ -1,8 +1,9 @@
 # Extensible core, SDK and plugins
 
-**Requested:** 11 October 2026. **Status:** architecture/source audit and pending
-implementation contracts. No core rebuild, SDK, plugin runtime or extracted
-feature is delivered by this package.
+**Requested:** 11 October 2026. **Status:** architecture/source audit, pending
+implementation contracts and [CORE-00 execution evidence](core-00/README.md).
+The feasibility tools do not deliver the production core rebuild, SDK, plugin
+host or extracted features.
 
 The goal is a native LUNA whose engine, CLI, SDK and application share one
 coherent contract. A user can ask an agent to create a provider or UI extension,
@@ -40,9 +41,10 @@ make it much harder to preserve the existing recovery and provider semantics.
 
 Use the [shared task queue](../README.md) and [agent workflow](../WORKFLOW.md)
 for actual status, claims, progress and resume notes. CORE tickets are one
-workstream, `core-platform`. The first eligible ticket is **CORE-00**: establish
-execution/performance baselines and test the narrow runtime choices. This
-source audit is its starting evidence, not a reason to repeat the inventory.
+workstream, `core-platform`. Use the live queue to select the next eligible
+ticket. [CORE-00](core-00/README.md) records execution/performance baselines and
+the narrow runtime choices; this source audit remains its starting evidence,
+not a reason to repeat the inventory.
 
 ## The product acceptance scenarios
 

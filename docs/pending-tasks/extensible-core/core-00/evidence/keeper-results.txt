@@ -1,0 +1,67 @@
+running 6 tests
+test existing_session_opens_the_historical_cloud_layout_in_place ... ok
+test concurrent_engine_info_and_runtime_share_one_device_identity ... ok
+test resolved_profile_ids_separate_accounts_on_one_device_and_survive_restart ... ok
+test local_and_synced_profiles_remain_isolated_across_restarts ... ok
+test synced_accounts_isolate_uploads_and_assign_the_legacy_cache_once ... ok
+test signing_in_does_not_activate_sync_for_the_running_local_profile ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+running 8 tests
+test real_claude_remembers_codeword_across_engine_restart ... ignored, requires installed+authenticated claude CLI; spends tokens
+test fresh_crash_requires_safe_reconciliation_without_replay ... ok
+test kill_crash_recovers_resume_from_journal_and_stamps_aborted ... ok
+test steer_after_restart_dispatches_new_turn_with_resume ... ok
+test restart_roundtrip_restores_chats_transcript_and_resume ... ok
+test resume_is_cwd_scoped ... ok
+test uncertain_startup_crash_is_not_replayed_and_keeps_resume ... ok
+test persistent_session_serves_multiple_turns_on_one_child ... ok
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.28s
+running 40 tests
+test cleanup_worker_advances_beyond_one_batch_without_touching_live_tasks ... ok
+test dense_pin_insertion_changes_only_requested_tasks_and_rejects_stale_neighbors ... ok
+test deletion_settles_a_held_synthetic_run_before_tombstoning ... ok
+test deletion_cleanup_failure_is_reported_and_resumes_after_restart ... ok
+test durable_queue_commands_dedupe_and_revision_fence_edit_remove ... ok
+test active_task_cannot_move_under_execution ... ok
+test abandoned_task_preparation_reopens_drafts_without_deleting_data ... ok
+test accepted_stop_fences_send_now_and_holds_the_queue ... ok
+test create_delete_identity_and_local_cleanup_share_the_receipt_transaction ... ok
+test earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot ... ok
+test clear_context_atomically_advances_binding_and_retains_local_state ... ok
+test duplicate_send_survives_two_clients_response_loss_and_restart ... ok
+test compact_is_idempotent_and_restart_unknown_is_never_replayed ... ok
+test exact_non_git_workspace_move_succeeds_and_different_root_is_rejected ... ok
+test model_change_waits_for_safe_turn_and_keeps_binding_generation ... ok
+test native_tip_fork_creates_independent_task_binding_and_lineage ... ok
+test fork_initial_prompt_grant_commits_with_its_snapshot ... ok
+test organization_commands_are_durable_ordered_and_revision_fenced ... ok
+test failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_reopen ... ok
+test failed_durable_claim_never_reaches_the_provider_and_reopens_held ... ok
+test failed_queue_snapshot_never_applies_or_clears_the_draft_and_retry_reopens_once ... ok
+test failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen ... ok
+test native_steer_caller_applies_only_for_supported_attachment_free_held_rows ... ok
+test project_cleanup_failure_resumes_from_durable_child_list ... ok
+test automatic_codex_context_events_gate_real_queue_drain_and_restart ... ok
+test local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_after_reopen ... ok
+test project_recovery_waits_for_durable_registry_delete ... ok
+test project_delete_requires_exact_children_and_preserves_workspace_files ... ok
+test queued_message_with_unsorted_execution_options_dispatches ... ok
+test codex_settled_terminal_turns_keep_checkpoints_and_history_prefixes ... ok
+test receipted_run_that_fails_local_authority_is_rejected_not_left_sending ... ok
+test revision_binding_turn_and_lifecycle_fences_are_visible ... ok
+test run_with_unsorted_model_options_dispatches_after_doc_round_trip ... ok
+test removed_project_keeps_sessions_and_readding_the_folder_restores_them ... ok
+test same_workspace_project_move_is_atomic_and_preserves_task_state ... ok
+test staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_twice ... ok
+test stale_project_preparation_never_deletes_a_moved_survivor ... ok
+test side_chat_native_fork_preserves_binding_and_never_replays_unknown_creation ... ok
+test side_chat_context_snapshot_is_an_explicit_native_fork_alternative ... ok
+test provider_switch_creates_fresh_binding_and_holds_incompatible_queue ... ok
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+running 5 tests
+test notice_landing_before_the_first_flush_stays_below_journaled_output ... ok
+test back_to_back_child_messages_stay_separate_parts ... ok
+test back_to_back_provider_messages_stay_separate_parts ... ok
+test split_reply_keeps_part_ids_unique_so_deltas_grow_the_right_paragraph ... ok
+test notices_written_mid_turn_stay_in_chronological_order ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.45s

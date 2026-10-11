@@ -1,0 +1,113 @@
+[
+  {
+    "name": "wasm-final",
+    "command": [
+      "/usr/bin/time",
+      "-l",
+      "target/debug/luna-core-runtime-probe",
+      "target/qa/core-00/wasm-final.json"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 3.367890707915649
+  },
+  {
+    "name": "worker-final",
+    "command": [
+      "node",
+      "scripts/qa-core-worker.mjs",
+      "target/qa/core-00/worker-final"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 2.1549452500185,
+    "superseded_by": "worker-sealed"
+  },
+  {
+    "name": "native-final",
+    "command": [
+      "target/debug/examples/core-contribution-probe",
+      "tools/core-baseline/contribution.json",
+      "tools/core-baseline/unknown-content.json",
+      "target/qa/core-00/native-final"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 0.16258645802736282
+  },
+  {
+    "name": "native-restart-final",
+    "command": [
+      "target/debug/examples/core-contribution-probe",
+      "tools/core-baseline/contribution.json",
+      "tools/core-baseline/unknown-content.json",
+      "target/qa/core-00/native-restart-final"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 0.13736741594038904
+  },
+  {
+    "name": "native-refusal",
+    "command": [
+      "target/debug/examples/core-contribution-probe",
+      "target/qa/core-00/invalid-contribution.json",
+      "tools/core-baseline/unknown-content.json",
+      "target/qa/core-00/native-refusal"
+    ],
+    "exit_code": 1,
+    "expected_exit_code": 1,
+    "seconds": 0.0869974170345813
+  },
+  {
+    "name": "engine-final",
+    "command": [
+      "node",
+      "scripts/qa-core-baseline.mjs",
+      "target/luna-macos-dev/LUNA QA Core Baseline.app/Contents/MacOS/luna",
+      "target/qa/core-00/engine-final"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 47.3257861250313
+  },
+  {
+    "name": "replay-final",
+    "command": [
+      "/usr/bin/time",
+      "-l",
+      "target/debug/examples/macos-resource-profile",
+      "target/qa/core-00/engine-final/frames.json",
+      "target/qa/core-00/replay-final"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "seconds": 15.496572499978356,
+    "superseded_by": "replay-verified"
+  },
+  {
+    "name": "replay-verified",
+    "command": [
+      "env",
+      "LUNA_PROFILE_BACKGROUND_CHATS=40",
+      "LUNA_PROFILE_SCROLL=1",
+      "/usr/bin/time",
+      "-l",
+      "target/debug/examples/macos-resource-profile",
+      "target/qa/core-00/engine-final/frames.json",
+      "target/qa/core-00/replay-verified"
+    ],
+    "exit_code": 0,
+    "boundary": "Native offscreen CoreText/Metal, active scroll and idle"
+  },
+  {
+    "name": "worker-sealed",
+    "command": [
+      "node",
+      "scripts/qa-core-worker.mjs",
+      "target/qa/core-00/worker-sealed"
+    ],
+    "exit_code": 0,
+    "cases": 39
+  }
+]

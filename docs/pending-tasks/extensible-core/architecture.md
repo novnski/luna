@@ -4,6 +4,11 @@ This is a proposed LUNA design. Names and interfaces below are targets, not
 existing APIs. CORE-00 settles the narrow runtime/platform choices with working
 prototypes and measurements before broad implementation.
 
+The [CORE-00 decision](core-00/decision.md) now pins the first execution profile,
+native trust policy and local budgets. In particular, its first Wasm profile uses
+core modules with explicit LUNA imports and no WASI; component/WASI support below
+remains a future versioned profile requiring its own evidence.
+
 ## 1. Core responsibility and dependency direction
 
 The core owns the facts that must remain true when an extension fails, is

@@ -1,0 +1,75 @@
+name: Core baseline probes
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/core-baseline/**'
+      - 'scripts/qa-core-*.mjs'
+      - 'crates/ui/examples/core-contribution-probe.rs'
+      - 'crates/ui/examples/macos-resource-profile.rs'
+      - '.github/workflows/core-baseline.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/core-baseline/**'
+      - 'scripts/qa-core-*.mjs'
+      - 'crates/ui/examples/core-contribution-probe.rs'
+      - 'crates/ui/examples/macos-resource-profile.rs'
+      - '.github/workflows/core-baseline.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  worker-and-wasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/core-baseline
+      - name: Compile and exercise real worker and Wasm boundaries
+        run: |
+          mkdir -p evidence
+          cargo build --locked --manifest-path tools/core-baseline/Cargo.toml
+          node scripts/qa-core-worker.mjs evidence/worker
+          tools/core-baseline/target/debug/luna-core-runtime-probe evidence/wasm.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-worker-wasm
+          path: evidence/
+
+  native-feasibility:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native probes and current app
+        run: |
+          cargo build --locked -p luna
+          cargo build --locked -p luna-ui --features resource-profile --example core-contribution-probe --example macos-resource-profile
+      - name: Capture native composition, durable fallback and engine workload
+        run: |
+          mkdir -p evidence
+          target/debug/examples/core-contribution-probe tools/core-baseline/contribution.json tools/core-baseline/unknown-content.json evidence/native
+          target/debug/examples/core-contribution-probe tools/core-baseline/contribution.json tools/core-baseline/unknown-content.json evidence/native-restart
+          node scripts/qa-core-baseline.mjs target/debug/luna evidence/engine
+          LUNA_PROFILE_BACKGROUND_CHATS=40 LUNA_PROFILE_SCROLL=1 target/debug/examples/macos-resource-profile evidence/engine/frames.json evidence/replay
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-native-baseline
+          path: |
+            evidence/**/*.json
+            evidence/**/*.log
+            evidence/**/*.png

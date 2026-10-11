@@ -1,0 +1,9 @@
+running 7 tests
+test inbound_eof_rejects_new_requests_on_a_half_open_transport ... ok
+test canceling_server_connection_releases_child_stream_tasks ... ok
+test dropping_client_releases_a_live_watch ... ok
+test closing_a_quiet_view_releases_its_server_lease ... ok
+test subscriptions_from_a_foreign_executor_use_the_clients_runtime ... ok
+test finite_stream_preserves_order_and_closes ... ok
+test stalled_view_does_not_wedge_other_socket_requests ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s

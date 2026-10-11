@@ -1,0 +1,1122 @@
+[
+  {
+    "at": 0,
+    "frame": {
+      "reset": [
+        {
+          "id": "a02df102-e710-4f81-a4e8-04accae5cafa",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Concurrent controlled workload 0"
+            }
+          ],
+          "createdAt": 1791684937636,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "57c24086-34f7-4601-bd06-c3588892c5c0",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684938122,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "f798502c-cc72-433b-9d28-821fbf1a8b0a",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 0: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684939087,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "d1d803f3-dcde-4e16-8e9f-a1bc3331f0b6",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684939248,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "fa90ecf9-427c-43f0-b267-5701ce9f1805",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 1: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684940131,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "40fd70ee-9253-4f67-bbd8-d8906fd348de",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684940293,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "f3c55d50-a41f-4443-98e6-b3d1ce4a27bc",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 2: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684941100,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "258548b2-1a28-4a6f-812b-8bba31731f29",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684941247,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "97e63355-d0bc-4bfa-aed6-caa8aa4c8058",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 3: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684942093,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "7a3e3425-5d07-4af4-bf50-0eaf333d7fcb",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684942264,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "4defbc76-6853-4995-98f6-1c3613d79ea6",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 4: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684943153,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "02813637-9188-41df-831d-0762ce554c21",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684943302,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "a28d3966-3c8e-44d0-9939-facf6c0565c4",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 5: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684944138,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "d0321a24-dba7-4ded-ad89-a722577f69f9",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684944296,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "bbcb8f28-90b6-4e05-b2b1-0fa2029f95e2",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 6: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684945126,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "1bd9f44f-68ed-4ff9-8e46-ffb611e7e771",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684945304,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "c4e98609-9499-44f3-bace-9c14d3fc242f",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 7: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684946112,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "c6b5d5a3-c8f6-4b3f-beff-6f6448d88b13",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684946269,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "6850cece-4974-4d1c-a6c9-5cb97bbf03f6",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 8: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684947120,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "82b4285c-33a5-4425-84c1-16ccaf4873ac",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684947273,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "0357f00e-bc74-449a-82bb-c7188af8eb0a",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 9: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684948120,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "ce081de5-37a9-42e2-8a8a-3720c9c241df",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684948278,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "545c7b93-8bd1-4dc9-b270-a1ff9c1e8171",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 10: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684949126,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "7f6eb031-c573-46c1-9cf0-6eb5a682cc68",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684949287,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "b87bbf1c-e1e3-42e7-909a-21165a975e1e",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 11: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684950133,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "a2e819b4-a562-49f2-872b-6709aae8ac63",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684950292,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "d93bdae9-2123-4fc5-82a9-dd8d32db5f4f",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 12: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684951138,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "dc688102-c6f0-4ec3-8e14-6d00b64491d2",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684951297,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "c68327bf-53e4-4bed-a066-59da20485791",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 13: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684952132,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "16eb1c97-0737-4072-ad2a-a8cfb6804f27",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684952293,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "bf5ca40f-895f-472f-ab79-ace97f66af77",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 14: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684953144,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "e8bd1c62-bd48-4191-87ac-508c32089ec4",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684953322,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "992f8db3-0435-48d8-aa1c-44bc8e2502e5",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 15: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684954156,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "efb920fe-f771-431c-bd10-cd1dc0326ee1",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684954330,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "6ce6a2f7-2e9b-4ca2-ba5c-a352e8e540f8",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 16: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684955169,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "c4692dff-1e5d-4cc8-b7d2-1efd012eb85d",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684955332,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "dbc0308f-56aa-4ce5-8b0e-131dc6ca6a4d",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 17: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684956216,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "aad3bfd8-1730-49f8-964f-628a2e8a74c1",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684956403,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "2bf2ef6b-65b3-4899-81ff-bcf6e2e57b82",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 18: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684957263,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "b2643b9a-4a31-4caa-91a2-41bb163751b6",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684957436,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "ea742cf7-8a9c-48f3-8ffe-9a352c78c1dc",
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "Turn 19: A reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\nA reproducible long transcript paragraph with code and ordinary prose.\n"
+            }
+          ],
+          "createdAt": 1791684958406,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        },
+        {
+          "id": "1a43e053-ac98-473c-a5d9-700ca8be1e03",
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "id": "t0",
+              "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-1",
+              "call": {
+                "kind": "exec",
+                "command": "cargo test --workspace"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "tool",
+              "id": "mock-tool-2",
+              "call": {
+                "kind": "exec",
+                "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+              },
+              "isError": false,
+              "resolved": true
+            },
+            {
+              "kind": "text",
+              "id": "t3",
+              "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+            }
+          ],
+          "createdAt": 1791684958620,
+          "deviceId": "774818b3-0392-4a2e-922e-7bbbbf6fe9fe",
+          "status": "complete"
+        }
+      ]
+    }
+  }
+]

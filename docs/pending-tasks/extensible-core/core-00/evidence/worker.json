@@ -1,0 +1,1258 @@
+{
+  "passed": true,
+  "node": "v24.14.1",
+  "frameLimit": 65536,
+  "deadline": 1000,
+  "receipts": [
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "61d0652d-72b8-4187-bba2-c1b55b29c4e4",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "61d0652d-72b8-4187-bba2-c1b55b29c4e4",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.716333,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "accepted"
+    },
+    {
+      "fault": "version",
+      "observed": "protocol-version",
+      "raw": {
+        "id": "0521c017-13ce-4552-99b0-35dd09b61bfd",
+        "protocol": {
+          "major": 2,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "0521c017-13ce-4552-99b0-35dd09b61bfd",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 28.533625,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "protocol-version"
+    },
+    {
+      "fault": "capability",
+      "observed": "capability",
+      "raw": {
+        "id": "22e25a50-434e-4208-8bea-1a2ea4b8d52d",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "22e25a50-434e-4208-8bea-1a2ea4b8d52d",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 30.376165999999998,
+      "bytes": 112,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "capability"
+    },
+    {
+      "fault": "json",
+      "observed": "invalid-json",
+      "request": {
+        "id": "3ec114ed-ae2a-4998-947f-795d166d4e31",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.790292000000008,
+      "bytes": 10,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "invalid-json"
+    },
+    {
+      "fault": "oversize",
+      "observed": "frame-too-large",
+      "request": {
+        "id": "34742786-5321-4081-a1ad-d0838b87c289",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 28.945209000000006,
+      "bytes": 65537,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "frame-too-large"
+    },
+    {
+      "fault": "correlation",
+      "observed": "correlation",
+      "raw": {
+        "id": "different-request",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "237e7d7e-13c9-4a54-b7c2-a472b6ff4de9",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.575999999999993,
+      "bytes": 111,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "correlation"
+    },
+    {
+      "fault": "eof",
+      "observed": "eof",
+      "request": {
+        "id": "c861ab6c-3f6b-4ef6-969c-f0fdf5607d6c",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 28.990959000000004,
+      "bytes": 0,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": 0,
+      "signal": null,
+      "reaped": true,
+      "expected": "eof"
+    },
+    {
+      "fault": "timeout",
+      "observed": "timeout",
+      "request": {
+        "id": "9fc5afa1-a102-41f6-803a-6a800e092a97",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 1005.36125,
+      "bytes": 0,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "timeout"
+    },
+    {
+      "fault": "stderr",
+      "observed": "accepted",
+      "raw": {
+        "id": "49a02a75-d934-4f23-b6cd-9c60e9dee137",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "49a02a75-d934-4f23-b6cd-9c60e9dee137",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 46.67491600000017,
+      "bytes": 130,
+      "stderrBytes": 524288,
+      "storedStderr": 65536,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "expected": "accepted"
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "ddf9252b-8f91-4826-a49c-6927aef67a80",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "ddf9252b-8f91-4826-a49c-6927aef67a80",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 34.85683300000005,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "4757ff74-7261-4165-9a15-42a3b0c6f76c",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "4757ff74-7261-4165-9a15-42a3b0c6f76c",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.607999999999947,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "fd58e06d-22c5-490e-aefd-989464bff400",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "fd58e06d-22c5-490e-aefd-989464bff400",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 31.27533399999993,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "8ea5f621-10b0-4ddb-9a5b-b8b32cef7076",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "8ea5f621-10b0-4ddb-9a5b-b8b32cef7076",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.852541999999858,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "e8703943-4c3d-4302-a11e-546f8b438bda",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "e8703943-4c3d-4302-a11e-546f8b438bda",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.604624999999942,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "6652930e-4a22-474a-9527-d024c00f6138",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "6652930e-4a22-474a-9527-d024c00f6138",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.001624999999876,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "e9788cb3-731c-4945-a509-553844191e47",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "e9788cb3-731c-4945-a509-553844191e47",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.323249999999916,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "accd68ce-68b4-459b-b6a4-a182b11f5b33",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "accd68ce-68b4-459b-b6a4-a182b11f5b33",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.658374999999978,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "27373b75-892a-4d03-960c-d71bc242a93d",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "27373b75-892a-4d03-960c-d71bc242a93d",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.34183299999995,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "5ac1961f-8cd6-4584-8629-046767f8cc19",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "5ac1961f-8cd6-4584-8629-046767f8cc19",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.231249999999818,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "3f741e41-8315-4363-99eb-e012f4589a3e",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "3f741e41-8315-4363-99eb-e012f4589a3e",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.987542000000076,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "764c13a7-779d-4b54-b416-618117a0e78d",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "764c13a7-779d-4b54-b416-618117a0e78d",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.369042000000036,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "a0ef39ce-db46-4e24-8c8a-222755166829",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "a0ef39ce-db46-4e24-8c8a-222755166829",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.324208,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "feaf4363-7cf2-4d28-97ac-8b4042959060",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "feaf4363-7cf2-4d28-97ac-8b4042959060",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 31.731583,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "f7b9892d-e404-47a7-8cc5-78b6b668a6c7",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "f7b9892d-e404-47a7-8cc5-78b6b668a6c7",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.23524999999995,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "952947f2-1cfc-49d8-a496-9a9a7a9b34c6",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "952947f2-1cfc-49d8-a496-9a9a7a9b34c6",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.119500000000016,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "aa82c8d5-fe73-4ef5-8070-dda8ad603304",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "aa82c8d5-fe73-4ef5-8070-dda8ad603304",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.819416000000047,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "e151d0fc-6097-4543-b303-48b2fc5f8ace",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "e151d0fc-6097-4543-b303-48b2fc5f8ace",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.093958000000157,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "dec828e1-3fea-4c70-9cf2-d99872a46420",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "dec828e1-3fea-4c70-9cf2-d99872a46420",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.62216599999988,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "0433e142-f212-4fd9-88c6-d14550a2bdad",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "0433e142-f212-4fd9-88c6-d14550a2bdad",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.29008399999998,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "2c6274fb-27da-4242-b085-c8943c9fb677",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "2c6274fb-27da-4242-b085-c8943c9fb677",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.838292000000138,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "d68660b0-1306-433b-9cf7-8c178a0a3cf7",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "d68660b0-1306-433b-9cf7-8c178a0a3cf7",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.33487500000001,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "8d116480-173f-4056-9ddc-a33d35be38b2",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "8d116480-173f-4056-9ddc-a33d35be38b2",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.60629199999994,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "ae9e838e-b49e-410b-acbb-d0671ca03751",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "ae9e838e-b49e-410b-acbb-d0671ca03751",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.05841700000019,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "0e74a3e1-815d-4f26-ab26-5c8ea4253af4",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "0e74a3e1-815d-4f26-ab26-5c8ea4253af4",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 28.13154200000008,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "c5502baa-b1a4-4124-838c-a4b43271ab98",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "c5502baa-b1a4-4124-838c-a4b43271ab98",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 29.31208300000003,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "f682b826-03fe-4f1f-9cfb-c7b956517043",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "f682b826-03fe-4f1f-9cfb-c7b956517043",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 28.12787500000013,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "8eb9cc35-eed0-4895-809d-c17fc3990225",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "8eb9cc35-eed0-4895-809d-c17fc3990225",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.063000000000102,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "99c198bd-e0b9-4065-84d6-9e216249f27a",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "99c198bd-e0b9-4065-84d6-9e216249f27a",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 27.516125000000102,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    },
+    {
+      "fault": "ok",
+      "observed": "accepted",
+      "raw": {
+        "id": "f9294817-e4cc-421c-b643-1418eff1f2bb",
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "capabilities": [
+          "provider.catalog"
+        ],
+        "kind": "hello"
+      },
+      "request": {
+        "id": "f9294817-e4cc-421c-b643-1418eff1f2bb",
+        "kind": "hello",
+        "protocol": {
+          "major": 1,
+          "minor": 1
+        },
+        "required": [
+          "provider.catalog"
+        ]
+      },
+      "elapsed_ms": 26.76650000000018,
+      "bytes": 130,
+      "stderrBytes": 0,
+      "storedStderr": 0,
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "reaped": true
+    }
+  ]
+}

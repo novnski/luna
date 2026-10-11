@@ -1,0 +1,19 @@
+{
+  "captured_at": "2026-10-11T02:03:04.199668+00:00",
+  "architecture": "aarch64",
+  "profile": "dev; workspace dependency opt-level=2; no cache purge",
+  "limitations": [
+    "One M3 Max, AC power. No low-end or non-macOS hardware measured.",
+    "Foreground/display state must be recorded separately per native workload."
+  ],
+  "facts": {
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+    "cpu": "Apple M3 Max",
+    "memory_bytes": "38654705664",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "node": "v24.14.1",
+    "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=37159011)\t100%; charged; 0:00 remaining present: true",
+    "source": "ffdf7b835cdb87a8ff02a10c48f2e308aa329c36",
+    "runtime_diff": "apps/ios/README.md | 6 ++++++\n 1 file changed, 6 insertions(+)"
+  }
+}

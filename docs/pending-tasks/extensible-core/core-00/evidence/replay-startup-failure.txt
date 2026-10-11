@@ -1,0 +1,4 @@
+
+thread 'main' (43284448) panicked at crates/ui/src/app_menus.rs:447:13:
+GPUI application delegate must exist
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,0 +1,599 @@
+{
+  "active_host_calls": 0,
+  "boundary": "standalone real Wasmtime, no WASI imports",
+  "cold": [
+    {
+      "compile_ms": 25.958042,
+      "guest": "ok",
+      "instantiate_ms": 0.03216599999999999
+    },
+    {
+      "compile_ms": 2.210292,
+      "guest": "loop",
+      "instantiate_ms": 0.006333
+    },
+    {
+      "compile_ms": 4.223458,
+      "guest": "host_wait",
+      "instantiate_ms": 0.027041000000000003
+    },
+    {
+      "compile_ms": 14.170125,
+      "guest": "memory",
+      "instantiate_ms": 0.085084
+    }
+  ],
+  "deadline_ms": 50,
+  "denied_import": "unknown import: `wasi_snapshot_preview1::fd_write` has not been defined",
+  "fuel_yield_interval": 10000,
+  "host_calls_entered": 20,
+  "late_effects": 0,
+  "linear_memory_limit_bytes": 16777216,
+  "maximum_return_ms": 150,
+  "passed": true,
+  "recovered_result": 42,
+  "runtime": "wasmtime 49.0.2",
+  "samples": [
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.043958000000000004,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 0
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.007125,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 1
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.006375,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 2
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.006584,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 3
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005959,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 4
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005875,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 5
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.006667,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 6
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005208,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 7
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.00575,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 8
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005083000000000001,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 9
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005125,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 10
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005625000000000001,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 11
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005417,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 12
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.0054589999999999994,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 13
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.0055,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 14
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005542,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 15
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.004875,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 16
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.0053750000000000004,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 17
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.005,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 18
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.004834,
+      "guest": "ok",
+      "observed": "42",
+      "repetition": 19
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 51.0105,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 0
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.907624999999996,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 1
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.880250000000004,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 2
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.960959,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 3
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.972083,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 4
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.975333,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 5
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.976417000000005,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 6
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.9835,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 7
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.993666,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 8
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.951542,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 9
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.978375,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 10
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.978375,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 11
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.987875,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 12
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.977250000000005,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 13
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.998000000000005,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 14
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.988958000000004,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 15
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.915124999999996,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 16
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.917667,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 17
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.95591700000001,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 18
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 50.921,
+      "guest": "loop",
+      "observed": "deadline cancelled",
+      "repetition": 19
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 51.975291999999996,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 0
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 58.702583000000004,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 1
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 56.222583,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 2
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 52.097917,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 3
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 60.165292,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 4
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 59.930125000000004,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 5
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 53.745958,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 6
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 57.97625,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 7
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 58.194917,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 8
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 59.14175,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 9
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 60.895708,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 10
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 57.269583,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 11
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 52.862208,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 12
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 51.554791,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 13
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 60.226875,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 14
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 58.069165999999996,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 15
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 61.270084000000004,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 16
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 57.390333,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 17
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 53.362,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 18
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 61.822833,
+      "guest": "host_wait",
+      "observed": "deadline cancelled",
+      "repetition": 19
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.05625,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 0
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.02125,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 1
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.018209000000000003,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 2
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.017249999999999998,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 3
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.016667,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 4
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.016041,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 5
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015958,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 6
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015375000000000002,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 7
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015291999999999998,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 8
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015708,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 9
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015375000000000002,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 10
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.014957999999999999,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 11
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015042,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 12
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015167,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 13
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015333000000000001,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 14
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.014917,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 15
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015125,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 16
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.014417,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 17
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.015000000000000001,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 18
+    },
+    {
+      "active_host_calls": 0,
+      "elapsed_ms": 0.0145,
+      "guest": "memory",
+      "observed": "growth denied",
+      "repetition": 19
+    }
+  ],
+  "total_ms": 3350.732
+}

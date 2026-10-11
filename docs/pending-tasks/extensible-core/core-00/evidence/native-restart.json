@@ -1,0 +1,231 @@
+{
+  "passed": true,
+  "boundary": "GPUI native CoreText/Metal offscreen; prototype composition, not production Shell",
+  "durable_sha256": "a336db10a75a7476b17706206fafad9c5f80f93ce4ffbbde0ec21b43ee89ab0b",
+  "declaration_sha256": "080bcb8a0cd47b2eafb9e579fcfa2afbaac572729563235ac758719dc675d391",
+  "selection": "task-before-plugin",
+  "draft": "Unsent host draft",
+  "payload_sent_to_view": false,
+  "images": [
+    "phase-0.png",
+    "phase-1.png",
+    "phase-2.png"
+  ],
+  "samples": [
+    {
+      "index": 0,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.22891599999999998
+    },
+    {
+      "index": 1,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.437583
+    },
+    {
+      "index": 2,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.092375
+    },
+    {
+      "index": 3,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.115042
+    },
+    {
+      "index": 4,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.058582999999999996
+    },
+    {
+      "index": 5,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.07200000000000001
+    },
+    {
+      "index": 6,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.20975
+    },
+    {
+      "index": 7,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.201792
+    },
+    {
+      "index": 8,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.170542
+    },
+    {
+      "index": 9,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.175958
+    },
+    {
+      "index": 10,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.061291000000000005
+    },
+    {
+      "index": 11,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.064708
+    },
+    {
+      "index": 12,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.150583
+    },
+    {
+      "index": 13,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.06575
+    },
+    {
+      "index": 14,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.07425
+    },
+    {
+      "index": 15,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.155708
+    },
+    {
+      "index": 16,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.054542
+    },
+    {
+      "index": 17,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.18654199999999999
+    },
+    {
+      "index": 18,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.051834
+    },
+    {
+      "index": 19,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.240125
+    },
+    {
+      "index": 20,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.076
+    },
+    {
+      "index": 21,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.10183299999999999
+    },
+    {
+      "index": 22,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.059084
+    },
+    {
+      "index": 23,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.082292
+    },
+    {
+      "index": 24,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.054625
+    },
+    {
+      "index": 25,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.093
+    },
+    {
+      "index": 26,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.059125000000000004
+    },
+    {
+      "index": 27,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.07975
+    },
+    {
+      "index": 28,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.053375000000000006
+    },
+    {
+      "index": 29,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.066
+    },
+    {
+      "index": 30,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.048917
+    },
+    {
+      "index": 31,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.064584
+    },
+    {
+      "index": 32,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.049333999999999996
+    },
+    {
+      "index": 33,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.067583
+    },
+    {
+      "index": 34,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.048
+    },
+    {
+      "index": 35,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.065125
+    },
+    {
+      "index": 36,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.048625
+    },
+    {
+      "index": 37,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.064667
+    },
+    {
+      "index": 38,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.050542
+    },
+    {
+      "index": 39,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.06499999999999999
+    },
+    {
+      "index": 40,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.048917
+    },
+    {
+      "index": 41,
+      "enabled": true,
+      "update_to_native_draw_ms": 0.171959
+    },
+    {
+      "index": 42,
+      "enabled": false,
+      "update_to_native_draw_ms": 0.04725
+    }
+  ]
+}

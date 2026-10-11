@@ -1,0 +1,79 @@
+[
+  {
+    "name": "runtime-build-final",
+    "command": [
+      "scripts/cargo.sh",
+      "build",
+      "--locked",
+      "--manifest-path",
+      "tools/core-baseline/Cargo.toml"
+    ],
+    "exit_code": 0,
+    "seconds": 2.4870133750373498
+  },
+  {
+    "name": "runtime-clippy",
+    "command": [
+      "scripts/cargo.sh",
+      "clippy",
+      "--locked",
+      "--manifest-path",
+      "tools/core-baseline/Cargo.toml",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 12.775069792056456
+  },
+  {
+    "name": "native-build-final",
+    "command": [
+      "scripts/cargo.sh",
+      "build",
+      "--locked",
+      "-p",
+      "luna-ui",
+      "--features",
+      "resource-profile",
+      "--example",
+      "core-contribution-probe",
+      "--example",
+      "macos-resource-profile"
+    ],
+    "exit_code": 0,
+    "seconds": 3.251945583964698
+  },
+  {
+    "name": "native-clippy",
+    "command": [
+      "scripts/cargo.sh",
+      "clippy",
+      "--locked",
+      "-p",
+      "luna-ui",
+      "--features",
+      "resource-profile",
+      "--example",
+      "core-contribution-probe",
+      "--example",
+      "macos-resource-profile"
+    ],
+    "exit_code": 0,
+    "seconds": 66.05508345901035
+  },
+  {
+    "name": "rpc-keeper",
+    "command": [
+      "scripts/cargo.sh",
+      "test",
+      "--locked",
+      "-p",
+      "luna-rpc",
+      "--test",
+      "subscription_lifecycle"
+    ],
+    "exit_code": 0,
+    "seconds": 27.091271582990885
+  }
+]

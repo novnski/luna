@@ -1,0 +1,4 @@
+
+thread 'main' (43286506) panicked at vendor/zui/crates/gpui/src/app.rs:1916:32:
+no state of type luna_ui::history::HistoryColumnPreferences exists
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
