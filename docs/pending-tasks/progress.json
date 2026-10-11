@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791742786.83114,
+  "created_at": 1791745606.834257,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 10,
+      "done": 11,
       "in_progress": 0,
       "paused": 0,
-      "ready": 70,
+      "ready": 69,
       "review": 0
     },
     "groups": [
@@ -215,14 +215,14 @@
         },
         "title": "One direct paired-Mac product",
         "tasks": 11,
-        "done": 0,
-        "remaining": 11,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 10,
+        "accepted_units": 3,
         "total_units": 40,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 7.5,
         "milestone_status": {
           "M0": {
-            "done": false,
+            "done": true,
             "members": [
               "RM-00"
             ]
@@ -373,15 +373,14 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 5,
-      "remaining": 71,
-      "accepted_units": 20,
+      "done": 6,
+      "remaining": 70,
+      "accepted_units": 23,
       "total_units": 296,
-      "acceptance_percent": 6.8
+      "acceptance_percent": 7.8
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "RM-00",
       "CORE-02",
       "SW-12",
       "IC-0",
@@ -1326,16 +1325,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "RM-00",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958842
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "RM-01",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1977,6 +1966,94 @@
       "note": "CORE-01 delivered at ccfabbe7: one reviewed 251-row operation catalog drives remote policy, forwarding, streams, deadlines and readiness; engine fails closed on uncatalogued methods; schemars-generated contract/v1 with CI drift test; independent Python reader validates real wire captures.",
       "status": "done",
       "updated_at": 1791742786.739008
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791745606.4310799,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/contract.md",
+              "sha256": "f93812d7798deee6b51f95590b3d849fc5918ccad6fc7c3cfbb67844e5a9e6ab"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/failures.md",
+              "sha256": "6ca650482afd904a1f17226a4b07829d9d663842555b71b45da23d05143c5f93"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json",
+              "sha256": "881f16b06828e805670da14e95172c2f868267896ca91136cd262cc56ed68722"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/audit-rebase.json",
+              "sha256": "b1a72ff5842670bfd5580154a466c19ea1e5b2d7e4ef446d43cf98cadf2573a1"
+            }
+          ],
+          "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first."
+        },
+        "handoff": {
+          "at": 1791745606.625912,
+          "evidence": [
+            {
+              "ref": "commit:afd8455b368b65fa9da659952f4f340361f22898"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/commands.json",
+              "sha256": "5f29837906b10477955c451f6816abc29f5399bf60dbf1900368c5cdba2450c7"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/sha256.json",
+              "sha256": "abbde4055b8d4470419885a1b1c969fb036e8748599b9767e85af35c1e3731f9"
+            }
+          ],
+          "note": "Delivered on origin/main at afd8455b (remote readback matches). Commands/exit codes in commands.json, hashes in sha256.json, limitations in README (Personal Team signing, no simulator target, M0-only scope). Rust suites pass (proto 35, rpc 13, device_room 14, remote_auth 5, device_routing 5); LUNA Dev refreshed 188 s, PID 27919, IPC 59777, codesign strict ok. RM-01 builds the engine-owned gateway on luna-remote; IOS-00 grows luna-mobile."
+        },
+        "physical": {
+          "at": 1791745606.528833,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/report.json",
+              "sha256": "4d10ed60e9599faa1f25b67a1421dbe0206cd516826c3a7798de24edae39252d"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/phone-result.json",
+              "sha256": "92ab5c0881503a45595df4e6cad74236948f1beb5ab473d79eb4fa6c859368e1"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/host-with-luna-dev/report.json",
+              "sha256": "84b0264ebb0058f2ed960e486c55d17c5a3187ba5e4c3775f8b733de80ada56a"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+              "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+            }
+          ],
+          "note": "Physical iPhone 16 Pro (iOS 27.0, 192.168.18.3, Wi-Fi) read the pinned descriptor from 192.168.18.2 over TLS 1.3 by IP and mDNS name; wrong pin and swapped host trust-rejected with 1 handshake / 0 requests on their hosts; same key other target refused (targetMismatch); ticket/endpoint/descriptor failures refused; URLSession transport fed the Rust core via UniFFI incl. late completion after cancel and after release. Final run 51/51 with no production test hooks; host checks 26/26 with LUNA Dev running."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:afd8455b368b65fa9da659952f4f340361f22898"
+        },
+        {
+          "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+          "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+        }
+      ],
+      "id": "RM-00",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791742920.734682,
+        "expires_at": 1791748921.365484,
+        "heartbeat_at": 1791745321.365484,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "RM-00 delivered at afd8455b: rebased contract and failure cases, luna-remote pinned descriptor host, luna-mobile UniFFI core and RemoteProbe app; physical iPhone LAN run 51/51 including wrong-identity failures and native-callback lifetime cases.",
+      "status": "done",
+      "updated_at": 1791745606.743625
     }
   ],
   "events": [
@@ -6018,6 +6095,412 @@
           "claimed_at": 1791740835.676694,
           "expires_at": 1791756508.1625988,
           "heartbeat_at": 1791742108.1625988,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 191,
+      "task": "RM-00",
+      "at": 1791742920.734816,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791746520.734682,
+          "heartbeat_at": 1791742920.734682,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 192,
+      "task": "RM-00",
+      "at": 1791743276.469023,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791746876.468929,
+          "heartbeat_at": 1791743276.468929,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 193,
+      "task": "RM-00",
+      "at": 1791744476.955969,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748076.955898,
+          "heartbeat_at": 1791744476.955898,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 194,
+      "task": "RM-00",
+      "at": 1791744758.7210739,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748358.720991,
+          "heartbeat_at": 1791744758.720991,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 195,
+      "task": "RM-00",
+      "at": 1791745321.365578,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748921.365484,
+          "heartbeat_at": 1791745321.365484,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 196,
+      "task": "RM-00",
+      "at": 1791745606.4314518,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791745606.4310799,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/contract.md",
+                "sha256": "f93812d7798deee6b51f95590b3d849fc5918ccad6fc7c3cfbb67844e5a9e6ab"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/failures.md",
+                "sha256": "6ca650482afd904a1f17226a4b07829d9d663842555b71b45da23d05143c5f93"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json",
+                "sha256": "881f16b06828e805670da14e95172c2f868267896ca91136cd262cc56ed68722"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/audit-rebase.json",
+                "sha256": "b1a72ff5842670bfd5580154a466c19ea1e5b2d7e4ef446d43cf98cadf2573a1"
+              }
+            ],
+            "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748921.365484,
+          "heartbeat_at": 1791745321.365484,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 197,
+      "task": "RM-00",
+      "at": 1791745606.529134,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791745606.4310799,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/contract.md",
+                "sha256": "f93812d7798deee6b51f95590b3d849fc5918ccad6fc7c3cfbb67844e5a9e6ab"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/failures.md",
+                "sha256": "6ca650482afd904a1f17226a4b07829d9d663842555b71b45da23d05143c5f93"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json",
+                "sha256": "881f16b06828e805670da14e95172c2f868267896ca91136cd262cc56ed68722"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/audit-rebase.json",
+                "sha256": "b1a72ff5842670bfd5580154a466c19ea1e5b2d7e4ef446d43cf98cadf2573a1"
+              }
+            ],
+            "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first."
+          },
+          "physical": {
+            "at": 1791745606.528833,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/report.json",
+                "sha256": "4d10ed60e9599faa1f25b67a1421dbe0206cd516826c3a7798de24edae39252d"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/phone-result.json",
+                "sha256": "92ab5c0881503a45595df4e6cad74236948f1beb5ab473d79eb4fa6c859368e1"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/host-with-luna-dev/report.json",
+                "sha256": "84b0264ebb0058f2ed960e486c55d17c5a3187ba5e4c3775f8b733de80ada56a"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+                "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+              }
+            ],
+            "note": "Physical iPhone 16 Pro (iOS 27.0, 192.168.18.3, Wi-Fi) read the pinned descriptor from 192.168.18.2 over TLS 1.3 by IP and mDNS name; wrong pin and swapped host trust-rejected with 1 handshake / 0 requests on their hosts; same key other target refused (targetMismatch); ticket/endpoint/descriptor failures refused; URLSession transport fed the Rust core via UniFFI incl. late completion after cancel and after release. Final run 51/51 with no production test hooks; host checks 26/26 with LUNA Dev running."
+          }
+        },
+        "criterion": "physical",
+        "evidence": null,
+        "note": "Physical iPhone 16 Pro (iOS 27.0, 192.168.18.3, Wi-Fi) read the pinned descriptor from 192.168.18.2 over TLS 1.3 by IP and mDNS name; wrong pin and swapped host trust-rejected with 1 handshake / 0 requests on their hosts; same key other target refused (targetMismatch); ticket/endpoint/descriptor failures refused; URLSession transport fed the Rust core via UniFFI incl. late completion after cancel and after release. Final run 51/51 with no production test hooks; host checks 26/26 with LUNA Dev running.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748921.365484,
+          "heartbeat_at": 1791745321.365484,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 198,
+      "task": "RM-00",
+      "at": 1791745606.637603,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791745606.4310799,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/contract.md",
+                "sha256": "f93812d7798deee6b51f95590b3d849fc5918ccad6fc7c3cfbb67844e5a9e6ab"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/failures.md",
+                "sha256": "6ca650482afd904a1f17226a4b07829d9d663842555b71b45da23d05143c5f93"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json",
+                "sha256": "881f16b06828e805670da14e95172c2f868267896ca91136cd262cc56ed68722"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/audit-rebase.json",
+                "sha256": "b1a72ff5842670bfd5580154a466c19ea1e5b2d7e4ef446d43cf98cadf2573a1"
+              }
+            ],
+            "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first."
+          },
+          "handoff": {
+            "at": 1791745606.625912,
+            "evidence": [
+              {
+                "ref": "commit:afd8455b368b65fa9da659952f4f340361f22898"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/commands.json",
+                "sha256": "5f29837906b10477955c451f6816abc29f5399bf60dbf1900368c5cdba2450c7"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/sha256.json",
+                "sha256": "abbde4055b8d4470419885a1b1c969fb036e8748599b9767e85af35c1e3731f9"
+              }
+            ],
+            "note": "Delivered on origin/main at afd8455b (remote readback matches). Commands/exit codes in commands.json, hashes in sha256.json, limitations in README (Personal Team signing, no simulator target, M0-only scope). Rust suites pass (proto 35, rpc 13, device_room 14, remote_auth 5, device_routing 5); LUNA Dev refreshed 188 s, PID 27919, IPC 59777, codesign strict ok. RM-01 builds the engine-owned gateway on luna-remote; IOS-00 grows luna-mobile."
+          },
+          "physical": {
+            "at": 1791745606.528833,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/report.json",
+                "sha256": "4d10ed60e9599faa1f25b67a1421dbe0206cd516826c3a7798de24edae39252d"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/phone-result.json",
+                "sha256": "92ab5c0881503a45595df4e6cad74236948f1beb5ab473d79eb4fa6c859368e1"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/host-with-luna-dev/report.json",
+                "sha256": "84b0264ebb0058f2ed960e486c55d17c5a3187ba5e4c3775f8b733de80ada56a"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+                "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+              }
+            ],
+            "note": "Physical iPhone 16 Pro (iOS 27.0, 192.168.18.3, Wi-Fi) read the pinned descriptor from 192.168.18.2 over TLS 1.3 by IP and mDNS name; wrong pin and swapped host trust-rejected with 1 handshake / 0 requests on their hosts; same key other target refused (targetMismatch); ticket/endpoint/descriptor failures refused; URLSession transport fed the Rust core via UniFFI incl. late completion after cancel and after release. Final run 51/51 with no production test hooks; host checks 26/26 with LUNA Dev running."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Delivered on origin/main at afd8455b (remote readback matches). Commands/exit codes in commands.json, hashes in sha256.json, limitations in README (Personal Team signing, no simulator target, M0-only scope). Rust suites pass (proto 35, rpc 13, device_room 14, remote_auth 5, device_routing 5); LUNA Dev refreshed 188 s, PID 27919, IPC 59777, codesign strict ok. RM-01 builds the engine-owned gateway on luna-remote; IOS-00 grows luna-mobile.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expired": false,
+          "expires_at": 1791748921.365484,
+          "heartbeat_at": 1791745321.365484,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 199,
+      "task": "RM-00",
+      "at": 1791745606.743829,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791745606.4310799,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/contract.md",
+                "sha256": "f93812d7798deee6b51f95590b3d849fc5918ccad6fc7c3cfbb67844e5a9e6ab"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/failures.md",
+                "sha256": "6ca650482afd904a1f17226a4b07829d9d663842555b71b45da23d05143c5f93"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/t3-verify.json",
+                "sha256": "881f16b06828e805670da14e95172c2f868267896ca91136cd262cc56ed68722"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/audit-rebase.json",
+                "sha256": "b1a72ff5842670bfd5580154a466c19ea1e5b2d7e4ef446d43cf98cadf2573a1"
+              }
+            ],
+            "note": "Both remote plans and lane audits rebased: audit LUNA SHA 4f3a6b0c was rewritten; 7b269800 holds all 27 cited files byte-for-byte, T3 a8bdfdb5 192 files verified, manifest re-pinned and verifier passes. Direct-only, local-profile, Rust host + Swift-owned transport feeding an owned UniFFI core preserved. Endpoint/scope/operation/receipt/failure map from the CORE-01 catalog, identity model and version policy in contract.md; failures written first."
+          },
+          "handoff": {
+            "at": 1791745606.625912,
+            "evidence": [
+              {
+                "ref": "commit:afd8455b368b65fa9da659952f4f340361f22898"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/commands.json",
+                "sha256": "5f29837906b10477955c451f6816abc29f5399bf60dbf1900368c5cdba2450c7"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/sha256.json",
+                "sha256": "abbde4055b8d4470419885a1b1c969fb036e8748599b9767e85af35c1e3731f9"
+              }
+            ],
+            "note": "Delivered on origin/main at afd8455b (remote readback matches). Commands/exit codes in commands.json, hashes in sha256.json, limitations in README (Personal Team signing, no simulator target, M0-only scope). Rust suites pass (proto 35, rpc 13, device_room 14, remote_auth 5, device_routing 5); LUNA Dev refreshed 188 s, PID 27919, IPC 59777, codesign strict ok. RM-01 builds the engine-owned gateway on luna-remote; IOS-00 grows luna-mobile."
+          },
+          "physical": {
+            "at": 1791745606.528833,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/report.json",
+                "sha256": "4d10ed60e9599faa1f25b67a1421dbe0206cd516826c3a7798de24edae39252d"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/physical/phone-result.json",
+                "sha256": "92ab5c0881503a45595df4e6cad74236948f1beb5ab473d79eb4fa6c859368e1"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/evidence/host-with-luna-dev/report.json",
+                "sha256": "84b0264ebb0058f2ed960e486c55d17c5a3187ba5e4c3775f8b733de80ada56a"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+                "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+              }
+            ],
+            "note": "Physical iPhone 16 Pro (iOS 27.0, 192.168.18.3, Wi-Fi) read the pinned descriptor from 192.168.18.2 over TLS 1.3 by IP and mDNS name; wrong pin and swapped host trust-rejected with 1 handshake / 0 requests on their hosts; same key other target refused (targetMismatch); ticket/endpoint/descriptor failures refused; URLSession transport fed the Rust core via UniFFI incl. late completion after cancel and after release. Final run 51/51 with no production test hooks; host checks 26/26 with LUNA Dev running."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:afd8455b368b65fa9da659952f4f340361f22898"
+          },
+          {
+            "ref": "docs/pending-tasks/control-this-mac/rm-00/README.md",
+            "sha256": "d57748fc76fbaaeea19385f6c223cc76234f0b922b96f7fed60463a05b13fb9d"
+          }
+        ],
+        "note": "RM-00 delivered at afd8455b: rebased contract and failure cases, luna-remote pinned descriptor host, luna-mobile UniFFI core and RemoteProbe app; physical iPhone LAN run 51/51 including wrong-identity failures and native-callback lifetime cases.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791742920.734682,
+          "expires_at": 1791748921.365484,
+          "heartbeat_at": 1791745321.365484,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
