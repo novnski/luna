@@ -46,10 +46,13 @@ Source before the change: `5285702d` (11 October 2026). Live status belongs to
 | --- | --- | --- | --- |
 | `backup_restore` ×5 (schema v19 pin) | Local; was unrouted | Stale assertion after `70707aee` | Repaired here; now routed |
 | `history-operations-fixture` ×1 | Local; was unrouted | Stale fixture setup after `dd75f9a4` | Repaired here; now routed |
-| `harness claude_goals::resumed_session_seeds_claudes_restored_goal` | GitHub Linux (`afd8455b`) | Passes 5/5 isolated on macOS; Linux-specific, not reproduced | Open; harness Claude goals owner needs a Linux reproduction. Still blocking in CI |
-| `linux-browser`: "blur sample did not cover the checkerboard" | GitHub Linux | Native-pixel evidence; the runner reports DRI3/EGL errors | Open; browser fixture owner |
-| `macos-frame-recovery`: "repeated tab/toolbar tooltip disrupted the live page" | GitHub macOS | Native UI fixture | Open; browser fixture owner |
+| `harness claude_goals::resumed_session_seeds_claudes_restored_goal` | GitHub Linux (`afd8455b`) | A real race: the resumed run's verdict could land before the seed read, so the inherited goal was never reported (diagnosed with `aad809ba`) | **Fixed** in `f1dcc78a` (seed as of run start); green on Linux CI |
+| `linux-browser`: "blur sample did not cover the checkerboard" | GitHub Linux | Stale menu coordinates after the right-pane header redesign | **Fixed** in `9b6edce2`; green on Linux CI |
+| `macos-frame-recovery`: "repeated tab/toolbar tooltip disrupted the live page" | GitHub macOS | Stale hover coordinates after the same redesign; the later preview/HMR step failed because the fixture booted the UI against an empty data root, and the job also exceeded its 45-minute limit | **Fixed** in `9b6edce2` (browser step green), `bd2021a2` (data root), `88d98323` (timeout) |
 | `LunaUITests.MobilePolishTests.testSendClearsComposerAndKeepsTheNextDraft` | Local simulator, full and isolated | Deterministic: demo mode refused to queue a send made during a reply, so the draft stayed | **Fixed** after CORE-02 (`AppModel.hostSupportsMessageQueue`); LunaTests 113/113, LunaUITests 14/14 |
+| `codex_subagents::parent_turn_end_does_not_claim_an_uncompleted_child_stopped` | GitHub Linux, first time its step ran | Asserted the child transcript before it published | **Fixed** in `f7b76be8` |
+| `child-activity-fixture` compile, `task-organization-fixture` opt-in test | GitHub Linux, first time routed | `libc` only a macOS dependency; hard-coded `/private/tmp` | **Fixed** in `1219c58c`, `a19deb8c` |
+| `LunaTests.TranscriptLayoutTests.testToolToggleReversalWhileStreamingKeepsTailAttached` | GitHub macOS, once (passed before and after) | Timing-sensitive: 16 ms sleeps stand in for frames | Open; flagged as a separate task |
 
 Nothing is quarantined: each open failure keeps failing loudly where it runs.
 
@@ -107,12 +110,13 @@ rows are exactly the deliberate retirements above.
 
 ## Limitations and hand-off
 
-- **CI verification of the new routes** happens on the delivered commit. Its
-  run id and step results are recorded in the queue's hand-off check.
-- **Open baseline failures are not fixed here.** They keep failing visibly
-  where they run (see the baseline ledger): the Linux `claude_goals` case, the
-  two native browser fixtures and the iOS composer clearing. Each is flagged
-  as a separate task.
+- **CI verification of the new routes**: on run 38178958258 the routed step
+  compiled every fixture example on Linux, passed the feature-gated test and ran
+  21 embedded tests (20 passed; the one Linux portability failure is fixed in
+  `a19deb8c`). Details in [CI routing](evidence/ci-routing.json).
+- **Baseline failures**: follow-up fixes right after CORE-02 resolved every one
+  except a timing-flaky iOS layout test, which is flagged as a separate task
+  (see the baseline ledger).
 - **Coverage gaps made visible.** Fail-closed expiry, run-change and one-shot
   coverage existed only on the retired archive responder; the live send
   responder never had it. The new owner should add it at the send path, from

@@ -1,0 +1,31 @@
+{
+ "runId": 38178958258,
+ "commit": "88d98323",
+ "job": "ui-tests (ubuntu-24.04)",
+ "step": "UI fixtures compile and run their embedded tests (CORE-02)",
+ "compile": "cargo check --release --locked -p luna-ui --features appshots-fixture --examples: ok (2m53s)",
+ "featuredLibTest": "fixture_local_handle_delegates_approval_to_its_synthetic_core: 1 passed",
+ "embeddedTests": {
+  "activity-attention-fixture": "1 passed",
+  "child-activity-fixture": "1 passed",
+  "drafts-fixture": "10 passed",
+  "history-operations-fixture": "6 passed",
+  "session-history-fixture": "1 passed",
+  "task-organization-fixture": "1 passed, 1 failed (Linux: hard-coded /private/tmp opt-in root; fixed in a19deb8c)"
+ },
+ "earlierRun": {
+  "runId": 38175746334,
+  "commit": "aad809ba",
+  "finding": "child-activity-fixture never compiled on Linux (libc only a macOS dependency); fixed in 1219c58c"
+ },
+ "independentSteps": {
+  "runId": 38174188313,
+  "commit": "4ce0c484",
+  "finding": "after the provider step failed, the docs/proto/RPC, CORE-01 contract and RM-00 steps still ran and passed"
+ },
+ "confirmationRun": {
+  "runId": 38181903042,
+  "commit": "a19deb8c",
+  "atRecord": "session-sync-regressions, linux-browser, ios-tests success; ui-tests and macos-frame-recovery still running"
+ }
+}

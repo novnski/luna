@@ -1,9 +1,9 @@
 {
- "docs/pending-tasks/extensible-core/core-02/README.md": "15beeaf701caf3803c952aecfe3286d020616adddc77aa647af615f79197d857",
+ "docs/pending-tasks/extensible-core/core-02/README.md": "b0c9f228227975ddc42ac05d1cc327d98a3dd3ab8ea47a257c47767caf49b536",
  "docs/pending-tasks/extensible-core/core-02/evidence/absent-retained.txt": "5e65fdf20b2e040b51cb8c09d3161c4e5d8c064f9ca154af0a95a39d4be90840",
  "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json": "2cd3c3a6cf58723a03d9f04198c4a55b1a6aa77ee0384c6745ee6c6595678f37",
  "docs/pending-tasks/extensible-core/core-02/evidence/commands.json": "96631fcd8f7cc4aaf688b67f43b51f14d494bedea4ab0e838e5cfca7b53ccbc6",
- "docs/pending-tasks/extensible-core/core-02/evidence/ios-ui-tests.json": "377b739266f9e81085a01788f21dceabb9d47b2a680689f640ee338236c4da75",
+ "docs/pending-tasks/extensible-core/core-02/evidence/ios-ui-tests.json": "6df7dfe5e8dc631381b163f764b9534f8440bec9f80dd9a519544b6038c40e30",
  "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-after.json": "5ed195bb96041f42794ab26b87139b62b6549ba4fd286763be6bcdf745bbd0eb",
  "docs/pending-tasks/extensible-core/core-02/evidence/ledger-rebase-before.json": "1c3a363fbc34154d916fb0393630078475bd0a647bf8e35e31a3049cbbe8cd4a",
  "docs/pending-tasks/extensible-core/core-02/evidence/ledger-trace.txt": "c2f86a26823d95ed336d907b6556d138a2a4dcffcf4b28768aee4c65d751f68a",
@@ -36,5 +36,6 @@
  "target/qa/core-02/mutation-M1.log": "5b29b54136a2b05f0b29f2ed8be726b8a1a8d3cddddc24b73bbe81778e23e2b2",
  "target/qa/core-02/mutation-M2.log": "45e6b8ca0e4d3a8f1305f66334412c26305aec017250582ddf83721e29a7da95",
  "target/qa/core-02/mutation-M3.log": "01fa9531787e38a01eb7bab89d529f1fcb77882cc6cd12cfba0306b51a75f187",
- "target/qa/core-02/mutation-M4.log": "e57adeda4d7ba55d9adfd6268af791f3e0ba8ebae141b79ff8bd84d482377774"
+ "target/qa/core-02/mutation-M4.log": "e57adeda4d7ba55d9adfd6268af791f3e0ba8ebae141b79ff8bd84d482377774",
+ "docs/pending-tasks/extensible-core/core-02/evidence/ci-routing.json": "0c2f60cc2d407f7886a6581a12df2e587b0408c6eb7adbf4e388e0283cee2e71"
 }
