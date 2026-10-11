@@ -1,0 +1,72 @@
+L02-engine-it-a-l R managed_offline_backup_refuses_missing_v13_v14_feature_tables
+   removed by None 
+   added there and still present: []
+L04-harness R effort_maps_special_modes
+   removed by None 
+   added there and still present: []
+L04-harness R v2_recovered_step_failure_is_a_transient_warning
+   removed by None 
+   added there and still present: []
+L04-harness R reasoning_ahead_of_its_message_role_is_held_and_replayed
+   removed by None 
+   added there and still present: []
+L04-harness R main_feed_user_text_is_the_prompt_echo_and_never_renders
+   removed by None 
+   added there and still present: []
+L06-ui-shell R the_card_carries_one_row_per_comment
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell R source_context_chat_finds_local_snapshot
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell R eval_never_escapes_unit_interval_dense_sweep
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell F new_thread_handoff_is_continuous_and_staged
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell R escape_interrupts_only_the_active_live_chat
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell R right_terminal_picker_with_no_history_waits_for_new
+   removed by 7e4bca47 Replace the right sidebar's tabs and Back pages with an icon rail
+   added there and still present: ['default', 'reorder_right_tabs', 'right_place', 'push_right_tab']
+L06-ui-shell R steps_forward_and_back_through_the_list
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L06-ui-shell R context_intents_carry_revision_and_binding_fences
+   removed by e6d58669 Prune ui-shell lane tests to their strongest owners
+   added there and still present: ['a_sent_comment_block_becomes_one_pill_with_one_row_per_comment', 'change_request_for_chat_requires_the_exact_device_checkout_and_branch', 'catalog_curves_pin_endpoints_and_stay_monotonic_inside_the_unit_interval', 'new_thread_background_height_scales_and_clamps_with_the_viewport']
+L07-ui-panels R pinned_modes_ignore_the_os
+   removed by 8a3bf971 Prune duplicate and implementation-coupled UI panel tests
+   added there and still present: ['system_mode_follows_the_os_and_pinned_modes_ignore_it', 'capture_dimensions_use_retina_scale_and_cap_large_windows', 'malformed_response_is_reported_as_decode_error', 'partial_legacy_settings_keep_their_values_and_default_new_keys']
+L07-ui-panels R capture_dimensions_use_retina_scale_for_ordinary_windows
+   removed by 8a3bf971 Prune duplicate and implementation-coupled UI panel tests
+   added there and still present: ['system_mode_follows_the_os_and_pinned_modes_ignore_it', 'capture_dimensions_use_retina_scale_and_cap_large_windows', 'malformed_response_is_reported_as_decode_error', 'partial_legacy_settings_keep_their_values_and_default_new_keys']
+L07-ui-panels R settings_without_appearance_default_to_system
+   removed by 8a3bf971 Prune duplicate and implementation-coupled UI panel tests
+   added there and still present: ['system_mode_follows_the_os_and_pinned_modes_ignore_it', 'capture_dimensions_use_retina_scale_and_cap_large_windows', 'malformed_response_is_reported_as_decode_error', 'partial_legacy_settings_keep_their_values_and_default_new_keys']
+L07-ui-panels F general_page_renders_existing_preferences_and_changes_them
+   removed by 8a3bf971 Prune duplicate and implementation-coupled UI panel tests
+   added there and still present: ['system_mode_follows_the_os_and_pinned_modes_ignore_it', 'capture_dimensions_use_retina_scale_and_cap_large_windows', 'malformed_response_is_reported_as_decode_error', 'partial_legacy_settings_keep_their_values_and_default_new_keys']
+L07-ui-panels R oklch_accents_match_reference
+   removed by 8a3bf971 Prune duplicate and implementation-coupled UI panel tests
+   added there and still present: ['system_mode_follows_the_os_and_pinned_modes_ignore_it', 'capture_dimensions_use_retina_scale_and_cap_large_windows', 'malformed_response_is_reported_as_decode_error', 'partial_legacy_settings_keep_their_values_and_default_new_keys']
+L08-sync-doc-proto-rpc F delivery_gate_makes_row_untakeable
+   removed by c0984a69 Prune sync, doc, proto and RPC tests to their real owners
+   added there and still present: ['delivery_gate_blocks_a_claim', 'gate_phase_resolves_connection_scope_and_auth', 'service_error_kinds_survive_the_wire', 'owner_count']
+L08-sync-doc-proto-rpc R transport_error_preserves_retryable_kind
+   removed by c0984a69 Prune sync, doc, proto and RPC tests to their real owners
+   added there and still present: ['delivery_gate_blocks_a_claim', 'gate_phase_resolves_connection_scope_and_auth', 'service_error_kinds_survive_the_wire', 'owner_count']
+L08-sync-doc-proto-rpc F unacked_writes_replay_idempotently_after_reconnect
+   removed by None 
+   added there and still present: []
+L09-small-crates-apps-edge R affected_languages_keep_utf8_boundaries_for_incomplete_code
+   removed by None 
+   added there and still present: []
+L09-small-crates-apps-edge F captured_app_identity_is_luna_owned
+   removed by 1f51ac99 Prune small-crate, app and edge tests to their strongest owners
+   added there and still present: ['service_env_keeps_the_data_root_and_never_the_bearer', 'default_is_home_luna_and_explicit_data_dir_wins']
+L09-small-crates-apps-edge F default_and_legacy_override_stay_luna_owned
+   removed by 1f51ac99 Prune small-crate, app and edge tests to their strongest owners
+   added there and still present: ['service_env_keeps_the_data_root_and_never_the_bearer', 'default_is_home_luna_and_explicit_data_dir_wins']

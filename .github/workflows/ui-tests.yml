@@ -49,25 +49,31 @@ jobs:
           cargo test --locked -p luna-harness --lib opencode::
           cargo test --locked -p luna-harness --tests
       - name: Documents, protocol and RPC contracts
+        if: ${{ !cancelled() }}
         run: cargo test --locked -p luna-doc -p luna-proto -p luna-rpc
       - name: Published contract matches the code (CORE-01)
+        if: ${{ !cancelled() }}
         run: cargo test --locked -p luna-rpc --features schema --test contract
       - name: Direct host and mobile core compile (RM-00)
+        if: ${{ !cancelled() }}
         run: cargo check --locked -p luna-remote -p luna-mobile --all-targets
       - name: Durable session publication and recovery
+        if: ${{ !cancelled() }}
         run: |
           cargo test --locked -p luna-sync --features mock-server
           cargo test --locked -p luna-engine --lib --test session_publication --test restart_resume --test codex_subagents --test local_profiles --test timeline_order_e2e
       - name: Engine integration keepers
+        if: ${{ !cancelled() }}
         run: |
           cargo test --locked -p luna-engine --test message_queue --test m5_repos_diffs_terminals \
             --test m5c_accounts_uploads_titles --test workspace_sync --test task_identity \
             --test device_routing --test no_keychain --test local_import \
-            --test workspace_identity_repair --test codex_login_resolution --test codex_login_resolver
+            --test workspace_identity_repair --test codex_login_resolution --test codex_login_resolver \
+            --test backup_restore
 
   ui-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: GPUI system dependencies
@@ -84,6 +90,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: UI and headless layout regressions
         run: cargo test --release --locked -p luna-ui --lib -- --test-threads=1
+      # Fixture examples default to `test = false` and their feature is off in
+      # the lib run, so they compiled and ran nowhere before CORE-02.
+      - name: UI fixtures compile and run their embedded tests (CORE-02)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo check --release --locked -p luna-ui --features appshots-fixture --examples
+          cargo test --release --locked -p luna-ui --features appshots-fixture --lib \
+            fixture_local_handle_delegates_approval_to_its_synthetic_core -- --test-threads=1
+          cargo test --release --locked -p luna-ui --features appshots-fixture \
+            --example drafts-fixture --example history-operations-fixture \
+            --example task-organization-fixture --example session-history-fixture \
+            --example activity-attention-fixture --example child-activity-fixture -- --test-threads=1
 
   macos-frame-recovery:
     runs-on: macos-latest

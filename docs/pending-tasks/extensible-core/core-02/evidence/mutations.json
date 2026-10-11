@@ -1,0 +1,63 @@
+[
+ {
+  "id": "M1",
+  "contract": "a stale snapshot save waits for the approved projection install",
+  "file": "crates/engine/src/doc_host.rs",
+  "command": "scripts/cargo.sh test --locked -p luna-engine --lib approved_queue_projection_tests::approved_commit_blocks_stale_snapshot_saver_until_installed",
+  "exit": 101,
+  "caught": true,
+  "failedTests": [
+   "test doc_host::approved_queue_projection_tests::approved_commit_blocks_stale_snapshot_saver_until_installed ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 47
+ },
+ {
+  "id": "M2",
+  "contract": "a remote row import waits for the approved projection install",
+  "file": "crates/engine/src/doc_host.rs",
+  "command": "scripts/cargo.sh test --locked -p luna-engine --lib approved_queue_projection_tests::projection_blocks_remote_row_until_queue_is_installed",
+  "exit": 101,
+  "caught": true,
+  "failedTests": [
+   "test doc_host::approved_queue_projection_tests::projection_blocks_remote_row_until_queue_is_installed ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 43
+ },
+ {
+  "id": "M3",
+  "contract": "a server-owned LUNA send approval is classified as engine-owned and cannot be consumed by generic answers",
+  "file": "crates/engine/src/sessions.rs",
+  "find": "                matches!(&item.kind, PendingInputKind::LunaSend { .. })\n            })\n        })\n    }",
+  "replace": "                matches!(&item.kind, PendingInputKind::Provider)\n            })\n        })\n    }",
+  "cmd": [
+   "scripts/cargo.sh",
+   "test",
+   "--locked",
+   "-p",
+   "luna-engine",
+   "--lib",
+   "generic_answers_cannot_consume_server_owned_luna_approval"
+  ],
+  "outcome": "mutation-anchor-not-unique",
+  "count": 0
+ },
+ {
+  "id": "M4",
+  "contract": "a backup manifest records the source database's real schema version",
+  "file": "crates/engine/src/backup.rs",
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test backup_restore",
+  "exit": 101,
+  "caught": true,
+  "failedTests": [
+   "test automation_tables_survive_encrypted_archive_and_activation ... FAILED",
+   "test side_chat_metadata_and_lazy_transcript_survive_backup_restore ... FAILED",
+   "test sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage ... FAILED",
+   "test managed_offline_v9_archive_remains_restorable_after_current_migrations ... FAILED",
+   "test staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schema ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 42
+ }
+]

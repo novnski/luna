@@ -1,0 +1,271 @@
+{
+ "rustTestDeclarations": 2917,
+ "distinctRustTestNames": 2912,
+ "lanes": {
+  "L01-engine-src": {
+   "R": 413,
+   "rust": 449,
+   "still-present": 413,
+   "D": 19,
+   "C": 17
+  },
+  "L02-engine-it-a-l": {
+   "R": 270,
+   "rust": 284,
+   "still-present": 275,
+   "D": 4,
+   "F": 6,
+   "C": 4,
+   "gone-since-audit": 1
+  },
+  "L03-engine-it-m-z": {
+   "R": 305,
+   "rust": 318,
+   "still-present": 310,
+   "D": 5,
+   "C": 3,
+   "F": 5
+  },
+  "L04-harness": {
+   "R": 360,
+   "rust": 388,
+   "gone-since-audit": 4,
+   "C": 7,
+   "D": 20,
+   "still-present": 357,
+   "F": 2,
+   "non-rust-or-unnamed": 1
+  },
+  "L05-ui-chat": {
+   "R": 407,
+   "rust": 426,
+   "still-present": 408,
+   "D": 15,
+   "C": 3,
+   "F": 1
+  },
+  "L06-ui-shell": {
+   "R": 332,
+   "rust": 372,
+   "still-present": 332,
+   "C": 17,
+   "gone-since-audit": 8,
+   "F": 8,
+   "D": 15
+  },
+  "L07-ui-panels": {
+   "C": 16,
+   "rust": 399,
+   "R": 353,
+   "gone-since-audit": 5,
+   "D": 29,
+   "still-present": 349,
+   "F": 4,
+   "non-rust-or-unnamed": 3
+  },
+  "L08-sync-doc-proto-rpc": {
+   "D": 33,
+   "rust": 297,
+   "R": 242,
+   "still-present": 252,
+   "F": 13,
+   "gone-since-audit": 3,
+   "C": 9
+  },
+  "L09-small-crates-apps-edge": {
+   "R": 176,
+   "rust": 147,
+   "still-present": 135,
+   "D": 13,
+   "F": 10,
+   "C": 3,
+   "gone-since-audit": 3,
+   "non-rust-or-unnamed": 55
+  },
+  "L10-ios-qa-tooling": {
+   "R": 272,
+   "non-rust-or-unnamed": 266,
+   "F": 9,
+   "D": 8,
+   "rust": 23,
+   "still-present": 21
+  }
+ },
+ "problems": {
+  "retained-now-absent": [
+   {
+    "lane": "L02-engine-it-a-l",
+    "mark": "R",
+    "test": "crates/engine/tests/backup_restore.rs::managed_offline_backup_refuses_missing_v13_v14_feature_tables"
+   },
+   {
+    "lane": "L04-harness",
+    "mark": "R",
+    "test": "crates/harness/src/claude/catalog.rs::tests::effort_maps_special_modes"
+   },
+   {
+    "lane": "L04-harness",
+    "mark": "R",
+    "test": "crates/harness/src/opencode/tests.rs::v2_recovered_step_failure_is_a_transient_warning"
+   },
+   {
+    "lane": "L04-harness",
+    "mark": "R",
+    "test": "crates/harness/src/opencode/tests.rs::reasoning_ahead_of_its_message_role_is_held_and_replayed"
+   },
+   {
+    "lane": "L04-harness",
+    "mark": "R",
+    "test": "crates/harness/src/opencode/tests.rs::main_feed_user_text_is_the_prompt_echo_and_never_renders"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "badges.rs::tests::the_card_carries_one_row_per_comment"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "change_requests.rs::tests::source_context_chat_finds_local_snapshot"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "motion.rs::tests::eval_never_escapes_unit_interval_dense_sweep"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "F",
+    "test": "shell.rs::tests::new_thread_handoff_is_continuous_and_staged"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "shell.rs::tests::escape_interrupts_only_the_active_live_chat"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "shell.rs::exit_regressions::right_terminal_picker_with_no_history_waits_for_new"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "shell/tabs.rs::cycle_tests::steps_forward_and_back_through_the_list"
+   },
+   {
+    "lane": "L06-ui-shell",
+    "mark": "R",
+    "test": "task_commands.rs::tests::context_intents_carry_revision_and_binding_fences"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "R",
+    "test": "appearance.rs::tests::pinned_modes_ignore_the_os"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "R",
+    "test": "appshots/macos.rs::tests::capture_dimensions_use_retina_scale_for_ordinary_windows"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "R",
+    "test": "settings.rs::tests::settings_without_appearance_default_to_system"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "F",
+    "test": "settings/general.rs::tests::general_page_renders_existing_preferences_and_changes_them"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "R",
+    "test": "theme.rs::tests::oklch_accents_match_reference"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "F",
+    "test": "crates/doc/src/queue.rs::tests::delivery_gate_makes_row_untakeable"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "R",
+    "test": "crates/rpc/src/lib.rs::tests::transport_error_preserves_retryable_kind"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "F",
+    "test": "crates/sync/tests/registry_client.rs::unacked_writes_replay_idempotently_after_reconnect"
+   },
+   {
+    "lane": "L09-small-crates-apps-edge",
+    "mark": "R",
+    "test": "crates/syntax/tests/quality.rs::affected_languages_keep_utf8_boundaries_for_incomplete_code"
+   },
+   {
+    "lane": "L09-small-crates-apps-edge",
+    "mark": "F",
+    "test": "apps/luna/src/daemon.rs::tests::captured_app_identity_is_luna_owned"
+   },
+   {
+    "lane": "L09-small-crates-apps-edge",
+    "mark": "F",
+    "test": "apps/luna/src/paths.rs::tests::default_and_legacy_override_stay_luna_owned"
+   }
+  ],
+  "keeper-missing": [
+   {
+    "lane": "L02-engine-it-a-l",
+    "mark": "C",
+    "test": "crates/engine/tests/e2e.rs::processed_commands_are_skipped_on_redelivery",
+    "keeper": "processed_commands_are_skipped"
+   },
+   {
+    "lane": "L04-harness",
+    "mark": "D",
+    "test": "crates/harness/src/opencode/tests.rs::v2_recovered_step_failure_does_not_poison_successful_execution",
+    "keeper": "v2_recovered_step_failure_is_a_transient_warning"
+   },
+   {
+    "lane": "L07-ui-panels",
+    "mark": "D",
+    "test": "settings/appearance.rs::tests::registry_offers_both_appearances_and_keeps_single_dark_families_valid",
+    "keeper": "visual_fixture_matrix_covers_every_variant_and_scene"
+   },
+   {
+    "lane": "L10-ios-qa-tooling",
+    "mark": "D",
+    "test": "crates/ui/examples/drafts-fixture.rs::tests::fixture_startup_loads_saved_settings_and_fresh_roots_default",
+    "keeper": "composer_send_behavior_is_opt_in_for_old_and_partial_settings"
+   }
+  ],
+  "removed-but-declared": [
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "D",
+    "test": "crates/doc/src/workspace.rs::tests::snapshot_round_trips_between_docs"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "D",
+    "test": "crates/doc/src/workspace.rs::tests::field_mutators_round_trip"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "D",
+    "test": "crates/doc/src/workspace.rs::tests::delete_chat_tombstones_row_and_session"
+   },
+   {
+    "lane": "L08-sync-doc-proto-rpc",
+    "mark": "D",
+    "test": "crates/doc/src/workspace.rs::tests::spaces_round_trip_and_mutate"
+   }
+  ]
+ },
+ "problemCounts": {
+  "retained-now-absent": 24,
+  "keeper-missing": 4,
+  "removed-but-declared": 4
+ }
+}

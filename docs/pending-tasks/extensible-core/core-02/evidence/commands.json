@@ -1,0 +1,155 @@
+[
+ {
+  "step": "ledger rebase (before)",
+  "command": "python3 scripts/qa-test-ledger-rebase.py target/qa/core-02/ledger-rebase-before.json",
+  "exit": 0,
+  "result": "2,917 Rust tests; 24 retained-absent, 4 keeper-missing, 4 name collisions"
+ },
+ {
+  "step": "baseline UI fixtures compile",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh check --locked -p luna-ui --features appshots-fixture --examples",
+  "exit": 0,
+  "log": "target/qa/core-02/before-ui-examples-check.log"
+ },
+ {
+  "step": "baseline UI fixture tests",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked --no-fail-fast -p luna-ui --features appshots-fixture --example drafts-fixture --example history-operations-fixture --example task-organization-fixture --example session-history-fixture --example activity-attention-fixture --example child-activity-fixture",
+  "exit": 101,
+  "result": "20 passed, 1 failed",
+  "log": "target/qa/core-02/before-ui-example-tests.log"
+ },
+ {
+  "step": "baseline engine (full debug)",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit": 75,
+  "result": "build guard stopped the build at 25.28 GiB growth"
+ },
+ {
+  "step": "baseline engine",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit": 101,
+  "result": "1,001 passed, 5 failed (backup_restore schema pin), 12 ignored",
+  "log": "target/qa/core-02/before-engine.log"
+ },
+ {
+  "step": "baseline harness",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --no-fail-fast",
+  "exit": 0,
+  "result": "338 passed, 12 ignored",
+  "log": "target/qa/core-02/before-harness.log"
+ },
+ {
+  "step": "CI baseline afd8455b",
+  "command": "gh run view <UI tests run> --log-failed",
+  "exit": null,
+  "result": "session-sync (claude_goals), linux-browser, macos-frame-recovery failed",
+  "artifact": "docs/pending-tasks/extensible-core/core-02/evidence/ci-baseline.json"
+ },
+ {
+  "step": "claude_goals isolated reruns",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --test claude_goals resumed_session_seeds_claudes_restored_goal (x5)",
+  "exit": 0,
+  "result": "5/5 passed on macOS"
+ },
+ {
+  "step": "LunaUITests full (local)",
+  "command": "xcodebuild ... -only-testing:LunaUITests CODE_SIGNING_ALLOWED=NO test",
+  "exit": 65,
+  "result": "14 run, 13 passed",
+  "artifact": "docs/pending-tasks/extensible-core/core-02/evidence/ios-ui-tests.json"
+ },
+ {
+  "step": "LunaUITests isolated failure",
+  "command": "xcodebuild ... -only-testing:LunaUITests/MobilePolishTests/testSendClearsComposerAndKeepsTheNextDraft test",
+  "exit": 65,
+  "result": "fails in isolation (deterministic)"
+ },
+ {
+  "step": "Skip-row mutation before restore",
+  "command": "evaluate_command Skip disabled; cargo test -p luna-doc --lib; cargo test -p luna-engine --test e2e",
+  "exit": 0,
+  "result": "97 doc + 31 e2e passed: contract unguarded",
+  "log": "target/qa/core-02/mut-skip-e2e.log"
+ },
+ {
+  "step": "Skip-row mutation after restore",
+  "command": "same mutation; cargo test -p luna-doc --lib commands::",
+  "exit": 101,
+  "result": "processed_commands_are_skipped FAILED (caught)",
+  "log": "target/qa/core-02/mut-skip-doc-after.log"
+ },
+ {
+  "step": "mutations M1-M4",
+  "command": "python3 target/qa/core-02/mutations.py (+ M3 rerun)",
+  "exit": 0,
+  "result": "all caught, all restored",
+  "artifact": "docs/pending-tasks/extensible-core/core-02/evidence/mutations.json"
+ },
+ {
+  "step": "after engine",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit": 0,
+  "result": "965 passed, 0 failed, 12 ignored",
+  "log": "target/qa/core-02/after-engine.log"
+ },
+ {
+  "step": "after harness",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --no-fail-fast",
+  "exit": 0,
+  "result": "338 passed, 12 ignored",
+  "log": "target/qa/core-02/after-harness.log"
+ },
+ {
+  "step": "after doc",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-doc",
+  "exit": 0,
+  "result": "99 passed",
+  "log": "target/qa/core-02/after-doc.log"
+ },
+ {
+  "step": "after UI fixtures compile",
+  "command": "scripts/cargo.sh check --locked -p luna-ui --features appshots-fixture --examples",
+  "exit": 0,
+  "log": "target/qa/core-02/after-ui-examples-check.log"
+ },
+ {
+  "step": "after UI fixture tests",
+  "command": "scripts/cargo.sh test --locked --no-fail-fast -p luna-ui --features appshots-fixture --example (6 fixtures)",
+  "exit": 0,
+  "result": "21 passed",
+  "log": "target/qa/core-02/after-ui-example-tests.log"
+ },
+ {
+  "step": "after featured UI lib test",
+  "command": "scripts/cargo.sh test --locked -p luna-ui --features appshots-fixture --lib fixture_local_handle_delegates_approval_to_its_synthetic_core",
+  "exit": 0,
+  "result": "1 passed",
+  "log": "target/qa/core-02/after-ui-featured-lib.log"
+ },
+ {
+  "step": "clippy",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh clippy --locked -p luna-engine -p luna-doc --all-targets",
+  "exit": 0,
+  "result": "no warning on a changed line",
+  "log": "target/qa/core-02/after-clippy.log"
+ },
+ {
+  "step": "backup_restore after rustfmt",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test backup_restore",
+  "exit": 0,
+  "result": "26 passed"
+ },
+ {
+  "step": "ledger rebase (after)",
+  "command": "python3 scripts/qa-test-ledger-rebase.py target/qa/core-02/ledger-rebase-after.json",
+  "exit": 0,
+  "result": "2,877 Rust tests; keeper-missing 3 (no new); 46 new absent rows = the deliberate retirements"
+ },
+ {
+  "step": "LUNA Dev refresh",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit": 0,
+  "result": "114 s, PID 5154, IPC 59777, codesign strict ok",
+  "log": "target/qa/core-02/primary-refresh.log"
+ }
+]

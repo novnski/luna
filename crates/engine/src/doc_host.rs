@@ -3946,103 +3946,6 @@ impl DocHost {
         Ok(())
     }
 
-    /// Dormant B0a prerequisite: persist one exact Interrupt command ID as a
-    /// detached snapshot/outbox projection before making it visible locally.
-    /// This does not mint approval, a receipt, or source authority, and no
-    /// runtime path calls it yet. A repeated ID never appends another row.
-    #[allow(dead_code)]
-    pub(crate) fn persist_unwired_interrupt_with_id(
-        &self,
-        chat_id: &str,
-        command_id: &str,
-    ) -> Result<bool, EngineError> {
-        self.persist_unwired_interrupt_with_id_after_commit(chat_id, command_id, || Ok(()))
-    }
-
-    fn persist_unwired_interrupt_with_id_after_commit(
-        &self,
-        chat_id: &str,
-        command_id: &str,
-        after_commit: impl FnOnce() -> Result<(), EngineError>,
-    ) -> Result<bool, EngineError> {
-        if command_id.is_empty()
-            || command_id.len() > 128
-            || !command_id.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(EngineError::Other("invalid interrupt command id".into()));
-        }
-        let handle = self.open(chat_id)?;
-        let _projection = lock(&handle.queue_projection_lock);
-        if handle
-            .durable_projection_uninstalled
-            .load(Ordering::Acquire)
-        {
-            return Err(EngineError::Other(
-                "a committed document projection needs recovery after restart".into(),
-            ));
-        }
-        let prepared = self.prepare_queue_projection(&handle, command_id, |doc| {
-            let existing = doc
-                .read_commands()?
-                .into_iter()
-                .filter(|entry| entry.id == command_id)
-                .collect::<Vec<_>>();
-            if !existing.is_empty() {
-                if existing.len() != 1
-                    || !matches!(&existing[0].payload, SessionCommandPayload::Interrupt {})
-                {
-                    return Err(EngineError::Other(
-                        "interrupt command id belongs to a different payload".into(),
-                    ));
-                }
-                return Ok(false);
-            }
-            let now = now_ms();
-            let based_on = doc.read_entries()?.last().map(|entry| CommandBasedOn {
-                turn_id: Some(entry.id.clone()),
-                frontier: None,
-            });
-            doc.queue_command(&SessionCommandEntry {
-                id: command_id.to_string(),
-                payload: SessionCommandPayload::Interrupt {},
-                issued_by: self.inner.config.device_id.clone(),
-                issued_at: now,
-                based_on,
-                expires_at: Some(now + COMMAND_DEFAULT_TTL_MS),
-                status: SessionCommandStatus::Pending,
-                resolution: None,
-            })?;
-            Ok(true)
-        })?;
-        if !prepared.outcome {
-            return Ok(false);
-        }
-        let updates = prepared
-            .batch_id
-            .as_deref()
-            .map(|batch_id| vec![(batch_id, prepared.update.as_slice())])
-            .unwrap_or_default();
-        // A storage error can be ambiguous. Leave this handle unable to save
-        // its older live doc until a restart reloads the authoritative bytes.
-        handle
-            .durable_projection_uninstalled
-            .store(true, Ordering::Release);
-        self.inner.store.save_snapshot_with_updates_and_authority(
-            &handle.chat_id,
-            &prepared.snapshot,
-            &updates,
-            &prepared.authority_changes,
-        )?;
-        after_commit()?;
-        let result = self.install_queue_projection(&handle, prepared);
-        if result.is_ok() {
-            handle
-                .durable_projection_uninstalled
-                .store(false, Ordering::Release);
-        }
-        result
-    }
-
     /// A send revives an archived chat on every device (best-effort).
     fn unarchive_on_send(&self, chat_id: &str) {
         let Some(workspace) = self.workspace() else {
@@ -9407,6 +9310,10 @@ mod approved_queue_projection_tests {
             sink.apply_row(&[0], 1),
             RowImportOutcome::PendingDependencies
         );
+        assert_eq!(
+            sink.apply_replay_row(&[0], 1),
+            RowImportOutcome::PendingDependencies
+        );
         assert!(sink.apply_checkpoint(&[0], 1).is_err());
         assert_eq!(
             store.load_snapshot_with_cursor("target").unwrap().unwrap(),
@@ -9475,45 +9382,6 @@ mod approved_queue_projection_tests {
             .unwrap();
         host.save_snapshot_checked(&handle).unwrap();
     }
-}
-
-#[cfg(test)]
-mod unwired_interrupt_projection_tests {
-    use super::*;
-    use crate::chat2_host::EngineChatSink;
-    use luna_sync::chat_client::{ChatDocSink, RowImportOutcome};
-
-    fn fixture() -> (
-        tempfile::TempDir,
-        Arc<DocsStore>,
-        DocHost,
-        Arc<ChatDocHandle>,
-    ) {
-        let root = tempfile::tempdir().unwrap();
-        let store = Arc::new(DocsStore::open(root.path()).unwrap());
-        let doc = SessionDoc::init("target").unwrap();
-        store
-            .save_snapshot("target", &doc.export_snapshot().unwrap())
-            .unwrap();
-        store.initialize_chat_outbox("target", &[]).unwrap();
-        let host = DocHost::new(
-            store.clone(),
-            DocHostConfig {
-                device_id: "synthetic-device".into(),
-                default_harness: HarnessId::Mock,
-                edge: None,
-            },
-        );
-        let handle = host.open("target").unwrap();
-        (root, store, host, handle)
-    }
-
-    fn stored_commands(store: &DocsStore) -> Vec<SessionCommandEntry> {
-        SessionDoc::from_snapshot(&store.load_snapshot("target").unwrap().unwrap())
-            .unwrap()
-            .read_commands()
-            .unwrap()
-    }
 
     fn remote_row(store: &DocsStore) -> (Vec<u8>, Vec<u8>) {
         let source =
@@ -9536,14 +9404,23 @@ mod unwired_interrupt_projection_tests {
         )
     }
 
-    fn stored_stop_and_remote(store: &DocsStore, command_id: &str) -> u64 {
+    /// The committed queue row and the imported remote edit are both durable;
+    /// returns the stored remote cursor.
+    fn stored_queue_and_remote(store: &DocsStore) -> u64 {
         let (snapshot, cursor, _) = store.load_snapshot_with_cursor("target").unwrap().unwrap();
         let doc = SessionDoc::from_snapshot(&snapshot).unwrap();
-        let commands = doc.read_commands().unwrap();
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, command_id);
+        assert_eq!(doc.read_queue().unwrap().len(), 1);
         assert_eq!(doc.doc().get_text("body").to_string(), "remote");
         cursor
+    }
+
+    fn commit(host: &DocHost, handle: &ChatDocHandle) {
+        begin(host, "approved-send");
+        host.commit_approved_queue_projection_after_commit(handle, "approved-send", queue, || {
+            Ok(())
+        })
+        .ok()
+        .expect("approved queue commit");
     }
 
     #[tokio::test]
@@ -9564,142 +9441,10 @@ mod unwired_interrupt_projection_tests {
         assert!(!lock(&host.inner.handles).contains_key("target"));
     }
 
-    #[tokio::test]
-    async fn unwired_interrupt_persists_one_exact_id_and_rejects_payload_collision() {
-        let (_root, store, host, handle) = fixture();
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "stop-a")
-                .unwrap()
-        );
-        let snapshot_after_first = store.load_snapshot("target").unwrap().unwrap();
-        let outbox_after_first = store.pending_chat_updates("target").unwrap();
-        assert!(
-            !host
-                .persist_unwired_interrupt_with_id("target", "stop-a")
-                .unwrap()
-        );
-        assert_eq!(
-            store.load_snapshot("target").unwrap().unwrap(),
-            snapshot_after_first
-        );
-        assert_eq!(
-            store.pending_chat_updates("target").unwrap(),
-            outbox_after_first
-        );
-        let commands = stored_commands(&store);
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "stop-a");
-        assert_eq!(commands[0].payload, SessionCommandPayload::Interrupt {});
-        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
-
-        handle
-            .doc
-            .queue_command(&SessionCommandEntry {
-                id: "occupied-id".into(),
-                payload: SessionCommandPayload::Steer {
-                    attachments: Vec::new(),
-                    input_items: Vec::new(),
-                    prompt: "synthetic only".into(),
-                    message_id: None,
-                },
-                issued_by: "synthetic-device".into(),
-                issued_at: 1,
-                based_on: None,
-                expires_at: None,
-                status: SessionCommandStatus::Pending,
-                resolution: None,
-            })
-            .unwrap();
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "occupied-id")
-                .is_err()
-        );
-        assert_eq!(
-            handle
-                .doc
-                .read_commands()
-                .unwrap()
-                .iter()
-                .filter(|entry| entry.id == "occupied-id")
-                .count(),
-            1
-        );
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "")
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn unwired_interrupt_storage_failure_publishes_no_row_or_outbox() {
-        for trigger in [
-            "CREATE TRIGGER fail_stop_snapshot BEFORE UPDATE ON snapshots
-             WHEN OLD.doc_id='target'
-             BEGIN SELECT RAISE(ABORT, 'synthetic stop snapshot failure'); END;",
-            "CREATE TRIGGER fail_stop_outbox BEFORE INSERT ON chat_outbox
-             WHEN NEW.doc_id='target'
-             BEGIN SELECT RAISE(ABORT, 'synthetic stop outbox failure'); END;",
-        ] {
-            let (root, store, host, handle) = fixture();
-            let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
-            db.execute_batch(trigger).unwrap();
-            assert!(
-                host.persist_unwired_interrupt_with_id("target", "stop-failed")
-                    .is_err()
-            );
-            assert!(handle.doc.read_commands().unwrap().is_empty());
-            assert!(stored_commands(&store).is_empty());
-            assert!(store.pending_chat_updates("target").unwrap().is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn unwired_interrupt_post_commit_failure_survives_restart_once() {
-        let (_root, store, host, handle) = fixture();
-        assert!(
-            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-uncertain", || {
-                Err(EngineError::Other(
-                    "synthetic failure before live import".into(),
-                ))
-            })
-            .is_err()
-        );
-        assert!(handle.doc.read_commands().unwrap().is_empty());
-        assert_eq!(stored_commands(&store).len(), 1);
-        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
-        host.save_snapshot(&handle);
-        assert_eq!(stored_commands(&store).len(), 1);
-        assert!(
-            host.open("target").is_err(),
-            "stale handle must fail closed"
-        );
-        drop(handle);
-        drop(host);
-
-        let restarted = DocHost::new(
-            store.clone(),
-            DocHostConfig {
-                device_id: "synthetic-device".into(),
-                default_harness: HarnessId::Mock,
-                edge: None,
-            },
-        );
-        let reopened = restarted.open("target").unwrap();
-        let commands = reopened.doc.read_commands().unwrap();
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "stop-uncertain");
-        assert!(
-            !restarted
-                .persist_unwired_interrupt_with_id("target", "stop-uncertain")
-                .unwrap()
-        );
-        assert_eq!(stored_commands(&store).len(), 1);
-        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unwired_interrupt_commit_blocks_stale_snapshot_saver() {
+    async fn approved_commit_blocks_stale_snapshot_saver_until_installed() {
         let (_root, store, host, handle) = fixture();
+        begin(&host, "approved-send");
         let saver_host = host.clone();
         let saver_handle = handle.clone();
         let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -9713,58 +9458,50 @@ mod unwired_interrupt_projection_tests {
             saver_host.save_snapshot(&saver_handle);
             finished_for_saver.store(true, Ordering::Release);
         });
-        assert!(
-            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-race", || {
-                start_tx.send(()).unwrap();
-                while !attempted.load(Ordering::Acquire) {
-                    std::thread::yield_now();
-                }
-                std::thread::sleep(std::time::Duration::from_millis(30));
-                assert!(!finished.load(Ordering::Acquire));
-                Ok(())
-            })
-            .unwrap()
-        );
+        host.commit_approved_queue_projection_after_commit(&handle, "approved-send", queue, || {
+            start_tx.send(()).unwrap();
+            while !attempted.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            assert!(!finished.load(Ordering::Acquire));
+            Ok(())
+        })
+        .ok()
+        .expect("approved queue commit");
         saver.join().unwrap();
         assert!(finished.load(Ordering::Acquire));
-        let commands = stored_commands(&store);
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "stop-race");
+        assert_eq!(stored_queue(&store).len(), 1);
         assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn remote_row_before_projection_survives_with_cursor_and_stop() {
+    async fn remote_row_before_projection_survives_with_cursor_and_queue() {
         let (_root, store, host, handle) = fixture();
         let (row, _) = remote_row(&store);
         let sink = remote_sink(store.clone(), &handle);
         assert_eq!(sink.apply_row(&row, 1), RowImportOutcome::Applied);
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "stop-after-remote")
-                .unwrap()
-        );
-        assert_eq!(stored_stop_and_remote(&store, "stop-after-remote"), 1);
+        commit(&host, &handle);
+        assert_eq!(stored_queue_and_remote(&store), 1);
         assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn handle_backed_checkpoint_and_replay_keep_cursor_with_stop() {
+    async fn handle_backed_checkpoint_and_replay_keep_cursor_with_queue() {
         let (_root, store, host, handle) = fixture();
         let (row, checkpoint) = remote_row(&store);
         let sink = remote_sink(store.clone(), &handle);
         sink.apply_checkpoint(&checkpoint, 1).unwrap();
         assert_eq!(sink.apply_replay_row(&row, 1), RowImportOutcome::Applied);
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "stop-after-checkpoint")
-                .unwrap()
-        );
-        assert_eq!(stored_stop_and_remote(&store, "stop-after-checkpoint"), 1);
+        commit(&host, &handle);
+        assert_eq!(stored_queue_and_remote(&store), 1);
         assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn projection_blocks_remote_row_until_stop_is_installed() {
+    async fn projection_blocks_remote_row_until_queue_is_installed() {
         let (_root, store, host, handle) = fixture();
+        begin(&host, "approved-send");
         let (row, _) = remote_row(&store);
         let sink = remote_sink(store.clone(), &handle);
         let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -9779,24 +9516,19 @@ mod unwired_interrupt_projection_tests {
             finished_for_row.store(true, Ordering::Release);
             outcome
         });
-        assert!(
-            host.persist_unwired_interrupt_with_id_after_commit(
-                "target",
-                "stop-before-remote",
-                || {
-                    start_tx.send(()).unwrap();
-                    while !attempted.load(Ordering::Acquire) {
-                        std::thread::yield_now();
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(30));
-                    assert!(!finished.load(Ordering::Acquire));
-                    Ok(())
-                }
-            )
-            .unwrap()
-        );
+        host.commit_approved_queue_projection_after_commit(&handle, "approved-send", queue, || {
+            start_tx.send(()).unwrap();
+            while !attempted.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            assert!(!finished.load(Ordering::Acquire));
+            Ok(())
+        })
+        .ok()
+        .expect("approved queue commit");
         assert_eq!(remote.join().unwrap(), RowImportOutcome::Applied);
-        assert_eq!(stored_stop_and_remote(&store, "stop-before-remote"), 1);
+        assert_eq!(stored_queue_and_remote(&store), 1);
         assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
         drop(handle);
         drop(host);
@@ -9809,71 +9541,15 @@ mod unwired_interrupt_projection_tests {
             },
         );
         let reopened = restarted.open("target").unwrap();
-        assert_eq!(reopened.doc.read_commands().unwrap().len(), 1);
+        assert_eq!(reopened.doc.read_queue().unwrap().len(), 1);
         assert_eq!(reopened.doc.doc().get_text("body").to_string(), "remote");
     }
 
     #[tokio::test]
-    async fn poisoned_projection_defers_remote_rows_and_checkpoint_without_cursor_change() {
-        let (_root, store, host, handle) = fixture();
-        let (row, checkpoint) = remote_row(&store);
-        let sink = remote_sink(store.clone(), &handle);
-        assert!(
-            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-poisoned", || {
-                Err(EngineError::Other("synthetic failure before import".into()))
-            })
-            .is_err()
-        );
-        let before = store.load_snapshot_with_cursor("target").unwrap().unwrap();
-        let outbox_before = store.pending_chat_updates("target").unwrap();
-        assert_eq!(
-            sink.apply_row(&row, 1),
-            RowImportOutcome::PendingDependencies
-        );
-        assert_eq!(
-            sink.apply_replay_row(&row, 1),
-            RowImportOutcome::PendingDependencies
-        );
-        assert!(sink.apply_checkpoint(&checkpoint, 1).is_err());
-        assert_eq!(
-            store.load_snapshot_with_cursor("target").unwrap().unwrap(),
-            before
-        );
-        assert_eq!(store.pending_chat_updates("target").unwrap(), outbox_before);
-        assert!(handle.doc.read_commands().unwrap().is_empty());
-        assert_eq!(handle.doc.doc().get_text("body").to_string(), "");
-        drop(handle);
-        drop(host);
-        let restarted = DocHost::new(
-            store.clone(),
-            DocHostConfig {
-                device_id: "synthetic-device".into(),
-                default_harness: HarnessId::Mock,
-                edge: None,
-            },
-        );
-        let reopened = restarted.open("target").unwrap();
-        let commands = reopened.doc.read_commands().unwrap();
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "stop-poisoned");
-        assert_eq!(
-            store
-                .load_snapshot_with_cursor("target")
-                .unwrap()
-                .unwrap()
-                .1,
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn remote_cursor_sql_failure_keeps_committed_stop_and_old_cursor() {
+    async fn remote_cursor_sql_failure_keeps_committed_queue_and_old_cursor() {
         let (root, store, host, handle) = fixture();
         let (row, _) = remote_row(&store);
-        assert!(
-            host.persist_unwired_interrupt_with_id("target", "stop-cursor-failure")
-                .unwrap()
-        );
+        commit(&host, &handle);
         let before = store.load_snapshot_with_cursor("target").unwrap().unwrap();
         let outbox_before = store.pending_chat_updates("target").unwrap();
         let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
@@ -9890,7 +9566,7 @@ mod unwired_interrupt_projection_tests {
             before
         );
         assert_eq!(store.pending_chat_updates("target").unwrap(), outbox_before);
-        assert_eq!(stored_commands(&store)[0].id, "stop-cursor-failure");
+        assert_eq!(stored_queue(&store).len(), 1);
         db.execute_batch("DROP TRIGGER fail_remote_cursor").unwrap();
     }
 }

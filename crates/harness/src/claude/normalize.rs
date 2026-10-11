@@ -12,7 +12,9 @@ const MAX_OBSERVED_CWD_BYTES: usize = 2_048;
 
 /// Private, one-shot observation from the first init of one run. Names and
 /// status words are not inventory attachment, health, callability or grants.
-#[allow(dead_code)] // No product consumer until source ownership can be mapped.
+// Owned by SW-01 (effective per-chat tool/skill inventory), which wires a
+// read-only consumer or retires this with its tests (CORE-02 decision).
+#[allow(dead_code)]
 struct SessionIntegrationReceipt {
     session_id: String,
     cwd: String,
@@ -279,7 +281,7 @@ impl Normalizer {
 
     /// Internal readback only. Taking it removes the observation from this
     /// per-run normalizer; no event, journal entry or UI surface is created.
-    #[allow(dead_code)] // Reserved for a future owner-mapped read-only consumer.
+    #[allow(dead_code)] // SW-01 consumer; see SessionIntegrationReceipt.
     fn take_init_integration_receipt(&mut self) -> Option<SessionIntegrationReceipt> {
         self.init_integration_receipt.take()
     }

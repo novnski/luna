@@ -922,12 +922,24 @@ mod tests {
 
         let core = assemble();
         let client = luna_rpc::memory_client(core.rpc_service());
+        // Sessions require a project (dd75f9a4); register the same one the
+        // fixture's own seed uses, so the task starts empty exactly as before.
+        core.workspace
+            .create_space(
+                "l13-ui-project",
+                &core.device_id,
+                root.path().to_str().unwrap(),
+                Some("Synthetic History project".into()),
+                false,
+            )
+            .unwrap();
         let created = execute(
             &client,
             UNSUPPORTED_TASK_ID,
             "l13-create-unsupported",
             serde_json::json!({
                 "kind": "createChat",
+                "spaceId": "l13-ui-project",
                 "deviceId": core.device_id,
                 "cwd": root.path(),
                 "config": chat_config(

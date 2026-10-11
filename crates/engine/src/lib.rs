@@ -127,6 +127,7 @@ mod claude_mcp;
 mod claude_ongoing;
 mod claude_peers;
 mod command_scope;
+mod composer_catalog;
 pub mod context_controls;
 pub(crate) mod context_transfers;
 pub mod credentials;
@@ -139,10 +140,6 @@ pub mod git_checkpoints;
 pub mod history_operations;
 mod http_error;
 pub mod instance_lock;
-// The owner-managed action seam is internal until an owner driver is verified.
-mod composer_catalog;
-#[allow(dead_code)]
-pub(crate) mod integration_actions;
 pub mod integration_settings;
 pub mod live_usage;
 pub mod local_import;

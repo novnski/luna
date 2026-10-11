@@ -47,6 +47,8 @@ the narrow runtime choices; this source audit remains its starting evidence,
 not a reason to repeat the inventory.
 [CORE-01](core-01/README.md) publishes the operation catalog and the minimal
 [core contract](core-01/contract.md) that IC-0, RM-00 and the SDKs build on.
+[CORE-02](core-02/README.md) rebases the 9 October test ledgers, resolves the
+named test-only production paths and routes the fixture suites into CI.
 
 ## The product acceptance scenarios
 

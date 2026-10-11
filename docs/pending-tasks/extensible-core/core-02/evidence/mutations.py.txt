@@ -1,0 +1,63 @@
+"""CORE-02 E04 mutation proofs: each production mutation must turn its keeper red.
+Every file is restored byte-for-byte and verified afterwards."""
+import json, os, subprocess, sys, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+os.chdir(ROOT)
+ENV = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0"}
+MUTATIONS = [
+    {"id": "M1", "contract": "a stale snapshot save waits for the approved projection install",
+     "file": "crates/engine/src/doc_host.rs",
+     "find": "    fn save_snapshot_checked(&self, handle: &ChatDocHandle) -> Result<(), EngineError> {\n        let _projection = lock(&handle.queue_projection_lock);\n",
+     "replace": "    fn save_snapshot_checked(&self, handle: &ChatDocHandle) -> Result<(), EngineError> {\n",
+     "cmd": ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--lib",
+             "approved_queue_projection_tests::approved_commit_blocks_stale_snapshot_saver_until_installed"]},
+    {"id": "M2", "contract": "a remote row import waits for the approved projection install",
+     "file": "crates/engine/src/doc_host.rs",
+     "find": "    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> Option<T> {\n        let _projection = lock(&self.queue_projection_lock);\n",
+     "replace": "    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> Option<T> {\n",
+     "cmd": ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--lib",
+             "approved_queue_projection_tests::projection_blocks_remote_row_until_queue_is_installed"]},
+    {"id": "M3", "contract": "a server-owned LUNA send approval is classified as engine-owned and cannot be consumed by generic answers",
+     "file": "crates/engine/src/sessions.rs",
+     "find": ".is_some_and(|item| matches!(&item.kind, PendingInputKind::LunaSend { .. }))\n        })\n    }",
+     "replace": ".is_some_and(|item| matches!(&item.kind, PendingInputKind::Provider))\n        })\n    }",
+     "cmd": ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--lib",
+             "generic_answers_cannot_consume_server_owned_luna_approval"]},
+    {"id": "M4", "contract": "a backup manifest records the source database's real schema version",
+     "file": "crates/engine/src/backup.rs",
+     "find": "        schema_version,\n",
+     "replace": "        schema_version: schema_version - 1,\n",
+     "cmd": ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--test", "backup_restore"]},
+]
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+results = []
+ONLY = set(sys.argv[1:])
+for m in [m for m in MUTATIONS if not ONLY or m['id'] in ONLY]:
+    path = Path(m["file"])
+    original = path.read_bytes()
+    text = original.decode()
+    if text.count(m["find"]) != 1:
+        results.append({**m, "outcome": "mutation-anchor-not-unique", "count": text.count(m["find"])})
+        continue
+    before = sha(path)
+    path.write_text(text.replace(m["find"], m["replace"], 1))
+    log = ROOT / f"target/qa/core-02/mutation-{m['id']}.log"
+    started = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(m["cmd"], env=ENV, stdout=out, stderr=subprocess.STDOUT).returncode
+    path.write_bytes(original)
+    lines = log.read_text().splitlines()
+    failed = [l for l in lines if l.startswith("test ") and l.endswith("FAILED")]
+    results.append({"id": m["id"], "contract": m["contract"], "file": m["file"], "command": " ".join(m["cmd"]),
+                    "exit": code, "caught": code != 0 and bool(failed), "failedTests": failed,
+                    "restored": sha(path) == before, "seconds": round(time.time() - started)})
+    print(m["id"], "exit", code, "caught" if results[-1]["caught"] else "NOT CAUGHT", failed[:3], flush=True)
+Path(f"target/qa/core-02/mutations{'-' + '-'.join(sorted(ONLY)) if ONLY else ''}.json").write_text(json.dumps(results, indent=1) + "\n")
+sys.exit(0 if all(r.get("caught") and r.get("restored") for r in results) else 1)

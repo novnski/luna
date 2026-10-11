@@ -263,6 +263,8 @@ impl CodexHarness {
 
     /// Internal read-only observation from a separate discovery process.
     /// Cwd/name pairs are not configured inventory or session attachment.
+    /// Owned by SW-01 (effective tool/skill inventory), which wires a consumer
+    /// or retires this with its tests (CORE-02 decision).
     #[doc(hidden)]
     pub async fn discover_skill_observations(
         &self,

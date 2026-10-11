@@ -247,6 +247,18 @@ mod tests {
 
     const NEVER: fn(&str) -> bool = |_| false;
 
+    /// Restored by CORE-02: L08 and L02 each deleted their copy citing the
+    /// other's, so no test guarded this row (a mutation that stops skipping
+    /// processed commands passed every suite).
+    #[test]
+    fn processed_commands_are_skipped() {
+        let e = steer("c1", 1_000);
+        let entries = vec![e.clone()];
+        let processed = |id: &str| id == "c1";
+        let cx = cx(&entries, &processed, &NEVER, 2_000, None);
+        assert_eq!(evaluate_command(&e, &cx), CommandDisposition::Skip);
+    }
+
     #[test]
     fn expired_commands_are_expired() {
         let e = steer("c1", 0);

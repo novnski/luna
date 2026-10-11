@@ -54,6 +54,25 @@ fn fixture() -> (TempDir, PathBuf, PathBuf) {
     (parent, root, backups)
 }
 
+/// The fixture database's migration version. Manifests must record what the
+/// source actually holds, so a schema bump never leaves a pinned number behind.
+fn store_schema(root: &Path) -> i64 {
+    Connection::open(root.join("profiles/local/docs.sqlite3"))
+        .unwrap()
+        .query_row("SELECT max(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// The migration version a freshly opened store writes today.
+fn current_store_schema() -> i64 {
+    let fresh = TempDir::new().unwrap();
+    let profile = fresh.path().join("profiles/local");
+    drop(DocsStore::open(&profile).unwrap());
+    store_schema(fresh.path())
+}
+
 fn service(root: &Path) -> BackupService {
     BackupService::new(
         IsolatedRoot::open(root).unwrap(),
@@ -79,7 +98,10 @@ fn automation_tables_survive_encrypted_archive_and_activation() {
     let backup = service(&root)
         .export(&backups.join("automations.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 19);
+    assert_eq!(
+        backup.manifest.databases[0].schema_version,
+        store_schema(&root)
+    );
     let conn = Connection::open(&database).unwrap();
     conn.execute_batch(
         "DELETE FROM automations; DELETE FROM automation_mutations; DELETE FROM automation_runs;",
@@ -282,7 +304,10 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
     let backup = service(&root)
         .backup_now(&backups, 1_700_000_000_000)
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 19);
+    assert_eq!(
+        backup.manifest.databases[0].schema_version,
+        store_schema(&root)
+    );
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     service(&root).activate(staged).unwrap();
@@ -648,7 +673,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 19);
+    assert_eq!(schema, current_store_schema());
 }
 
 #[test]
@@ -902,7 +927,10 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 19);
+    assert_eq!(
+        backup.manifest.databases[0].schema_version,
+        store_schema(&root)
+    );
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1397,7 +1425,10 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 19);
+    assert_eq!(
+        backup.manifest.databases[0].schema_version,
+        store_schema(&root)
+    );
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();

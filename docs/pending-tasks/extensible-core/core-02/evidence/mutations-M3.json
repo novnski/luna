@@ -1,0 +1,15 @@
+[
+ {
+  "id": "M3",
+  "contract": "a server-owned LUNA send approval is classified as engine-owned and cannot be consumed by generic answers",
+  "file": "crates/engine/src/sessions.rs",
+  "command": "scripts/cargo.sh test --locked -p luna-engine --lib generic_answers_cannot_consume_server_owned_luna_approval",
+  "exit": 101,
+  "caught": true,
+  "failedTests": [
+   "test sessions::tests::generic_answers_cannot_consume_server_owned_luna_approval ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 42
+ }
+]

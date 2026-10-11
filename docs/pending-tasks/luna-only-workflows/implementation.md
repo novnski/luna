@@ -20,6 +20,8 @@ Each task closes with its named [acceptance scenarios](verification.md), a retai
 
 **P0; SW-00. Owners:** `integration_settings.rs`, `claude_mcp.rs`, `rpc/native_extensions.rs`, provider catalogs; UI `settings/harnesses.rs`, `settings/native_extensions.rs`, `composer/integrations.rs`.
 
+CORE-02 assigned two unconsumed provider observations to this ticket: the Claude init `SessionIntegrationReceipt` (`harness/src/claude/normalize.rs`) and Codex `discover_skill_observations` (`harness/src/codex/mod.rs`). Wire each as a read-only inventory input or delete it together with its tests.
+
 1. Extend existing inventory with actual provider/account/host/project/mode ownership, discovery age/generation, native versus guidance-only skill delivery, and configured/available/attached/callable/verified distinctions.
 2. Preserve existing provider IDs and picker provenance. A pasted `plugin://`/`app://` link never creates a selected identity; a catalog row or administrative resource read never claims successful active-session access.
 3. Display a precise unavailable reason and supported remediation in existing picker/settings surfaces. Do not add another settings database or marketplace. Retain bounded last-call evidence without secrets; a prior successful call becomes stale when its relevant session/configuration changes.

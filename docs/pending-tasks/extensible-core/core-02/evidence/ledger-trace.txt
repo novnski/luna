@@ -1,0 +1,67 @@
+== keeper-missing 4
+L02-engine-it-a-l C e2e.rs::processed_commands_are_skipped_on_redelivery -> keeper processed_commands_are_skipped
+   now in: [] | history: []
+L04-harness D tests.rs::v2_recovered_step_failure_does_not_poison_successful_execution -> keeper v2_recovered_step_failure_is_a_transient_warning
+   now in: [] | history: ['8931c3e1 2026-10-09 Pin that an OpenCode retry continues its interrupted text']
+L07-ui-panels D appearance.rs::tests::registry_offers_both_appearances_and_keeps_single_dark_families_valid -> keeper visual_fixture_matrix_covers_every_variant_and_scene
+   now in: [] | history: []
+L10-ios-qa-tooling D drafts-fixture.rs::tests::fixture_startup_loads_saved_settings_and_fresh_roots_default -> keeper composer_send_behavior_is_opt_in_for_old_and_partial_settings
+   now in: [] | history: []
+== retained-now-absent 24
+L02-engine-it-a-l R backup_restore.rs::managed_offline_backup_refuses_missing_v13_v14_feature_tables
+   now in: [] | history: []
+L04-harness R catalog.rs::tests::effort_maps_special_modes
+   now in: [] | history: []
+L04-harness R tests.rs::v2_recovered_step_failure_is_a_transient_warning
+   now in: [] | history: ['8931c3e1 2026-10-09 Pin that an OpenCode retry continues its interrupted text']
+L04-harness R tests.rs::reasoning_ahead_of_its_message_role_is_held_and_replayed
+   now in: [] | history: ['7a2968ad 2026-10-09 Render OpenCode text and reasoning on arrival instead of holding them for a role']
+L04-harness R tests.rs::main_feed_user_text_is_the_prompt_echo_and_never_renders
+   now in: [] | history: ['7a2968ad 2026-10-09 Render OpenCode text and reasoning on arrival instead of holding them for a role']
+L06-ui-shell R badges.rs::tests::the_card_carries_one_row_per_comment
+   now in: [] | history: []
+L06-ui-shell R change_requests.rs::tests::source_context_chat_finds_local_snapshot
+   now in: [] | history: []
+L06-ui-shell R motion.rs::tests::eval_never_escapes_unit_interval_dense_sweep
+   now in: [] | history: []
+L06-ui-shell F shell.rs::tests::new_thread_handoff_is_continuous_and_staged
+   now in: [] | history: []
+L06-ui-shell R shell.rs::tests::escape_interrupts_only_the_active_live_chat
+   now in: [] | history: []
+L06-ui-shell R shell.rs::exit_regressions::right_terminal_picker_with_no_history_waits_for_new
+   now in: [] | history: ["7e4bca47 2026-10-11 Replace the right sidebar's tabs and Back pages with an icon rail"]
+L06-ui-shell R tabs.rs::cycle_tests::steps_forward_and_back_through_the_list
+   now in: [] | history: []
+L06-ui-shell R task_commands.rs::tests::context_intents_carry_revision_and_binding_fences
+   now in: [] | history: []
+L07-ui-panels R appearance.rs::tests::pinned_modes_ignore_the_os
+   now in: [] | history: []
+L07-ui-panels R macos.rs::tests::capture_dimensions_use_retina_scale_for_ordinary_windows
+   now in: [] | history: []
+L07-ui-panels R settings.rs::tests::settings_without_appearance_default_to_system
+   now in: [] | history: []
+L07-ui-panels F general.rs::tests::general_page_renders_existing_preferences_and_changes_them
+   now in: [] | history: []
+L07-ui-panels R theme.rs::tests::oklch_accents_match_reference
+   now in: [] | history: []
+L08-sync-doc-proto-rpc F queue.rs::tests::delivery_gate_makes_row_untakeable
+   now in: [] | history: []
+L08-sync-doc-proto-rpc R lib.rs::tests::transport_error_preserves_retryable_kind
+   now in: [] | history: []
+L08-sync-doc-proto-rpc F registry_client.rs::unacked_writes_replay_idempotently_after_reconnect
+   now in: [] | history: []
+L09-small-crates-apps-edge R quality.rs::affected_languages_keep_utf8_boundaries_for_incomplete_code
+   now in: [] | history: []
+L09-small-crates-apps-edge F daemon.rs::tests::captured_app_identity_is_luna_owned
+   now in: [] | history: []
+L09-small-crates-apps-edge F paths.rs::tests::default_and_legacy_override_stay_luna_owned
+   now in: [] | history: []
+== removed-but-declared 4
+L08-sync-doc-proto-rpc D workspace.rs::tests::snapshot_round_trips_between_docs
+   now in: ['crates/doc/src/schema.rs'] | history: []
+L08-sync-doc-proto-rpc D workspace.rs::tests::field_mutators_round_trip
+   now in: ['crates/doc/src/registry/tests.rs'] | history: []
+L08-sync-doc-proto-rpc D workspace.rs::tests::delete_chat_tombstones_row_and_session
+   now in: ['crates/doc/src/registry/tests.rs'] | history: []
+L08-sync-doc-proto-rpc D workspace.rs::tests::spaces_round_trip_and_mutate
+   now in: ['crates/doc/src/registry/tests.rs'] | history: []

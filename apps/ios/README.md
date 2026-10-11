@@ -73,6 +73,21 @@ xcodebuild -project Luna.xcodeproj -scheme Luna \
 Demo fixtures accept `-no-projects` (empty spaces/chats), `-ios-only` (no
 execution hosts), and `-sethomefilter <spaceId>` (an empty value selects All).
 
+### Full UI suite (local only)
+
+CI runs only `LunaTests`. The 14 `LunaUITests` (project sessions, appshots,
+mobile polish) run locally, because macOS simulator minutes cost about ten
+times Linux ones (CORE-02 decision). Run the whole suite and keep its result
+bundle:
+
+```sh
+cd apps/ios
+xcodebuild -project Luna.xcodeproj -scheme Luna \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -resultBundlePath ../../target/qa/ios-ui-tests/$(date -u +%Y%m%dT%H%M%SZ).xcresult \
+  -only-testing:LunaUITests CODE_SIGNING_ALLOWED=NO test
+```
+
 ## Architecture
 
 ```

@@ -1,0 +1,15 @@
+{
+ "commit": "afd8455b",
+ "workflow": "UI tests",
+ "runId": 38166613984,
+ "jobs": {
+  "session-sync-regressions": "failure: Provider protocol and permission regressions -> claude_goals::resumed_session_seeds_claudes_restored_goal (left 0, right 2); later steps skipped",
+  "linux-browser": "failure: X11 and Wayland browser regressions -> 'blur sample did not cover the checkerboard' (runner DRI3/EGL errors)",
+  "macos-frame-recovery": "failure: Native browser regression and screenshots -> 'repeated tab/toolbar tooltip disrupted the live page'",
+  "ios-tests": "success",
+  "ui-tests": "success (13.6 min)"
+ },
+ "localIsolatedReruns": {
+  "claude_goals::resumed_session_seeds_claudes_restored_goal": "5/5 passed on macOS"
+ }
+}
