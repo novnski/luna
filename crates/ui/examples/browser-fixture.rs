@@ -71,14 +71,11 @@ fn validate_blur(
     window_width: f32,
 ) -> anyhow::Result<()> {
     let baseline = image::open(directory.join("browser-blur-baseline-dark.png"))?.to_rgb8();
+    let dark_image = image::open(directory.join("browser-blur-dark.png"))?.to_rgb8();
+    let light_image = image::open(directory.join("browser-blur-light.png"))?.to_rgb8();
+    let solid_image = image::open(directory.join("browser-blur-solid-light.png"))?.to_rgb8();
     let scale = baseline.width() as f64 / window_width as f64;
-    let (x, y, w, h) = region;
-    // Empty lower-right menu area: no labels, icons, border, or rounded corner.
-    let x0 = ((x + w - 45.) * scale) as u32;
-    let x1 = ((x + w - 16.) * scale) as u32;
-    let y0 = ((y + h - 33.) * scale) as u32;
-    let y1 = ((y + h - 15.) * scale) as u32;
-    let measure = |img: &image::RgbImage| {
+    let measure = |img: &image::RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32)| {
         let mut edges = 0.;
         let mut mean = 0.;
         let mut count = 0.;
@@ -97,14 +94,43 @@ fn validate_blur(
         }
         (edges / count, mean / count)
     };
-    let (sharp, _) = measure(&baseline);
-    let dark = measure(&image::open(directory.join("browser-blur-dark.png"))?.to_rgb8());
-    let light = measure(&image::open(directory.join("browser-blur-light.png"))?.to_rgb8());
-    let solid = measure(&image::open(directory.join("browser-blur-solid-light.png"))?.to_rgb8());
+    // Sample inside the menu, clear of its border and rounded corners, where it
+    // covers the checkerboard and no label: with the checkerboard replaced by a
+    // flat colour (menu still open) the label-free spot is the flattest one.
+    let (x, y, w, h) = region;
+    let (inset, width, height) = (8., 20., 16.);
+    let mut sample = None;
+    let mut y1 = y + h - inset;
+    while y1 - height >= y + h / 2. {
+        let mut x1 = x + w - inset;
+        while x1 - width >= x + w / 2. {
+            let candidate = (
+                ((x1 - width) * scale) as u32,
+                ((y1 - height) * scale) as u32,
+                (x1 * scale) as u32,
+                (y1 * scale) as u32,
+            );
+            if measure(&baseline, candidate).0 > 10. {
+                let flatness = measure(&solid_image, candidate).0;
+                if sample.is_none_or(|(best, _)| flatness < best) {
+                    sample = Some((flatness, candidate));
+                }
+            }
+            x1 -= 2.;
+        }
+        y1 -= 2.;
+    }
+    let Some((_, sample)) = sample else {
+        anyhow::bail!("blur sample did not cover the checkerboard");
+    };
+    let (sharp, _) = measure(&baseline, sample);
+    let dark = measure(&dark_image, sample);
+    let light = measure(&light_image, sample);
+    let solid = measure(&solid_image, sample);
     std::fs::write(
         directory.join("blur-measurements.json"),
         serde_json::to_string_pretty(
-            &serde_json::json!({"sample":[x0,y0,x1,y1],"baseline_edges":sharp,"dark_edges":dark.0,"light_edges":light.0,"light_mean":light.1,"solid_mean":solid.1}),
+            &serde_json::json!({"region":[x,y,w,h],"sample":[sample.0,sample.1,sample.2,sample.3],"baseline_edges":sharp,"dark_edges":dark.0,"light_edges":light.0,"light_mean":light.1,"solid_mean":solid.1}),
         )?,
     )?;
     anyhow::ensure!(sharp > 10., "blur sample did not cover the checkerboard");
@@ -276,8 +302,13 @@ fn main() -> anyhow::Result<()> {
                     let before = first.read_with(cx, |b, _| b.fixture_visibility_changes());
                     // Actual GPUI mouse dispatch exercises tab and toolbar hover
                     // listeners and tooltip timers, including rapid cancellation.
+                    // The right pane's header: the active tab chip sits 57 px
+                    // above the page and the toolbar (Back, Forward, Reload)
+                    // 19 px above it, with Reload 86 px in from the page edge.
+                    let tab = (left + 35., top - 57.);
+                    let reload = (left + 86., top - 19.);
                     for _ in 0..12 {
-                        for (x,y) in [(left + 35.,20.), (left - 20.,100.), (left + 78.,56.)] {
+                        for (x,y) in [tab, (left - 20.,100.), reload] {
                             first.read_with(cx, |b,_| b.fixture_move_cursor(x as f64,y as f64));
                             gpui::AnyWindowHandle::from(window).update(cx, |_, w, cx| { w.dispatch_event(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent { position:gpui::point(px(x),px(y)), pressed_button:None,modifiers:Default::default() }),cx); })?;
                             pause(cx, 80).await;
@@ -294,7 +325,7 @@ fn main() -> anyhow::Result<()> {
                     // Also dwell on the tab itself: its URL tooltip is the
                     // original reported flicker case, distinct from toolbar hover.
                     for _ in 0..2 {
-                        for (x,y) in [(left+35.,20.), (left+78.,56.)] {
+                        for (x,y) in [tab, reload] {
                             first.read_with(cx, |b,_| b.fixture_move_cursor(x as f64,y as f64));
                             gpui::AnyWindowHandle::from(window).update(cx, |_,w,cx| { w.dispatch_event(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {position:gpui::point(px(x),px(y)),pressed_button:None,modifiers:Default::default()}),cx); })?;
                             pause(cx, 1000).await;

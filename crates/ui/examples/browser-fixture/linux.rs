@@ -518,11 +518,15 @@ pub async fn exercise(
     let bounds = page.read_with(cx, |b, _| b.fixture_linux_bounds());
     let viewport =
         AnyWindowHandle::from(window).update(cx, |_, w, _| f32::from(w.viewport_size().width))?;
-    super::validate_blur(
-        output,
-        (f32::from(bounds.origin.x) as f64 + 124., 42., 168., 112.),
-        viewport,
-    )?;
+    // The active tab's context menu opens under the tab chip in the right
+    // pane's header: 7 px right of the page edge, 36 px above the page top,
+    // 182 x 113 (measured on the CI capture after the header moved the tabs
+    // below the pane title). validate_blur picks its sample inside it.
+    let (left, top) = (
+        f32::from(bounds.origin.x) as f64,
+        f32::from(bounds.origin.y) as f64,
+    );
+    super::validate_blur(output, (left + 7., top - 36., 182., 113.), viewport)?;
     window.update(cx, |s, _, cx| s.fixture_browser_menu(false, cx))?;
     cx.update(|cx| {
         appearance::set_mode(appearance::AppearanceMode::Dark, cx);
