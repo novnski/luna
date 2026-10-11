@@ -64,14 +64,22 @@ fn capture_hover_frame(
     })?
 }
 
+/// The canonical system temp root an opt-in seed may live in (macOS resolves
+/// `/tmp` to `/private/tmp`).
+const OPT_IN_PARENT: &str = if cfg!(target_os = "macos") {
+    "/private/tmp"
+} else {
+    "/tmp"
+};
+
 fn validate_opt_in_root(root: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
-        root.parent() == Some(Path::new("/private/tmp"))
+        root.parent() == Some(Path::new(OPT_IN_PARENT))
             && root
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("luna-l12-")),
-        "opt-in fixture requires an explicit canonical /private/tmp/luna-l12-* root"
+        "opt-in fixture requires an explicit canonical {OPT_IN_PARENT}/luna-l12-* root"
     );
     Ok(())
 }
@@ -1549,7 +1557,7 @@ mod tests {
     async fn l20_opt_in_seed_uses_only_synthetic_registered_git_checkouts() {
         let temp = tempfile::Builder::new()
             .prefix("luna-l12-l20-seed-")
-            .tempdir_in("/private/tmp")
+            .tempdir_in(OPT_IN_PARENT)
             .unwrap();
         let root = temp.path().canonicalize().unwrap();
         validate_opt_in_root(&root).unwrap();
