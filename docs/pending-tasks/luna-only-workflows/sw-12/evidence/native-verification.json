@@ -1,0 +1,42 @@
+{
+  "at": "2026-10-11T23:21:07.135Z",
+  "pid": "17924",
+  "executable": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna",
+  "signature": "verified",
+  "deviceId": "70acfa1e-7bb2-4869-a754-320e4b223219",
+  "writesAllowlisted": false,
+  "lun12Revision": 2,
+  "priorRevision": 2,
+  "auditEvents": [
+    "22:ev-8716e9392fe542e0a890193b7a92973c:r2",
+    "20:ev-eea4ec21bb894fdc89d68daed43fed91:r1"
+  ],
+  "sourceLinks": [
+    "source:d9075a5b-a18d-4e22-96dd-cffa95e70e2e:true"
+  ],
+  "imageSha256": "721ec3c786e78dc75135586e05bcff5dacfde5afd15203ce1a3731df158c1a3e",
+  "activeKeys": [
+    "LUN-13",
+    "LUN-12",
+    "LUN-11",
+    "LUN-2",
+    "LUN-1"
+  ],
+  "archivedKeys": [
+    "LUN-10",
+    "LUN-9",
+    "LUN-8",
+    "LUN-7",
+    "LUN-6",
+    "LUN-5",
+    "LUN-4",
+    "LUN-3"
+  ],
+  "visibleRelatedKeys": [
+    "LUN-1",
+    "LUN-2",
+    "LUN-11",
+    "LUN-12",
+    "LUN-13"
+  ]
+}

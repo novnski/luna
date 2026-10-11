@@ -1,0 +1,64 @@
+[
+ {
+  "name": "engine-e2e",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test automations_e2e --test board_store_e2e --test board_authoring_e2e --test board_chat_model_e2e --test board_lifecycle_e2e --test board_review_e2e --test board_tools_e2e --test queued_attachments --no-fail-fast",
+  "exit_code": 0,
+  "log": "target/qa/sw-12/engine-e2e.log"
+ },
+ {
+  "name": "fixtures-build",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture --example board-detail-fixture --example board-chat-ui-fixture --example chat-workbench-fixture",
+  "exit_code": 0,
+  "log": "target/qa/sw-12/fixtures-build.log"
+ },
+ {
+  "name": "related-build",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture --example related-chats-fixture",
+  "exit_code": 0,
+  "log": "target/qa/sw-12/related-build.log"
+ },
+ {
+  "name": "quit-luna-dev",
+  "command": "NSRunningApplication.terminate for PID 36842 (the run-macos-dev.sh graceful quit)",
+  "exit_code": 0,
+  "note": "exited after 2 s; never force-quit"
+ },
+ {
+  "name": "board-detail-fixture",
+  "command": "target/debug/examples/board-detail-fixture \"$PWD/target/qa/sw-12/detail\"",
+  "exit_code": 0,
+  "seconds": 70
+ },
+ {
+  "name": "board-chat-ui-fixture",
+  "command": "target/debug/examples/board-chat-ui-fixture \"$PWD/target/qa/sw-12/chat\"",
+  "exit_code": 0,
+  "seconds": 40
+ },
+ {
+  "name": "chat-workbench-fixture",
+  "command": "target/debug/examples/chat-workbench-fixture \"$PWD/target/qa/sw-12/workbench\"",
+  "exit_code": 0,
+  "seconds": 271
+ },
+ {
+  "name": "related-chats-fixture",
+  "command": "target/debug/examples/related-chats-fixture \"$PWD/target/qa/sw-12/related\"",
+  "exit_code": 0,
+  "seconds": 19
+ },
+ {
+  "name": "refresh-luna-dev",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 3,
+  "note": "PID 17924, IPC 59777 listening, codesign --verify --deep --strict exit 0"
+ },
+ {
+  "name": "native-readback",
+  "command": "node target/qa/sw-12/native-readback.mjs",
+  "exit_code": 0,
+  "log": "target/qa/sw-12/native.log",
+  "note": "read-only allowlist: EngineInfo, BoardList, BoardRead, BoardChatBadges, ReadAttachmentChunk"
+ }
+]

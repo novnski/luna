@@ -1,0 +1,1028 @@
+{
+  "fixture": "board-detail-fixture",
+  "slice": "A9 board detail",
+  "outcome": "pass",
+  "error": null,
+  "commit": "8ff34b56d9d4c0dad3920fd2b77a7856d703f800",
+  "finishedAt": "2026-10-11T23:13:37.279531+00:00",
+  "steps": [
+    {
+      "id": "board-route-restored",
+      "expected": "page:board",
+      "observed": "page:board",
+      "pass": true
+    },
+    {
+      "id": "a11y-duplicate-id-check-armed",
+      "expected": {
+        "accessKitTree": true,
+        "debugAssertions": true
+      },
+      "observed": {
+        "accessKitTree": true,
+        "debugAssertions": true
+      },
+      "pass": true
+    },
+    {
+      "id": "catalog-from-engine",
+      "expected": "an available harness with two models of different reasoning support",
+      "observed": {
+        "harness": "codex",
+        "a": "fixture-sol",
+        "b": "fixture-luna",
+        "level": "low",
+        "permission": "auto"
+      },
+      "pass": true
+    },
+    {
+      "id": "chooser-two-experiences",
+      "expected": "Write manually and Discuss with AI are separate controls",
+      "observed": {
+        "manual": [
+          768.0,
+          233.0,
+          557.0,
+          60.0
+        ],
+        "ai": [
+          768.0,
+          307.0,
+          557.0,
+          76.0
+        ]
+      },
+      "pass": true
+    },
+    {
+      "id": "discuss-with-ai-has-no-form",
+      "expected": {
+        "authoringMounted": true,
+        "titleOrDescriptionInputs": []
+      },
+      "observed": {
+        "authoringMounted": true,
+        "surface": null,
+        "titleOrDescriptionInputs": []
+      },
+      "pass": true
+    },
+    {
+      "id": "scrim-closes-overlay",
+      "expected": null,
+      "observed": null,
+      "pass": true
+    },
+    {
+      "id": "manual-form-focuses-title",
+      "expected": "title",
+      "observed": "title",
+      "pass": true
+    },
+    {
+      "id": "empty-title-rejected-in-form",
+      "expected": {
+        "titleError": "shown",
+        "tickets": 0,
+        "chats": 0
+      },
+      "observed": {
+        "titleError": "A title is required: a short outcome such as “Retry failed uploads”.",
+        "tickets": 0,
+        "chats": 0
+      },
+      "pass": true
+    },
+    {
+      "id": "settings-are-the-chat-pickers",
+      "expected": {
+        "agent": [
+          "model",
+          "access",
+          "checkout"
+        ],
+        "reviewer": [
+          "model"
+        ],
+        "modes": [
+          "Project defaults",
+          "Project default"
+        ],
+        "modelPill": "Mock 1"
+      },
+      "observed": {
+        "agent": {
+          "model": [
+            824.0,
+            345.5,
+            133.0,
+            28.0
+          ],
+          "checkout": [
+            993.0,
+            348.5,
+            136.0,
+            22.0
+          ],
+          "access": [
+            961.0,
+            345.5,
+            28.0,
+            28.0
+          ],
+          "picker-checkout": [
+            993.0,
+            348.5,
+            136.0,
+            22.0
+          ]
+        },
+        "reviewer": {
+          "model": [
+            1015.0,
+            467.5,
+            133.0,
+            28.0
+          ]
+        },
+        "modes": [
+          "Project defaults",
+          "Project default"
+        ],
+        "modelPill": "Mock 1",
+        "agentCaption": "Inherits the project's settings. Runs on Studio Mac, the project's host."
+      },
+      "pass": true
+    },
+    {
+      "id": "model-choices-from-catalog",
+      "expected": {
+        "invented": []
+      },
+      "observed": {
+        "rows": [
+          {
+            "id": "mock-1",
+            "label": "Mock 1",
+            "harness": "mock"
+          },
+          {
+            "id": "mock-fable-5",
+            "label": "Fable 5",
+            "harness": "mock"
+          }
+        ],
+        "invented": []
+      },
+      "pass": true
+    },
+    {
+      "id": "reasoning-only-supported",
+      "expected": [
+        "high",
+        "low",
+        "medium"
+      ],
+      "observed": [
+        "high",
+        "low",
+        "medium"
+      ],
+      "pass": true
+    },
+    {
+      "id": "selected-real-settings",
+      "expected": {
+        "harness": "codex",
+        "model": "fixture-sol",
+        "reasoning": "low",
+        "permissionMode": "auto",
+        "mode": "Custom"
+      },
+      "observed": {
+        "draft": {
+          "harness": "codex",
+          "model": "fixture-sol",
+          "reasoning": "low",
+          "permissionMode": "auto"
+        },
+        "mode": "Custom"
+      },
+      "pass": true
+    },
+    {
+      "id": "model-change-resets-incompatible-reasoning",
+      "expected": {
+        "reasoning": null,
+        "notice": "names the reset level",
+        "tray": [
+          "medium"
+        ]
+      },
+      "observed": {
+        "reasoning": null,
+        "notices": [
+          "Low reasoning is not supported by Fixture Luna; reasoning now inherits."
+        ],
+        "tray": [
+          "medium"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "id": "reviewer-fallback-when-none-configured",
+      "expected": {
+        "caption": "No reviewer is configured: the implementation model reviews in a separate reviewer chat.",
+        "pill": [
+          "Fixture Luna",
+          "Medium"
+        ]
+      },
+      "observed": {
+        "shown": "No reviewer is configured: the implementation model reviews in a separate reviewer chat.",
+        "catalogFallsBack": true,
+        "pill": [
+          "Fixture Luna",
+          "Medium"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "id": "ticket-picks-leave-chat-defaults",
+      "expected": "absent",
+      "observed": "absent",
+      "pass": true
+    },
+    {
+      "id": "enter-moves-to-description",
+      "expected": "description",
+      "observed": "description",
+      "pass": true
+    },
+    {
+      "id": "description-box-lower-press-focuses",
+      "expected": {
+        "focused": [
+          "description",
+          "description"
+        ],
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes"
+      },
+      "observed": {
+        "focused": [
+          "description",
+          "description"
+        ],
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes"
+      },
+      "pass": true
+    },
+    {
+      "id": "typed-brief",
+      "expected": {
+        "title": "retry failed uploads",
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes"
+      },
+      "observed": {
+        "title": "retry failed uploads",
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes"
+      },
+      "pass": true
+    },
+    {
+      "id": "generate-title-from-the-brief",
+      "expected": {
+        "before": "waiting",
+        "ready": "ready",
+        "title": "Retry failed uploads three times",
+        "saved": 0
+      },
+      "observed": {
+        "before": "waiting",
+        "ready": "ready",
+        "title": "Retry failed uploads three times",
+        "saved": 0
+      },
+      "pass": true
+    },
+    {
+      "id": "brief-is-the-chat-composer",
+      "expected": {
+        "form": true,
+        "send": null,
+        "chips": [
+          "access",
+          "checkout",
+          "model"
+        ]
+      },
+      "observed": {
+        "form": true,
+        "send": null,
+        "chips": {
+          "access": [
+            991.0,
+            343.0,
+            28.0,
+            28.0
+          ],
+          "model": [
+            824.0,
+            343.0,
+            163.0,
+            28.0
+          ],
+          "checkout": [
+            1023.0,
+            346.0,
+            136.0,
+            22.0
+          ],
+          "picker-checkout": [
+            1023.0,
+            346.0,
+            136.0,
+            22.0
+          ]
+        }
+      },
+      "pass": true
+    },
+    {
+      "id": "brief-takes-files-and-images",
+      "expected": {
+        "offered": "src/upload.rs",
+        "mention": "in the brief",
+        "staged": 1
+      },
+      "observed": {
+        "offered": [
+          "src/upload.rs"
+        ],
+        "brief": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes\n[upload.rs](luna-file:src/upload.rs) ",
+        "staged": [
+          "brief-screenshot.png"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "id": "save-to-backlog-once-no-chat",
+      "expected": {
+        "tickets": 1,
+        "chats": 0,
+        "column": "backlog"
+      },
+      "observed": {
+        "tickets": 1,
+        "chats": 0,
+        "column": "backlog"
+      },
+      "pass": true
+    },
+    {
+      "id": "receipt-shows-key-no-chat-and-settings",
+      "expected": {
+        "key": "LUN-1",
+        "chat": "No chat was created",
+        "implementation": [
+          "Codex",
+          "Fixture Luna",
+          "Approve for me",
+          "Medium"
+        ]
+      },
+      "observed": {
+        "title": "LUN-1 saved to Backlog",
+        "chat": "No chat was created and nothing started. Move it to Ready (or press Start in its details) when an agent should work on it.",
+        "implementation": "Implementation: Codex · Fixture Luna · Medium · Approve for me",
+        "review": "Review: Project default · No reviewer is configured: the implementation model reviews in a separate reviewer chat."
+      },
+      "pass": true
+    },
+    {
+      "id": "engine-saved-the-selected-settings",
+      "expected": {
+        "harness": "codex",
+        "model": "fixture-luna",
+        "reasoning": "medium",
+        "permissionMode": "auto",
+        "launches": 0,
+        "workingChat": null
+      },
+      "observed": {
+        "implementation": {
+          "harness": "codex",
+          "model": "fixture-luna",
+          "reasoning": "medium",
+          "permissionMode": "auto"
+        },
+        "review": {},
+        "launches": 0,
+        "workingChat": null
+      },
+      "pass": true
+    },
+    {
+      "id": "engine-saved-the-brief-image-and-mention",
+      "expected": {
+        "attachments": 1,
+        "underUploads": true,
+        "mention": true,
+        "composerCleared": true
+      },
+      "observed": {
+        "attachments": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png"
+        ],
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes\n[upload.rs](luna-file:src/upload.rs)"
+      },
+      "pass": true
+    },
+    {
+      "id": "receipt-takes-the-keyboard",
+      "expected": "receipt",
+      "observed": "receipt",
+      "pass": true
+    },
+    {
+      "id": "detail-shows-saved-settings",
+      "expected": {
+        "requested": [
+          "Codex",
+          "Fixture Luna",
+          "Approve for me",
+          "Medium"
+        ],
+        "resolved": "Not resolved yet…",
+        "observed": "Not observed…"
+      },
+      "observed": {
+        "requested": "Codex · Fixture Luna · Medium · Approve for me",
+        "resolved": "Not resolved yet: Start resolves the settings and freezes them for the launch.",
+        "observed": "Not observed: nothing has run yet."
+      },
+      "pass": true
+    },
+    {
+      "id": "send-update-not-offered-before-start",
+      "expected": false,
+      "observed": false,
+      "pass": true
+    },
+    {
+      "id": "harness-switch-without-duplicate-ids",
+      "expected": {
+        "visits": 5,
+        "a11yTree": true
+      },
+      "observed": {
+        "visits": [
+          {
+            "harness": "claude-code",
+            "implementation": "Fixture Opus",
+            "review": "Fixture Opus"
+          },
+          {
+            "harness": "codex",
+            "implementation": "Fixture Astra",
+            "review": "Fixture Astra"
+          },
+          {
+            "harness": "opencode",
+            "implementation": "Fixture Open Sonnet",
+            "review": "Fixture Open Sonnet"
+          },
+          {
+            "harness": "claude-code",
+            "implementation": "Fixture Opus",
+            "review": "Fixture Opus"
+          },
+          {
+            "harness": "codex",
+            "implementation": "Fixture Astra",
+            "review": "Fixture Astra"
+          }
+        ],
+        "a11yTree": true
+      },
+      "pass": true
+    },
+    {
+      "id": "rename-through-the-engine",
+      "expected": {
+        "title": "retry failed uploads safely",
+        "revision": "> 1"
+      },
+      "observed": {
+        "title": "retry failed uploads safely",
+        "revision": 2
+      },
+      "pass": true
+    },
+    {
+      "id": "brief-box-lower-press-focuses",
+      "expected": {
+        "before": false,
+        "after": true
+      },
+      "observed": {
+        "before": false,
+        "after": true
+      },
+      "pass": true
+    },
+    {
+      "id": "stale-brief-edit-conflicts",
+      "expected": {
+        "conflictRevision": 3,
+        "engine": "changed in another window",
+        "mineKept": "… plus logging"
+      },
+      "observed": {
+        "conflictRevision": 3,
+        "engine": "changed in another window",
+        "mine": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes\n[upload.rs](luna-file:src/upload.rs) plus logging",
+        "banner": "LUN-1 changed since you started editing (you started from revision 2; it is now revision 3). Your edit is kept. Choose which version to keep."
+      },
+      "pass": true
+    },
+    {
+      "id": "keep-mine-saves-over-the-current-revision",
+      "expected": {
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes\n[upload.rs](luna-file:src/upload.rs) plus logging",
+        "revision": "> 3"
+      },
+      "observed": {
+        "description": "uploads that fail are retried three times\ndone when the retry test passes fast\n\n## Acceptance criteria\n- the retry test passes\n[upload.rs](luna-file:src/upload.rs) plus logging",
+        "revision": 4
+      },
+      "pass": true
+    },
+    {
+      "id": "start-dispatches-first-start-once",
+      "expected": {
+        "engineFirstStarts": 1,
+        "uiStarts": 1,
+        "summary": "1 start · 0 continuations"
+      },
+      "observed": {
+        "engineFirstStarts": 1,
+        "uiStarts": 1,
+        "summary": "1 start · 0 continuations",
+        "phase": "starting"
+      },
+      "pass": true
+    },
+    {
+      "id": "first-start-delivers-the-brief-image",
+      "expected": {
+        "attachments": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png"
+        ],
+        "trailer": true
+      },
+      "observed": {
+        "attachments": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png"
+        ],
+        "trailer": true
+      },
+      "pass": true
+    },
+    {
+      "id": "send-update-not-offered-without-an-unsent-revision",
+      "expected": false,
+      "observed": false,
+      "pass": true
+    },
+    {
+      "id": "send-update-offered-while-running",
+      "expected": {
+        "offered": true,
+        "runActive": true,
+        "note": "A run is active…"
+      },
+      "observed": {
+        "offered": true,
+        "runActive": true,
+        "note": "A run is active. Saving changes the ticket's brief for future work; the running chat keeps revision 4 until you send the update."
+      },
+      "pass": true
+    },
+    {
+      "id": "send-update-dispatches-a-brief-update",
+      "expected": {
+        "engineBriefUpdates": 1,
+        "uiUpdates": 1,
+        "notice": "Update sent…"
+      },
+      "observed": {
+        "engineBriefUpdates": 1,
+        "uiUpdates": 1,
+        "summary": "1 start · 0 continuations · 1 brief update",
+        "notice": "Update sent to the working chat: brief revision 4 → 5 (queued for its next turn)."
+      },
+      "pass": true
+    },
+    {
+      "id": "brief-image-thumbnail",
+      "expected": {
+        "images": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png"
+        ],
+        "state": "loaded"
+      },
+      "observed": [
+        {
+          "path": "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png",
+          "state": "loaded"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "id": "lightbox-escape-keeps-the-drawer",
+      "expected": {
+        "imagePreview": null,
+        "surface": "detail"
+      },
+      "observed": {
+        "imagePreview": null,
+        "surface": "detail"
+      },
+      "pass": true
+    },
+    {
+      "id": "brief-images-replaced-through-the-engine",
+      "expected": {
+        "removed": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/14de1ca9-brief-screenshot.png"
+        ],
+        "added": "one new upload",
+        "revision": "> 9"
+      },
+      "observed": {
+        "attachments": [
+          "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpjg6pox/engine/orgs/board-detail-fixture/board-detail-fixture/uploads/72df63ea-brief-replacement.png"
+        ],
+        "revision": 10
+      },
+      "pass": true
+    },
+    {
+      "id": "running-ticket-not-deletable",
+      "expected": {
+        "delete": false
+      },
+      "observed": [
+        "edit",
+        "moveToBacklog",
+        "stop",
+        "archive",
+        "goToChat",
+        "sendUpdate"
+      ],
+      "pass": true
+    },
+    {
+      "id": "delete-asks-before-sending",
+      "expected": {
+        "confirm": true,
+        "ticketStillExists": true
+      },
+      "observed": {
+        "confirm": true,
+        "ticketStillExists": true
+      },
+      "pass": true
+    },
+    {
+      "id": "delete-removes-the-ticket",
+      "expected": {
+        "drawer": "closed",
+        "listed": false,
+        "readable": false
+      },
+      "observed": {
+        "surface": null,
+        "listed": false,
+        "read": {
+          "Err": "BoardRead: board-error:{\"code\":\"notFound\",\"workItemId\":\"wi-c02b914387b30b66a0dfa8d97eab2446\"}"
+        }
+      },
+      "pass": true
+    },
+    {
+      "id": "reviewer-archived-through-the-engine",
+      "expected": {
+        "status": "applied",
+        "archived": true
+      },
+      "observed": {
+        "status": "applied",
+        "reason": null,
+        "archived": true
+      },
+      "pass": true
+    },
+    {
+      "id": "review-from-engine-records",
+      "expected": {
+        "repairs": "Repairs used: 1 of 2 · Review passes: 2",
+        "phase": "Round 1 … Completed",
+        "reviewer": "Fixture Sol",
+        "finding": "Note · Not blocking · src/upload.rs:57",
+        "earlier": "… Changes requested · 1 finding (1 blocking)",
+        "cleanup": [
+          "Cleanup: Archived; the review history is kept.",
+          "Cleanup: Archived and closed; the review history is kept."
+        ],
+        "engineCleanupSettled": "closed",
+        "reviewDetails": true
+      },
+      "observed": {
+        "repairs": "Repairs used: 1 of 2 · Review passes: 2",
+        "phase": "Round 1 (after repair 1) · Completed",
+        "reviewer": "Reviewer: Codex · Fixture Sol · Low (the implementation model; no reviewer is configured)",
+        "finding": "Note · Not blocking · src/upload.rs:57",
+        "earlier": "Round 0 · Completed · Changes requested · 1 finding (1 blocking)",
+        "cleanup": "Cleanup: Archived and closed; the review history is kept.",
+        "engineCleanupNow": "closed",
+        "reviewDetails": true
+      },
+      "pass": true
+    },
+    {
+      "id": "evidence-from-engine-records",
+      "expected": {
+        "done": "Done: the configured checks and review passed…",
+        "outcomes": [
+          "Diff · 3 files · +42 · −7",
+          "Pull request · …",
+          "Check · cargo test · Passed",
+          "Artifact · retry-report.json"
+        ],
+        "actor": "Recorded by …",
+        "historical": "1 earlier result kept as history."
+      },
+      "observed": {
+        "done": "Done: the configured checks and review passed for the current result.",
+        "outcomes": [
+          "Pull request · Retry failed uploads · Open",
+          "Diff · 3 files · +42 · −7",
+          "Check · cargo test · Passed",
+          "Artifact · retry-report.json"
+        ],
+        "metas": [
+          "Recorded by LUNA (source-control) · Oct 12, 02:08 · generation 3 · basis diff:9f2c4e1",
+          "Recorded by LUNA (review) · Oct 12, 02:08 · generation 3 · basis diff:9f2c4e1",
+          "Recorded by Agent in “Retry failed uploads” · Oct 12, 02:08 · generation 3 · basis diff:9f2c4e1",
+          "Recorded by Reviewer “Review · retry failed uploads” · Oct 12, 02:08 · generation 3 · basis diff:9f2c4e1 · target/retry-report.json"
+        ],
+        "historical": "1 earlier result kept as history."
+      },
+      "pass": true
+    },
+    {
+      "id": "dispatch-history-counts",
+      "expected": "1 start · 2 continuations",
+      "observed": {
+        "summary": "1 start · 2 continuations",
+        "first": "Continuation · generation 3 · brief revision 2 · Oct 12, 01:43",
+        "preview": "LUNA board continuation for LUN-3 (generation 3, brief revision 2): Uploads that fail are retried three times.",
+        "meta": "Sent to “Retry failed uploads” · instruction hash sha256:ada16 · resolved Codex · Fixture Luna · model default reasoning · Approve for me"
+      },
+      "pass": true
+    },
+    {
+      "id": "source-issue-and-blocker",
+      "expected": {
+        "issue": "example/luna#7 · source",
+        "blocker": "LUN-1"
+      },
+      "observed": {
+        "issue": "example/luna#7 · source",
+        "blocker": "LUN-1 · retry failed uploads safely · still open (blocks this ticket)",
+        "writeback": true
+      },
+      "pass": true
+    },
+    {
+      "id": "review-details-opens-the-archived-reviewer",
+      "expected": {
+        "route": "chat",
+        "selected": "b9d1a000-0000-4000-8000-000000000002",
+        "archived": true
+      },
+      "observed": {
+        "route": "chat",
+        "selected": "b9d1a000-0000-4000-8000-000000000002",
+        "archived": true
+      },
+      "pass": true
+    },
+    {
+      "id": "drawer-survives-go-to-chat-and-back",
+      "expected": {
+        "surface": "detail",
+        "workItemId": "wi-0c8629f9d3a9b9d31fb9c75f546a0a78"
+      },
+      "observed": {
+        "surface": "detail",
+        "workItemId": "wi-0c8629f9d3a9b9d31fb9c75f546a0a78"
+      },
+      "pass": true
+    },
+    {
+      "id": "narrow-window-drawer-fits",
+      "expected": {
+        "drawerFillsThePage": true,
+        "controlsOutside": []
+      },
+      "observed": {
+        "overlay": [
+          270.0,
+          44.0,
+          476.0,
+          842.0
+        ],
+        "drawer": [
+          271.0,
+          44.0,
+          475.0,
+          842.0
+        ],
+        "controlsOutside": []
+      },
+      "pass": true
+    },
+    {
+      "id": "close-stays-pinned-while-the-body-scrolls",
+      "expected": {
+        "bodyScrolled": true,
+        "closeInsideHeader": true,
+        "headerAboveBody": true
+      },
+      "observed": {
+        "header": [
+          271.0,
+          44.0,
+          475.0,
+          82.0
+        ],
+        "close": [
+          699.0,
+          59.0,
+          26.0,
+          26.0
+        ],
+        "body": [
+          271.0,
+          127.0,
+          475.0,
+          759.0
+        ],
+        "bodyScrolled": true
+      },
+      "pass": true
+    },
+    {
+      "id": "escape-closes-the-drawer",
+      "expected": null,
+      "observed": null,
+      "pass": true
+    },
+    {
+      "id": "pinned-close-closes-the-drawer",
+      "expected": null,
+      "observed": null,
+      "pass": true
+    }
+  ],
+  "captures": [
+    {
+      "name": "d01-chooser",
+      "file": "d01-chooser.png",
+      "sha256": "34e0cd27653dfb208f047f7fa0219f690c562589ae9e31795f0ab456d1521480",
+      "bytes": 499735
+    },
+    {
+      "name": "d02-discuss-with-ai",
+      "file": "d02-discuss-with-ai.png",
+      "sha256": "f723c38fd87bbdc055cedb963345db5032d24c1b9c52c5c8339625c79e4a1fcc",
+      "bytes": 266840
+    },
+    {
+      "name": "d03-manual-settings",
+      "file": "d03-manual-settings.png",
+      "sha256": "426ff9c5db19fa4156628cf567bb61271aac0871ede8fa46d1b34940b792387c",
+      "bytes": 521873
+    },
+    {
+      "name": "d04-receipt",
+      "file": "d04-receipt.png",
+      "sha256": "43c3827ac6414434e66e5b4b94ca19cc08824d8cd734d39066095a8e8f7bdc80",
+      "bytes": 429092
+    },
+    {
+      "name": "d05-detail",
+      "file": "d05-detail.png",
+      "sha256": "c2e6c1404544f9e459ba4fef21743ccf0e3d2238dcf9722f56a183363948c4cc",
+      "bytes": 529106
+    },
+    {
+      "name": "d05b-harness-switch",
+      "file": "d05b-harness-switch.png",
+      "sha256": "77c24189df02425d1f5db7068e2d8cfe209a9f2bb54fa2dbf31bd5d9e94c0527",
+      "bytes": 531729
+    },
+    {
+      "name": "d06-conflict",
+      "file": "d06-conflict.png",
+      "sha256": "cadf7b7fd7aaad2577d75f46f3e755d01206a908a70c7323d44ce4633499695f",
+      "bytes": 565073
+    },
+    {
+      "name": "d07-running",
+      "file": "d07-running.png",
+      "sha256": "2140d8ec1d776ecb7ae124e4baedea6f1638ea53576e6db9b6101ad9eeced6ee",
+      "bytes": 525789
+    },
+    {
+      "name": "d08-update-sent",
+      "file": "d08-update-sent.png",
+      "sha256": "d9bbeb17c0a0bb0e91f2da741dbb76b4da9c56da9ade8243fd1df8558444079c",
+      "bytes": 529742
+    },
+    {
+      "name": "d08b-brief-image-lightbox",
+      "file": "d08b-brief-image-lightbox.png",
+      "sha256": "adf6a88809850d4d38f46df9e46b83f7abfc3e93e2fd4bf5dc983b149bf6b29d",
+      "bytes": 442702
+    },
+    {
+      "name": "d08c-brief-images-edit",
+      "file": "d08c-brief-images-edit.png",
+      "sha256": "b8f96e34b3cd30631b06c8309e7fdd65f6630b41f02dc42a488e6d0cd7cc5098",
+      "bytes": 541783
+    },
+    {
+      "name": "d08d-brief-image-replaced",
+      "file": "d08d-brief-image-replaced.png",
+      "sha256": "d58c4f78b8adcf16d2304d6429f3da853360af4393760683678a1cfa9fed1042",
+      "bytes": 516344
+    },
+    {
+      "name": "d08e-delete-confirm",
+      "file": "d08e-delete-confirm.png",
+      "sha256": "2d343d816c2b16d25792755e2694be827ddb6458ff799517934aae92e2fff951",
+      "bytes": 591512
+    },
+    {
+      "name": "d08f-deleted",
+      "file": "d08f-deleted.png",
+      "sha256": "389c4f57a4bccc15d761cb64062a642d8d54686967d6cc7dfa56e5a397ac5fb4",
+      "bytes": 372576
+    },
+    {
+      "name": "d09-evidence-top",
+      "file": "d09-evidence-top.png",
+      "sha256": "64bb144ffab65436f2e8fb7cc2e081bb17ea8628dae1806a45bf5dfb4d10a7cd",
+      "bytes": 570630
+    },
+    {
+      "name": "d10-review",
+      "file": "d10-review.png",
+      "sha256": "9eb2100563bcd598e0f425a2e771168864de6c7141c402846621e80164ced261",
+      "bytes": 668114
+    },
+    {
+      "name": "d11-evidence-dispatch",
+      "file": "d11-evidence-dispatch.png",
+      "sha256": "e43b49a06c9a4ef6d953b2a59d1903ca369c7db018a6ac003696b57113ed64e8",
+      "bytes": 786184
+    },
+    {
+      "name": "d12-review-details",
+      "file": "d12-review-details.png",
+      "sha256": "195d278aad644043bd6e8601da48e09c7e792dfd4db0bb737fbbe9bda80c36b7",
+      "bytes": 281258
+    },
+    {
+      "name": "d13-narrow",
+      "file": "d13-narrow.png",
+      "sha256": "12748b04e6ad28fb8604a1d555a52089c6311ed5af049ba1fa3e90b1af14321c",
+      "bytes": 414121
+    },
+    {
+      "name": "d14-narrow-scrolled",
+      "file": "d14-narrow-scrolled.png",
+      "sha256": "d202c2ae1b7a839fe822fde38cdc6f5320fb5cad9151bf834e2e98bf802a8e59",
+      "bytes": 545817
+    }
+  ]
+}

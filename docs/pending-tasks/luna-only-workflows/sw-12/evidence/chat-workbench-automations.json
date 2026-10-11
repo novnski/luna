@@ -1,0 +1,2356 @@
+{
+ "lun2StaleAutomations": {
+  "hiddenDeleted": "w20m-bulk-00",
+  "revealFrames": 2,
+  "visibleDeleted": "w20m-bulk-01",
+  "visibleGoneMs": 181,
+  "watchSeq": 66
+ },
+ "automationsProjectWorkflow": {
+  "opsAutomation": "auto-36181070-3223-4c6f-a346-11acee6e82c8",
+  "dateRefusals": [
+   {
+    "date": "2035-257-257",
+    "time": "09:30",
+    "refusal": "Enter the date as YYYY-MM-DD."
+   },
+   {
+    "date": "2035-1-01",
+    "time": "09:30",
+    "refusal": "Enter the date as YYYY-MM-DD."
+   },
+   {
+    "date": "2035-02-30",
+    "time": "09:30",
+    "refusal": "2035-02-30 is not a calendar date."
+   },
+   {
+    "date": "2035-01-01",
+    "time": "25:00",
+    "refusal": "Enter a time between 00:00 and 23:59."
+   },
+   {
+    "date": "2035-01-01",
+    "time": "9:3",
+    "refusal": "Enter the time as HH:MM."
+   }
+  ],
+  "reviewedDefinition": {
+   "name": "W20N ops digest",
+   "prompt": "Summarize the Ops notes.",
+   "timezone": "Europe/Bucharest",
+   "target": {
+    "kind": "newConversation",
+    "projectId": "w20n-ops-project"
+   },
+   "trigger": {
+    "kind": "interval",
+    "anchorMs": 1791760697495,
+    "everyMinutes": 60
+   },
+   "maxLatenessMs": 600000,
+   "execution": {
+    "harness": "mock",
+    "model": "mock-1",
+    "reasoning": "medium",
+    "modelOptions": {}
+   },
+   "notificationPolicy": "never",
+   "archiveSuccessfulRuns": true
+  },
+  "clampNote": "High isn't offered by this model; runs use Medium.",
+  "reopened": {
+   "requestId": "req-ee1f408f-1d7d-4288-857f-8fe0e5050a25",
+   "automationId": "auto-36181070-3223-4c6f-a346-11acee6e82c8",
+   "expectedRevision": 1,
+   "existing": true,
+   "paused": false,
+   "kind": "interval",
+   "projectId": "w20n-ops-project",
+   "fresh": true,
+   "chatId": null,
+   "sourceTaskId": null,
+   "notificationPolicy": "never",
+   "archiveSuccessfulRuns": true,
+   "draft": {
+    "harness": "mock",
+    "providerAccountId": null,
+    "model": "mock-1",
+    "reasoning": "medium",
+    "branch": null,
+    "checkout": "local",
+    "permissionMode": null,
+    "modelOptions": {}
+   },
+   "resolved": {
+    "harness": "mock",
+    "model": "mock-1",
+    "reasoning": "medium"
+   },
+   "modelNote": null,
+   "phase": "editing",
+   "previewCurrent": false,
+   "nextOccurrencesMs": null,
+   "previewDescription": null,
+   "rule": null,
+   "built": null,
+   "definition": {
+    "name": "W20N ops digest",
+    "prompt": "Summarize the Ops notes.",
+    "timezone": "Europe/Bucharest",
+    "target": {
+     "kind": "newConversation",
+     "projectId": "w20n-ops-project"
+    },
+    "trigger": {
+     "kind": "interval",
+     "anchorMs": 1791760697495,
+     "everyMinutes": 60
+    },
+    "maxLatenessMs": 600000,
+    "execution": {
+     "harness": "mock",
+     "model": "mock-1",
+     "reasoning": "medium",
+     "modelOptions": {}
+    },
+    "notificationPolicy": "never",
+    "archiveSuccessfulRuns": true
+   }
+  },
+  "pausedRename": {
+   "id": "auto-36181070-3223-4c6f-a346-11acee6e82c8",
+   "name": "W20N ops digest (paused edit)",
+   "revision": 3,
+   "enabled": false,
+   "deleted": false,
+   "completed": false,
+   "lifecycle": "Paused",
+   "status": "Paused. No new runs start; accepted work continues under its task controls.",
+   "toggle": "Resume",
+   "trigger": "Every hour",
+   "nextDueMs": null,
+   "target": {
+    "kind": "newConversation",
+    "projectId": "w20n-ops-project"
+   },
+   "projectId": "w20n-ops-project",
+   "destination": "Starts a new chat in Ops each run",
+   "execution": {
+    "harness": "mock",
+    "model": "mock-1",
+    "reasoning": "medium",
+    "modelOptions": {}
+   },
+   "executionLabel": "Mock \u00b7 mock-1 \u00b7 Medium",
+   "sourceTaskId": null,
+   "notificationPolicy": "never",
+   "archiveSuccessfulRuns": true
+  },
+  "retargetedProject": "workbench-project",
+  "ruleNextRuns": [
+   "2026-10-12T09:30:00+03:00[Europe/Bucharest]",
+   "2026-10-14T09:30:00+03:00[Europe/Bucharest]",
+   "2026-10-19T09:30:00+03:00[Europe/Bucharest]"
+  ],
+  "unsupportedRule": "error:Unsupported recurrence field COUNT. Supported: FREQ, INTERVAL, BYHOUR, BYMINUTE, BYMONTH, BYMONTHDAY, BYDAY, WKST, UNTIL",
+  "deletedRow": {
+   "id": "auto-36181070-3223-4c6f-a346-11acee6e82c8",
+   "name": "W20N ops digest (paused edit)",
+   "revision": 5,
+   "enabled": false,
+   "deleted": true,
+   "completed": false,
+   "lifecycle": "Deleted",
+   "status": "Deleted. Its run history stays.",
+   "toggle": null,
+   "trigger": "Every hour",
+   "nextDueMs": null,
+   "target": {
+    "kind": "existing",
+    "taskId": "e5e5e5e5-0000-4000-8000-000000000001"
+   },
+   "projectId": "workbench-project",
+   "destination": "Sends to Automation checks in LUNA",
+   "execution": {
+    "harness": "mock",
+    "model": "mock-1",
+    "reasoning": "medium",
+    "modelOptions": {}
+   },
+   "executionLabel": "Mock \u00b7 mock-1 \u00b7 Medium",
+   "sourceTaskId": "e5e5e5e5-0000-4000-8000-000000000001",
+   "notificationPolicy": "never",
+   "archiveSuccessfulRuns": false
+  },
+  "card": {
+   "id": "w20n-card-reply#automation-auto-c3e2e53f-1bd2-4b22-95a3-cf76781e7391",
+   "entryId": "w20n-card-reply",
+   "version": 16983016272674287621,
+   "kind": "automation",
+   "text": "auto-c3e2e53f-1bd2-4b22-95a3-cf76781e7391",
+   "turnStart": false,
+   "lane": true,
+   "copyText": null,
+   "topGap": 12.0,
+   "historyActions": false
+  },
+  "typedMessage": {
+   "id": "w20n-typed",
+   "entryId": "w20n-typed",
+   "version": 2416078983731870844,
+   "kind": "user",
+   "text": "A typed note.",
+   "turnStart": true,
+   "lane": true,
+   "copyText": "A typed note.",
+   "topGap": 16.0,
+   "historyActions": false,
+   "attachments": 0,
+   "badges": []
+  },
+  "openedFromCard": {
+   "project": "workbench-project"
+  },
+  "leftOps": {
+   "project": "w20n-ops-project"
+  },
+  "focusedTabEditor": {
+   "requestId": "req-b47604d6-d2f1-4615-842e-eccdb4477814",
+   "automationId": "auto-38817990-b654-4ca2-a75f-2b9da8eb52da",
+   "expectedRevision": 0,
+   "existing": false,
+   "paused": false,
+   "kind": "once",
+   "projectId": "w20n-ops-project",
+   "fresh": false,
+   "chatId": "e4e4e4e4-0000-4000-8000-000000000001",
+   "sourceTaskId": "e4e4e4e4-0000-4000-8000-000000000001",
+   "notificationPolicy": "importantUpdates",
+   "archiveSuccessfulRuns": false,
+   "draft": {
+    "harness": "mock",
+    "providerAccountId": null,
+    "model": "mock-1",
+    "reasoning": null,
+    "branch": null,
+    "checkout": "local",
+    "permissionMode": null,
+    "modelOptions": {}
+   },
+   "resolved": {
+    "harness": "mock",
+    "model": "mock-1",
+    "reasoning": null
+   },
+   "modelNote": "Runs continue Ops notes on Mock: choose its model and effort here. Another provider needs a new chat each run.",
+   "phase": "editing",
+   "previewCurrent": false,
+   "nextOccurrencesMs": null,
+   "previewDescription": null,
+   "rule": null,
+   "built": "Enter a name (up to 160 bytes).",
+   "definition": null
+  },
+  "mainAfterFocus": {
+   "conversation": "e5e5e5e5-0000-4000-8000-000000000001"
+  }
+ },
+ "narrow": {
+  "available": true,
+  "loaded": true,
+  "loadNotice": null,
+  "unavailableLatched": false,
+  "bootOverlay": false,
+  "main": "e0e0e0e0-0000-4000-8000-000000000001",
+  "revision": 48,
+  "focusedPane": "pane-c390ee30231a44cf8c8367e8c491e82e",
+  "focusedChat": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+  "canvasMinimum": {
+   "w": 642.0,
+   "h": 240.0
+  },
+  "composerWidths": {
+   "e1e1e1e1-0000-4000-8000-000000000002": 326.0,
+   "a51ee9cc-d176-48e9-aea4-87389eb34ffa": 325.0
+  },
+  "canvasScroll": {
+   "x": -0.0,
+   "y": -0.0,
+   "maxX": 0.0,
+   "maxY": 0.0
+  },
+  "footer": {
+   "chat": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+   "cwd": "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpBIZD4H/project"
+  },
+  "root": {
+   "kind": "split",
+   "id": "split-79d72ae21eb54c07b21fb6dd3702d2f9",
+   "axis": "horizontal",
+   "ratio": 0.5,
+   "first": {
+    "kind": "pane",
+    "id": "main-pane",
+    "active": "e1e1e1e1-0000-4000-8000-000000000002",
+    "tabs": [
+     {
+      "chatId": "e0e0e0e0-0000-4000-8000-000000000001",
+      "sideParentId": null,
+      "role": "Main",
+      "parent": "",
+      "title": "Release plan for the v0.6 cut: cache migration, settings rename and the UI flag rollout",
+      "help": {
+       "title": "Release plan for the v0.6 cut: cache migration, settings rename and the UI flag rollout",
+       "details": "Main \u00b7 this workbench's own chat. It stays open."
+      },
+      "status": "Idle"
+     },
+     {
+      "chatId": "e1e1e1e1-0000-4000-8000-000000000002",
+      "sideParentId": null,
+      "role": "Child",
+      "parent": "e0e0e0e0-0000-4000-8000-000000000001",
+      "title": "Draft release notes",
+      "help": {
+       "title": "Side chat of Release plan for the v0.6 cut: cache migration, settings rename and the UI flag rollout",
+       "details": "Started fresh: it does not carry the main chat's conversation."
+      },
+      "status": "Idle"
+     }
+    ]
+   },
+   "second": {
+    "kind": "pane",
+    "id": "pane-c390ee30231a44cf8c8367e8c491e82e",
+    "active": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+    "tabs": [
+     {
+      "chatId": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+      "sideParentId": null,
+      "role": "Child",
+      "parent": "e0e0e0e0-0000-4000-8000-000000000001",
+      "title": "Side chat",
+      "help": {
+       "title": "Side chat of Release plan for the v0.6 cut: cache migration, settings rename and the UI flag rollout",
+       "details": "Started fresh: it does not carry the main chat's conversation."
+      },
+      "status": "Idle"
+     },
+     {
+      "chatId": "e1e1e1e1-0000-4000-8000-000000000001",
+      "sideParentId": null,
+      "role": "Child",
+      "parent": "e0e0e0e0-0000-4000-8000-000000000001",
+      "title": "Benchmark the cache",
+      "help": {
+       "title": "Side chat of Release plan for the v0.6 cut: cache migration, settings rename and the UI flag rollout",
+       "details": "Started fresh: it does not carry the main chat's conversation."
+      },
+      "status": "Idle"
+     }
+    ]
+   }
+  },
+  "closed": [
+   "e0e0e0e0-0000-4000-8000-000000000002",
+   "e2e2e2e2-0000-4000-8000-000000000001"
+  ],
+  "views": [
+   "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+   "e1e1e1e1-0000-4000-8000-000000000002"
+  ],
+  "pendingMutations": 0,
+  "creatingChild": false,
+  "childFailure": null,
+  "childFailureRequest": null,
+  "childBlocked": false,
+  "creatingChildRequest": null,
+  "notice": null,
+  "preview": null,
+  "resize": null,
+  "rootBounds": {
+   "x": 270.0,
+   "y": 44.0,
+   "w": 652.0,
+   "h": 558.0
+  },
+  "canvasBounds": {
+   "x": 265.0,
+   "y": 39.0,
+   "w": 662.0,
+   "h": 568.0
+  },
+  "viewportInsets": [
+   5.0,
+   5.0,
+   5.0,
+   5.0
+  ],
+  "overflowFades": [
+   false,
+   false,
+   false,
+   false
+  ],
+  "paneOutline": false,
+  "tabSelection": [
+   {
+    "pane": "main-pane",
+    "active": "e1e1e1e1-0000-4000-8000-000000000002",
+    "focused": false,
+    "fill": [
+     0.0,
+     0.0,
+     0.9200000166893005,
+     0.09000000357627869
+    ],
+    "accentTint": false,
+    "title": [
+     0.6666666865348816,
+     0.045454561710357666,
+     0.9137254953384399,
+     1.0
+    ],
+    "underline": false,
+    "outline": false
+   },
+   {
+    "pane": "pane-c390ee30231a44cf8c8367e8c491e82e",
+    "active": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+    "focused": true,
+    "fill": [
+     0.6871585249900818,
+     0.8714286088943481,
+     0.7254902124404907,
+     0.1599999964237213
+    ],
+    "accentTint": true,
+    "title": [
+     0.6666666865348816,
+     0.045454561710357666,
+     0.9137254953384399,
+     1.0
+    ],
+    "underline": false,
+    "outline": false
+   }
+  ],
+  "paneBounds": [
+   {
+    "id": "pane-c390ee30231a44cf8c8367e8c491e82e",
+    "bounds": {
+     "x": 597.0,
+     "y": 44.0,
+     "w": 325.0,
+     "h": 558.0
+    }
+   },
+   {
+    "id": "main-pane",
+    "bounds": {
+     "x": 270.0,
+     "y": 44.0,
+     "w": 326.0,
+     "h": 558.0
+    }
+   }
+  ],
+  "tabBounds": [
+   {
+    "pane": "pane-c390ee30231a44cf8c8367e8c491e82e",
+    "view": {
+     "x": 603.0,
+     "y": 44.0,
+     "w": 217.0,
+     "h": 38.0
+    },
+    "tabs": [
+     {
+      "chatId": "a51ee9cc-d176-48e9-aea4-87389eb34ffa",
+      "bounds": {
+       "x": 603.0,
+       "y": 49.0,
+       "w": 130.0,
+       "h": 28.0
+      },
+      "visible": {
+       "x": 603.0,
+       "y": 49.0,
+       "w": 130.0,
+       "h": 28.0
+      }
+     },
+     {
+      "chatId": "e1e1e1e1-0000-4000-8000-000000000001",
+      "bounds": {
+       "x": 735.0,
+       "y": 49.0,
+       "w": 203.0,
+       "h": 28.0
+      },
+      "visible": {
+       "x": 735.0,
+       "y": 49.0,
+       "w": 85.0,
+       "h": 28.0
+      }
+     }
+    ]
+   },
+   {
+    "pane": "main-pane",
+    "view": {
+     "x": 276.0,
+     "y": 44.0,
+     "w": 250.0,
+     "h": 38.0
+    },
+    "tabs": [
+     {
+      "chatId": "e0e0e0e0-0000-4000-8000-000000000001",
+      "bounds": {
+       "x": 117.0,
+       "y": 49.0,
+       "w": 220.0,
+       "h": 28.0
+      },
+      "visible": {
+       "x": 276.0,
+       "y": 49.0,
+       "w": 61.0,
+       "h": 28.0
+      }
+     },
+     {
+      "chatId": "e1e1e1e1-0000-4000-8000-000000000002",
+      "bounds": {
+       "x": 339.0,
+       "y": 49.0,
+       "w": 187.0,
+       "h": 28.0
+      },
+      "visible": {
+       "x": 339.0,
+       "y": 49.0,
+       "w": 187.0,
+       "h": 28.0
+      }
+     }
+    ]
+   }
+  ],
+  "splitBounds": [
+   {
+    "id": "split-79d72ae21eb54c07b21fb6dd3702d2f9",
+    "bounds": {
+     "x": 270.0,
+     "y": 44.0,
+     "w": 652.0,
+     "h": 558.0
+    }
+   }
+  ],
+  "plusBounds": [
+   {
+    "pane": "main-pane",
+    "bounds": {
+     "x": 530.0,
+     "y": 49.0,
+     "w": 28.0,
+     "h": 28.0
+    }
+   },
+   {
+    "pane": "pane-c390ee30231a44cf8c8367e8c491e82e",
+    "bounds": {
+     "x": 824.0,
+     "y": 49.0,
+     "w": 28.0,
+     "h": 28.0
+    }
+   }
+  ],
+  "groupActionsBounds": [],
+  "menuRows": [],
+  "noticeDismiss": null
+ },
+ "renderedContrast": [
+  {
+   "variant": "luna-dark",
+   "surface": "ThemeDefault",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 16.435714721679688
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 12.204705238342285
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 5.463358402252197
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 13.581551551818848
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 10.085282325744629
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      8,
+      8,
+      8,
+      232
+     ],
+     "ratio": 5.238503456115723
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 16.367055892944336
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 12.15372085571289
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 5.4665374755859375
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 9.154481887817383
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 6.797863483428955
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 4.212419509887695
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 16.367055892944336
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 12.15372085571289
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 5.4665374755859375
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 9.154481887817383
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 6.797863483428955
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      10,
+      10,
+      10,
+      204
+     ],
+     "ratio": 4.212419509887695
+    }
+   ]
+  },
+  {
+   "variant": "luna-light",
+   "surface": "ThemeDefault",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 14.541182518005371
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 7.803057670593262
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 3.370457410812378
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 14.66714859008789
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 7.87065315246582
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      250,
+      251,
+      253,
+      254
+     ],
+     "ratio": 3.3751285076141357
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 10.495086669921875
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 5.631850719451904
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 3.1775050163269043
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 12.10605525970459
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 6.49632453918457
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 3.2659645080566406
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 10.495086669921875
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 5.631850719451904
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 3.1775050163269043
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 12.10605525970459
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 6.49632453918457
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      226,
+      228,
+      232,
+      240
+     ],
+     "ratio": 3.2659645080566406
+    }
+   ]
+  },
+  {
+   "variant": "luna-dark",
+   "surface": "Opaque",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 16.272846221923828
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 7.017824649810791
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 4.131083965301514
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 16.272846221923828
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 7.017824649810791
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      9,
+      9,
+      9,
+      255
+     ],
+     "ratio": 4.131083965301514
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 15.88338851928711
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 6.883903503417969
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 4.16769552230835
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 15.88338851928711
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 6.883903503417969
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 4.16769552230835
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 15.88338851928711
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 6.883903503417969
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 4.16769552230835
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 15.88338851928711
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 6.883903503417969
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      13,
+      13,
+      13,
+      255
+     ],
+     "ratio": 4.16769552230835
+    }
+   ]
+  },
+  {
+   "variant": "github-light",
+   "surface": "ThemeDefault",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 15.79761791229248
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 6.892305850982666
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 3.393672227859497
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 15.79761791229248
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 6.892305850982666
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      255,
+      255,
+      255,
+      255
+     ],
+     "ratio": 3.393672227859497
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 14.83919620513916
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 6.47415828704834
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 3.3599205017089844
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 14.83919620513916
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 6.47415828704834
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 3.3599205017089844
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 14.83919620513916
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 6.47415828704834
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 3.3599205017089844
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 14.83919620513916
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 6.47415828704834
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      246,
+      248,
+      250,
+      255
+     ],
+     "ratio": 3.3599205017089844
+    }
+   ]
+  },
+  {
+   "variant": "dracula",
+   "surface": "Frosted",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 15.213730812072754
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 12.376540184020996
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 6.486230373382568
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 11.10580825805664
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 9.034700393676758
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      34,
+      35,
+      45,
+      232
+     ],
+     "ratio": 5.28546142578125
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 16.98387908935547
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 13.816576957702637
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 6.879367351531982
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 8.457113265991211
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 6.879956245422363
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 4.366020202636719
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 16.98387908935547
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 13.816576957702637
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 6.879367351531982
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 8.457113265991211
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 6.879956245422363
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      26,
+      27,
+      35,
+      204
+     ],
+     "ratio": 4.366020202636719
+    }
+   ]
+  },
+  {
+   "variant": "gruvbox-light",
+   "surface": "ThemeDefault",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 10.219744682312012
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 7.324527740478516
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 4.326954364776611
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 10.219744682312012
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 7.324527740478516
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      251,
+      241,
+      199,
+      255
+     ],
+     "ratio": 4.326954364776611
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 9.226229667663574
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 6.612471580505371
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 4.219720840454102
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 9.226229667663574
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 6.612471580505371
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 4.219720840454102
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 9.226229667663574
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 6.612471580505371
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 4.219720840454102
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 9.226229667663574
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 6.612471580505371
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      242,
+      229,
+      188,
+      255
+     ],
+     "ratio": 4.219720840454102
+    }
+   ]
+  },
+  {
+   "variant": "catppuccin-latte",
+   "surface": "Frosted",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 6.999259948730469
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 6.604160785675049
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 3.321213722229004
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 6.999259948730469
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 6.604160785675049
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      238,
+      240,
+      244,
+      255
+     ],
+     "ratio": 3.321213722229004
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.354142665863037
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.051908493041992
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 3.157853603363037
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 6.013495922088623
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.674041748046875
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 3.231344699859619
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.354142665863037
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.051908493041992
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 3.157853603363037
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 6.013495922088623
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 5.674041748046875
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      219,
+      222,
+      228,
+      243
+     ],
+     "ratio": 3.231344699859619
+    }
+   ]
+  },
+  {
+   "variant": "tokyo-night",
+   "surface": "ThemeDefault",
+   "pairs": [
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 10.831096649169922
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 6.071892738342285
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 4.1486663818359375
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 10.831096649169922
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 6.071892738342285
+    },
+    {
+     "surface": "canvas",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      24,
+      25,
+      34,
+      255
+     ],
+     "ratio": 4.1486663818359375
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 11.140578269958496
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 6.222900867462158
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 4.170080184936523
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 11.140578269958496
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 6.222900867462158
+    },
+    {
+     "surface": "left chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 4.170080184936523
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "text",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 11.140578269958496
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "secondary",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 6.222900867462158
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 0.0,
+     "role": "focus edge",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 4.170080184936523
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "text",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 11.140578269958496
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "secondary",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 6.222900867462158
+    },
+    {
+     "surface": "right chrome",
+     "backdrop": 1.0,
+     "role": "focus edge",
+     "pixel": [
+      22,
+      22,
+      30,
+      255
+     ],
+     "ratio": 4.170080184936523
+    }
+   ]
+  }
+ ]
+}

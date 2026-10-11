@@ -1,0 +1,66 @@
+{
+ "source": "8ff34b56",
+ "suites": [
+  {
+   "suite": "automations_e2e",
+   "result": "ok",
+   "passed": 30,
+   "failed": 0,
+   "ignored": 1
+  },
+  {
+   "suite": "board_authoring_e2e",
+   "result": "ok",
+   "passed": 6,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "board_chat_model_e2e",
+   "result": "ok",
+   "passed": 9,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "board_lifecycle_e2e",
+   "result": "ok",
+   "passed": 14,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "board_review_e2e",
+   "result": "ok",
+   "passed": 17,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "board_store_e2e",
+   "result": "ok",
+   "passed": 7,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "board_tools_e2e",
+   "result": "ok",
+   "passed": 2,
+   "failed": 0,
+   "ignored": 0
+  },
+  {
+   "suite": "queued_attachments",
+   "result": "ok",
+   "passed": 1,
+   "failed": 0,
+   "ignored": 0
+  }
+ ],
+ "totals": {
+  "passed": 86,
+  "failed": 0,
+  "ignored": 1
+ }
+}

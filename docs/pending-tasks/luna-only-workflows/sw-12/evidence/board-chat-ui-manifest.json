@@ -1,0 +1,842 @@
+{
+  "fixture": "board-chat-ui-fixture",
+  "slice": "A10 board-ui-chat",
+  "commit": "unknown",
+  "engine": "in-process EngineCore (Mock harness, temp data dir)",
+  "input": "real pointer and keyboard events through GPUI hit testing",
+  "pass": true,
+  "failures": [],
+  "steps": [
+    {
+      "step": "ordinary-rows",
+      "expected": "no ticket badge on any ordinary chat's row or header",
+      "observed": {
+        "badges": []
+      },
+      "pass": true
+    },
+    {
+      "step": "main-chooser",
+      "expected": "a main chat's + opens Side chat with Fresh and With context (no side-origin card)",
+      "observed": {
+        "source": "b0a10000-0000-4000-8000-000000000001",
+        "kinds": [
+          "Fresh",
+          "With context"
+        ],
+        "sideCard": null
+      },
+      "pass": true
+    },
+    {
+      "step": "main-menu",
+      "expected": "an ordinary main chat's menu offers Convert and Create ticket, keeps its context fork, and no side-chat-only rows",
+      "observed": {
+        "rows": [
+          "Convert this chat to a ticket…",
+          "Create ticket from this chat…"
+        ],
+        "fork": [
+          "shown"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "convert-proposes-title",
+      "expected": "the dialog proposes the chat's current title",
+      "observed": {
+        "kind": "Convert",
+        "chatId": "b0a10000-0000-4000-8000-000000000001",
+        "title": "Plan the reconnect rollout",
+        "body": "Plan the reconnect rollout: retry with backoff, then surface the offline banner.",
+        "busy": false,
+        "lost": false,
+        "error": null
+      },
+      "pass": true
+    },
+    {
+      "step": "convert-in-place",
+      "expected": "the same chat id is the ticket's working chat; no chat added; nothing sent",
+      "observed": {
+        "badge": {
+          "taskId": "b0a10000-0000-4000-8000-000000000001",
+          "workItemId": "wi-bdd07509e3879cb4648020d817c5912f",
+          "archived": false,
+          "key": "LUN-1",
+          "title": "Plan the reconnect rollout",
+          "role": "working",
+          "column": "backlog",
+          "phase": "Idle",
+          "text": "Ticket LUN-1",
+          "compact": "LUN-1",
+          "accessible": "Working chat of ticket LUN-1: Plan the reconnect rollout. Backlog · Idle"
+        },
+        "engine": {
+          "badges": [
+            {
+              "archived": false,
+              "taskId": "b0a10000-0000-4000-8000-000000000001",
+              "workItemId": "wi-bdd07509e3879cb4648020d817c5912f",
+              "key": "LUN-1",
+              "title": "Plan the reconnect rollout",
+              "column": "backlog",
+              "phase": "idle",
+              "role": "working",
+              "harness": "mock"
+            }
+          ]
+        },
+        "uiChats": [
+          3,
+          3
+        ],
+        "engineChats": [
+          3,
+          3
+        ],
+        "userMessages": [
+          1,
+          1
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "header-badge-and-status",
+      "expected": "the header shows `Ticket KEY` and a separate workflow-status control",
+      "observed": {
+        "header": [
+          334.5,
+          99.0
+        ],
+        "status": [
+          454.0,
+          99.0
+        ],
+        "strip": [
+          "Ticket LUN-1",
+          "Backlog · Idle",
+          "Main chat · Mock"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "sidebar-row-badge",
+      "expected": "the main sidebar row carries the compact key with an accessible label naming the ticket",
+      "observed": {
+        "bounds": [
+          197.0,
+          298.0
+        ],
+        "marks": [
+          "LUN-1",
+          "Working chat of ticket LUN-1: Plan the reconnect rollout. Backlog · Idle"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "status-control",
+      "expected": "the status menu offers Start/Continue or Stop/Reopen and Open ticket, never Done",
+      "observed": [
+        "Continue · move to Ready",
+        "Open ticket LUN-1"
+      ],
+      "pass": true
+    },
+    {
+      "step": "badge-opens-ticket",
+      "expected": "clicking `Ticket KEY` opens the Board on that ticket (stable id)",
+      "observed": {
+        "route": "page:board",
+        "selected": "wi-bdd07509e3879cb4648020d817c5912f"
+      },
+      "pass": true
+    },
+    {
+      "step": "side-chat-in-main-workbench",
+      "expected": "the fresh side chat opens as a tab in MAIN's workbench, not in the sidebar",
+      "observed": {
+        "side": "830267c4-1894-4154-999d-5598dc517fe7",
+        "created": {
+          "requestId": "br-9acb6490c7eec368a7b0cf6a611caf94f39d1d1d",
+          "taskId": "830267c4-1894-4154-999d-5598dc517fe7",
+          "role": "side",
+          "mainParentId": "b0a10000-0000-4000-8000-000000000001",
+          "creator": {
+            "taskId": "b0a10000-0000-4000-8000-000000000001",
+            "relation": "createdBy"
+          },
+          "contextOrigin": "fresh",
+          "launch": "created",
+          "settings": {
+            "harness": "mock",
+            "model": "mock-1",
+            "permissionMode": "ask",
+            "hostDeviceId": "f8b8cdbd-fe1b-4308-86a1-159d70f05e9b",
+            "projectId": "board-chat-ui-project",
+            "cwd": "/private/var/folders/21/jpkvz_6j697gjsbr8b_hyph00000gn/T/.tmpKPxaZg/project",
+            "sources": [
+              {
+                "field": "harness",
+                "source": "parent"
+              },
+              {
+                "field": "model",
+                "source": "parent"
+              },
+              {
+                "field": "reasoning",
+                "source": "parent"
+              },
+              {
+                "field": "permissionMode",
+                "source": "parent"
+              }
+            ]
+          },
+          "navigation": {
+            "kind": "sideChat",
+            "mainTaskId": "b0a10000-0000-4000-8000-000000000001",
+            "sideTaskId": "830267c4-1894-4154-999d-5598dc517fe7"
+          }
+        },
+        "order": [
+          "b0a10000-0000-4000-8000-000000000001",
+          "b0a10000-0000-4000-8000-000000000002",
+          "b0a10000-0000-4000-8000-000000000003"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "side-menu-vocabulary",
+      "expected": "a side chat offers only New side chat (fresh sibling) and Hand off, with the no-fork explanation; no With context or Fork",
+      "observed": [
+        "Convert this chat to a ticket…",
+        "Create ticket from this chat…",
+        "New side chat",
+        "Hand off to a new main chat…",
+        "No context forks from a side chat"
+      ],
+      "pass": true
+    },
+    {
+      "step": "side-tab-badge",
+      "expected": "the side chat's tab carries the same compact key; its placement and lineage are unchanged",
+      "observed": {
+        "marks": [
+          "LUN-2",
+          "Working chat of ticket LUN-2: Reconnect banner. Backlog · Idle"
+        ],
+        "main": "b0a10000-0000-4000-8000-000000000001",
+        "lineage": [
+          "b0a10000-0000-4000-8000-000000000001",
+          "b0a10000-0000-4000-8000-000000000001"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "side-creation-card",
+      "expected": "a side chat's + offers exactly New side chat and Hand off to a new main chat",
+      "observed": {
+        "card": {
+          "sideId": "830267c4-1894-4154-999d-5598dc517fe7",
+          "mainId": "b0a10000-0000-4000-8000-000000000001"
+        },
+        "options": [
+          "New side chat",
+          "Hand off to a new main chat…"
+        ],
+        "chooser": false
+      },
+      "pass": true
+    },
+    {
+      "step": "side-ticket-started",
+      "expected": "the side ticket moves to Ready from its status control and continues the same chat (no new chat), reaching its working phase",
+      "observed": {
+        "column": "ready",
+        "phase": "idle",
+        "workingChat": "830267c4-1894-4154-999d-5598dc517fe7",
+        "newChats": [],
+        "reviewers": [],
+        "badge": {
+          "taskId": "830267c4-1894-4154-999d-5598dc517fe7",
+          "workItemId": "wi-4e99a4d2ccc1e1edc8e57742cc0d545a",
+          "archived": false,
+          "key": "LUN-2",
+          "title": "Reconnect banner",
+          "role": "working",
+          "column": "ready",
+          "phase": "Starting",
+          "text": "Ticket LUN-2",
+          "compact": "LUN-2",
+          "accessible": "Working chat of ticket LUN-2: Reconnect banner. Ready · Starting"
+        }
+      },
+      "pass": true
+    },
+    {
+      "step": "reviewer-badge",
+      "expected": "a reviewer side chat (a sibling under the same main chat) shows `Reviewer · KEY` (its own glyph and words), never the working badge",
+      "observed": {
+        "tab": [
+          "Reviewer · LUN-2",
+          "Reviewer for ticket LUN-2: Reconnect banner. Ready · Reviewing"
+        ],
+        "parent": "b0a10000-0000-4000-8000-000000000001",
+        "main": "b0a10000-0000-4000-8000-000000000001",
+        "header": [
+          347.5,
+          99.0
+        ],
+        "working": null
+      },
+      "pass": true
+    },
+    {
+      "step": "create-ticket-from-chat",
+      "expected": "the ticket is saved and related to SOURCE; no working badge on the source; no chat added (UI or engine)",
+      "observed": {
+        "ticket": "wi-0295167e22b0cedddf216edc920af040",
+        "engine": {
+          "badges": [],
+          "related": [
+            {
+              "archived": false,
+              "taskId": "b0a10000-0000-4000-8000-000000000002",
+              "workItemId": "wi-0295167e22b0cedddf216edc920af040",
+              "key": "LUN-3",
+              "title": "Follow-up: Discuss flaky sync tests",
+              "column": "backlog",
+              "phase": "notStarted",
+              "role": "source",
+              "harness": "mock"
+            }
+          ]
+        },
+        "uiChats": [
+          5,
+          5
+        ],
+        "engineChats": [
+          5,
+          5
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "no-related-tickets-in-conversation",
+      "expected": "nothing ticket-related paints in or above SOURCE's conversation: no related rows, no \"N more\", no creation receipt",
+      "observed": {
+        "noise": [],
+        "strip": []
+      },
+      "pass": true
+    },
+    {
+      "step": "create-keeps-the-pane-and-focus",
+      "expected": "creating a ticket neither opens nor switches the right pane and leaves SOURCE focused",
+      "observed": {
+        "rightOpen": [
+          false,
+          false
+        ],
+        "rightActive": [
+          "Home(Overview)",
+          "Home(Overview)"
+        ],
+        "focused": "b0a10000-0000-4000-8000-000000000002"
+      },
+      "pass": true
+    },
+    {
+      "step": "related-ticket-in-right-sidebar",
+      "expected": "SOURCE's ticket is one row of the right sidebar (right of the conversation's composer), and still nothing in the conversation",
+      "observed": {
+        "row": [
+          884.0,
+          256.0,
+          504.0,
+          30.0
+        ],
+        "composer": [
+          286.0,
+          738.0,
+          560.0,
+          108.0
+        ],
+        "painted": [
+          "wi-0295167e22b0cedddf216edc920af040"
+        ],
+        "rightActive": "Home(Related)",
+        "noise": []
+      },
+      "pass": true
+    },
+    {
+      "step": "related-row-opens-ticket",
+      "expected": "the right sidebar's row opens that ticket by id",
+      "observed": {
+        "selected": "wi-0295167e22b0cedddf216edc920af040",
+        "ticket": "wi-0295167e22b0cedddf216edc920af040"
+      },
+      "pass": true
+    },
+    {
+      "step": "go-to-chat-after-close",
+      "expected": "Go to chat reopens the exact side chat in MAIN's workbench: no relaunch, no prompt, no promotion or reparenting",
+      "observed": {
+        "focused": "830267c4-1894-4154-999d-5598dc517fe7",
+        "main": "b0a10000-0000-4000-8000-000000000001",
+        "launches": [
+          1,
+          1
+        ],
+        "prompts": [
+          1,
+          1
+        ],
+        "uiChats": [
+          5,
+          5
+        ],
+        "engineChats": [
+          5,
+          5
+        ],
+        "lineage": [
+          "b0a10000-0000-4000-8000-000000000001",
+          "b0a10000-0000-4000-8000-000000000001"
+        ],
+        "inSidebar": false
+      },
+      "pass": true
+    },
+    {
+      "step": "palette-by-stable-id",
+      "expected": "the palette's Go to chat entry is keyed by the ticket id and names its key",
+      "observed": {
+        "label": "palette:goto:wi-4e99a4d2ccc1e1edc8e57742cc0d545a",
+        "marks": [
+          "Go to chat · LUN-2 · Reconnect banner",
+          "Ready · Reviewing · Side chat in Plan the reconnect rollout · Mock"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "focused-side-chat-tickets",
+      "expected": "with the side tab focused, the right sidebar lists the side chat's related tickets (its count, a label naming the side chat), not MAIN's",
+      "observed": {
+        "ticket": "wi-db646707b81705de6a595383f1a430a8",
+        "rows": [
+          "wi-db646707b81705de6a595383f1a430a8"
+        ],
+        "count": [
+          "Tickets 1",
+          "LUN-4"
+        ],
+        "context": [
+          "Reconnect banner"
+        ],
+        "mainRows": [],
+        "focused": "830267c4-1894-4154-999d-5598dc517fe7",
+        "noise": []
+      },
+      "pass": true
+    },
+    {
+      "step": "focused-main-chat-tickets",
+      "expected": "focusing MAIN's tab drops the side chat's rows and lists exactly MAIN's own related tickets, with no side-chat label",
+      "observed": {
+        "sideRows": [],
+        "mainRows": [],
+        "mainData": [],
+        "sideContext": [],
+        "focused": "b0a10000-0000-4000-8000-000000000001"
+      },
+      "pass": true
+    },
+    {
+      "step": "conversation-unobstructed",
+      "expected": "with the right sidebar closed, five related tickets paint nothing in or above SOURCE's conversation",
+      "observed": {
+        "tickets": [
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c",
+          "wi-f713aa40baec6a4b26dc39d559db04c1"
+        ],
+        "rightOpen": false,
+        "noise": []
+      },
+      "pass": true
+    },
+    {
+      "step": "all-related-tickets-reachable",
+      "expected": "every related ticket is exactly one row of the right sidebar, each reachable by scrolling, none behind \"N more\"",
+      "observed": {
+        "tickets": [
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c",
+          "wi-f713aa40baec6a4b26dc39d559db04c1"
+        ],
+        "painted": [
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-f713aa40baec6a4b26dc39d559db04c1",
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c"
+        ],
+        "reached": [
+          {
+            "ticket": "wi-0295167e22b0cedddf216edc920af040",
+            "row": [
+              884.0,
+              256.0,
+              504.0,
+              30.0
+            ]
+          },
+          {
+            "ticket": "wi-e45ec8d850c643cd4681298fd132b0f4",
+            "row": [
+              884.0,
+              286.0,
+              504.0,
+              30.0
+            ]
+          },
+          {
+            "ticket": "wi-9c432f01229c18266167818cd4017ae7",
+            "row": [
+              884.0,
+              316.0,
+              504.0,
+              30.0
+            ]
+          },
+          {
+            "ticket": "wi-421bb1a2ac04aaf39c246a6a9107195c",
+            "row": [
+              884.0,
+              346.0,
+              504.0,
+              30.0
+            ]
+          },
+          {
+            "ticket": "wi-f713aa40baec6a4b26dc39d559db04c1",
+            "row": [
+              884.0,
+              376.0,
+              504.0,
+              30.0
+            ]
+          }
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "related-follows-selection",
+      "expected": "selecting another chat drops SOURCE's rows from the right sidebar; selecting SOURCE again restores them",
+      "observed": {
+        "other": [],
+        "otherActive": "Home(Overview)",
+        "back": [
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-f713aa40baec6a4b26dc39d559db04c1",
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "lun12-archive-leaves-sidebar",
+      "expected": "archiving a related ticket removes its right-sidebar row at once, without reopening the chat",
+      "observed": {
+        "archived": "wi-0295167e22b0cedddf216edc920af040",
+        "before": [
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c",
+          "wi-f713aa40baec6a4b26dc39d559db04c1"
+        ],
+        "after": [
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-f713aa40baec6a4b26dc39d559db04c1",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "lun12-unarchive-returns",
+      "expected": "unarchiving brings the ticket's row back",
+      "observed": {
+        "after": [
+          "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "wi-f713aa40baec6a4b26dc39d559db04c1",
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c"
+        ]
+      },
+      "pass": true
+    },
+    {
+      "step": "lun12-delete-leaves-sidebar",
+      "expected": "a deleted ticket leaves the right sidebar and the badge read; nothing ever painted in the conversation",
+      "observed": {
+        "deleted": "wi-e45ec8d850c643cd4681298fd132b0f4",
+        "receipt": {
+          "requestId": "br-605b022baaf77a9fdd8c5d9b87d18c25098e1af3",
+          "payloadHash": "5b5eb7f94f660a35937bd6efd097440706051f4ebc39c2370503ef28855f1998",
+          "operation": "delete",
+          "workItemId": "wi-e45ec8d850c643cd4681298fd132b0f4",
+          "key": "LUN-5",
+          "revision": 2,
+          "column": "backlog",
+          "archived": true,
+          "item": {
+            "schemaVersion": 1,
+            "id": "wi-e45ec8d850c643cd4681298fd132b0f4",
+            "projectId": "board-chat-ui-project",
+            "ownerHostId": "f8b8cdbd-fe1b-4308-86a1-159d70f05e9b",
+            "key": "LUN-5",
+            "number": 5,
+            "title": "Follow-up: Discuss flaky sync tests",
+            "description": "The sync tests flake on CI about once a day. Can we pin the clock?",
+            "briefRevision": 1,
+            "column": "backlog",
+            "archived": true,
+            "deleted": true,
+            "rank": "r0ffffffffffffff",
+            "revision": 2,
+            "fieldRevisions": {
+              "title": 1,
+              "description": 1,
+              "implementation": 1,
+              "review": 1,
+              "completion": 1,
+              "labels": 1,
+              "priority": 1,
+              "contextRefs": 1,
+              "attachments": 1
+            },
+            "implementation": {},
+            "review": {},
+            "completion": {
+              "mode": "automaticChecksAndReview"
+            },
+            "origin": {
+              "kind": "chat",
+              "taskId": "b0a10000-0000-4000-8000-000000000002"
+            },
+            "createdAtMs": 1791760446969,
+            "updatedAtMs": 1791760456443,
+            "createdBy": {
+              "kind": "user",
+              "deviceId": "f8b8cdbd-fe1b-4308-86a1-159d70f05e9b"
+            },
+            "updatedBy": {
+              "kind": "user",
+              "deviceId": "f8b8cdbd-fe1b-4308-86a1-159d70f05e9b"
+            }
+          },
+          "eventSeq": 17,
+          "actor": {
+            "kind": "user",
+            "deviceId": "f8b8cdbd-fe1b-4308-86a1-159d70f05e9b"
+          },
+          "committedAtMs": 1791760456443,
+          "navigation": {
+            "kind": "noChat",
+            "workItemId": "wi-e45ec8d850c643cd4681298fd132b0f4"
+          }
+        },
+        "after": [
+          "wi-f713aa40baec6a4b26dc39d559db04c1",
+          "wi-0295167e22b0cedddf216edc920af040",
+          "wi-9c432f01229c18266167818cd4017ae7",
+          "wi-421bb1a2ac04aaf39c246a6a9107195c"
+        ],
+        "noise": []
+      },
+      "pass": true
+    },
+    {
+      "step": "no-reattach-controls",
+      "expected": "no Move here / Reattach / Change parent on any board surface or tab menu",
+      "observed": [],
+      "pass": true
+    }
+  ],
+  "artifacts": [
+    {
+      "file": "f00-ordinary.png",
+      "sha256": "b4267f31be35a0124684f975ac131ca70b9176b43056ab1aa4f0d146232fc6e0",
+      "bytes": 248512
+    },
+    {
+      "file": "rb-00-ordinary.json",
+      "sha256": "3c38e92f485d054e5666865a42acedb9b5ebbdb96fac36e4496d38647372c21c",
+      "bytes": 9040
+    },
+    {
+      "file": "f01-main-chooser.png",
+      "sha256": "12f732badb89569a3054fb5b6f1a747bb26d7cbc4d0abbcf9dbe4742744114b7",
+      "bytes": 380108
+    },
+    {
+      "file": "f02-convert-dialog.png",
+      "sha256": "607ad56539b943f1ffb5a3264c75956aefe7911baebf82c6a024ecbb818052c8",
+      "bytes": 403126
+    },
+    {
+      "file": "f03-converted-header.png",
+      "sha256": "e94f9aaf6105e7553af9ca3dd6cf515ea8363b5815d9c88a6c2d697072a77acc",
+      "bytes": 339285
+    },
+    {
+      "file": "rb-03-converted.json",
+      "sha256": "8e0accd4194399d6f303e368f3e7223c604a0dd84124240bbaeddbef62e6eb8b",
+      "bytes": 11474
+    },
+    {
+      "file": "f04-status-menu.png",
+      "sha256": "b9cf9dcb20247e8c4ce996964972c4d4fcf45570576a28490d90887f614a15fa",
+      "bytes": 385314
+    },
+    {
+      "file": "f05-badge-opens-ticket.png",
+      "sha256": "6d849f73482629b263ca4ea0dd35e6a63236c60b2ab7d907f68558d913102ef2",
+      "bytes": 586776
+    },
+    {
+      "file": "f06-side-chat-tab.png",
+      "sha256": "bd2629423363e6d1744102e81982f11bd0d2801ace952726750cbba6276c6fa0",
+      "bytes": 273586
+    },
+    {
+      "file": "f07-side-tab-menu.png",
+      "sha256": "d87ffd5fa7d5c581e7b528627d8fd9857bc7787a2da5ddba6887eac1396823a6",
+      "bytes": 408406
+    },
+    {
+      "file": "f08-side-tab-badge.png",
+      "sha256": "2b553f809c2d341ef084b174ff3194a60c099114c3352a7fb074d0a1a16889e1",
+      "bytes": 298979
+    },
+    {
+      "file": "rb-08-side-converted.json",
+      "sha256": "b8b6a9106b45c5115c39beb3642bcb59a7b3f7cf210b08074cd3c4c249ab6cf5",
+      "bytes": 13383
+    },
+    {
+      "file": "f09-side-creation-card.png",
+      "sha256": "e2d39b4b28909b5543b5504aecf0656a533f252ca7a49a33ee668d3d7ed11177",
+      "bytes": 379625
+    },
+    {
+      "file": "f10-reviewer-badge.png",
+      "sha256": "00b0981ef03e588b9bd569261715db2019d46c4afbf983bd4d1d47e5fc1b72c7",
+      "bytes": 485042
+    },
+    {
+      "file": "f11-source-created.png",
+      "sha256": "3f4782b6030c51466a71cedce9d39d0a3b5fc48a8b533dc12ffc365e91e6f338",
+      "bytes": 331994
+    },
+    {
+      "file": "rb-11-source-created.json",
+      "sha256": "c0f430a14fb943819f629885fa8ff1806d16b0a30b2eac9cd79c774ebc7c971c",
+      "bytes": 12643
+    },
+    {
+      "file": "f11-related-sidebar.png",
+      "sha256": "39a979379bfab41bfb1820fb20eeba484fee149c7d2b89f9ece2c9c638561443",
+      "bytes": 474418
+    },
+    {
+      "file": "rb-11-related-sidebar.json",
+      "sha256": "aab4e8cf8bebe47f0c3fdd09cc21f77f386b7cd705e18ed2e03c36c93fd92044",
+      "bytes": 13211
+    },
+    {
+      "file": "f12-go-to-chat.png",
+      "sha256": "8f8bcbce51b60c8fb9aae9883872689b17c374f7ed78438002b638759b6696ed",
+      "bytes": 474172
+    },
+    {
+      "file": "rb-12-go-to-chat.json",
+      "sha256": "cf8d9432864390308666fc3b183a19641f2908f08098a613940953eaa2efdc84",
+      "bytes": 18283
+    },
+    {
+      "file": "f12b-side-tickets.png",
+      "sha256": "f9808d1b213b58dfa18145287f9f433dadec852746a94d34e1334fcca5e8292f",
+      "bytes": 531640
+    },
+    {
+      "file": "rb-12b-side-tickets.json",
+      "sha256": "2a81519ce1926d20f495dab2ca26f4858aa91c3c20dd26b3c2ec89b995d1e4ef",
+      "bytes": 18487
+    },
+    {
+      "file": "f12b-main-tickets.png",
+      "sha256": "c65c5e19ebe1e34117dae9b2d63dada56cfc210e756242111e7844b60e9ab91a",
+      "bytes": 429291
+    },
+    {
+      "file": "f13-conversation-unobstructed.png",
+      "sha256": "7b13d66ac1f0611ac40d4c5562365935b637ab3e0a72407633d2ed35aa58000d",
+      "bytes": 331947
+    },
+    {
+      "file": "f13-related-sidebar.png",
+      "sha256": "c53af0498e4cee99753c2b0662f5aac07758facd01c79746fddc4f0005a03448",
+      "bytes": 558719
+    },
+    {
+      "file": "rb-13-related-sidebar.json",
+      "sha256": "df347f8a6ab0104cf085e540fb8228cca3ce80067f520c0586a92f3fd07f4af6",
+      "bytes": 18000
+    },
+    {
+      "file": "f13-other-selected.png",
+      "sha256": "9476af648aa7ad637caa59cbd07b1f41cd4e7ff02c61a345379180ff1b1c4fd4",
+      "bytes": 310428
+    },
+    {
+      "file": "f13-related-archived.png",
+      "sha256": "82a559b429fb69b4885ae91cb08c990150ef9e2b6ce5d6a1d5acbc2fb64e6955",
+      "bytes": 537899
+    },
+    {
+      "file": "f13-related-deleted.png",
+      "sha256": "fbe9d6dc9c029622341e92d681c1d9bf4058d86be25f1e4a7554c9a2b09113e7",
+      "bytes": 538000
+    },
+    {
+      "file": "rb-13-related-deleted.json",
+      "sha256": "d9ab83b2d05776ebf9142a01e1f799a55fe0fa606252e22e9056977ae96eb3c3",
+      "bytes": 17394
+    }
+  ]
+}

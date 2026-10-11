@@ -1,0 +1,16 @@
+[
+  {
+    "revalidating": true,
+    "loading": true,
+    "rows": 0,
+    "deletedShown": false,
+    "watchSeq": 65
+  },
+  {
+    "revalidating": false,
+    "loading": false,
+    "rows": 50,
+    "deletedShown": false,
+    "watchSeq": 65
+  }
+]
