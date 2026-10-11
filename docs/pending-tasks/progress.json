@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791760023.791658,
+  "created_at": 1791760996.599218,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 12,
+      "done": 13,
       "in_progress": 0,
       "paused": 0,
-      "ready": 68,
+      "ready": 67,
       "review": 0
     },
     "groups": [
@@ -184,11 +184,11 @@
         "id": "orchestration",
         "title": "Board, helper supervision and future workflows",
         "tasks": 2,
-        "done": 0,
-        "remaining": 2,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 1,
+        "accepted_units": 4,
         "total_units": 8,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 50.0,
         "milestone_status": {}
       },
       {
@@ -373,16 +373,15 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 7,
-      "remaining": 69,
-      "accepted_units": 27,
+      "done": 8,
+      "remaining": 68,
+      "accepted_units": 31,
       "total_units": 296,
-      "acceptance_percent": 9.1
+      "acceptance_percent": 10.5
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
       "CORE-03",
-      "SW-12",
       "IC-0",
       "ZI-01",
       "ZI-03",
@@ -460,16 +459,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.958591
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-12",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958604
     },
     {
       "attempts": 0,
@@ -2157,6 +2146,82 @@
       ],
       "status": "done",
       "updated_at": 1791760023.691684
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "baseline": {
+          "at": 1791760974.770873,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+              "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+            }
+          ],
+          "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+        },
+        "disposition": {
+          "at": 1791760974.9631958,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/native-verification.json",
+              "sha256": "ffc8ef488e593f027ab2da668a2454bb010c29e37eec964bae196f03d12ae654"
+            }
+          ],
+          "note": "Passing baseline: no correction or new ticket. Read-only native readback confirms LUN-1/2/11/12/13 active, LUN-3..10 archived, LUN-12 revision/audit/source link/image bytes unchanged since 10 October"
+        },
+        "handoff": {
+          "at": 1791760975.0555289,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/sha256.json",
+              "sha256": "6a8aec77eab12cdbafaa7be0dfe0d2627846fdb0aa4bdc311f36e13e79ab3483"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+              "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+            }
+          ],
+          "note": "Commands/exit codes, 202 artifact hashes and limitations retained; no runtime code changed; LUNA Dev restored and verified (PID 17924, IPC 59777, codesign ok)"
+        },
+        "verification": {
+          "at": 1791760974.86583,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+              "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/engine-e2e.json",
+              "sha256": "add53e06a13293c15b9df6ffe8e4e2b4d005275ce85137ba7a772f036f8f5822"
+            },
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/commands.json",
+              "sha256": "5571d807d5c809771097ba2362cb61d1f8f1cb27627ee23e9b482a1f103c2078"
+            }
+          ],
+          "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse"
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+          "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+        }
+      ],
+      "id": "SW-12",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791760044.391399,
+        "expires_at": 1791764574.678422,
+        "heartbeat_at": 1791760974.678422,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "E15 passed on 8ff34b56 without a correction; evidence delivered in 5be7861f and pushed to origin/main",
+      "status": "done",
+      "updated_at": 1791760996.506337
     }
   ],
   "events": [
@@ -7344,6 +7409,356 @@
           "claimed_at": 1791756331.596164,
           "expires_at": 1791763531.596164,
           "heartbeat_at": 1791756331.596164,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 210,
+      "task": "SW-12",
+      "at": 1791760044.391478,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791767244.391399,
+          "heartbeat_at": 1791760044.391399,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 211,
+      "task": "SW-12",
+      "at": 1791760974.6785018,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 212,
+      "task": "SW-12",
+      "at": 1791760974.771009,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791760974.770873,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+                "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+              }
+            ],
+            "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+          }
+        },
+        "criterion": "baseline",
+        "evidence": null,
+        "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 213,
+      "task": "SW-12",
+      "at": 1791760974.866133,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791760974.770873,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+                "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+              }
+            ],
+            "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+          },
+          "verification": {
+            "at": 1791760974.86583,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/engine-e2e.json",
+                "sha256": "add53e06a13293c15b9df6ffe8e4e2b4d005275ce85137ba7a772f036f8f5822"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/commands.json",
+                "sha256": "5571d807d5c809771097ba2362cb61d1f8f1cb27627ee23e9b482a1f103c2078"
+              }
+            ],
+            "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse"
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 214,
+      "task": "SW-12",
+      "at": 1791760974.96335,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791760974.770873,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+                "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+              }
+            ],
+            "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+          },
+          "disposition": {
+            "at": 1791760974.9631958,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/native-verification.json",
+                "sha256": "ffc8ef488e593f027ab2da668a2454bb010c29e37eec964bae196f03d12ae654"
+              }
+            ],
+            "note": "Passing baseline: no correction or new ticket. Read-only native readback confirms LUN-1/2/11/12/13 active, LUN-3..10 archived, LUN-12 revision/audit/source link/image bytes unchanged since 10 October"
+          },
+          "verification": {
+            "at": 1791760974.86583,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/engine-e2e.json",
+                "sha256": "add53e06a13293c15b9df6ffe8e4e2b4d005275ce85137ba7a772f036f8f5822"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/commands.json",
+                "sha256": "5571d807d5c809771097ba2362cb61d1f8f1cb27627ee23e9b482a1f103c2078"
+              }
+            ],
+            "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse"
+          }
+        },
+        "criterion": "disposition",
+        "evidence": null,
+        "note": "Passing baseline: no correction or new ticket. Read-only native readback confirms LUN-1/2/11/12/13 active, LUN-3..10 archived, LUN-12 revision/audit/source link/image bytes unchanged since 10 October",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 215,
+      "task": "SW-12",
+      "at": 1791760975.055718,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791760974.770873,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+                "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+              }
+            ],
+            "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+          },
+          "disposition": {
+            "at": 1791760974.9631958,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/native-verification.json",
+                "sha256": "ffc8ef488e593f027ab2da668a2454bb010c29e37eec964bae196f03d12ae654"
+              }
+            ],
+            "note": "Passing baseline: no correction or new ticket. Read-only native readback confirms LUN-1/2/11/12/13 active, LUN-3..10 archived, LUN-12 revision/audit/source link/image bytes unchanged since 10 October"
+          },
+          "handoff": {
+            "at": 1791760975.0555289,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/sha256.json",
+                "sha256": "6a8aec77eab12cdbafaa7be0dfe0d2627846fdb0aa4bdc311f36e13e79ab3483"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              }
+            ],
+            "note": "Commands/exit codes, 202 artifact hashes and limitations retained; no runtime code changed; LUNA Dev restored and verified (PID 17924, IPC 59777, codesign ok)"
+          },
+          "verification": {
+            "at": 1791760974.86583,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/engine-e2e.json",
+                "sha256": "add53e06a13293c15b9df6ffe8e4e2b4d005275ce85137ba7a772f036f8f5822"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/commands.json",
+                "sha256": "5571d807d5c809771097ba2362cb61d1f8f1cb27627ee23e9b482a1f103c2078"
+              }
+            ],
+            "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse"
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes, 202 artifact hashes and limitations retained; no runtime code changed; LUNA Dev restored and verified (PID 17924, IPC 59777, codesign ok)",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expired": false,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 216,
+      "task": "SW-12",
+      "at": 1791760996.5064151,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "baseline": {
+            "at": 1791760974.770873,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/failures.md",
+                "sha256": "23a4fe8cec1391a64f5749c15c4eced741d8d7d608e0ed3764304dc3f9a097ef"
+              }
+            ],
+            "note": "Read the shipped fix package (design/board-automation-ticket-fixes verification, failure cases, handoff) and its 10 October owner evidence; criteria R1-R6 written before the replay"
+          },
+          "disposition": {
+            "at": 1791760974.9631958,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/native-verification.json",
+                "sha256": "ffc8ef488e593f027ab2da668a2454bb010c29e37eec964bae196f03d12ae654"
+              }
+            ],
+            "note": "Passing baseline: no correction or new ticket. Read-only native readback confirms LUN-1/2/11/12/13 active, LUN-3..10 archived, LUN-12 revision/audit/source link/image bytes unchanged since 10 October"
+          },
+          "handoff": {
+            "at": 1791760975.0555289,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/sha256.json",
+                "sha256": "6a8aec77eab12cdbafaa7be0dfe0d2627846fdb0aa4bdc311f36e13e79ab3483"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              }
+            ],
+            "note": "Commands/exit codes, 202 artifact hashes and limitations retained; no runtime code changed; LUNA Dev restored and verified (PID 17924, IPC 59777, codesign ok)"
+          },
+          "verification": {
+            "at": 1791760974.86583,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+                "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/engine-e2e.json",
+                "sha256": "add53e06a13293c15b9df6ffe8e4e2b4d005275ce85137ba7a772f036f8f5822"
+              },
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-12/evidence/commands.json",
+                "sha256": "5571d807d5c809771097ba2362cb61d1f8f1cb27627ee23e9b482a1f103c2078"
+              }
+            ],
+            "note": "On 8ff34b56: engine E2E 86 passed/0 failed (1 ignored live-PR); board-detail 55/55, board-chat-ui 31/31, chat-workbench and related-chats pass. Covers editor/status freshness, safe deletion, related counts/banners and same-chat image reuse"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/luna-only-workflows/sw-12/README.md",
+            "sha256": "3cce90823b4a87b2a758be7c6facf98d9508e66e771bbb4d73af6b5f9ffb8a9c"
+          }
+        ],
+        "note": "E15 passed on 8ff34b56 without a correction; evidence delivered in 5be7861f and pushed to origin/main",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791760044.391399,
+          "expires_at": 1791764574.678422,
+          "heartbeat_at": 1791760974.678422,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }

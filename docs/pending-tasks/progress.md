@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-12T02:07:03+03:00.
+Generated 2026-10-12T02:23:16+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **9.1% accepted**, **7/76 Done**.
+Active scope: **10.5% accepted**, **8/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: CORE-03, SW-12, IC-0, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: CORE-03, IC-0, ZI-01, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -103,7 +103,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4C — Reusable ticket and action templates](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4D — Bounded dependency dispatch and durable workflow stages](devin-project-board/README.md) | deferred | 0.0% | — |
@@ -115,6 +114,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-03 — Attention presentation and source navigation](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
+| [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
 
 ## One direct paired-Mac product
 
