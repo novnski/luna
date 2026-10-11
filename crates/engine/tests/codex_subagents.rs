@@ -319,23 +319,29 @@ async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
         .dispatch(CHAT, HarnessId::Codex, request, Some("user-prompt".into()))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // The child's transcript publishes on its own document, independently of
+    // the parent going idle, so wait for all three facts, not just the first.
+    let child = format!("{CHAT}--sub--spawn-open");
+    let settled = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if core.sessions.session_status(CHAT)
                 .is_some_and(|status| status.status == SessionStatus::Idle)
                 && entries(&core, CHAT).iter().flat_map(|entry| &entry.parts).any(|part| matches!(part,
                     MessagePart::Tool { id, subagent_status: Some(SubagentStatus::Unobserved), .. }
                         if id == "spawn-open"
-                )) { break; }
+                ))
+                && text(&entries(&core, &child), MessageRole::Assistant).contains("still working")
+            { break; }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await.expect("parent completes without child terminal event");
+    }).await;
     assert!(
-        text(
-            &entries(&core, &format!("{CHAT}--sub--spawn-open")),
-            MessageRole::Assistant
-        )
-        .contains("still working")
+        settled.is_ok(),
+        "parent idle without a child terminal event, child text kept: status {:?}, child text {:?}",
+        core.sessions
+            .session_status(CHAT)
+            .map(|status| status.status),
+        text(&entries(&core, &child), MessageRole::Assistant)
     );
     core.shutdown().await;
 }
