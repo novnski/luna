@@ -99,10 +99,18 @@ request: its Steer now action is only for Steer-behaviour rows without
 attachments. The engine correctly keeps the row and delivers it once as the
 next turn.
 
-The refusal reason it reports is wrong, though. The hold says "another steer
-remains unconfirmed" and the receipt says "being edited, reviewed, or
-delivered", but the row simply isn't a steer row. This is recorded as a
-follow-up.
+The refusal reason it reported was wrong, though. The hold said "another steer
+remains unconfirmed" and the receipt said "being edited, reviewed, or
+delivered", but the row simply isn't a steer row.
+
+**Fixed in a follow-up.** The steer pre-check in `crates/engine/src/rpc.rs` now
+refuses this case up front with `Rejected` / `UnsupportedOperation`: "this
+message is queued to send after the turn, not to steer it". It adds no hold
+reason and leaves the row as queued, so it is still delivered once as the next
+turn. `QueueClaimed` remains only for rows that really are claimed or being
+edited. The regression case in `task_commands`
+`native_steer_caller_applies_only_for_supported_attachment_free_held_rows`
+returned `Conflict` before the fix.
 
 ## Repeat
 

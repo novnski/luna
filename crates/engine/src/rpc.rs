@@ -3388,6 +3388,18 @@ impl EngineRpc {
                     "Finish the current queue action and reload before retrying.",
                 );
             }
+            // Only a row queued as a steer can redirect a running turn; a row
+            // queued to follow the turn keeps that place, untouched.
+            if item.follow_up_behavior != luna_proto::FollowUpBehavior::Steer {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Rejected,
+                    false,
+                    CommandReasonCode::UnsupportedOperation,
+                    "this message is queued to send after the turn, not to steer it",
+                    "Leave it queued for the next turn or use Send now, which explicitly interrupts the turn.",
+                );
+            }
             let harness = item
                 .execution
                 .as_ref()

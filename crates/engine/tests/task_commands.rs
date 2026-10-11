@@ -990,7 +990,8 @@ async fn wait_for_no_live_run(core: &EngineCore, task_id: &str) {
 async fn steer_queue_case(
     steering: SteeringMode,
     with_attachment: bool,
-) -> (CommandReceipt, QueueMessageStatus) {
+    behavior: luna_proto::FollowUpBehavior,
+) -> (CommandReceipt, luna_doc::QueuedMessage) {
     let root = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -1043,7 +1044,7 @@ async fn steer_queue_case(
             "steer this row",
             attachments,
             true,
-            luna_proto::FollowUpBehavior::Steer,
+            behavior,
             None,
         )
         .unwrap();
@@ -1067,14 +1068,13 @@ async fn steer_queue_case(
     );
     steer["expectedTurnId"] = current.snapshot.active_turn_id.unwrap().into();
     let receipt = execute(&client, steer).await;
-    let status = core
+    let row = core
         .doc_host
         .queued_message(&task_id, "steer-caller-row")
         .unwrap()
-        .expect("steer keeps the row until provider correlation")
-        .status;
+        .expect("steer keeps the row until provider correlation");
     core.shutdown().await;
-    (receipt, status)
+    (receipt, row)
 }
 
 fn snapshot_row_exists(db_path: &std::path::Path, doc_id: &str) -> bool {
@@ -3220,24 +3220,26 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_steer_caller_applies_only_for_supported_attachment_free_held_rows() {
-    let (supported, supported_row) = steer_queue_case(SteeringMode::StepBoundary, false).await;
+    use luna_proto::FollowUpBehavior::{Queue, Steer};
+    let (supported, supported_row) =
+        steer_queue_case(SteeringMode::StepBoundary, false, Steer).await;
     assert_eq!(supported.status, CommandReceiptStatus::Pending);
     assert!(matches!(
-        supported_row,
+        supported_row.status,
         QueueMessageStatus::SteeringAccepted { .. }
     ));
 
     let (unsupported_harness, harness_row) =
-        steer_queue_case(SteeringMode::TurnBoundary, false).await;
+        steer_queue_case(SteeringMode::TurnBoundary, false, Steer).await;
     assert_eq!(unsupported_harness.status, CommandReceiptStatus::Rejected);
     assert_eq!(
         unsupported_harness.reason.unwrap().code,
         CommandReasonCode::UnsupportedOperation
     );
-    assert!(matches!(harness_row, QueueMessageStatus::Held));
+    assert!(matches!(harness_row.status, QueueMessageStatus::Held));
 
     let (unsupported_attachment, attachment_row) =
-        steer_queue_case(SteeringMode::StepBoundary, true).await;
+        steer_queue_case(SteeringMode::StepBoundary, true, Steer).await;
     assert_eq!(
         unsupported_attachment.status,
         CommandReceiptStatus::Rejected
@@ -3246,7 +3248,22 @@ async fn native_steer_caller_applies_only_for_supported_attachment_free_held_row
         unsupported_attachment.reason.unwrap().code,
         CommandReasonCode::UnsupportedOperation
     );
-    assert!(matches!(attachment_row, QueueMessageStatus::Held));
+    assert!(matches!(attachment_row.status, QueueMessageStatus::Held));
+
+    // A row queued to send after the turn is not a steer: the refusal says so
+    // (not "being edited, reviewed, or delivered") and leaves the row exactly
+    // as queued, with no hold reason, for its normal next-turn delivery.
+    let (not_steer, queued_row) = steer_queue_case(SteeringMode::StepBoundary, false, Queue).await;
+    assert_eq!(not_steer.status, CommandReceiptStatus::Rejected);
+    let reason = not_steer.reason.unwrap();
+    assert_eq!(reason.code, CommandReasonCode::UnsupportedOperation);
+    assert!(
+        reason.message.contains("queued to send after the turn"),
+        "{}",
+        reason.message
+    );
+    assert!(matches!(queued_row.status, QueueMessageStatus::Held));
+    assert_eq!(queued_row.hold_reason, None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
