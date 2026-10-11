@@ -320,12 +320,6 @@ impl Shell {
                 });
             }
         }
-        // It left the pane's list: close it there if it was open.
-        if let Some(panel) = self.child_chat_panel.clone()
-            && panel.read(cx).open_chat_id() == Some(id.as_str())
-        {
-            panel.update(cx, |panel, cx| panel.back(cx));
-        }
         if let Some((anchor, place)) = target.filter(|(anchor, _)| *anchor != id) {
             match drag.scope {
                 SidebarDragScope::Pinned => self.move_pinned_chat(id, &anchor, place, cx),

@@ -1,0 +1,266 @@
+{
+  "closed": {
+    "activeChat": "rs-parent",
+    "railShown": true,
+    "rightPaneOpen": false,
+    "rightActive": "Home(Overview)",
+    "place": "overview",
+    "expanded": false,
+    "viewport": 1396.0,
+    "tabs": [],
+    "tabMenuOpen": null,
+    "bounds": {
+      "rail:overview": [
+        1401.0,
+        44.0,
+        34.0,
+        34.0
+      ],
+      "rail:agents": [
+        1401.0,
+        80.0,
+        34.0,
+        34.0
+      ],
+      "rail:related": [
+        1401.0,
+        116.0,
+        34.0,
+        34.0
+      ],
+      "rail:automations": [
+        1401.0,
+        152.0,
+        34.0,
+        34.0
+      ],
+      "rail:changes": [
+        1401.0,
+        239.0,
+        34.0,
+        34.0
+      ],
+      "rail:browser": [
+        1401.0,
+        311.0,
+        34.0,
+        34.0
+      ],
+      "rail:files": [
+        1401.0,
+        203.0,
+        34.0,
+        34.0
+      ],
+      "rail:terminal": [
+        1401.0,
+        275.0,
+        34.0,
+        34.0
+      ]
+    },
+    "marks": {
+      "rail-badges": [
+        "agents:1:running",
+        "related:1:needs-you"
+      ]
+    }
+  },
+  "overview": {
+    "activeChat": "rs-parent",
+    "railShown": true,
+    "rightPaneOpen": true,
+    "rightActive": "Home(Overview)",
+    "place": "overview",
+    "expanded": false,
+    "viewport": 1396.0,
+    "tabs": [],
+    "tabMenuOpen": null,
+    "bounds": {
+      "overview:related": [
+        884.0,
+        173.5,
+        504.0,
+        47.5
+      ],
+      "rail:agents": [
+        1401.0,
+        80.0,
+        34.0,
+        34.0
+      ],
+      "rail:browser": [
+        1401.0,
+        311.0,
+        34.0,
+        34.0
+      ],
+      "rail:terminal": [
+        1401.0,
+        275.0,
+        34.0,
+        34.0
+      ],
+      "home-body:overview": [
+        884.0,
+        46.0,
+        504.0,
+        224.5
+      ],
+      "rail:overview": [
+        1401.0,
+        44.0,
+        34.0,
+        34.0
+      ],
+      "rail:related": [
+        1401.0,
+        116.0,
+        34.0,
+        34.0
+      ],
+      "overview:agents": [
+        884.0,
+        124.0,
+        504.0,
+        47.5
+      ],
+      "rail:automations": [
+        1401.0,
+        152.0,
+        34.0,
+        34.0
+      ],
+      "rail:changes": [
+        1401.0,
+        239.0,
+        34.0,
+        34.0
+      ],
+      "home-viewport": [
+        876.0,
+        44.0,
+        520.0,
+        856.0
+      ],
+      "overview:automations": [
+        884.0,
+        223.0,
+        504.0,
+        47.5
+      ],
+      "rail:files": [
+        1401.0,
+        203.0,
+        34.0,
+        34.0
+      ],
+      "header:title": [
+        888.0,
+        10.5,
+        482.0,
+        21.0
+      ]
+    },
+    "marks": {
+      "home": [
+        "overview"
+      ],
+      "rail-badges": [
+        "agents:1:running",
+        "related:1:needs-you"
+      ]
+    }
+  },
+  "noGit": {
+    "activeChat": "rs-plain",
+    "railShown": true,
+    "rightPaneOpen": true,
+    "rightActive": "Home(Changes)",
+    "place": "changes",
+    "expanded": false,
+    "viewport": 1396.0,
+    "tabs": [],
+    "tabMenuOpen": null,
+    "bounds": {
+      "rail:agents": [
+        1401.0,
+        80.0,
+        34.0,
+        34.0
+      ],
+      "rail:browser": [
+        1401.0,
+        311.0,
+        34.0,
+        34.0
+      ],
+      "rail:terminal": [
+        1401.0,
+        275.0,
+        34.0,
+        34.0
+      ],
+      "rail:overview": [
+        1401.0,
+        44.0,
+        34.0,
+        34.0
+      ],
+      "rail:related": [
+        1401.0,
+        116.0,
+        34.0,
+        34.0
+      ],
+      "rail:automations": [
+        1401.0,
+        152.0,
+        34.0,
+        34.0
+      ],
+      "rail:changes": [
+        1401.0,
+        239.0,
+        34.0,
+        34.0
+      ],
+      "rail:files": [
+        1401.0,
+        203.0,
+        34.0,
+        34.0
+      ],
+      "header:title": [
+        888.0,
+        10.5,
+        482.0,
+        21.0
+      ]
+    },
+    "marks": {
+      "home": [
+        "changes"
+      ],
+      "empty": [
+        "changes|No Git repository in this folder."
+      ],
+      "rail-badges": []
+    }
+  },
+  "states": [
+    "Home(Overview)",
+    "Home(Overview)",
+    "Home(Related)",
+    "Home(Agents)",
+    "Diff(2)",
+    "Home(Terminal)",
+    "Diff(2)",
+    "Home(Changes)",
+    "Home(Related)",
+    "Home(Agents)",
+    "Home(Automations)",
+    "Home(Overview)",
+    "Home(Changes)"
+  ]
+}

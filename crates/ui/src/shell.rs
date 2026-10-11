@@ -81,6 +81,8 @@ mod command_palette;
 mod findings;
 mod native_file_rewind;
 mod native_review;
+mod right_rail;
+pub use right_rail::RAIL_WIDTH as RIGHT_RAIL_WIDTH;
 mod pane_chat;
 mod placement;
 mod project_picker;
@@ -692,13 +694,108 @@ fn right_pane_takeover_width(viewport: f32, sidebar: f32) -> f32 {
     (viewport - sidebar).max(0.0)
 }
 
-/// One right-pane surface tab: a workspace browser, an individual workspace
-/// file editor, a Git diff or history page, an embedded terminal, or a
-/// subagent transcript. `Picker` is the empty surface chooser.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+/// A fixed place on the right sidebar's rail
+/// (docs/design/right-sidebar-redesign-2026-10-11): the chat's own places
+/// above the line, workspace tools below it. Clicking a place opens the
+/// sidebar there; clicking the active one closes it. Nothing navigates back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RightPlace {
+    Overview,
+    Agents,
+    Related,
+    Automations,
+    Files,
+    Changes,
+    Terminal,
+    Browser,
+}
+
+impl RightPlace {
+    /// Rail order, top to bottom.
+    pub const ALL: [RightPlace; 8] = [
+        Self::Overview,
+        Self::Agents,
+        Self::Related,
+        Self::Automations,
+        Self::Files,
+        Self::Changes,
+        Self::Terminal,
+        Self::Browser,
+    ];
+
+    /// Stable id for element ids and the QA probe.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Agents => "agents",
+            Self::Related => "related",
+            Self::Automations => "automations",
+            Self::Files => "files",
+            Self::Changes => "changes",
+            Self::Terminal => "terminal",
+            Self::Browser => "browser",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Agents => "Agents",
+            Self::Related => "Related",
+            Self::Automations => "Automations",
+            Self::Files => "Files",
+            Self::Changes => "Changes",
+            Self::Terminal => "Terminal",
+            Self::Browser => "Browser",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Overview => icons::WIDGET,
+            Self::Agents => icons::BOT,
+            Self::Related => icons::DIALOG_2,
+            Self::Automations => icons::STOPWATCH_PLAY,
+            Self::Files => icons::FOLDER_WITH_FILES,
+            Self::Changes => icons::GIT_DIFF,
+            Self::Terminal => icons::TERMINAL,
+            Self::Browser => icons::WINDOW_FRAME,
+        }
+    }
+
+    /// Workspace places hold instances (tabs of their own); the chat's
+    /// places above the rail's line are single pages.
+    pub fn is_workspace(self) -> bool {
+        matches!(
+            self,
+            Self::Files | Self::Changes | Self::Terminal | Self::Browser
+        )
+    }
+
+    /// The place a surface lives in.
+    pub fn of(surface: RightSurface) -> Self {
+        match surface {
+            RightSurface::Home(place) => place,
+            RightSurface::Subagent(_) => Self::Agents,
+            RightSurface::Files | RightSurface::File(_) => Self::Files,
+            RightSurface::Diff(_) => Self::Changes,
+            RightSurface::Terminal(_) => Self::Terminal,
+            RightSurface::Browser(_) => Self::Browser,
+        }
+    }
+}
+
+/// What the right sidebar shows: a place's own page, or one instance inside
+/// a place — a workspace browser, a file editor, a Git diff or history page,
+/// an embedded terminal, a browser page, or a subagent transcript. Instances
+/// list as tabs in their place's own row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RightSurface {
-    #[default]
-    Picker,
+    /// A place's page: the Overview, the agents list, the related chats,
+    /// the automations, or a workspace place with nothing open (its empty
+    /// state says why and offers to open one). Never stored in
+    /// [`Shell::right_tabs`].
+    Home(RightPlace),
     Files,
     File(u64),
     Browser(u64),
@@ -707,18 +804,16 @@ pub enum RightSurface {
     /// A subagent's transcript, read-only (per-subagent viz) — the handle
     /// keys [`Shell::subagent_tabs`].
     Subagent(u64),
-    Agents,
-    /// Chats related to this conversation, in one list: child chats (started
-    /// by the parent agent with fresh context) and side chats (started by
-    /// the user from a copy of its context). A row drills into that chat's
-    /// transcript and composer ([`related_chats`]).
-    RelatedChats,
-    /// The focused conversation's host-owned automations (slice 5).
-    Automations,
+}
+
+impl Default for RightSurface {
+    fn default() -> Self {
+        Self::Home(RightPlace::Overview)
+    }
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
-    if tabs.contains(&surface) {
+    if matches!(surface, RightSurface::Home(_)) || tabs.contains(&surface) {
         false
     } else {
         tabs.push(surface);
@@ -737,18 +832,16 @@ fn workspace_file_title(path: &str) -> SharedString {
 /// Everything defaults CLOSED — the right pane included (user request,
 /// revising the earlier default-open: it popped open on every session you
 /// visited). Opening is an explicit act, remembered per chat for the rest of
-/// the app run; a fresh open with no surface tabs lands on the picker.
+/// the app run; a fresh open lands on the Overview place.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ChatPanels {
     pub terminal_open: bool,
     /// Right pane visible (the surface host — historically the Changes pane).
     pub changes_open: bool,
-    /// Which surface tab renders; validated against the live tab list each
-    /// frame (a closed tab falls back gracefully).
+    /// What renders, and so which rail place is active; validated against
+    /// the live tab list each frame (a closed tab falls back within its
+    /// place).
     pub right_active: RightSurface,
-    /// The surface menu is showing over existing tabs (a pane's Back). Any
-    /// tab activation leaves it; the tabs themselves stay open.
-    pub picker_open: bool,
 }
 
 /// The session-scoped panel map. Keys are chat ids; the new-chat canvas uses
@@ -2287,6 +2380,9 @@ pub struct Shell {
     /// fixture only (off until it opts in).
     #[cfg(feature = "appshots-fixture")]
     sidebar_probe: Option<spaces::SidebarProbe>,
+    /// What the right sidebar painted, for its QA fixture only.
+    #[cfg(feature = "appshots-fixture")]
+    right_probe: Option<right_rail::RightProbe>,
     /// Where the notice toast's Dismiss control last painted, with the id of
     /// the notice it belonged to (QA readback only).
     #[cfg(feature = "appshots-fixture")]
@@ -2304,8 +2400,6 @@ pub struct Shell {
     pub(super) related_expanded: std::collections::HashSet<String>,
     /// The Child chats surface shows an open child (not the list); the shell
     /// re-renders when the panel flips between them.
-    child_chat_open_shown: bool,
-    child_chat_observation: Option<Subscription>,
     /// Opens the fork the side chat creator made, once it is published.
     side_chat_observation: Option<Subscription>,
     /// Last rendered related-list rows, `list → [(section, id)]`, for QA.
@@ -2335,7 +2429,9 @@ pub struct Shell {
     right_terminal_sub: Option<Subscription>,
     terminal_picker_notice: Option<(String, SharedString)>,
     /// The surface-tab strip's `+` menu (Files / Terminal / Diffs / History rows).
-    right_plus: popover::Popup<()>,
+    /// A right tab's context menu (right-click): close it, the others, or
+    /// those to its right.
+    right_tab_menu: popover::Popup<RightSurface>,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
     /// scope/base pick and diff watch (multiple diff panels, user request).
     diffs: std::collections::HashMap<u64, Entity<Changes>>,
@@ -2367,8 +2463,6 @@ pub struct Shell {
     /// flight, and the forks already tried on this engine connection.
     side_marks_migration: Option<Task<()>>,
     side_marks_attempted: (u64, std::collections::HashSet<String>),
-    child_chat_panel: Option<Entity<child_chats::ChildChatPanel>>,
-    child_chat_events: Option<Subscription>,
     /// The right pane's Automations surface and Settings → Automations, each
     /// with the subscription that routes "Open conversation".
     automations_conversation: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
@@ -2388,8 +2482,6 @@ pub struct Shell {
     /// The central chat workbench (tabs and splits around Main).
     workbench: workbench::WorkbenchState,
     _pane_composers_observe: Subscription,
-    /// History/subagent events from the open pane chat's transcript.
-    pane_transcript_events: Option<Subscription>,
     /// "Open as main chat" waiting for the pane composer's draft to save.
     pending_open_main: Option<Subscription>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
@@ -2405,6 +2497,13 @@ pub struct Shell {
     /// Surface-tab strip scroll (the strip overflows horizontally, t3
     /// ScrollArea-style; drag drop-math reads the offset back out).
     right_tab_scroll: gpui::ScrollHandle,
+    /// What each rail place last showed, per chat, so returning to a place
+    /// shows the same tab.
+    right_place_memory:
+        std::collections::HashMap<String, std::collections::HashMap<RightPlace, RightSurface>>,
+    /// The chat whose New tab asked for its terminals
+    /// ([`Self::add_terminal_surface`]).
+    terminal_request: Option<String>,
     /// Chat outlet vs settings pages.
     route: Route,
     /// One normalized service response shared by the full page and sidebar.
@@ -2907,13 +3006,13 @@ impl Shell {
             #[cfg(feature = "appshots-fixture")]
             sidebar_probe: None,
             #[cfg(feature = "appshots-fixture")]
+            right_probe: None,
+            #[cfg(feature = "appshots-fixture")]
             toast_dismiss_bounds: Default::default(),
             related_focus: related_chats::RelatedKind::Child,
             sidebar_drag: None,
             sidebar_drag_rows: Vec::new(),
             related_expanded: Default::default(),
-            child_chat_open_shown: false,
-            child_chat_observation: None,
             side_chat_observation: None,
             #[cfg(feature = "appshots-fixture")]
             fixture_related_rows: Default::default(),
@@ -2925,7 +3024,7 @@ impl Shell {
             right_terminal: None,
             right_terminal_sub: None,
             terminal_picker_notice: None,
-            right_plus: popover::Popup::default(),
+            right_tab_menu: popover::Popup::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
@@ -2944,8 +3043,6 @@ impl Shell {
             side_chat_panel: None,
             side_marks_migration: None,
             side_marks_attempted: (0, Default::default()),
-            child_chat_panel: None,
-            child_chat_events: None,
             automations_conversation: None,
             automations_settings: None,
             automations_mounted: Default::default(),
@@ -2954,7 +3051,6 @@ impl Shell {
             pane_composers,
             workbench: workbench::WorkbenchState::new(cx),
             _pane_composers_observe: pane_composers_observe,
-            pane_transcript_events: None,
             pending_open_main: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
@@ -2964,6 +3060,8 @@ impl Shell {
             right_tabs: std::collections::HashMap::new(),
             right_tab_drag: None,
             right_tab_scroll: gpui::ScrollHandle::new(),
+            right_place_memory: Default::default(),
+            terminal_request: None,
             route,
             usage_snapshot: None,
             usage_environment_snapshots: Vec::new(),
@@ -3459,13 +3557,6 @@ impl Shell {
         {
             self.release_side_chat(cx);
         }
-        if self
-            .child_chat_panel
-            .as_ref()
-            .is_some_and(|panel| !panel.read(cx).is_current(cx))
-        {
-            self.release_child_chat_panel(cx);
-        }
         // Chat switch: restore THAT chat's panel state (per-session open flags;
         // snap, no tween — the panels belong to the destination chat).
         let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
@@ -3475,7 +3566,6 @@ impl Shell {
         if selected != self.active_chat {
             self.pending_open_main = None;
             self.release_side_chat(cx);
-            self.release_child_chat_panel(cx);
             self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             self.active_chat = selected;
@@ -3655,7 +3745,6 @@ impl Shell {
         let open = self.panels.toggle_changes(&key);
         if !open {
             self.release_side_chat(cx);
-            self.release_child_chat_panel(cx);
             self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             // Closing always leaves takeover mode — reopening at full bleed
@@ -3711,16 +3800,20 @@ impl Shell {
         tab_keys: &[u64],
         cx: &mut Context<Self>,
     ) {
-        let activate = self.active_chat == chat_id
-            && self.panels.get(chat_id).right_active == RightSurface::Picker;
-        if !tab_keys.is_empty() {
-            let tabs = self.right_tabs.entry(chat_id.to_string()).or_default();
-            for tab in tab_keys {
-                let surface = RightSurface::Terminal(*tab);
-                if !tabs.contains(&surface) {
-                    tabs.push(surface);
-                }
-            }
+        // Only the Terminal place asks for this chat's terminals; the first
+        // one shows while the place is still on its empty state.
+        let requested = self.terminal_request.as_deref() == Some(chat_id);
+        if requested {
+            self.terminal_request = None;
+        }
+        let activate = requested
+            && self.active_chat == chat_id
+            && self.panels.get(chat_id).right_active == RightSurface::Home(RightPlace::Terminal);
+        for tab in tab_keys {
+            push_unique_right_surface(
+                self.right_tabs.entry(chat_id.to_string()).or_default(),
+                RightSurface::Terminal(*tab),
+            );
         }
         if !tab_keys.is_empty()
             && self
@@ -3738,14 +3831,23 @@ impl Shell {
                     // re-entering that entity; the next shell paint mounts it.
                     self.panels.update(chat_id, |panel| {
                         panel.right_active = RightSurface::Terminal(*first);
-                        panel.picker_open = false;
                     });
                 }
-            } else {
-                self.terminal_picker_notice = Some((
-                    chat_id.to_string(),
-                    "No saved terminals. Use + → Terminal to start a new shell.".into(),
-                ));
+            } else if requested {
+                // Nothing saved: the explicit Terminal choice starts a shell.
+                // Deferred, since this event can arrive inside the terminal
+                // entity's own update.
+                let shell = cx.entity().downgrade();
+                let chat = chat_id.to_string();
+                cx.defer(move |cx| {
+                    shell
+                        .update(cx, |this, cx| {
+                            if this.active_chat == chat {
+                                this.add_new_terminal_surface(cx);
+                            }
+                        })
+                        .ok();
+                });
             }
             cx.notify();
         }
@@ -3836,10 +3938,8 @@ impl Shell {
                         browser.page.url.clone().map(Into::into),
                     )
                 }),
-                RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
-                RightSurface::RelatedChats => Some((*surface, "Related".into(), false, None)),
-                RightSurface::Automations => Some((*surface, "Automations".into(), false, None)),
-                RightSurface::Picker => None,
+                // A place's own page is never a stored tab.
+                RightSurface::Home(_) => None,
             })
             .collect()
     }
@@ -3855,12 +3955,9 @@ impl Shell {
                 .get(&self.panel_key(cx))
                 .and_then(|files| files.read(cx).attachment_path().map(str::to_string))?,
             RightSurface::File(id) => self.file_surface_paths.get(&id)?.clone(),
-            RightSurface::Picker
+            RightSurface::Home(_)
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
-            | RightSurface::Agents
-            | RightSurface::RelatedChats
-            | RightSurface::Automations
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3869,18 +3966,35 @@ impl Shell {
         Some(WorkspacePathDrag::new(path, false))
     }
 
-    /// Drag-reorder a surface tab within this chat's strip.
-    fn reorder_right_tabs(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+    /// Drag-reorder a tab within `place`'s row (`from`/`to` index that
+    /// row; the other places' tabs keep their positions).
+    fn reorder_right_tabs(
+        &mut self,
+        place: RightPlace,
+        from: usize,
+        to: usize,
+        cx: &mut Context<Self>,
+    ) {
         let key = self.panel_key(cx);
-        if let Some(tabs) = self.right_tabs.get_mut(&key)
-            && from < tabs.len()
-            && to < tabs.len()
-            && from != to
-        {
-            let surface = tabs.remove(from);
-            tabs.insert(to, surface);
-            cx.notify();
+        let Some(tabs) = self.right_tabs.get_mut(&key) else {
+            return;
+        };
+        let slots: Vec<usize> = tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| RightPlace::of(**tab) == place)
+            .map(|(ix, _)| ix)
+            .collect();
+        if from >= slots.len() || to >= slots.len() || from == to {
+            return;
         }
+        let mut row: Vec<RightSurface> = slots.iter().map(|ix| tabs[*ix]).collect();
+        let surface = row.remove(from);
+        row.insert(to, surface);
+        for (slot, surface) in slots.into_iter().zip(row) {
+            tabs[slot] = surface;
+        }
+        cx.notify();
     }
 
     /// Track the hovered drop slot mid-drag (the terminal drawer's
@@ -3907,26 +4021,28 @@ impl Shell {
     }
 
     /// The surface that actually renders: the stored pick when it still
-    /// exists, else the first remaining tab, else the picker. Terminal keys
-    /// go stale when their tab closes/exits — never render a dead surface.
+    /// exists, else another open tab of the same place, else that place's
+    /// own page. Terminal keys go stale when their tab closes/exits — never
+    /// render a dead surface, and never leave the place the rail shows.
     fn resolved_right_active(&self, cx: &App) -> RightSurface {
-        let panel = self.panels.get(&self.panel_key(cx));
-        if panel.picker_open {
-            return RightSurface::Picker;
+        let picked = self.panels.get(&self.panel_key(cx)).right_active;
+        if matches!(picked, RightSurface::Home(_)) {
+            return picked;
         }
-        let picked = panel.right_active;
+        let place = RightPlace::of(picked);
         let rows = self.right_surface_rows(cx);
-        let exists = match picked {
-            RightSurface::Picker => false,
-            surface => rows.iter().any(|(s, _, _, _)| *s == surface),
-        };
-        if exists {
-            picked
-        } else {
-            rows.first()
-                .map(|(s, _, _, _)| *s)
-                .unwrap_or(RightSurface::Picker)
+        if rows.iter().any(|(surface, _, _, _)| *surface == picked) {
+            return picked;
         }
+        rows.iter()
+            .map(|(surface, _, _, _)| *surface)
+            .find(|surface| RightPlace::of(*surface) == place)
+            .unwrap_or(RightSurface::Home(place))
+    }
+
+    /// The rail place the sidebar is on.
+    fn right_place(&self, cx: &App) -> RightPlace {
+        RightPlace::of(self.resolved_right_active(cx))
     }
 
     fn suspend_file_images(&mut self, cx: &mut Context<Self>) {
@@ -3944,10 +4060,14 @@ impl Shell {
             self.suspend_file_images(cx);
         }
         let key = self.panel_key(cx);
-        self.panels.update(&key, |p| {
-            p.right_active = surface;
-            p.picker_open = false;
-        });
+        self.panels.update(&key, |p| p.right_active = surface);
+        // Coming back to a place shows what it last showed.
+        if !matches!(surface, RightSurface::Home(_)) {
+            self.right_place_memory
+                .entry(key.clone())
+                .or_default()
+                .insert(RightPlace::of(surface), surface);
+        }
         match surface {
             RightSurface::Files => {
                 if let Some(files) = self.files.get(&key).cloned() {
@@ -3977,12 +4097,7 @@ impl Shell {
             // activation needs no revalidation.
             // The child chat panel keeps its one doc watch while its tab
             // exists, so flipping tabs never churns the subscription.
-            RightSurface::Subagent(_)
-            | RightSurface::Browser(_)
-            | RightSurface::Agents
-            | RightSurface::RelatedChats
-            | RightSurface::Automations => {}
-            RightSurface::Picker => {}
+            RightSurface::Subagent(_) | RightSurface::Browser(_) | RightSurface::Home(_) => {}
         }
         cx.notify();
     }
@@ -4106,12 +4221,6 @@ impl Shell {
             return LinkOutcome::Rejected;
         };
         let current_pane = match self.resolved_right_active(cx) {
-            RightSurface::RelatedChats => self.child_chat_panel.as_ref().is_some_and(|panel| {
-                let panel = panel.read(cx);
-                panel.is_current(cx)
-                    && panel.parent() == self.active_chat
-                    && panel.open_chat_id() == Some(source)
-            }),
             RightSurface::File(id) => {
                 self.right_pane_open(cx)
                     && self
@@ -4214,10 +4323,7 @@ impl Shell {
         });
         self.browsers.insert(id, browser.clone());
         self.browser_subs.insert(id, sub);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Browser(id));
+        self.push_right_tab(&key, RightSurface::Browser(id));
         self.set_right_active(RightSurface::Browser(id), cx);
         browser.update(cx, |browser, cx| {
             if let Some(url) = url {
@@ -4347,8 +4453,7 @@ impl Shell {
             self.files.insert(key.clone(), files);
             self.files_subs.insert(key.clone(), sub);
         }
-        let tabs = self.right_tabs.entry(key).or_default();
-        push_unique_right_surface(tabs, RightSurface::Files);
+        self.push_right_tab(&key, RightSurface::Files);
         self.set_right_active(RightSurface::Files, cx);
         self.focus_right_file_editor(RightSurface::Files, window, cx);
     }
@@ -4438,10 +4543,7 @@ impl Shell {
             .insert(id, (panel_key.clone(), owner));
         self.file_surface_keys.insert(lookup, id);
         self.file_surface_subs.insert(id, sub);
-        self.right_tabs
-            .entry(panel_key)
-            .or_default()
-            .push(RightSurface::File(id));
+        self.push_right_tab(&panel_key, RightSurface::File(id));
         self.set_right_active(RightSurface::File(id), cx);
     }
 
@@ -4535,21 +4637,20 @@ impl Shell {
         self.diffs.insert(id, changes);
         self.diff_subs.insert(id, sub);
         let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Diff(id));
+        self.push_right_tab(&key, RightSurface::Diff(id));
         self.set_right_active(RightSurface::Diff(id), cx);
     }
 
-    /// The picker's Terminal card restores saved/live tabs for this task.
+    /// The Terminal place with nothing open: this task's saved and live
+    /// terminals restore there; with none saved, a fresh shell starts
+    /// ([`Self::register_saved_terminal_surfaces`]).
     fn add_terminal_surface(&mut self, cx: &mut Context<Self>) {
         self.terminal_picker_notice = None;
         let key = self.panel_key(cx);
         self.panels.update(&key, |panel| {
-            panel.right_active = RightSurface::Picker;
-            panel.picker_open = false;
+            panel.right_active = RightSurface::Home(RightPlace::Terminal)
         });
+        self.terminal_request = Some(key);
         let panel = self.right_terminal_panel(cx);
         panel.update(cx, |panel, cx| {
             panel.set_open(true, cx);
@@ -4557,7 +4658,7 @@ impl Shell {
         });
     }
 
-    /// The right-pane `+` menu explicitly starts a fresh managed shell.
+    /// Start a fresh managed shell in its own tab.
     fn add_new_terminal_surface(&mut self, cx: &mut Context<Self>) {
         let panel = self.right_terminal_panel(cx);
         let opened = panel.update(cx, |panel, cx| {
@@ -4567,12 +4668,14 @@ impl Shell {
         if let Some(tab) = opened {
             self.terminal_picker_notice = None;
             let key = self.panel_key(cx);
-            self.right_tabs
-                .entry(key)
-                .or_default()
-                .push(RightSurface::Terminal(tab));
+            self.push_right_tab(&key, RightSurface::Terminal(tab));
             self.set_right_active(RightSurface::Terminal(tab), cx);
         }
+    }
+
+    /// Add `surface` to `key`'s tabs (its place's row lists it).
+    fn push_right_tab(&mut self, key: &str, surface: RightSurface) -> bool {
+        push_unique_right_surface(self.right_tabs.entry(key.to_string()).or_default(), surface)
     }
 
     /// Spawn-chip events from the primary transcript AND from subagent-tab
@@ -4612,19 +4715,15 @@ impl Shell {
                     cx.notify();
                     return;
                 }
-                let visible_child = self.child_chat_panel.as_ref().is_some_and(|panel| {
-                    let panel = panel.read(cx);
-                    panel.is_current(cx) && panel.open_chat_id() == Some(task_id.as_str())
-                });
                 // A child (or other chat) open as a workbench tab forks its
                 // own side chat: the source is that chat, never Main.
                 let workbench_tab = self.workbench.has_view(task_id);
-                if self.active_chat == *task_id || visible_child || workbench_tab {
+                if self.active_chat == *task_id || workbench_tab {
                     self.release_side_chat(cx);
                     // The new fork lists in Related chats and opens as a tab
                     // (or the chat) once the engine publishes it.
                     self.related_focus = related_chats::RelatedKind::Side;
-                    self.add_work_surface(RightSurface::RelatedChats, cx);
+                    self.show_right_place(RightPlace::Related, cx);
                     self.create_side_chat_panel_for(
                         task_id.clone(),
                         Some((message_id.clone(), text.clone())),
@@ -4762,10 +4861,7 @@ impl Shell {
             },
         );
         let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Subagent(id));
+        self.push_right_tab(&key, RightSurface::Subagent(id));
         self.set_right_active(RightSurface::Subagent(id), cx);
     }
 
@@ -4868,9 +4964,7 @@ impl Shell {
             }
             return;
         }
-        if let Some(tabs) = self.right_tabs.get_mut(&key) {
-            tabs.retain(|s| *s != surface);
-        }
+        self.remove_right_tab(&key, surface);
         match surface {
             RightSurface::Files | RightSurface::File(_) => {}
             RightSurface::Browser(id) => {
@@ -4899,19 +4993,46 @@ impl Shell {
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
-            RightSurface::RelatedChats => {
-                self.release_side_chat(cx);
-                self.release_child_chat_panel(cx);
-            }
-            RightSurface::Agents | RightSurface::Picker => {}
-            RightSurface::Automations => self.automations_conversation = None,
+            RightSurface::Home(_) => {}
         }
-        self.panels.update(&key, |p| {
-            if p.right_active == surface {
-                p.right_active = RightSurface::Picker;
+        cx.notify();
+    }
+
+    /// Take `surface` out of `key`'s tabs. When it was showing, its place
+    /// stays: the tab to its left in that place shows, else the next one,
+    /// else the place's own page.
+    fn remove_right_tab(&mut self, key: &str, surface: RightSurface) {
+        let Some(tabs) = self.right_tabs.get_mut(key) else {
+            return;
+        };
+        let Some(ix) = tabs.iter().position(|tab| *tab == surface) else {
+            return;
+        };
+        tabs.remove(ix);
+        let place = RightPlace::of(surface);
+        let same: Vec<(usize, RightSurface)> = tabs
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, tab)| RightPlace::of(*tab) == place)
+            .collect();
+        let next = same
+            .iter()
+            .rev()
+            .find(|(i, _)| *i < ix)
+            .or_else(|| same.first())
+            .map(|(_, tab)| *tab)
+            .unwrap_or(RightSurface::Home(place));
+        if let Some(memory) = self.right_place_memory.get_mut(key)
+            && memory.get(&place) == Some(&surface)
+        {
+            memory.remove(&place);
+        }
+        self.panels.update(key, |panel| {
+            if panel.right_active == surface {
+                panel.right_active = next;
             }
         });
-        cx.notify();
     }
 
     fn on_file_close_ready(
@@ -4983,14 +5104,15 @@ impl Shell {
     }
 
     /// The right pane's closable surface for the `⌘W` cascade: the resolved
-    /// active surface while the pane is open, or `None` on the picker empty
-    /// state / a closed pane / the new-session canvas.
+    /// active tab while the pane is open, or `None` on a place's own page /
+    /// a closed pane / the new-session canvas.
     fn closable_right_surface(&self, cx: &App) -> Option<RightSurface> {
         if !self.right_pane_open(cx) {
             return None;
         }
         match self.resolved_right_active(cx) {
-            RightSurface::Picker => None,
+            // A place's own page has nothing to close.
+            RightSurface::Home(_) => None,
             surface => Some(surface),
         }
     }
@@ -5060,7 +5182,6 @@ impl Shell {
             self.panels.update(&key, |panel| {
                 panel.changes_open = true;
                 panel.right_active = surface;
-                panel.picker_open = false;
             });
             self.apply_nav(NavEntry::Chat(key), cx);
         }
@@ -5079,9 +5200,10 @@ impl Shell {
         panel_key: &str,
         cx: &mut Context<Self>,
     ) {
-        if let Some(tabs) = self.right_tabs.get_mut(panel_key) {
-            tabs.retain(|candidate| *candidate != surface);
+        if !matches!(surface, RightSurface::Files | RightSurface::File(_)) {
+            return;
         }
+        self.remove_right_tab(panel_key, surface);
         match surface {
             RightSurface::Files => {
                 self.files.remove(panel_key);
@@ -5097,11 +5219,6 @@ impl Shell {
             _ => return,
         }
         self.pending_file_closes.remove(&surface);
-        self.panels.update(panel_key, |panel| {
-            if panel.right_active == surface {
-                panel.right_active = RightSurface::Picker;
-            }
-        });
         cx.notify();
     }
 
@@ -6899,7 +7016,9 @@ impl Shell {
                 if side_chats::is_fork(self.state.read(cx), &id) {
                     self.open_side_chat_in_pane(id, cx)
                 } else if !self.open_related_in_workbench(id.clone(), false, cx) {
-                    self.open_child_chat_in_pane(id, cx)
+                    // No workbench: the conversation becomes the main view,
+                    // never a chat inside the sidebar.
+                    self.open_chat(id, cx)
                 }
             }
         }
@@ -11575,11 +11694,11 @@ impl Shell {
             return true;
         }
 
-        if self.right_plus.is_open() {
-            self.close_right_plus(cx);
+        if self.right_tab_menu.is_open() {
+            self.close_right_tab_menu(cx);
             return true;
         }
-        if self.right_plus.get().is_some() {
+        if self.right_tab_menu.get().is_some() {
             return true;
         }
         // The workbench tab / Group actions menu: Escape dismisses it and
@@ -13908,13 +14027,8 @@ impl Shell {
         let content: AnyElement = if self.right_pane_open(cx) || self.tween_active(self.right_tween)
         {
             match self.resolved_right_active(cx) {
-                RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
-                RightSurface::Automations if self.right_pane_open(cx) => {
-                    let scope = self.automations_conversation_scope(cx);
-                    self.automations_outlet(scope, false, cx).into_any_element()
-                }
-                RightSurface::RelatedChats if self.right_pane_open(cx) => {
-                    self.render_related_chats(cx)
+                RightSurface::Home(place) if self.right_pane_open(cx) => {
+                    self.render_place_home(place, cx)
                 }
                 // Rendering a Files surface activates its image. Keep it unmounted
                 // throughout the closing animation after suspending its resources.
@@ -13927,7 +14041,7 @@ impl Shell {
                         files.update(cx, |files, cx| files.ensure_loaded(cx));
                         files.into_any_element()
                     } else {
-                        self.render_surface_picker(cx)
+                        self.render_place_home(RightPlace::Files, cx)
                     }
                 }
                 RightSurface::File(id) => {
@@ -13935,7 +14049,7 @@ impl Shell {
                         file.update(cx, |file, cx| file.ensure_loaded(cx));
                         file.into_any_element()
                     } else {
-                        self.render_surface_picker(cx)
+                        self.render_place_home(RightPlace::Files, cx)
                     }
                 }
                 RightSurface::Diff(id) if self.diffs.contains_key(&id) => {
@@ -13961,7 +14075,7 @@ impl Shell {
                     .get(&id)
                     .cloned()
                     .map(|browser| browser.into_any_element())
-                    .unwrap_or_else(|| self.render_surface_picker(cx)),
+                    .unwrap_or_else(|| self.render_place_home(RightPlace::Browser, cx)),
                 RightSurface::Terminal(tab) => {
                     let panel = self.right_terminal_panel(cx);
                     // Keep the embedded panel's own active tab aligned with
@@ -14013,14 +14127,25 @@ impl Shell {
                         .into_any_element()
                 }
                 // Closing: the guarded surfaces above stop rendering (they
-                // start watches and loads), and flashing the picker in their
-                // place read as the pane changing its mind (audit SS-01).
-                // The pane slides out empty instead.
+                // start watches and loads), and flashing a place's page in
+                // their place read as the pane changing its mind (audit
+                // SS-01). The pane slides out empty instead.
                 _ if !self.right_pane_open(cx) => gpui::Empty.into_any_element(),
-                _ => self.render_surface_picker(cx),
+                surface => self.render_place_home(RightPlace::of(surface), cx),
             }
         } else {
             gpui::Empty.into_any_element()
+        };
+        // A place with tabs of its own lists them in a row above what shows.
+        let content = match self.render_place_tabs(cx) {
+            Some(tabs) if self.right_pane_open(cx) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(div().flex_1().min_h_0().child(content))
+                .into_any_element(),
+            _ => content,
         };
         // The right sidebar shares the one chrome surface (the shell frost)
         // with the left sidebar, titlebar and frame footer: no tint band and
@@ -14033,14 +14158,17 @@ impl Shell {
             .size_full()
             .flex()
             .flex_col()
-            // The panel's right edge IS the window's right edge: it carries
-            // the CSD window's rounded corners directly (gpui cannot clip
-            // children rounded — each full-bleed layer rounds itself; see
-            // [`Self::window_corner_radius`]).
-            .when(Self::window_corner_radius(window) > 0.0, |el| {
-                let corner = Self::window_corner_radius(window);
-                el.rounded_tr(px(corner)).rounded_br(px(corner))
-            })
+            // Without the rail, the panel's right edge IS the window's right
+            // edge: it carries the CSD window's rounded corners directly
+            // (gpui cannot clip children rounded — each full-bleed layer
+            // rounds itself; see [`Self::window_corner_radius`]).
+            .when(
+                Self::window_corner_radius(window) > 0.0 && !self.rail_shown(),
+                |el| {
+                    let corner = Self::window_corner_radius(window);
+                    el.rounded_tr(px(corner)).rounded_br(px(corner))
+                },
+            )
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the panel's own chrome starts below it, on the same line
@@ -14059,211 +14187,6 @@ impl Shell {
             edge_offset,
             div().h_full().relative().child(panel).into_any_element(),
         )
-    }
-
-    /// The right pane's empty state: a compact vertical list of surface rows
-    /// (icon + label). The old two-card grid clipped in narrow panes and
-    /// wasted short ones.
-    fn render_surface_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).clone();
-        let terminal_notice = self
-            .terminal_picker_notice
-            .as_ref()
-            .filter(|(chat, _)| chat == &self.active_chat)
-            .map(|(_, notice)| notice.clone());
-        let text = theme.text;
-        let muted = theme.text_muted;
-        // Related holds the chat's related chats and the related tickets of
-        // the conversation focused in it (a side chat's tab included).
-        let related_chats = self.active_related_chat_count(cx);
-        let related_tickets = if self.active_chat.is_empty() {
-            0
-        } else {
-            let owner = self.related_tickets_owner(cx);
-            self.board_chat.related(&owner).len()
-        };
-        let related_count = related_chats + related_tickets;
-        let related_label: SharedString = format!(
-            "Related: chats and tickets, {related_chats} open chat{}, {related_tickets} ticket{}",
-            if related_chats == 1 { "" } else { "s" },
-            if related_tickets == 1 { "" } else { "s" },
-        )
-        .into();
-        let badge_tone = theme.text_muted;
-        let badge_text = theme.readable_tone(badge_tone, 0.85);
-        let row = |id: &'static str, icon_path: &'static str, title: &'static str| {
-            div()
-                .id(id)
-                .role(gpui::Role::Button)
-                .aria_label(title)
-                .tab_index(0)
-                .focus_visible({
-                    let ring = theme.focus_ring();
-                    move |style| crate::theme::focus_ring(style, ring)
-                })
-                // Filled tiles, not outlined wireframe rows (audit SH-23).
-                .w_full()
-                .h(px(44.0))
-                .px(px(14.0))
-                .rounded(px(crate::theme::radius::LG))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(10.0))
-                .cursor_pointer()
-                .hover_fill(
-                    id,
-                    crate::theme::fill(crate::theme::FillTier::Quaternary),
-                    crate::theme::fill(crate::theme::FillTier::Tertiary),
-                )
-                .child(icon(icon_path).size(px(16.0)).flex_none().text_color(muted))
-                .child(
-                    div()
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(text)
-                        .child(SharedString::from(title)),
-                )
-        };
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .p(px(16.0))
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(280.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .mb(px(4.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(text)
-                                    .child("Open in this pane"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.readable_faint(0.9))
-                                    .child("Pick a surface to work beside the conversation."),
-                            ),
-                    )
-                    // The conversation's own surfaces lead; side and child
-                    // chats sit together as the two kinds of related chat.
-                    .when(!self.active_chat.is_empty(), |el| {
-                        el.child(
-                            row("surface-card-agents", icons::BOT, "Agents")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_work_surface(RightSurface::Agents, cx)
-                                }))
-                                .on_key_down(crate::swallow_activation_key),
-                        )
-                        .child(
-                            row("surface-card-related-chats", icons::DIALOG_2, "Related")
-                                .aria_label(related_label)
-                                // What it holds, so tickets are found there too.
-                                .child(
-                                    div()
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .text_color(theme.readable_faint(0.9))
-                                        .child("Chats and tickets"),
-                                )
-                                .child(div().flex_1())
-                                .when(related_count > 0, |row| {
-                                    row.child(
-                                        div()
-                                            .h(px(18.0))
-                                            .min_w(px(18.0))
-                                            .px(px(6.0))
-                                            .flex_none()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded_full()
-                                            .bg(badge_tone.opacity(0.12))
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(badge_text)
-                                            .child(related_count.to_string()),
-                                    )
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_work_surface(RightSurface::RelatedChats, cx)
-                                }))
-                                .on_key_down(crate::swallow_activation_key),
-                        )
-                        .child(
-                            row(
-                                "surface-card-automations",
-                                icons::STOPWATCH_PLAY,
-                                "Automations",
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.add_work_surface(RightSurface::Automations, cx)
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
-                        )
-                    })
-                    .child(
-                        row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.add_files_surface(window, cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        row("surface-card-browser", icons::WINDOW_FRAME, "Browser").on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.add_browser_surface(None, window, cx)
-                            }),
-                        ),
-                    )
-                    .child(
-                        row("surface-card-terminal", icons::TERMINAL, "Terminal").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.add_terminal_surface(cx);
-                            }),
-                        ),
-                    )
-                    .when_some(terminal_notice, |el, notice| {
-                        el.child(
-                            div()
-                                .px(px(14.0))
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(muted)
-                                .child(notice),
-                        )
-                    })
-                    // Git surfaces only where there IS git — the pane itself
-                    // no longer gates on it (terminals work anywhere).
-                    .when(self.space_git_detected(cx), |el| {
-                        el.child(
-                            row("surface-card-diffs", icons::GIT_DIFF, "Diffs").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.add_diff_surface(cx);
-                                }),
-                            ),
-                        )
-                        .child(
-                            row("surface-card-history", icons::GIT_BRANCH, "History").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.add_history_surface(cx);
-                                }),
-                            ),
-                        )
-                    }),
-            )
-            .into_any_element()
     }
 
     fn render_signed_out_restart(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -14350,17 +14273,133 @@ impl Shell {
             .into_any_element()
     }
 
-    fn close_right_plus(&mut self, cx: &mut Context<Self>) {
-        if self.right_plus.begin_close() {
-            popover::reap_popup(cx, |shell: &mut Self| &mut shell.right_plus);
+    fn close_right_tab_menu(&mut self, cx: &mut Context<Self>) {
+        if self.right_tab_menu.begin_close() {
+            popover::reap_popup(cx, |shell: &mut Self| &mut shell.right_tab_menu);
         }
         cx.notify();
     }
 
-    /// The titlebar strip over the right pane: one chip per surface tab
-    /// (icon · title · ✕) plus the `+` menu — the t3code RightPanelTabs bar,
-    /// living in the top row; the diff options moved into the pane below.
-    pub(crate) fn render_right_tab_strip(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The tab menu's Close others / Close to the right, within the tab's
+    /// place: each tab closes as its own ✕ would (an unsaved file still asks
+    /// first).
+    fn close_right_tabs_except(
+        &mut self,
+        keep: RightSurface,
+        only_right: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.panel_key(cx);
+        let place = RightPlace::of(keep);
+        let tabs: Vec<RightSurface> = self
+            .right_tabs
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|tab| RightPlace::of(*tab) == place)
+            .collect();
+        let Some(ix) = tabs.iter().position(|tab| *tab == keep) else {
+            return;
+        };
+        let doomed: Vec<RightSurface> = tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| if only_right { *i > ix } else { *i != ix })
+            .map(|(_, tab)| *tab)
+            .collect();
+        self.set_right_active(keep, cx);
+        for surface in doomed {
+            self.close_right_surface(surface, window, cx);
+        }
+    }
+
+    /// The tab menu for `surface`, anchored under its chip.
+    fn render_right_tab_menu(
+        &mut self,
+        surface: RightSurface,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = self.panel_key(cx);
+        let place = RightPlace::of(surface);
+        let tabs: Vec<RightSurface> = self
+            .right_tabs
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|tab| RightPlace::of(*tab) == place)
+            .collect();
+        let ix = tabs.iter().position(|tab| *tab == surface);
+        let others = tabs.len() > 1;
+        let to_right = ix.is_some_and(|ix| ix + 1 < tabs.len());
+        let row = |id: &'static str, label: &'static str, enabled: bool| {
+            popover::menu_row(theme, false, id)
+                .id(id)
+                .role(gpui::Role::MenuItem)
+                .aria_label(label)
+                .relative()
+                .when(!enabled, |row| row.opacity(0.45))
+                .child(SharedString::from(label))
+                .children(self.right_probe_child(|| id.to_string()))
+        };
+        let menu =
+            popover::popover_card(theme)
+                .w(px(180.0))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_right_tab_menu(cx)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(row("right-tab-menu-close", "Close tab", true).on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.close_right_tab_menu(cx);
+                                this.close_right_surface(surface, window, cx);
+                            }),
+                        ))
+                        .child(
+                            row("right-tab-menu-close-others", "Close other tabs", others).when(
+                                others,
+                                |row| {
+                                    row.on_click(cx.listener(move |this, _, window, cx| {
+                                        this.close_right_tab_menu(cx);
+                                        this.close_right_tabs_except(surface, false, window, cx);
+                                    }))
+                                },
+                            ),
+                        )
+                        .child(
+                            row(
+                                "right-tab-menu-close-right",
+                                "Close tabs to the right",
+                                to_right,
+                            )
+                            .when(to_right, |row| {
+                                row.on_click(cx.listener(move |this, _, window, cx| {
+                                    this.close_right_tab_menu(cx);
+                                    this.close_right_tabs_except(surface, true, window, cx);
+                                }))
+                            }),
+                        ),
+                )
+                .into_any_element();
+        popover::anchored_menu_below_gap(
+            "right-tab-menu",
+            menu,
+            self.right_tab_menu.closing_since(),
+            6.0,
+        )
+        .into_any_element()
+    }
+
+    /// The current place's own tab row, above what it shows: one chip per
+    /// open instance (icon · title · ✕), the Agents list pinned first in the
+    /// Agents place, and `+` where the place can open another (Terminal,
+    /// Browser, Changes). `None` when the place has no tabs.
+    pub(crate) fn render_place_tabs(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         /// Fixed chip slot — the terminal drawer's drag mechanics (drop-index
         /// quantisation + slide offsets) assume uniform widths.
         const CHIP_W: f32 = 112.0;
@@ -14371,7 +14410,15 @@ impl Shell {
         if self.right_tab_drag.is_some() && !cx.has_active_drag() {
             self.right_tab_drag = None;
         }
-        let rows = self.right_surface_rows(cx);
+        let place = self.right_place(cx);
+        let rows: Vec<_> = self
+            .right_surface_rows(cx)
+            .into_iter()
+            .filter(|(surface, _, _, _)| RightPlace::of(*surface) == place)
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
         let count = rows.len();
         let active = self.resolved_right_active(cx);
         let drag = self
@@ -14431,7 +14478,7 @@ impl Shell {
                     .map(|d| d.over)
                     .unwrap_or(payload.from);
                 this.right_tab_drag = None;
-                this.reorder_right_tabs(payload.from, to, cx);
+                this.reorder_right_tabs(place, payload.from, to, cx);
             }));
         for (ix, (surface, title, dirty, detail)) in rows.into_iter().enumerate() {
             let is_active = surface == active;
@@ -14450,12 +14497,10 @@ impl Shell {
                         }
                     })
                     .unwrap_or(icons::GIT_DIFF),
-                RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
-                RightSurface::RelatedChats => icons::DIALOG_2,
-                RightSurface::Automations => icons::STOPWATCH_PLAY,
+                RightSurface::Subagent(_) => icons::BOT,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::WINDOW_FRAME,
-                RightSurface::Picker => icons::PLUS,
+                RightSurface::Home(place) => place.icon(),
             };
             // A live subagent tab swaps its icon for the mini working
             // spinner (the history fetch button's in-flight recipe) — the
@@ -14542,6 +14587,14 @@ impl Shell {
                     gpui::MouseButton::Middle,
                     cx.listener(move |this, _, window, cx| {
                         this.close_right_surface(surface, window, cx);
+                    }),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.right_tab_menu.open(surface);
+                        cx.notify();
                     }),
                 )
                 .when(crate::click_activation_drag_enabled(), |el| {
@@ -14662,6 +14715,13 @@ impl Shell {
                             .bg(theme.text_muted),
                     )
                 });
+            let chip = chip.children(self.right_probe_child(|| format!("strip:tab:{ix}")));
+            let chip = if self.right_tab_menu.get() == Some(&surface) {
+                let menu = self.render_right_tab_menu(surface, &theme, cx);
+                chip.relative().child(menu)
+            } else {
+                chip
+            };
             // Sliding transform while a sibling drags over (the terminal
             // drawer's exact recipe): animate 150ms between committed
             // offsets; the dragged tab leaves an invisible spacer — the
@@ -14689,197 +14749,61 @@ impl Shell {
             };
             strip = strip.child(wrapped);
         }
-        // The `+` — a small menu offering the available surfaces (t3 "Add panel
-        // surface"); mirrors the picker cards.
-        let plus_open = self.right_plus.get().is_some();
-        let plus_fade = "right-surface-add-fade";
-        let mut plus = div()
-            .id("right-surface-add")
-            .size(px(crate::surface_chrome::CONTROL_M))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(crate::surface_chrome::RADIUS_M))
-            .cursor_pointer()
-            .bg(motion::hover_blend(
-                plus_fade,
-                crate::theme::wash(0.0),
-                crate::theme::wash(0.11),
-            ))
-            .on_hover(motion::hover_listener(plus_fade))
-            .block_mouse_except_scroll()
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, window, _| {
-                    window.prevent_default();
-                    this.right_plus.note_trigger_press();
-                }),
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                cx.stop_propagation();
-                if this.right_plus.take_press_was_open() {
-                    this.close_right_plus(cx);
-                } else {
-                    this.right_plus.open(());
-                    cx.notify();
-                }
-            }))
-            .child(
-                icon(icons::PLUS)
-                    .size(px(13.0))
-                    .text_color(theme.text_muted),
-            );
-        if plus_open {
-            let closing = self.right_plus.closing_since();
-            let menu = popover::popover_card(&theme)
-                .w(px(168.0))
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_right_plus(cx)))
+        // `+` opens another instance of this place, pinned after the
+        // scroller so it stays in reach however many tabs are open.
+        let add_label = match place {
+            RightPlace::Terminal => Some("New terminal"),
+            RightPlace::Browser => Some("New page"),
+            RightPlace::Changes => Some("New diff"),
+            _ => None,
+        };
+        let plus = add_label.map(|label| {
+            let plus_fade = "right-surface-add-fade";
+            div()
+                .id("right-surface-add")
+                .debug_selector(|| "right-surface-add".to_string())
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .tab_index(0)
+                .size(px(crate::surface_chrome::CONTROL_M))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(crate::surface_chrome::RADIUS_M))
+                .cursor_pointer()
+                .bg(motion::hover_blend(
+                    plus_fade,
+                    crate::theme::wash(0.0),
+                    crate::theme::wash(0.11),
+                ))
+                .on_hover(motion::hover_listener(plus_fade))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
+                .tooltip(move |_, cx| crate::pickers::ControlTooltip::view(label, None, cx))
+                .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                    window.prevent_default()
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    match place {
+                        RightPlace::Terminal => this.add_new_terminal_surface(cx),
+                        RightPlace::Browser => this.add_browser_surface(None, window, cx),
+                        RightPlace::Changes => this.add_diff_surface(cx),
+                        _ => {}
+                    }
+                }))
+                .on_key_down(crate::swallow_activation_key)
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            popover::menu_row(&theme, false, "right-plus-files")
-                                .id("right-plus-files-row")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.add_files_surface(window, cx);
-                                    this.close_right_plus(cx);
-                                }))
-                                .child(
-                                    icon(icons::FOLDER_WITH_FILES)
-                                        .size(px(13.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Files")),
-                        )
-                        .child(
-                            popover::menu_row(&theme, false, "right-plus-browser")
-                                .id("right-plus-browser-row")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.add_browser_surface(None, window, cx);
-                                    this.close_right_plus(cx);
-                                }))
-                                .child(
-                                    icon(icons::WINDOW_FRAME)
-                                        .size(px(13.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Browser")),
-                        )
-                        .when(!self.active_chat.is_empty(), |menu| {
-                            menu.child(
-                                popover::menu_row(&theme, false, "right-plus-agents")
-                                    .id("right-plus-agents-row")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("Agents")
-                                    .tab_index(0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::Agents, cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(
-                                        icon(icons::BOT)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child("Agents"),
-                            )
-                            .child(
-                                popover::menu_row(&theme, false, "right-plus-related-chats")
-                                    .id("right-plus-related-chats-row")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("Related: chats and tickets")
-                                    .tab_index(0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::RelatedChats, cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(
-                                        icon(icons::DIALOG_2)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child("Related"),
-                            )
-                            .child(
-                                popover::menu_row(&theme, false, "right-plus-automations")
-                                    .id("right-plus-automations-row")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("Automations")
-                                    .tab_index(0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::Automations, cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(
-                                        icon(icons::STOPWATCH_PLAY)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child("Automations"),
-                            )
-                        })
-                        .child(
-                            popover::menu_row(&theme, false, "right-plus-terminal")
-                                .id("right-plus-terminal-row")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_new_terminal_surface(cx);
-                                    this.close_right_plus(cx);
-                                }))
-                                .child(
-                                    icon(icons::TERMINAL)
-                                        .size(px(13.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Terminal")),
-                        )
-                        .when(self.space_git_detected(cx), |menu| {
-                            menu.child(
-                                popover::menu_row(&theme, false, "right-plus-diff")
-                                    .id("right-plus-diff-row")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_diff_surface(cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .child(
-                                        icon(icons::GIT_DIFF)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child(SharedString::from("Diffs")),
-                            )
-                            .child(
-                                popover::menu_row(&theme, false, "right-plus-history")
-                                    .id("right-plus-history-row")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_history_surface(cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .child(
-                                        icon(icons::GIT_BRANCH)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child(SharedString::from("History")),
-                            )
-                        }),
+                    icon(icons::PLUS)
+                        .size(px(13.0))
+                        .text_color(theme.text_muted),
                 )
-                .into_any_element();
-            plus = plus.relative().child(popover::anchored_menu_below_gap(
-                "right-plus-menu",
-                menu,
-                closing,
-                10.0,
-            ));
-        }
-        // The empty-state picker already offers every surface. Show a single
-        // Chrome-style add-tab affordance only after at least one tab exists.
-        strip = strip.when(count > 0, |strip| strip.child(plus));
+                .children(self.right_probe_child(|| "tabs:plus".to_string()))
+        });
         // Edge fades on whichever side hides tabs (flags computed above).
         // Glass: per-glyph EdgeFade scope over the chips' own opacity ramps;
         // opaque: painted gradients in the shell surface tone.
@@ -14922,14 +14846,73 @@ impl Shell {
                         )),
                 )
             });
-        if glass {
+        let region = if glass {
             crate::edge_fade::edge_faded(FADE_WIDTH, false, false, region)
                 .fade_left(fade_left)
                 .fade_right(fade_right)
                 .into_any_element()
         } else {
             region.into_any_element()
-        }
+        };
+        // The Agents place pins its list ahead of the transcripts it opened:
+        // never closed, dragged or scrolled away.
+        let home = (place == RightPlace::Agents).then(|| {
+            let home_active = active == RightSurface::Home(RightPlace::Agents);
+            div()
+                .id("right-agents-home-tab")
+                .role(gpui::Role::Tab)
+                .aria_label("All agents")
+                .aria_selected(home_active)
+                .tab_index(0)
+                .h(px(28.0))
+                .px(px(8.0))
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .text_size(crate::typography::ui_rems(12.5))
+                .text_color(if home_active {
+                    theme.text
+                } else {
+                    theme.text_muted
+                })
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
+                .when(home_active, |el| {
+                    el.bg(crate::theme::fill(crate::theme::FillTier::Secondary))
+                })
+                .when(!home_active, |el| el.hover_wash("right-agents-home-tab"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.set_right_active(RightSurface::Home(RightPlace::Agents), cx);
+                }))
+                .on_key_down(crate::swallow_activation_key)
+                .child(icon(icons::BOT).size(px(13.0)).text_color(theme.text_muted))
+                .child("All agents")
+                .children(self.right_probe_child(|| "tabs:home".to_string()))
+        });
+        Some(
+            div()
+                .id("right-place-tabs")
+                .h(px(36.0))
+                .flex_none()
+                .w_full()
+                .min_w_0()
+                .px(px(8.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
+                .children(home)
+                .child(div().flex_1().min_w_0().h_full().child(region))
+                .children(plus)
+                .into_any_element(),
+        )
     }
 
     /// Toggle the changes-panel takeover (the header's expand button, t3code
@@ -15691,7 +15674,13 @@ impl Render for Shell {
             });
         }
         crate::transcript::record_view_frame("shell");
-        self.viewport_width = f32::from(window.viewport_size().width);
+        // Layout width: the window less the right rail, when it shows.
+        self.viewport_width = f32::from(window.viewport_size().width)
+            - if self.rail_shown() {
+                right_rail::RAIL_WIDTH
+            } else {
+                0.0
+            };
         // Appearance actions persist independently of the shell. Mirror the
         // globals before any later debounced settings save can overwrite them.
         self.settings.appearance = crate::appearance::mode(cx);
@@ -16104,7 +16093,14 @@ impl Render for Shell {
                         .update(cx, |c, cx| c.debug_open_model_menu(window, cx));
                 }
                 // MessageRail width gate: hide below 48rem of main-panel width.
-                let viewport = f32::from(window.viewport_size().width);
+                // The right rail keeps its width at the window's right edge
+                // whenever it shows; everything else lays out in the rest.
+                let rail_width = if self.rail_shown() {
+                    right_rail::RAIL_WIDTH
+                } else {
+                    0.0
+                };
+                let viewport = f32::from(window.viewport_size().width) - rail_width;
                 self.viewport_height = f32::from(window.viewport_size().height);
                 // Stamped for `right_target` — the expanded changes panel
                 // sizes itself to the viewport.
@@ -16285,6 +16281,7 @@ impl Render for Shell {
                     Empty.into_any_element()
                 };
                 let title_bar = self.render_title_bar(cx);
+                let rail = (rail_width > 0.0).then(|| self.render_right_rail(window, cx));
                 // Sidebar tone: a slightly lighter column behind the sidebar,
                 // spanning the FULL window height (under the traffic lights,
                 // through the titlebar, down to the bottom edge). Its width
@@ -16346,7 +16343,8 @@ impl Render for Shell {
                                     .relative()
                                     .child(right)
                                     .child(right_seam),
-                            ),
+                            )
+                            .children(rail),
                     )
                     .child(div().absolute().top_0().left_0().right_0().child(title_bar))
                     .child(self.render_titlebar_cluster(cx))
@@ -17394,7 +17392,10 @@ mod tests {
         // brief default-open popped the pane on every visited session).
         assert!(!panels.get("a").terminal_open);
         assert!(!panels.get("a").changes_open);
-        assert_eq!(panels.get("a").right_active, RightSurface::Picker);
+        assert_eq!(
+            panels.get("a").right_active,
+            RightSurface::Home(RightPlace::Overview)
+        );
         // The new-chat canvas ("" key) is its own session, also closed.
         assert!(!panels.get("").terminal_open);
     }
@@ -17443,8 +17444,11 @@ mod tests {
         let mut panels = SessionPanels::default();
         panels.update("a", |p| p.right_active = RightSurface::Diff(3));
         assert_eq!(panels.get("a").right_active, RightSurface::Diff(3));
-        // Other chats keep the picker default.
-        assert_eq!(panels.get("b").right_active, RightSurface::Picker);
+        // Other chats keep the Overview default.
+        assert_eq!(
+            panels.get("b").right_active,
+            RightSurface::Home(RightPlace::Overview)
+        );
         panels.update("a", |p| p.right_active = RightSurface::Terminal(7));
         assert_eq!(panels.get("a").right_active, RightSurface::Terminal(7));
         panels.update("a", |p| p.right_active = RightSurface::Files);
@@ -20266,7 +20270,7 @@ mod exit_regressions {
     }
 
     #[gpui::test]
-    fn right_terminal_picker_with_no_history_waits_for_new(cx: &mut TestAppContext) {
+    fn right_terminal_place_with_no_history_starts_a_shell(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -20299,27 +20303,29 @@ mod exit_regressions {
                 shell.add_terminal_surface(cx);
             })
             .unwrap();
+        // Nothing saved: choosing the Terminal place is the request for a
+        // shell, so one starts there (and only one).
         for _ in 0..150 {
             cx.run_until_parked();
             runtime.block_on(tokio::task::yield_now());
-            if window
-                .read_with(cx, |shell, _| shell.terminal_picker_notice.is_some())
-                .unwrap()
-            {
+            if service.opens.load(Ordering::SeqCst) == 1 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
         }
+        cx.run_until_parked();
         window
             .read_with(cx, |shell, _| {
-                assert!(shell.right_tabs.get("terminal-task").is_none());
-                assert_eq!(
-                    shell.terminal_picker_notice.as_ref().unwrap().0,
-                    "terminal-task"
-                );
+                let tabs = shell
+                    .right_tabs
+                    .get("terminal-task")
+                    .expect("a terminal tab");
+                assert_eq!(tabs.len(), 1);
+                assert!(matches!(tabs[0], RightSurface::Terminal(_)));
+                assert!(shell.terminal_picker_notice.is_none());
             })
             .unwrap();
-        assert_eq!(service.opens.load(Ordering::SeqCst), 0);
+        assert_eq!(service.opens.load(Ordering::SeqCst), 1);
     }
 
     #[gpui::test]
@@ -20763,7 +20769,10 @@ mod exit_regressions {
                     RightSurface::Browser(second)
                 );
                 shell.close_right_surface(RightSurface::Browser(second), window, cx);
-                assert_eq!(shell.resolved_right_active(cx), RightSurface::Picker);
+                assert_eq!(
+                    shell.resolved_right_active(cx),
+                    RightSurface::Home(RightPlace::Browser)
+                );
                 shell.active_chat = "second-session".into();
                 assert_eq!(
                     shell.resolved_right_active(cx),
@@ -20830,7 +20839,10 @@ mod exit_regressions {
 
                 // …and again for the last tab.
                 assert!(shell.close_active_surface(window, cx));
-                assert_eq!(shell.resolved_right_active(cx), RightSurface::Picker);
+                assert_eq!(
+                    shell.resolved_right_active(cx),
+                    RightSurface::Home(RightPlace::Browser)
+                );
 
                 // An open pane with nothing left to close falls through to the
                 // window-close rung instead of being consumed.
@@ -21001,16 +21013,18 @@ impl Shell {
     pub fn fixture_close_browser(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.close_right_surface(RightSurface::Browser(id), window, cx);
     }
+    /// A menu over the live page: the active tab's context menu.
     pub fn fixture_browser_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         if open {
-            self.right_plus.open(());
+            let surface = self.resolved_right_active(cx);
+            self.right_tab_menu.open(surface);
             cx.notify();
         } else {
-            self.close_right_plus(cx);
+            self.close_right_tab_menu(cx);
         }
     }
     pub fn fixture_browser_menu_mounted(&self) -> bool {
-        self.right_plus.get().is_some()
+        self.right_tab_menu.get().is_some()
     }
     pub fn fixture_expand_browser(&mut self, cx: &mut Context<Self>) {
         self.toggle_right_pane_expand(cx);
@@ -21041,7 +21055,9 @@ mod right_tab_mouse_regressions {
     impl Render for TabHost {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.shell.update(cx, |shell, cx| {
-                let tabs = shell.render_right_tab_strip(cx);
+                let tabs = shell
+                    .render_place_tabs(cx)
+                    .unwrap_or_else(|| gpui::Empty.into_any_element());
                 shell.titlebar_drag_region(
                     "right-tab-test-titlebar",
                     div().w(px(400.)).h(px(40.)).child(tabs),

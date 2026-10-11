@@ -2,22 +2,17 @@ use super::*;
 use luna_doc::{MessagePart, SubagentStatus};
 
 impl Shell {
-    pub(super) fn add_work_surface(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
-        if self.active_chat.is_empty() {
-            return;
-        }
-        let key = self.panel_key(cx);
-        push_unique_right_surface(self.right_tabs.entry(key).or_default(), surface);
-        if !self.right_pane_open(cx) {
-            self.toggle_right_pane(cx);
-        }
-        self.set_right_active(surface, cx);
-    }
-
-    pub(super) fn render_agents(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The Agents place's page: background work, native workflow tasks,
+    /// then subagent rows (a row opens its transcript in the place's tab
+    /// row), and its summary. The place's page scrolls it.
+    pub(super) fn render_agents_section(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> (AnyElement, Option<SharedString>) {
         let theme = Theme::of(cx).clone();
         let state = self.state.read(cx);
         let (rows, total) = agent_rows(&state.transcript);
+        let running = rows.iter().filter(|row| row.label == "Running").count();
         let rows: Vec<_> = rows
             .into_iter()
             .map(|row| {
@@ -35,13 +30,9 @@ impl Shell {
         let parent = self.active_chat.clone();
         let mut content = div()
             .id("agents-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(crate::typography::ui_rems(8.0));
+            .gap(crate::typography::ui_rems(2.0));
         // The focused chat's background work, grouped by lifecycle owner
         // (read-only here; the owned-work stop lives in its composer).
         if let Some(section) = work_section(&theme, self.state.read(cx)) {
@@ -55,7 +46,7 @@ impl Shell {
             content = content.child(section);
         }
         if rows.is_empty() && !has_native {
-            content = content.child(div().p(px(crate::surface_chrome::CONTENT_INSET)).text_color(theme.text_muted).child("No agents yet. Native subagents from this conversation appear here when the provider reports them."));
+            content = content.child(div().px(crate::typography::ui_rems(10.0)).py(crate::typography::ui_rems(4.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted).child("No agents yet. Native subagents from this conversation appear here when the provider reports them."));
         }
         for (id, title, label, activity, metrics, doc_id, frozen) in rows {
             let parent = parent.clone();
@@ -171,31 +162,49 @@ impl Shell {
                     }),
             );
         }
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_size(crate::typography::ui_rems(12.0))
-            .child(crate::surface_chrome::toolbar(&theme).child("Agents · this conversation"))
-            .child(content)
-            .child(
+        if total > 100 {
+            content = content.child(
                 div()
-                    .px(crate::typography::ui_rems(16.0))
-                    .py(crate::typography::ui_rems(8.0))
-                    .border_t_1()
-                    .border_color(theme.border)
+                    .px(crate::typography::ui_rems(10.0))
+                    .py(crate::typography::ui_rems(4.0))
+                    .text_size(crate::typography::ui_rems(11.5))
                     .text_color(theme.text_muted)
-                    .child(if total > 100 {
-                        "Showing the first 100 observed agents".into()
-                    } else {
-                        format!("{total} observed agents · provider-reported activity")
-                    }),
-            )
-            .into_any_element()
+                    .child("Showing the first 100 observed agents"),
+            );
+        }
+        let summary = if running > 0 {
+            Some(format!("{running} running").into())
+        } else if total > 0 {
+            Some(total.to_string().into())
+        } else {
+            None
+        };
+        (content.into_any_element(), summary)
     }
 }
 
-/// One Agents-surface row, derived from a root spawn chip.
+/// This conversation's subagents the provider reports as running: the
+/// rail's Agents badge.
+pub(super) fn running_agent_count(transcript: &[luna_doc::SessionMessageEntry]) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut running = 0;
+    for part in transcript.iter().flat_map(|entry| &entry.parts) {
+        if let MessagePart::Tool {
+            id,
+            call,
+            subagent_status: Some(SubagentStatus::Running),
+            ..
+        } = part
+            && call.is_subagent_spawn()
+            && seen.insert(id.as_str())
+        {
+            running += 1;
+        }
+    }
+    running
+}
+
+/// One Agents-place row, derived from a root spawn chip.
 pub(super) struct AgentRow {
     id: String,
     title: String,
@@ -272,14 +281,9 @@ impl Shell {
 fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElement> {
     use crate::task_work::{WorkGroup, kind_label, state_label};
     let view = state.task_work.as_ref().filter(|view| view.has_work())?;
-    let title = state
-        .chats
-        .iter()
-        .find(|chat| chat.id == view.task_id)
-        .and_then(|chat| chat.title.clone())
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| "Untitled chat".into());
     let muted = theme.readable_muted(0.7);
+    // A part of the Overview's Agents section, which already names the
+    // chat: a quiet sub-heading, not a second title.
     let mut section = div()
         .id("agents-work")
         .flex()
@@ -288,12 +292,15 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
         .pb(crate::typography::ui_rems(8.0))
         .child(
             div()
-                .text_color(theme.text)
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(SharedString::from(format!("Work · {title}"))),
+                .px(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.readable_faint(0.9))
+                .child("Background work"),
         )
         .child(
             div()
+                .px(crate::typography::ui_rems(10.0))
                 .text_size(crate::typography::ui_rems(11.0))
                 .text_color(muted)
                 .child(SharedString::from(view.summary())),
@@ -472,7 +479,7 @@ pub(super) fn agent_rows(transcript: &[luna_doc::SessionMessageEntry]) -> (Vec<A
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
     pub fn fixture_open_agents(&mut self, cx: &mut Context<Self>) {
-        self.add_work_surface(RightSurface::Agents, cx);
+        self.show_right_place(RightPlace::Agents, cx);
     }
 
     /// Open a child transcript exactly as an Agents row or chip click does.

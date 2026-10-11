@@ -703,6 +703,9 @@ impl Runs {
 pub struct AutomationsPanel {
     state: Entity<AppState>,
     scope: AutomationScope,
+    /// The right sidebar's Automations place: the place's header names it,
+    /// so the pane toolbar shows only the actions.
+    embedded: bool,
     engine_generation: u64,
     load_seq: u64,
     first: Vec<AutomationRecord>,
@@ -1409,6 +1412,7 @@ impl AutomationsPanel {
         let mut panel = Self {
             state,
             scope,
+            embedded: false,
             engine_generation: 0,
             load_seq: 0,
             first: Vec::new(),
@@ -3123,6 +3127,11 @@ fn card_notice(strip: gpui::Div) -> gpui::Div {
 }
 
 impl AutomationsPanel {
+    /// Render as the Automations place's page ([`Self::embedded`]).
+    pub fn set_embedded(&mut self, embedded: bool) {
+        self.embedded = embedded;
+    }
+
     /// The Automations page: the page frame (title bar with the page's
     /// actions, subtitle naming the project), the editor when one is open,
     /// then the list card, in the page's own scroller with the floating rail.
@@ -3184,6 +3193,8 @@ impl AutomationsPanel {
         } else {
             self.header_actions(ControlSize::Sm, theme, cx)
         };
+        // In the right sidebar's Automations place the place header names
+        // it, so the toolbar keeps only the actions.
         let toolbar = crate::surface_chrome::toolbar(theme)
             .child(
                 // The chat title is user data: it ellipsizes before the
@@ -3192,7 +3203,7 @@ impl AutomationsPanel {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(SharedString::from(title)),
+                    .when(!self.embedded, |el| el.child(SharedString::from(title))),
             )
             .children(actions);
         let mut body = div()

@@ -19,7 +19,6 @@
 //! workbench a row opens a center tab; without it, a child drills into the
 //! child panel ([`super::child_chats`]) and a fork opens as the chat.
 
-use super::side_chats::SideCreateSnapshot;
 use super::*;
 use std::collections::{HashMap, HashSet};
 
@@ -145,69 +144,7 @@ impl RelatedSection {
 }
 
 impl Shell {
-    /// Show the surface menu over this chat's open tabs. The tabs keep their
-    /// state; clicking one returns.
-    pub(super) fn show_surface_picker(&mut self, cx: &mut Context<Self>) {
-        self.suspend_subagent_watches(Some(RightSurface::Picker), cx);
-        self.suspend_file_images(cx);
-        let key = self.panel_key(cx);
-        self.panels.update(&key, |panel| panel.picker_open = true);
-        cx.notify();
-    }
-
-    /// Toolbar of a related-chat list: Back to the surface menu, the title,
-    /// then optional trailing controls.
-    pub(super) fn render_related_list_header(
-        &self,
-        id: &'static str,
-        title: SharedString,
-        trailing: Vec<AnyElement>,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let muted = theme.text_muted;
-        let back = div()
-            .id(SharedString::from(format!("{id}-back")))
-            .role(gpui::Role::Button)
-            .aria_label("Back to panels")
-            .tab_index(0)
-            .size(px(crate::surface_chrome::CONTROL_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .cursor_pointer()
-            .hover_wash(format!("{id}-back"))
-            .focus_visible({
-                let ring = theme.focus_ring();
-                move |style| crate::theme::focus_ring(style, ring)
-            })
-            .tooltip(|_, cx| crate::pickers::ControlTooltip::view("Back to panels", None, cx))
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-            .on_click(cx.listener(|this, _, _, cx| this.show_surface_picker(cx)))
-            .on_key_down(crate::swallow_activation_key)
-            .child(
-                icon(icons::ALT_ARROW_LEFT)
-                    .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(muted),
-            );
-        crate::surface_chrome::toolbar(theme)
-            .child(back)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .child(title),
-            )
-            .children(trailing)
-    }
-
-    /// A small text button in a related-list toolbar.
+    /// A small text button in a related section's header or notices.
     pub(super) fn related_header_button(
         id: impl Into<SharedString>,
         glyph: &'static str,
@@ -460,6 +397,28 @@ impl Shell {
             .collect()
     }
 
+    /// The active chat's related chats that need the user (an approval,
+    /// a question, a failure): the rail's Related badge.
+    pub(super) fn related_needs_you(&self, cx: &App) -> usize {
+        if self.active_chat.is_empty() {
+            return 0;
+        }
+        let edges = self.related_edges(cx);
+        let tree = self.related_tree(&self.active_chat, &edges, cx);
+        let mut attention = self.activity_task_keys(cx);
+        attention.extend(self.settlement_blocking_task_keys());
+        let state = self.state.read(cx);
+        tree.iter()
+            .filter(|(id, _, _)| {
+                state.chats.iter().any(|chat| {
+                    chat.id == *id
+                        && !chat.archived
+                        && attention.contains(&(chat.device_id.clone(), chat.id.clone()))
+                })
+            })
+            .count()
+    }
+
     pub(super) fn active_related_chat_count(&self, cx: &App) -> usize {
         if self.active_chat.is_empty() {
             return 0;
@@ -470,27 +429,62 @@ impl Shell {
             .unwrap_or(0)
     }
 
-    /// The Related chats surface: the open child when one was opened (no
-    /// workbench), else the list.
-    pub(super) fn render_related_chats(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The Related place's side-chat action (its header's button): starts
+    /// a side chat, or retries the same request while one is unresolved.
+    pub(super) fn render_side_chat_action(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let side = self.ensure_side_chat_panel(cx).read(cx).snapshot();
-        // With the workbench, conversations open as center tabs: this pane is
-        // the library and never renders a second conversation.
-        if self.workbench_is_open(&self.active_chat).is_some() {
-            return self.render_related_list(side, cx);
+        let theme = Theme::of(cx).clone();
+        let parent_title = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == self.active_chat)
+            .and_then(|chat| chat.title.as_deref())
+            .map(transcript::single_line)
+            .unwrap_or_else(|| "this chat".into());
+        // While a create is unresolved the header retries that same request;
+        // a genuinely new side chat is the notice's explicit choice below.
+        match side.pending_create {
+            Some(snapshot) => Self::related_header_button(
+                "related-chats-retry-side",
+                icons::REFRESH,
+                "Retry side chat",
+                &theme,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.start_side_chat(snapshot, cx))),
+            None => Self::related_header_button(
+                "related-chats-new-side",
+                icons::PLUS,
+                // A main chat's button forks with context; a side chat's
+                // starts a fresh sibling (side chats never fork).
+                if super::board::chat_badges::context_forks_blocked(
+                    self.state.read(cx),
+                    &self.active_chat,
+                ) {
+                    "New side chat"
+                } else {
+                    "Side chat with context"
+                },
+                &theme,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(false, cx))),
         }
-        let child = self.ensure_child_chat_panel(cx);
-        if child.read(cx).open_chat_id().is_some() {
-            return child.into_any_element();
-        }
-        self.render_related_list(side, cx)
+        .when(side.busy, |el| el.opacity(0.5))
+        .aria_label(SharedString::from(format!(
+            "Start a side chat from {parent_title}"
+        )))
+        .into_any_element()
     }
 
-    fn render_related_list(
+    /// The Related place: this chat's library of child, side and alongside
+    /// chats (a row opens its chat in the canvas, never in the sidebar),
+    /// and their count.
+    pub(super) fn render_related_section(
         &mut self,
-        side: SideCreateSnapshot,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> (AnyElement, Option<SharedString>) {
+        let side = self.ensure_side_chat_panel(cx).read(cx).snapshot();
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
         let parent = self.active_chat.clone();
@@ -501,12 +495,9 @@ impl Shell {
         let by_device = self.settings.sidebar_organization == SidebarOrganization::ByDevice;
         let edges = self.related_edges(cx);
         let tree = self.related_tree(&parent, &edges, cx);
-        let (parent_title, parent_project, related) = {
+        let (parent_project, related) = {
             let state = self.state.read(cx);
             let parent_chat = state.chats.iter().find(|chat| chat.id == parent);
-            let title = parent_chat
-                .and_then(|chat| chat.title.clone())
-                .unwrap_or_else(|| "Conversation".into());
             let project = parent_chat
                 .and_then(|chat| state.space_for_chat(chat))
                 .map(|space| space.display_name().to_string())
@@ -527,7 +518,7 @@ impl Shell {
                     Some((chat.clone(), *kind, via.as_deref().map(title_of)))
                 })
                 .collect();
-            (transcript::single_line(&title), project, related)
+            (project, related)
         };
         let mut entries: Vec<RelatedEntry> = Vec::new();
 
@@ -683,50 +674,12 @@ impl Shell {
                 rows.push((entry.id, entry.element));
             }
         }
+        let listed = by_section
+            .iter()
+            .filter(|(section, _)| *section != RelatedSection::Archived)
+            .map(|(_, rows)| rows.len())
+            .sum::<usize>();
         let sections = self.render_related_sections("related", by_section, &theme, cx);
-        // Related tickets lead the list: the conversation itself never
-        // shows them. They belong to the conversation actually focused (a
-        // side chat's tab in the workbench, else this main chat); the chats
-        // below stay this main chat's library.
-        let owner = self.related_tickets_owner(cx);
-        let tickets = self.render_related_tickets(&owner, &parent, &theme, cx);
-
-        // While a create is unresolved the header retries that same request;
-        // a genuinely new side chat is the notice's explicit choice below.
-        let new = match side.pending_create {
-            Some(snapshot) => Self::related_header_button(
-                "related-chats-retry-side",
-                icons::REFRESH,
-                "Retry side chat",
-                &theme,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| this.start_side_chat(snapshot, cx))),
-            None => Self::related_header_button(
-                "related-chats-new-side",
-                icons::PLUS,
-                // A main chat's button forks with context; a side chat's
-                // starts a fresh sibling (side chats never fork).
-                if super::board::chat_badges::context_forks_blocked(
-                    self.state.read(cx),
-                    &self.active_chat,
-                ) {
-                    "New side chat"
-                } else {
-                    "Side chat with context"
-                },
-                &theme,
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(false, cx))),
-        }
-        .when(side.busy, |el| el.opacity(0.5))
-        .into_any_element();
-        let header = self.render_related_list_header(
-            "related-chats",
-            format!("Related · {parent_title}").into(),
-            vec![new],
-            &theme,
-            cx,
-        );
 
         let quiet = |text: SharedString| {
             div()
@@ -755,12 +708,6 @@ impl Shell {
                     style
                 }
             })
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(Theme::SPACE_SM))
-            .pt(crate::typography::ui_rems(4.0))
-            .pb(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col();
         if let Some(operation) = side.operation {
@@ -835,28 +782,25 @@ impl Shell {
                     ),
             );
         }
-        if empty && tickets.is_none() && side.error.is_none() && !side.busy {
+        if empty && side.error.is_none() && !side.busy {
             list = list.child(self.render_related_empty(&theme, cx));
         }
-        list = list.children(tickets).children(sections);
-        // The list's visible frame (it scrolls inside it).
-        let viewport = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .flex()
-            .flex_col()
-            .child(list)
-            .children(self.board_probe_child(|| "related-chats-viewport".to_string()));
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_color(theme.text)
-            .child(header)
-            .child(viewport)
-            .into_any_element()
+        list = list.children(sections);
+        let summary = (listed > 0).then(|| SharedString::from(listed.to_string()));
+        (list.into_any_element(), summary)
+    }
+
+    /// The Related place's tickets: the related tickets of the conversation
+    /// actually focused (a side chat's tab in the workbench, else this main
+    /// chat), and their summary. `None` when it has none.
+    pub(super) fn render_tickets_section(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(AnyElement, SharedString)> {
+        let theme = Theme::of(cx).clone();
+        let owner = self.related_tickets_owner(cx);
+        let parent = self.active_chat.clone();
+        self.render_related_tickets(&owner, &parent, &theme, cx)
     }
 
     /// Whose related tickets the Related pane lists: the conversation
@@ -881,7 +825,7 @@ impl Shell {
         parent: &str,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<(AnyElement, SharedString)> {
         let tickets: Vec<luna_proto::ChatTicketBadge> = self.board_chat.related(owner).to_vec();
         if tickets.is_empty() {
             return None;
@@ -900,22 +844,17 @@ impl Shell {
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| "Side chat".into())
         });
+        // The tickets' heading summary: a side chat's tickets name it, so
+        // they aren't read as the main chat's.
         let heading: SharedString = match &context {
-            Some(chat) => format!("Tickets · {chat} ({count})").into(),
-            None => format!("Tickets ({count})").into(),
+            Some(chat) => format!("{chat} · {count}").into(),
+            None => count.to_string().into(),
         };
         if let Some(chat) = context.clone() {
             let context_label = format!("related-tickets-context:{owner}");
             self.board_mark(|| context_label, || vec![chat]);
         }
-        let header = spaces::sidebar_disclosure_header(
-            SharedString::from(format!("related-section-tickets-{owner}")),
-            theme,
-            heading,
-            div().into_any_element(),
-        )
-        .cursor(gpui::CursorStyle::Arrow);
-        let mut rows = div().w_full().flex().flex_col().pt(px(4.0));
+        let mut rows = div().w_full().flex().flex_col();
         for ticket in tickets {
             keys.push(ticket.key.clone());
             let status = super::board::chat_badges::render::status_text(&ticket);
@@ -1012,7 +951,7 @@ impl Shell {
         }
         let section_label = format!("related-tickets:{owner}");
         self.board_mark(|| section_label.clone(), || keys);
-        Some(
+        Some((
             div()
                 .id(SharedString::from(format!("related-tickets-{owner}")))
                 .role(gpui::Role::Group)
@@ -1022,14 +961,13 @@ impl Shell {
                 }))
                 .relative()
                 .w_full()
-                .pt(px(4.0))
                 .flex()
                 .flex_col()
-                .child(header)
                 .child(rows)
                 .children(self.board_probe_child(|| section_label.clone()))
                 .into_any_element(),
-        )
+            heading,
+        ))
     }
 
     /// Nothing related yet: say what each kind is, and offer the one the
@@ -1149,7 +1087,6 @@ impl Shell {
                     "h": f32::from(bounds.size.height),
                 })),
             "rightActive": format!("{:?}", self.resolved_right_active(cx)),
-            "pickerOpen": self.panels.get(&key).picker_open,
             "rightTabs": self
                 .right_tabs
                 .get(&key)
@@ -1169,10 +1106,6 @@ impl Shell {
                     )
                 })
                 .collect::<serde_json::Map<_, _>>(),
-            "childOpen": self
-                .child_chat_panel
-                .as_ref()
-                .and_then(|panel| panel.read(cx).open_chat_id().map(str::to_string)),
             "sideMarks": self.settings.side_chat_marks,
             "placementScope": self.placement_scope(cx),
             "placements": self
@@ -1231,10 +1164,6 @@ impl Shell {
                     .collect::<serde_json::Map<_, _>>()
             }),
             "selected": state.selected_chat,
-            "paneIdentity": self
-                .child_chat_panel
-                .as_ref()
-                .and_then(|panel| panel.read(cx).open_identity(cx)),
             "relatedCounts": self.related_chat_counts(cx),
             "pendingActions": self.pending_task_actions.keys().cloned().collect::<Vec<_>>(),
         })

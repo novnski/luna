@@ -1678,7 +1678,7 @@ async fn scenario(
         }),
         matches!((row, composer), (Some(row), Some(composer)) if row[0] >= composer[0] + composer[2] - 0.5)
             && painted_tickets(&listed, SOURCE) == [ticket_source.clone()]
-            && listed["frame"]["rightActive"] == "RelatedChats"
+            && listed["frame"]["rightActive"] == "Home(Related)"
             && conversation_ticket_noise(&listed, SOURCE).is_empty(),
     );
     audit(&mut words, &listed);

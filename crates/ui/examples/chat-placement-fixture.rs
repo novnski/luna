@@ -407,7 +407,10 @@ async fn drop_on_related(
         window,
         cx,
         (sidebar_x, center(&left, id)?),
-        (WIDTH - PANE_WIDTH / 2.0, HEIGHT - 120.0),
+        (
+            WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0,
+            HEIGHT - 120.0,
+        ),
     )
     .await?;
     readback(window, cx)
@@ -696,7 +699,7 @@ fn main() -> anyhow::Result<()> {
                 let mut record = serde_json::Map::new();
                 settle(cx, 900).await;
                 let sidebar_x = settings::SIDEBAR_DEFAULT / 2.0;
-                let pane_x = WIDTH - PANE_WIDTH / 2.0;
+                let pane_x = WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0;
                 let pane_drop = (pane_x, HEIGHT - 120.0);
                 let select = |cx: &mut AsyncApp, id: &str| {
                     let id = id.to_string();

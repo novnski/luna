@@ -1819,7 +1819,7 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label("Open Related chats")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.add_work_surface(RightSurface::RelatedChats, cx);
+                                this.show_right_place(RightPlace::Related, cx);
                             })),
                     )
                     .child(

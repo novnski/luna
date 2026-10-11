@@ -29,7 +29,7 @@ use std::rc::Rc;
 use gpui::Bounds;
 use serde_json::json;
 
-use super::pane_chat::{PaneChatEvent, PaneChatView, PaneIdentity};
+use super::pane_chat::{PaneChatView, PaneIdentity};
 use super::*;
 use model::{Command, Destination, command};
 pub(super) use model::{DropTarget, Edge, Layout, TabRef};
@@ -274,7 +274,6 @@ struct Mutation {
 
 struct TabView {
     view: Entity<PaneChatView>,
-    _events: Subscription,
     _transcript_events: Subscription,
 }
 
@@ -1452,18 +1451,12 @@ impl Shell {
                 cx,
             )
         });
-        let events = cx.subscribe(&view, |shell, _view, event, cx| match event {
-            PaneChatEvent::Back => {}
-            PaneChatEvent::OpenAsMain(id) => shell.open_pane_chat_as_main(id.clone(), cx),
-            PaneChatEvent::ShowParent(id) => shell.workbench_show_parent(id.clone(), cx),
-        });
         let transcript = view.read(cx).transcript().clone();
         let transcript_events = cx.subscribe(&transcript, Self::on_transcript_event);
         self.workbench.views.insert(
             tab.chat_id.clone(),
             TabView {
                 view: view.clone(),
-                _events: events,
                 _transcript_events: transcript_events,
             },
         );
@@ -4200,7 +4193,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match kind {
-            "related" => self.add_work_surface(RightSurface::RelatedChats, cx),
+            "related" => self.show_right_place(RightPlace::Related, cx),
             "changes" => {
                 let main = self.active_chat.clone();
                 self.add_diff_surface_for(main, cx);

@@ -28,8 +28,8 @@
 //!    write device-local marks instead of its own synced flags.
 //! 6. A fork shows its source's title instead of its own chat title, or does
 //!    not open as a Side tab under its source.
-//! 7. Back from Side/Child chats closes their tabs or cannot reach the
-//!    surface menu; Side chats and Child chats are not adjacent in it.
+//! 7. Related chats open anywhere but the right sidebar's Related place (a
+//!    tab of their own, or a page needing Back).
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example related-chats-fixture
@@ -851,17 +851,17 @@ fn main() -> anyhow::Result<()> {
                 let outside = readback(window, cx)?;
                 anyhow::ensure!(outside["drag"].is_null() && ids(&outside["sidebarOrder"]) == ids(&activity["sidebarOrder"]), "outside drop must be a no-op: {outside}");
 
-                // r06. Surface menu: Side chats and Child chats adjacent.
+                // r06. Opening the right sidebar lands on its Overview place.
                 window.update(cx, |shell, _, cx| shell.fixture_open_right_pane(cx))?;
                 settle(cx, 600).await;
-                capture(window, cx, output.join("r06-surface-menu.png"))?;
+                capture(window, cx, output.join("r06-overview.png"))?;
 
                 // r07. Child chats: sidebar rows in sidebar sections.
                 window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
                 settle(cx, 500).await;
                 capture(window, cx, output.join("r07-child-chats.png"))?;
                 let child = readback(window, cx)?;
-                anyhow::ensure!(child["rightActive"] == "RelatedChats", "related surface: {child}");
+                anyhow::ensure!(child["rightActive"] == "Home(Related)", "related chats live in the Related place: {child}");
                 anyhow::ensure!(
                     sections(&child, "related") == [("Active".to_string(), CHILD_ACTIVE.to_string()), ("Active".into(), CHILD_NEW.into()), ("Active".into(), CHILD_OLD.into()), ("Archived".into(), CHILD_ARCHIVED.into())],
                     "child sections: {child}"
@@ -870,8 +870,8 @@ fn main() -> anyhow::Result<()> {
 
                 // Real clicks on the row's hover actions: pin, then settle
                 // and archive, each applied by the engine.
-                let pane_x = WIDTH - PANE_WIDTH / 2.0;
-                let right = WIDTH - 16.0;
+                let pane_x = WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0;
+                let right = WIDTH - shell::RIGHT_RAIL_WIDTH - 16.0;
                 let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
                 let (_, old_top, _) = span(&spans, CHILD_OLD)?.clone();
                 // Two-line rows (no branch): the corner sits 22 px down. The
@@ -902,19 +902,12 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(section_of(&archived_child, "related", CHILD_OLD).as_deref() == Some("Archived"), "archived child section: {archived_child}");
                 record.insert("childActions".into(), archived_child);
 
-                // r10. Back (a real click) shows the surface menu with the
-                // tab still open; the tab returns to the list.
-                click_at(window, cx, WIDTH - PANE_WIDTH + 20.0, theme::Theme::TITLEBAR_HEIGHT * 1.5).await?;
-                settle(cx, 200).await;
-                capture(window, cx, output.join("r10-back-to-menu.png"))?;
-                let back = readback(window, cx)?;
-                anyhow::ensure!(back["rightActive"] == "Picker" && back["pickerOpen"] == true, "Back must show the surface menu: {back}");
-                anyhow::ensure!(ids(&back["rightTabs"]).contains(&"RelatedChats".to_string()), "Back must keep the tab: {back}");
-                window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
-                settle(cx, 200).await;
-                let returned = readback(window, cx)?;
-                anyhow::ensure!(returned["rightActive"] == "RelatedChats" && returned["pickerOpen"] == false, "choosing the surface again returns: {returned}");
-                record.insert("back".into(), back);
+                // r10. No Back and no separate tab: the list is the Related
+                // place's own page, so no tab opened for it.
+                capture(window, cx, output.join("r10-related-place.png"))?;
+                let related_place = readback(window, cx)?;
+                anyhow::ensure!(related_place["rightActive"] == "Home(Related)" && ids(&related_place["rightTabs"]).is_empty(), "related chats must not open a tab of their own: {related_place}");
+                record.insert("relatedPlace".into(), related_place);
 
                 // r11-r14. Side chats: two real forks, each a Side tab with
                 // its own title, listed with the children; then pin, settle
@@ -969,15 +962,11 @@ fn main() -> anyhow::Result<()> {
                 capture(window, cx, output.join("r13-side-archived.png"))?;
                 record.insert("sideMarks".into(), archived_side);
 
-                // Back from Side chats too; both related tabs stay open.
-                click_at(window, cx, WIDTH - PANE_WIDTH + 20.0, theme::Theme::TITLEBAR_HEIGHT * 1.5).await?;
-                settle(cx, 200).await;
-                capture(window, cx, output.join("r14-side-back-to-menu.png"))?;
-                let side_back = readback(window, cx)?;
-                anyhow::ensure!(side_back["rightActive"] == "Picker", "side Back: {side_back}");
-                let tabs = ids(&side_back["rightTabs"]);
-                anyhow::ensure!(tabs == ["RelatedChats".to_string()], "one Related chats tab, kept: {side_back}");
-                record.insert("sideBack".into(), side_back);
+                // Side chats list in the same place; still no tab.
+                capture(window, cx, output.join("r14-side-in-related.png"))?;
+                let side_related = readback(window, cx)?;
+                anyhow::ensure!(side_related["rightActive"] == "Home(Related)" && ids(&side_related["rightTabs"]).is_empty(), "side chats stay in the Related place: {side_related}");
+                record.insert("sideRelated".into(), side_related);
 
                 // r15. Final mixed list: an active child and a new active side
                 // chat together, and the sidebar's combined count on the parent.

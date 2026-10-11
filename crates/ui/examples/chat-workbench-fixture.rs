@@ -1562,7 +1562,7 @@ async fn close_and_reopen(
         shell.fixture_open_child_chats(cx);
     })?;
     settle(cx, 600).await;
-    let pane_x = WIDTH - PANE_WIDTH / 2.0;
+    let pane_x = WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0;
     let rows = related_rows(window, cx, pane_x)?;
     click(window, cx, (pane_x, row_y(&rows, chat)?), MouseButton::Left).await?;
     let id = chat.to_string();
@@ -2062,7 +2062,7 @@ fn main() -> anyhow::Result<()> {
                     shell.fixture_open_child_chats(cx);
                 })?;
                 settle(cx, 700).await;
-                let pane_x = WIDTH - PANE_WIDTH / 2.0;
+                let pane_x = WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0;
                 let rows = related_rows(window, cx, pane_x)?;
                 click(window, cx, (pane_x, row_y(&rows, CHILD_A)?), MouseButton::Left).await?;
                 let opened = wait_for(window, cx, "Child A's tab", |rb| occurrences(rb, CHILD_A) == 1).await?;
@@ -2074,7 +2074,7 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(occurrences(&again, CHILD_A) == 1, "repeated Open must not duplicate: {again}");
                 let library = related(window, cx)?;
                 anyhow::ensure!(related_ids(&library).iter().any(|id| id == CHILD_A), "the row stays in the library: {library}");
-                anyhow::ensure!(library["childOpen"].is_null() && library["paneIdentity"].is_null(), "the right pane must not render the conversation: {library}");
+                anyhow::ensure!(library["rightActive"] == "Home(Related)", "the right sidebar stays on Related; the conversation opens in the canvas: {library}");
                 shot(window, cx, output.join("w02-related-open.png")).await?;
                 progress(&output, &mut record, "opened".into(), again.clone());
 
@@ -2903,7 +2903,7 @@ fn main() -> anyhow::Result<()> {
                 })?;
                 settle(cx, 600).await;
                 let with_related = wb(window, cx)?;
-                let pane_x = WIDTH - PANE_WIDTH / 2.0;
+                let pane_x = WIDTH - shell::RIGHT_RAIL_WIDTH - PANE_WIDTH / 2.0;
                 let rows = related_rows(window, cx, pane_x)?;
                 let (cgx, cgy, cgw, cgh) = pane_rect(&with_related, &child_group)?;
                 flick(window, cx, (pane_x, row_y(&rows, CHILD_B)?), (cgx + cgw / 2.0, cgy + cgh / 2.0)).await?;

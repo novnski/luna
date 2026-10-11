@@ -1,6 +1,6 @@
-//! Mounting the automations panel (slice 5): the right pane's surface for
-//! the active conversation and the Automations page for the sidebar's
-//! project (or every project on this host).
+//! Mounting the automations panel (slice 5): the right sidebar's
+//! Automations place for the active conversation and the Automations page
+//! for the sidebar's project (or every project on this host).
 use super::*;
 use crate::automations::{AutomationCards, AutomationScope, AutomationsEvent, AutomationsPanel};
 
@@ -101,7 +101,12 @@ impl Shell {
             return panel;
         }
         let state = self.state.clone();
-        let panel = cx.new(|cx| AutomationsPanel::new(state, scope, cx));
+        let panel = cx.new(|cx| {
+            let mut panel = AutomationsPanel::new(state, scope, cx);
+            // The conversation's panel is the Automations place's page.
+            panel.set_embedded(!settings);
+            panel
+        });
         let events = cx.subscribe(&panel, |this, _, event, cx| match event {
             AutomationsEvent::OpenChat(chat) => this.open_chat(chat.clone(), cx),
         });
@@ -125,18 +130,22 @@ impl Shell {
         slot.as_ref().map(|(panel, _)| panel.clone())
     }
 
-    /// QA: open the right pane's Automations surface for the active chat.
+    /// QA: open the Automations place for the active chat.
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_open_automations(&mut self, cx: &mut Context<Self>) {
-        self.add_work_surface(RightSurface::Automations, cx);
+        self.show_right_place(RightPlace::Automations, cx);
         let scope = self.automations_conversation_scope(cx);
         self.automations_panel(scope, false, cx);
     }
 
-    /// QA: close the right pane's Automations surface (its panel goes too).
+    /// QA: leave the Automations place by closing the right pane (its
+    /// panel goes too).
     #[cfg(feature = "appshots-fixture")]
-    pub fn fixture_close_automations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_right_surface(RightSurface::Automations, window, cx);
+    pub fn fixture_close_automations(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.right_pane_open(cx) {
+            self.toggle_right_pane(cx);
+        }
+        self.automations_conversation = None;
     }
 
     /// QA: open Settings → Automations.

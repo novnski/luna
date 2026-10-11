@@ -1,19 +1,17 @@
-//! The right pane's shared chat view.
+//! The shared chat view of a workbench tab.
 //!
-//! Side chats and child chats open in the right pane as another main chat:
-//! the main [`Transcript`] (tool rendering, markdown, history actions) bound
-//! to the chat's doc, and the main [`Composer`] bound to the same chat id
-//! (queue/steer/Stop, approvals and questions, goals, model/effort/access,
+//! Side, child and alongside chats open as canvas tabs, each another main
+//! chat: the main [`Transcript`] (tool rendering, markdown, history actions)
+//! bound to the chat's doc, and the main [`Composer`] bound to the same chat
+//! id (queue/steer/Stop, approvals and questions, goals, model/effort/access,
 //! context usage, attachments, `@` and `/` pickers), with the main column's
-//! gutter so both pills share one geometry. A child chat's compact header
-//! carries its identity, status, parent and navigation; a side chat inherits
-//! all of that from the main chat beside it, so its header is one row (Back,
-//! title, Close) with the details in the title's tooltip.
+//! gutter so both pills share one geometry. The tab carries the chat's
+//! identity, status and parent.
 //!
 //! Composers are cached per chat in [`PaneComposers`], owned by the shell, so
 //! drafts, pending submissions and their receipt watches belong to the chat,
-//! not to whichever pane happens to show it: Back, closing the pane or
-//! switching the main chat never drops a send in flight.
+//! not to whichever tab happens to show it: closing a tab or switching the
+//! main chat never drops a send in flight.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -33,6 +31,7 @@ pub(super) enum PaneIdentity {
 }
 
 impl PaneIdentity {
+    #[cfg(feature = "appshots-fixture")]
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Side => "Side chat",
@@ -153,7 +152,9 @@ impl PaneComposers {
     }
 }
 
-/// What the header shows. Built by the owning panel each frame.
+/// The view's identity facts, as the QA strip reads them (in a workbench
+/// tab they live on the tab and its tooltip).
+#[cfg(feature = "appshots-fixture")]
 pub(super) struct PaneChatChrome {
     pub identity: PaneIdentity,
     pub title: SharedString,
@@ -164,353 +165,13 @@ pub(super) struct PaneChatChrome {
     pub meta: Option<SharedString>,
 }
 
-type PaneAction<V> = Rc<dyn Fn(&mut V, &mut Context<V>)>;
-
-/// Navigation affordances of the header; `None` hides a control.
-pub(super) struct PaneHeaderActions<V> {
-    pub back_label: &'static str,
-    pub back: PaneAction<V>,
-    pub open_main: Option<PaneAction<V>>,
-    pub show_parent: Option<PaneAction<V>>,
-    /// Extra trailing controls (e.g. side chat Unload).
-    pub extra: Vec<AnyElement>,
-}
-
-fn header_control<V: 'static>(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    theme: &Theme,
-    action: PaneAction<V>,
-    cx: &mut Context<V>,
-) -> gpui::Stateful<gpui::Div> {
-    let label = label.into();
-    let id: SharedString = id.into();
-    div()
-        .id(id.clone())
-        .role(gpui::Role::Button)
-        .aria_label(label)
-        .tab_index(0)
-        .h(px(crate::surface_chrome::CONTROL_SIZE))
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap(crate::typography::ui_rems(4.0))
-        .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-        .border_1()
-        .border_color(gpui::transparent_black())
-        .cursor_pointer()
-        .hover_wash(id)
-        .focus_visible({
-            let ring = theme.focus_ring();
-            move |style| crate::theme::focus_ring(style, ring)
-        })
-        .on_click(cx.listener(move |view, _, _, cx| action(view, cx)))
-        .on_key_down(crate::swallow_activation_key)
-}
-
-/// Compact identity header: Back · title · identity badge · Open as main,
-/// then one quiet line with status, parent link and provider facts. Side
-/// chats get the single-row [`render_side_header`] instead.
-pub(super) fn render_pane_header<V: 'static>(
-    chrome: &PaneChatChrome,
-    actions: PaneHeaderActions<V>,
-    theme: &Theme,
-    cx: &mut Context<V>,
-) -> gpui::Div {
-    if chrome.identity == PaneIdentity::Side {
-        return render_side_header(chrome, actions, theme, cx);
-    }
-    let muted = theme.text_muted;
-    let back_tooltip: SharedString =
-        format!("Back to {} (Esc)", actions.back_label.to_lowercase()).into();
-    let back = header_control(
-        "pane-chat-back",
-        format!("Back to {}", actions.back_label.to_lowercase()),
-        theme,
-        actions.back,
-        cx,
-    )
-    .pl(crate::typography::ui_rems(4.0))
-    .pr(crate::typography::ui_rems(8.0))
-    .text_color(muted)
-    .tooltip(move |_, cx| {
-        cx.new(|_| SurfaceTabTooltip {
-            text: back_tooltip.clone(),
-        })
-        .into()
-    })
-    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-    .child(
-        icon(icons::ALT_ARROW_LEFT)
-            .size(crate::typography::ui_rems(14.0))
-            .text_color(muted),
-    )
-    .child(actions.back_label);
-    let badge = div()
-        .id("pane-chat-identity")
-        .role(gpui::Role::Label)
-        .aria_label(chrome.identity.label())
-        .flex_none()
-        .px(crate::typography::ui_rems(6.0))
-        .py(px(1.0))
-        .rounded(px(4.0))
-        .border_1()
-        .border_color(theme.border)
-        .bg(crate::theme::ink(0.04))
-        .text_size(crate::typography::ui_rems(11.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.readable_muted(0.75))
-        .child(chrome.identity.label());
-    let mut toolbar = crate::surface_chrome::toolbar(theme)
-        .child(back)
-        .child(
-            div()
-                .flex_none()
-                .text_color(theme.decorative_muted(0.4))
-                .child("/"),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .px(px(2.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(chrome.title.clone()),
-        )
-        .child(badge)
-        .children(actions.extra);
-    if let Some(open_main) = actions.open_main {
-        toolbar = toolbar.child(
-            header_control(
-                "pane-chat-open-main",
-                "Open as main chat",
-                theme,
-                open_main,
-                cx,
-            )
-            .w(px(crate::surface_chrome::CONTROL_SIZE))
-            .justify_center()
-            .tooltip(|_, cx| {
-                cx.new(|_| SurfaceTabTooltip {
-                    text: "Open as main chat".into(),
-                })
-                .into()
-            })
-            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-            .child(
-                icon(icons::ARROW_UP_RIGHT)
-                    .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(muted),
-            ),
-        );
-    }
-    let parent_label: SharedString = match chrome.identity {
-        PaneIdentity::Alongside => format!("beside {}", chrome.parent_title).into(),
-        _ => format!("from {}", chrome.parent_title).into(),
-    };
-    let parent = match actions.show_parent {
-        Some(show_parent) => header_control(
-            "pane-chat-parent",
-            format!("Parent chat: {}", chrome.parent_title),
-            theme,
-            show_parent,
-            cx,
-        )
-        .h(crate::typography::ui_rems(18.0))
-        .px(crate::typography::ui_rems(4.0))
-        .min_w_0()
-        .text_color(theme.readable_muted(0.7))
-        .child(
-            icon(icons::ARROW_UP_RIGHT)
-                .size(crate::typography::ui_rems(11.0))
-                .flex_none()
-                .text_color(theme.readable_muted(0.6)),
-        )
-        .child(div().min_w_0().truncate().child(parent_label))
-        .into_any_element(),
-        None => div()
-            .min_w_0()
-            .truncate()
-            .text_color(theme.readable_muted(0.7))
-            .child(parent_label)
-            .into_any_element(),
-    };
-    let strip = div()
-        .w_full()
-        .flex_none()
-        .px(crate::typography::ui_rems(12.0))
-        .py(crate::typography::ui_rems(5.0))
-        .flex()
-        .items_center()
-        .gap(crate::typography::ui_rems(6.0))
-        .border_b_1()
-        .border_color(theme.border)
-        .text_size(crate::typography::ui_rems(11.5))
-        .min_w_0()
-        .when_some(chrome.status.clone(), |el, (label, color, _)| {
-            el.child(
-                div()
-                    .size(crate::typography::ui_rems(6.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(color),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(color)
-                    .child(label),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.decorative_muted(0.4))
-                    .child("·"),
-            )
-        })
-        .child(div().min_w_0().child(parent))
-        .when_some(chrome.meta.clone(), |el, meta| {
-            el.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.readable_muted(0.6))
-                    .child(format!("· {meta}")),
-            )
-        });
-    div()
-        .w_full()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .child(toolbar)
-        .child(strip)
-}
-
-/// A side chat inherits its checkout, access and provider from the main chat
-/// beside it, so its header is one quiet row (Codex's side tab): Back to the
-/// list, the chat's name, then the trailing controls (Close). The lease
-/// lifetime, parent and provider facts live in the title's tooltip, and the
-/// title reveals where the chat started. Only a state other than the live
-/// lease ("Writable · N min left") — saving, read-only — stays visible.
-fn render_side_header<V: 'static>(
-    chrome: &PaneChatChrome,
-    actions: PaneHeaderActions<V>,
-    theme: &Theme,
-    cx: &mut Context<V>,
-) -> gpui::Div {
-    let muted = theme.text_muted;
-    let back = header_control(
-        "pane-chat-back",
-        format!("Back to {}", actions.back_label.to_lowercase()),
-        theme,
-        actions.back,
-        cx,
-    )
-    .w(px(crate::surface_chrome::CONTROL_SIZE))
-    .justify_center()
-    .tooltip(move |_, cx| {
-        crate::pickers::ControlTooltip::view("All related chats", Some("Esc".into()), cx)
-    })
-    .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-    .child(
-        icon(icons::ALT_ARROW_LEFT)
-            .size(px(crate::surface_chrome::ICON_SIZE))
-            .text_color(muted),
-    );
-    let live = chrome
-        .status
-        .as_ref()
-        .is_none_or(|(label, _, _)| label.starts_with("Writable") || label.as_ref() == "Active");
-    let facts: Vec<String> = chrome
-        .status
-        .iter()
-        .map(|(label, _, _)| label.to_string())
-        .chain(std::iter::once(format!("From {}", chrome.parent_title)))
-        .chain(chrome.meta.iter().map(|meta| meta.to_string()))
-        .collect();
-    let tooltip_title = chrome.title.clone();
-    let tooltip_detail: SharedString = facts.join(" · ").into();
-    let title_text = div()
-        .min_w_0()
-        .truncate()
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
-        .child(chrome.title.clone());
-    let title = match actions.show_parent {
-        Some(show_parent) => header_control(
-            "pane-chat-title",
-            format!("{}: show where it started", chrome.title),
-            theme,
-            show_parent,
-            cx,
-        )
-        .flex_1()
-        .min_w_0()
-        .px(crate::typography::ui_rems(6.0))
-        .child(title_text)
-        .tooltip(move |_, cx| {
-            crate::pickers::ControlTooltip::view(
-                tooltip_title.clone(),
-                Some(format!("{tooltip_detail}. Click to show where it started.").into()),
-                cx,
-            )
-        })
-        .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-        .into_any_element(),
-        None => div()
-            .id("pane-chat-title")
-            .flex_1()
-            .min_w_0()
-            .px(crate::typography::ui_rems(6.0))
-            .child(title_text)
-            .tooltip(move |_, cx| {
-                crate::pickers::ControlTooltip::view(
-                    tooltip_title.clone(),
-                    Some(tooltip_detail.clone()),
-                    cx,
-                )
-            })
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-            .into_any_element(),
-    };
-    crate::surface_chrome::toolbar(theme)
-        .child(back)
-        .child(title)
-        .when_some(
-            chrome.status.clone().filter(|_| !live),
-            |row, (label, color, _)| {
-                row.child(
-                    div()
-                        .flex_none()
-                        .text_size(crate::typography::ui_rems(11.5))
-                        .text_color(color)
-                        .child(label),
-                )
-            },
-        )
-        .children(actions.extra)
-}
-
-pub(super) enum PaneChatEvent {
-    Back,
-    OpenAsMain(String),
-    ShowParent(String),
-}
-
-impl gpui::EventEmitter<PaneChatEvent> for PaneChatView {}
-
-/// One full chat in the right pane: the main transcript and the main
+/// One full chat in a workbench tab: the main transcript and the main
 /// composer, both bound to `chat_id`.
 pub(super) struct PaneChatView {
     state: Entity<AppState>,
     chat_id: String,
     identity: PaneIdentity,
     parent: String,
-    back_label: &'static str,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
     /// Composer slot width measured at paint, fed back as the composer's
@@ -521,29 +182,10 @@ pub(super) struct PaneChatView {
     composer_height: Rc<Cell<f32>>,
     /// The pane width and stack height the transcript last laid out for.
     last_layout: (f32, f32),
-    /// A workbench tab: the tab names the chat, so the view keeps only a
-    /// slim context strip (parent, status, provider) above the transcript.
-    embedded: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl PaneChatView {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        state: Entity<AppState>,
-        chat_id: String,
-        identity: PaneIdentity,
-        parent: String,
-        back_label: &'static str,
-        composer: Entity<Composer>,
-        links: LinkUi,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self::build(
-            state, chat_id, identity, parent, back_label, composer, links, false, true, cx,
-        )
-    }
-
     /// A workbench tab's view. Creating it never moves keyboard focus: a
     /// restored layout mounts several at once; the shell focuses one.
     #[allow(clippy::too_many_arguments)]
@@ -557,33 +199,6 @@ impl PaneChatView {
         cx: &mut Context<Self>,
     ) -> Self {
         composer.update(cx, |composer, cx| composer.set_frame_footer(true, cx));
-        Self::build(
-            state,
-            chat_id,
-            identity,
-            parent,
-            "Workbench",
-            composer,
-            links,
-            true,
-            false,
-            cx,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build(
-        state: Entity<AppState>,
-        chat_id: String,
-        identity: PaneIdentity,
-        parent: String,
-        back_label: &'static str,
-        composer: Entity<Composer>,
-        links: LinkUi,
-        embedded: bool,
-        focus: bool,
-        cx: &mut Context<Self>,
-    ) -> Self {
         let owner = state.update(cx, |state, cx| {
             let owner = state.watch_pane_chat(chat_id.clone(), cx);
             // Reading it here is reading it: clear the unseen marker exactly
@@ -597,9 +212,6 @@ impl PaneChatView {
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
         });
-        if focus {
-            composer.update(cx, |composer, cx| composer.request_focus(cx));
-        }
         let subscriptions = vec![
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.observe(&composer, |_, _, cx| cx.notify()),
@@ -618,13 +230,11 @@ impl PaneChatView {
             chat_id,
             identity,
             parent,
-            back_label,
             transcript,
             composer,
             composer_width: Rc::new(Cell::new(0.0)),
             composer_height: Rc::new(Cell::new(0.0)),
             last_layout: (0.0, 0.0),
-            embedded,
             _subscriptions: subscriptions,
         }
     }
@@ -666,6 +276,21 @@ impl PaneChatView {
         &self.composer
     }
 
+    /// Whether the chat is archived (read-only) and still loading its
+    /// transcript.
+    fn archived_loading(&self, cx: &App) -> (bool, bool) {
+        let state = self.state.read(cx);
+        let archived = state
+            .chats
+            .iter()
+            .find(|chat| chat.id == self.chat_id)
+            .is_some_and(|chat| chat.archived);
+        let loading = !ChatBinding::Chat(self.chat_id.clone()).transcript_replayed(state)
+            && state.sub_transcript(&self.chat_id).is_empty();
+        (archived, loading)
+    }
+
+    #[cfg(feature = "appshots-fixture")]
     fn chrome(&self, cx: &App) -> (PaneChatChrome, bool, bool) {
         let state = self.state.read(cx);
         let now = Utc::now();
@@ -719,18 +344,14 @@ impl PaneChatView {
         };
         let meta = chat.and_then(|chat| chat.config.as_ref()).map(|config| {
             let provider = super::child_chats::provider_label(config.harness);
-            let mut meta = match config.model.as_deref().filter(|model| !model.is_empty()) {
-                Some(model) => format!("{provider} · {model}"),
-                None => provider.to_string(),
-            };
             // A workbench tab's checkout and branch live in the frame's
             // bottom row while it is focused.
-            if !self.embedded
-                && let Some(branch) = chat.and_then(|chat| chat.branch.as_deref())
-            {
-                meta.push_str(&format!(" · {branch}"));
-            }
-            SharedString::from(meta)
+            SharedString::from(
+                match config.model.as_deref().filter(|model| !model.is_empty()) {
+                    Some(model) => format!("{provider} · {model}"),
+                    None => provider.to_string(),
+                },
+            )
         });
         let loading = !ChatBinding::Chat(self.chat_id.clone()).transcript_replayed(state)
             && state.sub_transcript(&self.chat_id).is_empty();
@@ -754,66 +375,14 @@ impl Render for PaneChatView {
         let _perf =
             crate::perf_counters::Timer::start("pane.render", || format!("pane:{}", self.chat_id));
         let theme = Theme::of(cx).clone();
-        let (chrome, archived, loading) = self.chrome(cx);
-        let open_id = self.chat_id.clone();
-        // A deleted source is named, never linked.
-        let parent_id = if self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .any(|chat| chat.id == self.parent)
-        {
-            self.parent.clone()
-        } else {
-            String::new()
-        };
-        // A workbench tab has no context row: its tab carries the identity
-        // (role glyph, tooltip, context menu) and live status, so the chat
-        // starts right under the tabs.
-        let header = if self.embedded {
-            div()
-        } else {
-            self.render_full_header(&chrome, open_id, parent_id, &theme, cx)
-        };
-        self.render_with_header(header, archived, loading, &theme, cx)
+        let (archived, loading) = self.archived_loading(cx);
+        // No context row: the tab carries the identity (role glyph, tooltip,
+        // context menu) and live status, so the chat starts under the tabs.
+        self.render_with_header(div(), archived, loading, &theme, cx)
     }
 }
 
 impl PaneChatView {
-    fn render_full_header(
-        &mut self,
-        chrome: &PaneChatChrome,
-        open_id: String,
-        parent_id: String,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        render_pane_header(
-            chrome,
-            PaneHeaderActions {
-                back_label: self.back_label,
-                back: Rc::new(|_, cx| cx.emit(PaneChatEvent::Back)),
-                // Any thread, a fork included, can become the main chat.
-                open_main: Some(Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
-                    cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
-                })
-                    as Rc<dyn Fn(&mut Self, &mut Context<Self>)>),
-                // An alongside chat has no parent to show (its host is named
-                // as text only), nor does a fork whose source was deleted.
-                show_parent: (self.identity != PaneIdentity::Alongside && !parent_id.is_empty())
-                    .then(|| {
-                        Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
-                            cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
-                        }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
-                    }),
-                extra: Vec::new(),
-            },
-            theme,
-            cx,
-        )
-    }
-
     fn render_with_header(
         &mut self,
         header: gpui::Div,
@@ -1010,7 +579,7 @@ impl PaneChatView {
             "archived": archived,
             "loading": loading,
             // A workbench tab renders no context row (identity is on the tab).
-            "metaRow": !self.embedded,
+            "metaRow": false,
         })
     }
 }

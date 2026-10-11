@@ -403,15 +403,22 @@ impl Shell {
                 // the buttons slide right on expand (user report).
                 let gap_budget = if takeover { 8.0 } else { 16.0 };
                 let avail = self.viewport_width - row_left - pr - gap_budget;
-                // The right pane's SURFACE TABS (t3 RightPanelTabs) — the diff
-                // options that used to live here moved into the pane's own
-                // second row; expand stays in this band (user request).
-                let tabs = self.render_right_tab_strip(cx);
+                // The rail place's header: its name and actions. Its tabs
+                // sit in the pane's own first row; expand stays in this band.
+                let tabs = self.render_right_place_header(cx);
                 // The toggle is the fixed right-edge anchor, like the left
                 // sidebar control. Only the tabs + expand section reveals to
                 // its left; including the toggle in this animated width
                 // compressed both icons into the same clipped box at open.
-                let animated_width = ((right_now - pr).min(avail) - 28.0).max(0.0);
+                // With the rail at the window's edge the pane ends where the
+                // rail starts, while this band still ends at the toggle over
+                // the rail: widen it by the rail so it starts on the pane.
+                let rail = if self.rail_shown() {
+                    super::right_rail::RAIL_WIDTH
+                } else {
+                    0.0
+                };
+                let animated_width = ((right_now + rail - pr).min(avail + rail) - 28.0).max(0.0);
                 controls = controls.child(
                     div()
                         .w(px(animated_width))

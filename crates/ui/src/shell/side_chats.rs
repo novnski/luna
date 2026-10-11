@@ -577,7 +577,7 @@ impl Shell {
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
     pub fn fixture_open_side_chats(&mut self, cx: &mut Context<Self>) {
-        self.add_work_surface(RightSurface::RelatedChats, cx);
+        self.show_right_place(RightPlace::Related, cx);
         if self.side_chat_panel.is_none() {
             self.create_side_chat_panel(None, cx);
         }

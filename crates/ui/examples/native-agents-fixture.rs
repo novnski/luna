@@ -355,25 +355,25 @@ fn main() -> anyhow::Result<()> {
             cx.spawn(async move |cx| {
                 let result: anyhow::Result<serde_json::Value> = async {
                     let mut record = serde_json::Map::new();
-                    // 1. Root transcript loads; the Agents surface lists the
+                    // 1. Root transcript loads; the Agents place lists the
                     // three ROOT children with provider-reported activity.
                     // The Shell adopts the selected chat asynchronously; a
                     // surface opened before that is a no-op, so retry.
                     let mut agents = serde_json::Value::Null;
                     settle(cx, 900).await;
                     for _ in 0..80 {
-                        if agents["rightActive"] != "Agents" {
+                        if agents["rightActive"] != "Home(Agents)" {
                             window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
                         }
                         settle(cx, 100).await;
                         agents = readback(window, cx)?;
-                        if agents["total"] == 3 && agents["rightActive"] == "Agents" {
+                        if agents["total"] == 3 && agents["rightActive"] == "Home(Agents)" {
                             break;
                         }
                     }
                     settle(cx, 400).await;
                     capture(window, cx, output.join("01-agents-surface.png"))?;
-                    anyhow::ensure!(agents["rightActive"] == "Agents", "Agents surface inactive: {agents}");
+                    anyhow::ensure!(agents["rightActive"] == "Home(Agents)", "the Agents place is not showing: {agents}");
                     anyhow::ensure!(agents["total"] == 3, "expected the 3 root agents only: {agents}");
                     let a = row(&agents, "toolu_A")?;
                     anyhow::ensure!(a["label"] == "Done" && a["activity"] == "Parser mapped", "A row: {a}");
