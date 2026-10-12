@@ -16162,8 +16162,8 @@ impl Render for Shell {
                     cx,
                 );
                 // The chat route with a selected chat is the workbench: the
-                // inset canvas of tabs and splits around Main, and the
-                // frame's bottom row. The new-chat canvas sits in the same frame.
+                // inset canvas of splits around Main, and the frame's bottom
+                // row of tabs. The new-chat canvas sits in the same frame.
                 let framed = self.workbench_framed(cx);
                 let on_chat_route = matches!(self.route, Route::Chat);
                 let top_chrome = if on_chat_route {
@@ -16174,8 +16174,6 @@ impl Render for Shell {
                 self.transcript.update(cx, |transcript, cx| {
                     transcript.set_top_chrome(top_chrome, cx)
                 });
-                self.composer
-                    .update(cx, |composer, cx| composer.set_frame_footer(framed, cx));
                 let main = if framed {
                     self.render_workbench(window, main_content_width, transcript_width, cx)
                 } else if on_chat_route {

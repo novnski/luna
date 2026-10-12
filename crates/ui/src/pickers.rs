@@ -60,10 +60,10 @@ fn submenu_corridor(
 
 const FOOTER_CHIP_RADIUS: f32 = 6.0;
 
-/// A new-thread target chip in the frame's bottom row: as tall as that row's
-/// buttons (Review changes, Commit & push…), with the working thread's
-/// footer-label type (11.5 pt) and glyph (12 pt). Points at the 16 px
-/// Interface size; every one is an interface rem.
+/// A new-thread target chip in the checkout row above the prompt, and a
+/// chat's read-only label in the same row: 22 pt tall, 11.5 pt type and a
+/// 12 pt glyph. Points at the 16 px Interface size; every one is an
+/// interface rem.
 const TARGET_CHIP_HEIGHT: f32 = 22.0;
 const TARGET_CHIP_PAD_X: f32 = 6.0;
 const TARGET_CHIP_TEXT: f32 = 11.5;
@@ -75,6 +75,10 @@ const TARGET_CHIP_CHEVRON: f32 = 10.0;
 /// open target menu's card (`"menu"`), shared with their measuring canvases.
 type TargetBounds =
     std::rc::Rc<std::cell::RefCell<HashMap<&'static str, gpui::Bounds<gpui::Pixels>>>>;
+
+/// Painted bounds of the checkout row's read-only labels, by text in row
+/// order (QA readback; refilled by each paint of the row).
+type LabelBounds = std::rc::Rc<std::cell::RefCell<Vec<(String, gpui::Bounds<gpui::Pixels>)>>>;
 
 /// What one bottom-row target chip shows (see [`Pickers::target_chip`]).
 struct TargetChip {
@@ -1000,9 +1004,12 @@ pub struct Pickers {
     /// How much of the model chip the composer's controls row has room for.
     model_chip_fit: ModelChipFit,
     setting_bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    /// The new-thread target chips in the frame's bottom row, and the open
-    /// target menu's card, as last painted (window coordinates; QA readback).
+    /// The new-thread target chips above the prompt, and the open target
+    /// menu's card, as last painted (window coordinates; QA readback).
     target_bounds: TargetBounds,
+    /// A chat's read-only checkout row labels above the prompt, as last
+    /// painted (window coordinates; QA readback).
+    context_bounds: LabelBounds,
     setting_scroll: gpui::ScrollHandle,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     accounts: Loadable<AgentAccountsSnapshot>,
@@ -1352,6 +1359,7 @@ impl Pickers {
             model_chip_fit: ModelChipFit::Full,
             setting_bounds: None,
             target_bounds: TargetBounds::default(),
+            context_bounds: LabelBounds::default(),
             setting_scroll: gpui::ScrollHandle::new(),
             harnesses: Loadable::Idle,
             accounts: Loadable::Idle,
@@ -5112,9 +5120,10 @@ impl Pickers {
         self.close(cx);
     }
 
-    /// The new thread's target as the frame's bottom row paints it: each
+    /// The new thread's target as the row above its prompt paints it: each
     /// chip's bounds and accessible name, the open target menu's card, and
-    /// the target those chips set (project, machine, checkout plan, ref).
+    /// the target those chips set (project, machine, checkout plan, ref);
+    /// for a chat, its read-only checkout labels.
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_target_readback(&self, cx: &App) -> serde_json::Value {
         let rect = |b: &gpui::Bounds<gpui::Pixels>| {
@@ -5166,6 +5175,13 @@ impl Pickers {
                 })
                 .collect::<Vec<_>>(),
             "menu": painted.get("menu").map(rect),
+            // A chat's read-only checkout row (empty on a new thread).
+            "contextLabels": self
+                .context_bounds
+                .borrow()
+                .iter()
+                .map(|(text, bounds)| serde_json::json!({"text": text, "bounds": rect(bounds)}))
+                .collect::<Vec<_>>(),
             "open": self.open_kind().map(|kind| format!("{kind:?}")),
             "selectedSpace": state.selected_space.clone(),
             "effectiveDevice": device,
@@ -5500,11 +5516,11 @@ impl Pickers {
             })
     }
 
-    /// A new-thread target picker in the frame's bottom row. It is the
-    /// working thread's footer label (12 pt glyph, 11.5 pt label, the same
-    /// readable muted ink) made into a quiet pop-up button: transparent at
-    /// rest, the shared hover wash, a small trailing chevron, as tall as the
-    /// row's push buttons. `interactive: false` paints the same pixels with
+    /// A new-thread target picker above the prompt. It is a chat's
+    /// checkout label (12 pt glyph, 11.5 pt label, the same readable muted
+    /// ink) made into a quiet pop-up button: transparent at rest, the
+    /// shared hover wash, a small trailing chevron. `interactive: false`
+    /// paints the same pixels with
     /// no handlers and no tab stop: the departing copy while the route
     /// crossfades to a working thread, whose target is already fixed.
     fn target_chip(
@@ -5605,37 +5621,10 @@ impl Pickers {
             })
     }
 
-    /// A read-only footer label (locked sessions — t3code's
-    /// `resolveLockedWorkspaceLabel` span).
-    fn footer_label(icon_path: &'static str, label: SharedString, theme: &Theme) -> gpui::Div {
-        div()
-            .h(crate::typography::ui_rems(20.0))
-            // Four of these share one row now (device, project, checkout,
-            // ref): cap each early and let them SHRINK (`min_w_0`) — without
-            // it the clusters overflowed into each other and the labels
-            // painted overlapped (user report).
-            .max_w(crate::typography::ui_rems(160.0))
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(crate::typography::ui_rems(6.0))
-            .px(crate::typography::ui_rems(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.readable_muted(0.6))
-            .child(
-                crate::icons::icon(icon_path)
-                    .size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.readable_muted(0.6)),
-            )
-            .child(div().min_w_0().truncate().child(label))
-    }
-
-    /// The new thread's target, in the frame's bottom row where a working
-    /// thread names its checkout and branch: machine and project, then (for
-    /// a Git project, after a hairline) checkout kind and branch. Each menu
-    /// opens upward from its chip, leading-aligned, inside the window.
+    /// The new thread's target, above its prompt where a chat names its
+    /// checkout and branch: machine and project, then (for a Git project,
+    /// after a hairline) checkout kind and branch. Each menu opens upward
+    /// from its chip, leading-aligned, inside the window.
     ///
     /// On a crowded row the machine and branch labels truncate (each also
     /// under its own cap); the project and checkout kind stay whole.
@@ -5839,13 +5828,19 @@ impl Pickers {
         .into_any_element()
     }
 
-    /// The bottom row stopped offering the target (a working thread's row,
-    /// or no projects): drop its bounds, and close a target menu left open
+    /// The composer stopped offering the target (a chat's own row, or no
+    /// projects): drop its bounds, and close a target menu left open
     /// by a route change no click dismissed (a deep link), so it never
     /// lingers invisibly holding focus and quieting shortcuts.
     pub(crate) fn release_target_footer(&mut self, cx: &mut Context<Self>) {
         self.target_bounds.borrow_mut().clear();
         self.dismiss_target_menu(cx);
+    }
+
+    /// The composer stopped showing a chat's checkout row (a new thread):
+    /// drop its labels' bounds.
+    pub(crate) fn release_context_row(&mut self) {
+        self.context_bounds.borrow_mut().clear();
     }
 
     fn dismiss_target_menu(&mut self, cx: &mut Context<Self>) {
@@ -5859,64 +5854,84 @@ impl Pickers {
         }
     }
 
-    /// The composer footer row of an unframed session: read-only checkout
-    /// kind + ref, LEFT-aligned, only when the session's project has git.
-    /// A new thread has nothing under its pill: its target pickers live in
-    /// the frame's bottom row ([`Self::render_target_footer`]), where the
-    /// workbench also names a framed session's checkout and branch.
-    pub fn render_footer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// A chat's checkout row above its prompt: where it works (Local
+    /// checkout, Worktree, or its folder when there is no Git repository)
+    /// and its branch, then the pull request badge at the row's end.
+    /// Read-only (a chat never changes checkout), in the new thread's target
+    /// chip metrics, so the two rows crossfade in one place. Each composer
+    /// names its own chat, so a tab switch changes what the row says.
+    pub fn render_context_row(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
-        let (space, chat, change_request) = {
+        // Only labels painted from this render report bounds.
+        let measure = self.context_bounds.clone();
+        measure.borrow_mut().clear();
+        let (folder, git, worktree, branch, change_request) = {
             let state = self.state.read(cx);
-            let space = self.binding.space_row(state).cloned();
-            let chat = self.binding.chat_row(state).cloned()?;
-            let change_request = state.change_request_for_chat(&chat).cloned();
-            (space, chat, change_request)
+            let chat = self.binding.chat_row(state)?;
+            let space = self.binding.space_row(state);
+            let folder = chat
+                .cwd
+                .clone()
+                .or_else(|| space.map(|space| space.path.clone()))?;
+            let git = space.is_some_and(|space| space.git_detected);
+            let worktree = space.is_some_and(|space| folder != space.path);
+            let branch = crate::change_requests::conversation_branch(chat, &state.spaces)
+                .or(chat.branch.as_deref())
+                .map(str::trim)
+                .filter(|branch| !branch.is_empty())
+                .map(|branch| SharedString::from(branch.to_string()));
+            let change_request = state.change_request_for_chat(chat).cloned();
+            (folder, git, worktree, branch, change_request)
         };
-        // Sessions never move: read-only labels. The target (project @
-        // device) lives in the titlebar.
-        let space = space.filter(|s| s.git_detected)?;
-        let is_worktree = chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
-        let (icon_path, label) = if is_worktree {
-            (crate::icons::FOLDER_WITH_FILES, "Worktree")
+        let (glyph, noun, label): (&'static str, &'static str, SharedString) = if !git {
+            let name = std::path::Path::new(&folder)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| folder.clone());
+            (crate::icons::FOLDER, "Folder", name.into())
+        } else if worktree {
+            (
+                crate::icons::FOLDER_WITH_FILES,
+                "Worktree",
+                "Worktree".into(),
+            )
         } else {
-            (crate::icons::FOLDER, "Local checkout")
+            (crate::icons::FOLDER, "Checkout", "Local checkout".into())
         };
-        let left = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .min_w_0()
-            .child(Self::footer_label(
-                icon_path,
-                SharedString::from(label),
-                &theme,
-            ));
-        let right = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(crate::typography::ui_rems(4.0))
-            .min_w_0()
-            .child(Self::footer_label(
+        let detail: SharedString = if git {
+            folder.clone().into()
+        } else {
+            format!("{folder} (no Git repository)").into()
+        };
+        let checkout = Self::context_label(
+            "context-checkout",
+            glyph,
+            label,
+            noun,
+            detail,
+            180.0,
+            0.0,
+            measure.clone(),
+            &theme,
+        );
+        let branch = branch.filter(|_| git).map(|branch| {
+            Self::context_label(
+                "context-branch",
                 crate::icons::GIT_BRANCH,
-                chat.branch
-                    .clone()
-                    .map(SharedString::from)
-                    .unwrap_or_else(|| SharedString::from("No ref")),
+                branch.clone(),
+                "Branch",
+                branch,
+                360.0,
+                1.0,
+                measure.clone(),
                 &theme,
-            ));
-        // The composer owns the row's animated reveal and negative bottom
-        // margin. `w_full` is load-bearing: without it the canvas layout
-        // sizes the row to CONTENT, and the trailing spacer's flex_1 (basis
-        // 0) collapsed to zero width, so the groups painted overlapped.
-        // Checkout + branch stay together; the PR badge forms the trailing
-        // status group, independently of the branch label's length.
+            )
+        });
         Some(
             workspace_footer_row()
-                .pl(crate::typography::ui_rems(10.0))
-                .child(left)
-                .child(right)
+                .gap(crate::typography::ui_rems(2.0))
+                .child(checkout)
+                .children(branch)
                 .child(div().flex_1().min_w_0())
                 .when_some(change_request, |el, summary| {
                     el.child(
@@ -5932,6 +5947,59 @@ impl Pickers {
                 })
                 .into_any_element(),
         )
+    }
+
+    /// One read-only label of [`Self::render_context_row`]: a target chip's
+    /// glyph, type and padding without its chevron or hover, named
+    /// "Branch: main" and so on, with the full value in its tooltip.
+    #[allow(clippy::too_many_arguments)]
+    fn context_label(
+        id: &'static str,
+        glyph: &'static str,
+        label: SharedString,
+        noun: &'static str,
+        detail: SharedString,
+        max_width: f32,
+        shrink: f32,
+        measure: LabelBounds,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let ink = theme.readable_muted(0.7);
+        let key = label.to_string();
+        div()
+            .id(id)
+            .relative()
+            .h(crate::typography::ui_rems(TARGET_CHIP_HEIGHT))
+            .min_w_0()
+            .flex_shrink(shrink)
+            .max_w(crate::typography::ui_rems(max_width))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(TARGET_CHIP_GAP))
+            .px(crate::typography::ui_rems(TARGET_CHIP_PAD_X))
+            .text_size(crate::typography::ui_rems(TARGET_CHIP_TEXT))
+            .text_color(ink)
+            .role(gpui::Role::Label)
+            .aria_label(SharedString::from(format!("{noun}: {label}")))
+            .child(
+                crate::icons::icon(glyph)
+                    .size(crate::typography::ui_rems(TARGET_CHIP_GLYPH))
+                    .flex_none()
+                    .text_color(ink),
+            )
+            .child(div().min_w_0().truncate().child(label))
+            .tooltip_above(move |_, cx| ControlTooltip::view(noun, Some(detail.clone()), cx))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        measure.borrow_mut().push((key.clone(), bounds));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
     }
 
     fn popover_frame(&self, width: f32, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
@@ -9045,11 +9113,11 @@ impl Render for Pickers {
         }
         // Render the open popover's body first (mutable borrow), then the
         // chips. The new thread's target pickers (machine, project, checkout,
-        // branch) render in the frame's bottom row (see
+        // branch) render in the row above the prompt (see
         // `render_target_footer`), not here.
         let closing = self.open.closing_since();
         // A detached instance (a ticket's settings) offers its checkout here,
-        // beside the model; a new chat's lives in the frame's bottom row.
+        // beside the model; a new chat's lives in the row above its prompt.
         let detached_checkout = self.show_checkout
             && self.binding.is_detached()
             && self.binding.space_git(self.state.read(cx));

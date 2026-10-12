@@ -198,7 +198,6 @@ impl PaneChatView {
         links: LinkUi,
         cx: &mut Context<Self>,
     ) -> Self {
-        composer.update(cx, |composer, cx| composer.set_frame_footer(true, cx));
         let owner = state.update(cx, |state, cx| {
             let owner = state.watch_pane_chat(chat_id.clone(), cx);
             // Reading it here is reading it: clear the unseen marker exactly

@@ -1,54 +1,55 @@
-//! Headless GPUI E2E for the new thread's target controls in the frame's
-//! bottom row: the machine, project, checkout-kind and branch pickers that
-//! used to float above and below the new-thread composer now sit where a
-//! working thread names its checkout and branch.
+//! Headless GPUI E2E for the new thread's target controls above its prompt:
+//! the machine, project, checkout-kind and branch pickers sit in the
+//! checkout row right above the pill, where a working chat names its own
+//! checkout and branch (docs/design/bottom-tabs-2026-10-12). The frame's
+//! bottom row holds a chat's tabs, so on a new thread it is empty.
 //!
 //! Drives the production `Shell` in hidden windows against an in-process
 //! `EngineCore`. Two Git projects (real repositories with a `main` branch
 //! and a long feature branch) on a local machine with a long name, a second
-//! machine, and one working chat whose footer is the comparison. Every
-//! combination of Interface size (12, 16, 20 px) and theme (dark, light)
-//! gets its own window, at 1200 px wide and at 900 px.
+//! machine, and one working chat whose checkout row is the comparison.
+//! Every combination of Interface size (12, 16, 20 px) and theme (dark,
+//! light) gets its own window, at 1200 px wide and at 900 px.
 //!
 //! Failure cases this run must catch (written before the change):
-//! 1. A selector row still renders around the new-thread pill: any target
-//!    chip (machine, project, checkout, branch) painted above the pill, or
-//!    within 48 px below it, instead of inside the frame's bottom row.
-//! 2. The bottom row of a new thread for a Git project misses one of the
-//!    four target pickers, or shows Review changes / Commit & push… (there
-//!    is no task to review or commit yet).
-//! 3. A target chip leaves the bottom row: it extends past the row's left
+//! 1. A target chip (machine, project, checkout, branch) paints anywhere
+//!    but in the checkout row right above the new-thread pill: below it, in
+//!    the frame's bottom row, or more than 8 px above it.
+//! 2. The checkout row of a new thread for a Git project misses one of the
+//!    four target pickers, or the bottom row is not empty (a new thread
+//!    has no tabs).
+//! 3. A target chip leaves the checkout row: it extends past the row's left
 //!    or right edge, crosses its top or bottom, overlaps another chip, or
 //!    (900 px, 20 px, long machine and branch names) the row overflows
 //!    instead of yielding. The yield order: the machine and branch labels
 //!    truncate, the project never does (same width at 900 px as at
-//!    1200 px); on a row narrower than 560 pt (at 16 px) the machine and
+//!    1200 px); on a row narrower than 520 pt (at 16 px) the machine and
 //!    checkout labels collapse to their glyphs, named by tooltip, and only
 //!    then.
-//! 4. A menu opened from the bottom row is clipped or misplaced: it does not
-//!    open on a click, opens downward (its card's bottom is below the chip's
+//! 4. A menu opened from the row is clipped or misplaced: it does not open
+//!    on a click, opens downward (its card's bottom is below the chip's
 //!    top), or its card leaves the window's 8 px gutter on any side.
-//! 5. Choosing in a bottom-row menu no longer sets the new thread's target:
+//! 5. Choosing in a target menu no longer sets the new thread's target:
 //!    picking another project (click to open, arrow, Enter) leaves the
 //!    selected project unchanged; picking another machine leaves the
 //!    effective machine unchanged; New worktree leaves the checkout plan
 //!    unchanged; another branch leaves the ref label unchanged.
-//! 6. The two screens don't read as one design: the new-thread target
-//!    chips and the working thread's checkout/branch labels differ in
-//!    vertical centre by more than 1 px, or in glyph size; a chip is taller
-//!    than the row's buttons (22 pt) or not centred in the row.
+//! 6. The two screens don't read as one design: the working chat's row
+//!    does not name its checkout and branch above its own pill, its labels
+//!    differ from the target chips in height (22 pt) or are not centred in
+//!    their row; target chips remain on the working chat; or its bottom
+//!    row does not hold its tab.
 //! 7. Text-adjacent sizes don't follow the Interface size: a chip's height
 //!    at 12 and 20 px is not 0.75x and 1.25x of its 16 px height (±1 px).
 //! 8. A target chip has no accessible name naming its kind and value
 //!    ("Project: luna"), or is not a keyboard control (Enter opens it).
-//! 9. The pill is no longer placed sensibly once the rows are gone: its
-//!    centre is more than 24 px from the canvas centre, or it overlaps the
-//!    bottom row.
+//! 9. The pill is no longer placed sensibly: its centre is more than 24 px
+//!    from the canvas centre, or it overlaps the bottom row.
 //! 10. The route change jumps: sending from the new thread (selecting the
-//!     working chat) shows the target pickers and the thread's footer at
-//!     the same time, the target layer's opacity ever rises or the thread
-//!     footer's ever falls during the change, or the change does not end
-//!     with the thread footer fully shown and no target chips; the reverse
+//!     working chat) shows the target pickers and the chat's checkout row
+//!     at the same time, the target layer's opacity ever rises or the
+//!     chat row's ever falls during the change, or the change does not end
+//!     with the chat row fully shown and no target chips; the reverse
 //!     (Cmd+N back) must mirror it.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
@@ -292,7 +293,8 @@ fn centre(r: [f32; 4]) -> (f32, f32) {
     (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
 }
 
-/// Poll the bottom row until `ready` holds (or time out with the last one).
+/// Poll the main composer's surroundings until `ready` holds (or time out
+/// with the last one).
 async fn footer_until(
     window: Win,
     cx: &mut AsyncApp,
@@ -496,7 +498,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("new-thread-target.pass"),
-                                "PASS: headless production Shell; the new thread's machine, project, checkout and branch pickers sit in the frame's bottom row (none around the pill, no Review/Commit), inside the row and the window at 12/16/20 px, dark and light, 1200 and 900 px wide; their menus open upward inside the window; picking a project, machine, checkout and branch from the row sets the target; chips share the working thread's footer centre line and scale with the Interface size; the route crossfade never shows both rows and runs monotonically both ways\n",
+                                "PASS: headless production Shell; the new thread's machine, project, checkout and branch pickers sit in the checkout row right above its pill (the bottom row empty), inside the row and the window at 12/16/20 px, dark and light, 1200 and 900 px wide; their menus open upward inside the window; picking a project, machine, checkout and branch there sets the target; a working chat names its own checkout and branch in the same row above its pill (22 pt labels, centred) with its tab in the bottom row; chips scale with the Interface size; the route crossfade never shows both rows and runs monotonically both ways\n",
                             )
                         });
                         if let Err(error) = written {
@@ -526,7 +528,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Geometry checks shared by every new-thread capture (cases 1-3, 6, 7, 9).
+/// Geometry checks shared by every new-thread capture (cases 1-3, 7-9).
 fn check_new_thread(
     name: &str,
     readback: &Value,
@@ -538,51 +540,64 @@ fn check_new_thread(
     if readback["framed"] != false {
         fail("the new thread renders inside the workbench frame".into());
     }
-    let Some(row) = rect(&readback["row"]) else {
+    let Some(bottom) = rect(&readback["row"]) else {
         fail("the bottom row was not painted".into());
+        return;
+    };
+    let Some(row) = rect(&readback["contextRow"]["row"]) else {
+        fail("the checkout row above the pill was not painted".into());
         return;
     };
     let Some(pill) = rect(&readback["pill"]) else {
         fail("the composer pill was not painted".into());
         return;
     };
-    // Case 2: all four pickers, no Git actions.
+    // Case 2: all four pickers; nothing in the bottom row.
     let chips: Vec<(String, [f32; 4], Value)> = TARGETS
         .iter()
         .filter_map(|id| chip(readback, id).map(|(chip, bounds)| (id.to_string(), bounds, chip)))
         .collect();
     if chips.len() != TARGETS.len() {
         fail(format!(
-            "the bottom row shows {} of the four target pickers: {}",
+            "the checkout row shows {} of the four target pickers: {}",
             chips.len(),
             readback["targets"]["chips"]
         ));
     }
-    if readback["buttons"]
+    if readback["strips"]
         .as_array()
-        .is_some_and(|buttons| !buttons.is_empty())
+        .is_some_and(|strips| !strips.is_empty())
     {
         fail(format!(
-            "a new thread shows Git actions: {}",
-            readback["buttons"]
+            "a new thread's bottom row holds tabs: {}",
+            readback["strips"]
+        ));
+    }
+    // Case 1: the row right above the pill.
+    let gap = pill[1] - (row[1] + row[3]);
+    if !(-0.5..=8.0).contains(&gap) {
+        fail(format!(
+            "the checkout row is not right above the pill (gap {gap}: {row:?} vs pill {pill:?})"
         ));
     }
     let scale = pixels / 16.0;
     let row_mid = row[1] + row[3] / 2.0;
     for (index, (id, b, chip)) in chips.iter().enumerate() {
-        // Case 1: in the bottom row, never around the pill.
-        if b[1] < pill[1] + pill[3] + 48.0 {
-            fail(format!(
-                "{id} sits around the pill ({b:?} vs pill {pill:?})"
-            ));
-        }
-        // Case 3: inside the row.
+        // Cases 1 and 3: inside the row (so above the pill, never in the
+        // bottom row).
         if b[0] < row[0] - 0.5
             || b[0] + b[2] > row[0] + row[2] + 0.5
             || b[1] < row[1] - 0.5
             || b[1] + b[3] > row[1] + row[3] + 0.5
         {
-            fail(format!("{id} leaves the bottom row ({b:?} vs row {row:?})"));
+            fail(format!(
+                "{id} leaves the checkout row ({b:?} vs row {row:?})"
+            ));
+        }
+        if b[1] + b[3] > bottom[1] - 0.5 && b[1] < bottom[1] + bottom[3] {
+            fail(format!(
+                "{id} paints in the bottom row ({b:?} vs {bottom:?})"
+            ));
         }
         if b[0] + b[2] > width - 8.0 {
             fail(format!("{id} runs past the window edge ({b:?})"));
@@ -592,7 +607,7 @@ fn check_new_thread(
                 fail(format!("{id} overlaps {other} ({b:?} / {o:?})"));
             }
         }
-        // Cases 6 and 7: the row buttons' height, scaled; centred.
+        // Case 7: 22 pt, scaled; centred in the row.
         if (b[3] - 22.0 * scale).abs() > 1.0 {
             fail(format!(
                 "{id} is {} px tall, expected {} at {pixels} px",
@@ -614,21 +629,21 @@ fn check_new_thread(
             ));
         }
     }
-    // Case 3: how a narrow row yields. Below 560 pt (at 16 px) the machine
+    // Case 3: how a narrow row yields. Below 520 pt (at 16 px) the machine
     // chip is its glyph alone; above it, labelled.
     if let Some((_, device)) = chip(readback, "picker-device") {
         let glyph_only = device[2] < 2.6 * device[3];
-        let narrow = row[2] < 560.0 * scale;
+        let narrow = row[2] < 520.0 * scale;
         if glyph_only != narrow {
             fail(format!(
                 "the machine chip is {} on a {} px row (narrow below {})",
                 if glyph_only { "glyph-only" } else { "labelled" },
                 row[2],
-                560.0 * scale
+                520.0 * scale
             ));
         }
     }
-    // Case 9: the pill near the canvas centre, clear of the row.
+    // Case 9: the pill near the canvas centre, clear of the bottom row.
     if let Some(canvas) = rect(&readback["canvas"]) {
         let offset = centre(pill).1 - centre(canvas).1;
         if offset.abs() > 24.0 {
@@ -637,7 +652,7 @@ fn check_new_thread(
     } else {
         fail("the canvas was not measured".into());
     }
-    if pill[1] + pill[3] > row[1] {
+    if pill[1] + pill[3] > bottom[1] {
         fail("the pill overlaps the bottom row".into());
     }
 }
@@ -762,7 +777,7 @@ async fn check_picks(
     .await?;
     if to_site["after"]["selectedSpace"] != SITE_SPACE {
         failures.push(format!(
-            "picking website in the bottom row left the project at {}",
+            "picking website above the prompt left the project at {}",
             to_site["after"]["selectedSpace"]
         ));
     }
@@ -779,7 +794,7 @@ async fn check_picks(
     .await?;
     if back["after"]["selectedSpace"] != LUNA_SPACE {
         failures.push(format!(
-            "picking luna in the bottom row left the project at {}",
+            "picking luna above the prompt left the project at {}",
             back["after"]["selectedSpace"]
         ));
     }
@@ -797,7 +812,7 @@ async fn check_picks(
     .await?;
     if studio["after"]["effectiveDevice"] != OTHER_DEVICE {
         failures.push(format!(
-            "picking Studio Mac in the bottom row left the machine at {}",
+            "picking Studio Mac above the prompt left the machine at {}",
             studio["after"]["effectiveDevice"]
         ));
     }
@@ -814,7 +829,7 @@ async fn check_picks(
     .await?;
     if home["after"]["effectiveDevice"] != local {
         failures.push(format!(
-            "picking the MacBook in the bottom row left the machine at {}",
+            "picking the MacBook above the prompt left the machine at {}",
             home["after"]["effectiveDevice"]
         ));
     }
@@ -847,7 +862,7 @@ async fn check_picks(
         .starts_with("NewWorktree")
     {
         failures.push(format!(
-            "New worktree from the bottom row left the plan at {}",
+            "New worktree above the prompt left the plan at {}",
             worktree["after"]["checkoutPlan"]
         ));
     }
@@ -868,7 +883,7 @@ async fn check_picks(
         .starts_with("NewWorktree")
     {
         failures.push(format!(
-            "Current checkout from the bottom row left the plan at {}",
+            "Current checkout above the prompt left the plan at {}",
             current["after"]["checkoutPlan"]
         ));
     }
@@ -886,7 +901,7 @@ async fn check_picks(
     .await?;
     if main_ref["after"]["ref"] != "main" {
         failures.push(format!(
-            "picking main in the bottom row left the ref at {}",
+            "picking main above the prompt left the ref at {}",
             main_ref["after"]["ref"]
         ));
     }
@@ -903,7 +918,7 @@ async fn check_picks(
     .await?;
     if long["after"]["ref"] != LONG_BRANCH {
         failures.push(format!(
-            "picking {LONG_BRANCH} in the bottom row left the ref at {}",
+            "picking {LONG_BRANCH} above the prompt left the ref at {}",
             long["after"]["ref"]
         ));
     }
@@ -935,7 +950,9 @@ async fn sample_route(
         let target = readback["dock"]["targetOpacity"].as_f64().unwrap_or(-1.0);
         let thread = readback["dock"]["threadOpacity"].as_f64().unwrap_or(-1.0);
         let chips = readback["targets"]["chips"].as_array().map_or(0, Vec::len);
-        let labels = readback["labels"].as_array().map_or(0, Vec::len);
+        let labels = readback["contextRow"]["labels"]
+            .as_array()
+            .map_or(0, Vec::len);
         samples.push(json!({
             "ms": started.elapsed().as_millis() as u64,
             "target": target, "thread": thread, "chips": chips, "labels": labels,
@@ -1150,7 +1167,7 @@ async fn run(
                 let thread = footer_until(window, cx, 6000, |r| {
                     r["framed"] == true
                         && r["dock"]["active"] == false
-                        && r["labels"].as_array().map_or(0, Vec::len) >= 2
+                        && r["contextRow"]["labels"].as_array().map_or(0, Vec::len) >= 2
                 })
                 .await?;
                 let image = stable(window, cx).await?;
@@ -1158,39 +1175,59 @@ async fn run(
                 let thread = footer(window, cx).ok().unwrap_or(thread);
                 {
                     let mut fail = |message: String| failures.push(format!("{name}: {message}"));
-                    let labels = thread["labels"].as_array().cloned().unwrap_or_default();
+                    let labels = thread["contextRow"]["labels"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
                     let texts: Vec<&str> =
                         labels.iter().filter_map(|l| l["text"].as_str()).collect();
-                    if !texts.contains(&"Local checkout") || !texts.contains(&"main") {
+                    if texts != ["Local checkout", "main"] {
                         fail(format!(
-                            "the thread row does not name its checkout and branch: {texts:?}"
+                            "the chat's row does not name its checkout and branch: {texts:?}"
                         ));
                     }
                     if thread["targets"]["chips"]
                         .as_array()
                         .is_some_and(|c| !c.is_empty())
                     {
-                        fail("target chips remain in the working thread's row".into());
+                        fail("target chips remain on the working chat".into());
                     }
-                    let ids: Vec<&str> = thread["buttons"]
+                    // Its tab, in the bottom row.
+                    if thread["strips"]
                         .as_array()
-                        .map(|b| b.iter().filter_map(|b| b["id"].as_str()).collect())
-                        .unwrap_or_default();
-                    if !ids.contains(&"wb-footer-review") || !ids.contains(&"wb-footer-commit") {
-                        fail(format!("the thread row misses its Git actions: {ids:?}"));
+                        .is_none_or(|strips| strips.is_empty())
+                    {
+                        fail(format!(
+                            "the working chat's bottom row holds no tab strip: {}",
+                            thread["strips"]
+                        ));
                     }
-                    // Case 6: one centre line across both screens.
-                    let new_mid = chip(&fresh, "picker-checkout").map(|(_, b)| centre(b).1);
-                    for label in &labels {
-                        if let (Some(b), Some(mid)) = (rect(&label["bounds"]), new_mid)
-                            && (centre(b).1 - mid).abs() > 1.0
-                        {
-                            fail(format!(
-                                "{} sits {} px off the new thread's chips' centre line",
-                                label["text"],
-                                centre(b).1 - mid
-                            ));
+                    // Case 6: the same row above its own pill, labels as
+                    // tall as the chips and centred in it.
+                    let scale = pixels / 16.0;
+                    match (rect(&thread["contextRow"]["row"]), rect(&thread["pill"])) {
+                        (Some(row), Some(pill)) => {
+                            let gap = pill[1] - (row[1] + row[3]);
+                            if !(-0.5..=8.0).contains(&gap) {
+                                fail(format!(
+                                    "the chat's row is not right above its pill (gap {gap})"
+                                ));
+                            }
+                            for label in &labels {
+                                let Some(b) = rect(&label["bounds"]) else {
+                                    continue;
+                                };
+                                if (b[3] - 22.0 * scale).abs() > 1.0
+                                    || (centre(b).1 - (row[1] + row[3] / 2.0)).abs() > 1.0
+                                {
+                                    fail(format!(
+                                        "{} is not a 22 pt label centred in the chat's row ({b:?} in {row:?})",
+                                        label["text"]
+                                    ));
+                                }
+                            }
                         }
+                        _ => fail("the chat's checkout row or pill was not painted".into()),
                     }
                 }
                 readback.insert("thread".into(), thread);

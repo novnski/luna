@@ -634,11 +634,11 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             pill,
         ),
         p(
-            "workbench",
-            "frame footer checkout/branch",
+            "composer",
+            "checkout/branch row above the pill",
             Kind::Text,
             theme.readable_muted(0.7),
-            chrome,
+            canvas,
         ),
         // Related chats and tool surfaces (right sidebar).
         p(

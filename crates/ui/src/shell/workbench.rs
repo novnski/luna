@@ -136,8 +136,10 @@ pub(super) struct Geometry {
     pub(super) root: Option<Bounds<Pixels>>,
     /// The whole rounded canvas, gutter included.
     pub(super) canvas: Option<Bounds<Pixels>>,
-    /// Whole pane (strip + body) by pane id; see `render::pane_regions`.
+    /// Each group's body by pane id (its tab strip is in the bottom row).
     pub(super) panes: HashMap<String, Bounds<Pixels>>,
+    /// Each group's tab strip in the frame's bottom row, by pane id.
+    pub(super) strips: HashMap<String, Bounds<Pixels>>,
     /// Pane id -> `(chat id, tab bounds)` in strip order.
     pub(super) tabs: HashMap<String, Vec<(String, Bounds<Pixels>)>>,
     pub(super) splits: HashMap<String, Bounds<Pixels>>,
@@ -149,14 +151,8 @@ pub(super) struct Geometry {
     /// The open tab / Group actions menu's rows by id, as last painted
     /// (QA readback; empty while it is closed).
     pub(super) menu_rows: Vec<(&'static str, Bounds<Pixels>)>,
-    /// The frame row's Balance panes button, while shown.
-    pub(super) balance: Option<Bounds<Pixels>>,
-    /// The frame's bottom row, and its Git action buttons by id.
+    /// The frame's bottom row (the groups' tab strips).
     pub(super) footer: Option<Bounds<Pixels>>,
-    pub(super) footer_buttons: HashMap<String, Bounds<Pixels>>,
-    /// The row's read-only context labels (checkout, branch) by text, in
-    /// order (QA readback; empty while the row shows none).
-    pub(super) footer_labels: Vec<(String, Bounds<Pixels>)>,
     /// The workbench notice's Dismiss control, while a notice shows.
     pub(super) notice_dismiss: Option<Bounds<Pixels>>,
     /// Each strip's visible tab viewport: tabs scrolled outside it are
@@ -173,6 +169,7 @@ impl Geometry {
     fn retain(&mut self, layout: &Layout) {
         let panes: HashSet<&str> = model::panes(layout).iter().map(|pane| pane.id).collect();
         self.panes.retain(|id, _| panes.contains(id.as_str()));
+        self.strips.retain(|id, _| panes.contains(id.as_str()));
         self.tabs.retain(|id, _| panes.contains(id.as_str()));
         self.plus.retain(|id, _| panes.contains(id.as_str()));
         self.group_actions
@@ -186,10 +183,9 @@ impl Geometry {
     }
 
     /// `pane_id`'s tabs clipped to what can be seen: the strip's viewport,
-    /// within the canvas viewport (a group scrolled out of the canvas shows
-    /// none of its tabs). A tab scrolled out of view keeps its slot as a
-    /// zero-width span at the edge it left by, so it can never be hit or
-    /// mis-targeted.
+    /// within the frame's bottom row. A tab scrolled out of view keeps its
+    /// slot as a zero-width span at the edge it left by, so it can never be
+    /// hit or mis-targeted.
     pub(super) fn visible_tabs(&self, pane_id: &str) -> Vec<(String, Bounds<Pixels>)> {
         let Some(tabs) = self.tabs.get(pane_id) else {
             return Vec::new();
@@ -198,15 +194,9 @@ impl Geometry {
             return tabs.clone();
         };
         let (mut view_left, mut view_right) = (f32::from(view.left()), f32::from(view.right()));
-        let mut strip_shown = true;
-        if let Some(root) = self.root {
-            view_left = view_left.max(f32::from(root.left()));
-            view_right = view_right.min(f32::from(root.right())).max(view_left);
-            let middle = f32::from(view.top() + view.size.height / 2.0);
-            strip_shown = middle >= f32::from(root.top()) && middle <= f32::from(root.bottom());
-        }
-        if !strip_shown {
-            view_right = view_left;
+        if let Some(row) = self.footer {
+            view_left = view_left.max(f32::from(row.left()));
+            view_right = view_right.min(f32::from(row.right())).max(view_left);
         }
         tabs.iter()
             .map(|(chat, bounds)| {
@@ -228,6 +218,20 @@ impl Geometry {
             .iter()
             .find(|(_, bounds)| bounds.contains(&point))
             .map(|(id, bounds)| (id.clone(), *bounds))
+    }
+
+    /// The group whose strip (in the bottom row) holds `point`.
+    fn strip_at(&self, point: Point<Pixels>) -> Option<String> {
+        self.strips
+            .iter()
+            .find(|(_, bounds)| bounds.contains(&point))
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Whether `point` is somewhere a dragged tab can land: a group's body
+    /// (the canvas viewport) or a group's strip.
+    fn accepts_drop_at(&self, point: Point<Pixels>) -> bool {
+        self.root.is_some_and(|root| root.contains(&point)) || self.strip_at(point).is_some()
     }
 }
 
@@ -303,17 +307,6 @@ pub(super) struct ChildFailure {
     pub(super) ambiguous: bool,
 }
 
-/// The frame row's read-only context for a working thread: who (a non-Main
-/// tab), its checkout kind and branch, and whether it offers the Git actions.
-#[derive(Clone)]
-pub(super) struct FooterContext {
-    pub(super) who: Option<SharedString>,
-    pub(super) checkout: Option<(&'static str, &'static str)>,
-    pub(super) branch: Option<SharedString>,
-    pub(super) git: bool,
-    pub(super) compact: bool,
-}
-
 #[derive(Clone)]
 pub(super) struct TabMenu {
     pub(super) chat_id: String,
@@ -364,9 +357,6 @@ pub(super) struct WorkbenchState {
     /// not, previewed or not) is cancelled and its release does nothing.
     pub(super) gesture_cancelled: bool,
     pub(super) geometry: Rc<RefCell<Geometry>>,
-    /// What the frame row last named for a working thread, so the new
-    /// thread's row can fade it out after the route has already left it.
-    pub(super) footer_context: Option<FooterContext>,
     pub(super) creating_child: Option<ChildRequest>,
     pub(super) child_failure: Option<ChildFailure>,
     /// A new New thread was refused while an earlier outcome is unknown
@@ -407,6 +397,10 @@ pub(super) struct WorkbenchState {
     tab_reveal: HashMap<String, TabReveal>,
     /// Each pane's focus scope and its focus-in listener.
     pub(super) pane_focus: HashMap<String, (FocusHandle, gpui::Subscription)>,
+    /// Each pane's tab strip focus scope (in the frame's bottom row, outside
+    /// the pane) and its focus-in listener: a focused tab or strip control
+    /// belongs to its group as much as anything in the pane does.
+    pub(super) strip_focus: HashMap<String, (FocusHandle, gpui::Subscription)>,
     pub(super) leaving: Vec<LeavingTab>,
     pub(super) collapse: Vec<Collapse>,
     /// QA: park mutation completions to deliver them late.
@@ -487,7 +481,6 @@ impl WorkbenchState {
             divider_press: None,
             gesture_cancelled: false,
             geometry: Rc::new(RefCell::new(Geometry::default())),
-            footer_context: None,
             creating_child: None,
             child_failure: None,
             child_blocked: false,
@@ -500,6 +493,7 @@ impl WorkbenchState {
             chooser: None,
             tab_focus: HashMap::new(),
             pane_focus: HashMap::new(),
+            strip_focus: HashMap::new(),
             tab_scroll: HashMap::new(),
             canvas_scroll: gpui::ScrollHandle::new(),
             canvas_reveal: None,
@@ -1393,6 +1387,9 @@ impl Shell {
             .map(|pane| pane.id.to_string())
             .collect();
         self.workbench.pane_focus.retain(|id, _| panes.contains(id));
+        self.workbench
+            .strip_focus
+            .retain(|id, _| panes.contains(id));
         self.workbench.tab_scroll.retain(|id, _| panes.contains(id));
         self.workbench.tab_caps.retain(|id, _| panes.contains(id));
         self.workbench.tab_reveal.retain(|id, _| panes.contains(id));
@@ -1570,9 +1567,7 @@ impl Shell {
         });
         let in_pane = || {
             model::panes(&layout).into_iter().find_map(|pane| {
-                let (handle, _) = self.workbench.pane_focus.get(pane.id)?;
-                handle
-                    .contains_focused(window, cx)
+                self.workbench_group_holds_focus(pane.id, window, cx)
                     .then(|| pane.active_chat_id.map(str::to_string))
             })
         };
@@ -1647,6 +1642,45 @@ impl Shell {
             .pane_focus
             .insert(pane_id.to_string(), (handle.clone(), subscription));
         handle
+    }
+
+    /// A pane's tab strip focus scope (see [`WorkbenchState::strip_focus`]),
+    /// created with the same focus-in listener as the pane's own.
+    pub(super) fn workbench_strip_focus(
+        &mut self,
+        pane_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        if let Some((handle, _)) = self.workbench.strip_focus.get(pane_id) {
+            return handle.clone();
+        }
+        let handle = cx.focus_handle();
+        let id = pane_id.to_string();
+        let subscription = cx.on_focus_in(&handle, window, move |shell, _, cx| {
+            shell.workbench_pane_focused(&id, cx);
+        });
+        self.workbench
+            .strip_focus
+            .insert(pane_id.to_string(), (handle.clone(), subscription));
+        handle
+    }
+
+    /// Whether keyboard focus is in `pane_id`'s group: in its pane, or on
+    /// its tab strip in the bottom row.
+    pub(super) fn workbench_group_holds_focus(
+        &self,
+        pane_id: &str,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        [&self.workbench.pane_focus, &self.workbench.strip_focus]
+            .iter()
+            .any(|scopes| {
+                scopes
+                    .get(pane_id)
+                    .is_some_and(|(handle, _)| handle.contains_focused(window, cx))
+            })
     }
 
     /// The canvas's scroll handle, first scrolling it so the focused group is
@@ -1904,10 +1938,8 @@ impl Shell {
         let app: &App = cx;
         if self.workbench.focus.contains_focused(window, app) {
             let home = model::panes(&layout).into_iter().find_map(|pane| {
-                let (handle, _) = self.workbench.pane_focus.get(pane.id)?;
                 let chat = pane.active_chat_id?;
-                handle
-                    .contains_focused(window, app)
+                self.workbench_group_holds_focus(pane.id, window, app)
                     .then(|| (pane.id.to_string(), chat.to_string()))
             });
             if let Some((_, chat)) = &home {
@@ -1980,16 +2012,18 @@ impl Shell {
     }
 
     /// Any press: a new pointer gesture (an earlier Escape no longer
-    /// applies); a press outside the canvas is the user leaving it, so the
-    /// keyboard's home in the canvas is forgotten.
+    /// applies); a press outside the workbench (its canvas and its bottom
+    /// row of tabs) is the user leaving it, so the keyboard's home in the
+    /// workbench is forgotten.
     pub(super) fn workbench_pressed_at(&mut self, position: Point<Pixels>) {
         self.workbench.gesture_cancelled = false;
-        let inside = self
-            .workbench
-            .geometry
-            .borrow()
-            .canvas
-            .is_some_and(|canvas| canvas.contains(&position));
+        let inside = {
+            let geometry = self.workbench.geometry.borrow();
+            [geometry.canvas, geometry.footer]
+                .iter()
+                .flatten()
+                .any(|area| area.contains(&position))
+        };
         if !inside {
             self.workbench.keyboard_home = None;
             self.workbench.vanish_watch = None;
@@ -2015,9 +2049,9 @@ impl Shell {
         let pane = self
             .workbench
             .pane_focus
-            .iter()
-            .find(|(_, (handle, _))| handle.contains_focused(window, app))
-            .map(|(id, _)| id.clone());
+            .keys()
+            .find(|id| self.workbench_group_holds_focus(id, window, app))
+            .cloned();
         if let Some(pane) = pane {
             self.workbench_pane_focused(&pane, cx);
         }
@@ -2819,9 +2853,20 @@ impl Shell {
         self.workbench.divider_press = Some((split_id, point));
     }
 
-    /// Resolve where a drop at `point` lands, for `dragged`.
+    /// Resolve where a drop at `point` lands, for `dragged`: a group's
+    /// strip in the bottom row (an insertion slot), else a group's body.
     fn workbench_drop_target(&self, point: Point<Pixels>, dragged: &str) -> Option<DropTarget> {
         let geometry = self.workbench.geometry.borrow();
+        if let Some(pane_id) = geometry.strip_at(point) {
+            let tabs = geometry.visible_tabs(&pane_id);
+            let spans: Vec<(f32, f32)> = tabs
+                .iter()
+                .map(|(_, bounds)| (f32::from(bounds.left()), f32::from(bounds.right())))
+                .collect();
+            let from = tabs.iter().position(|(chat, _)| chat == dragged);
+            let index = model::strip_index(f32::from(point.x), &spans, from);
+            return Some(DropTarget::Strip { pane_id, index });
+        }
         let root = geometry.root?;
         if !root.contains(&point) {
             return None;
@@ -2851,18 +2896,7 @@ impl Shell {
                 });
             }
         }
-        let (pane_id, bounds) = geometry.pane_at(point)?;
-        let (strip, body) = render::pane_regions(bounds);
-        if strip.contains(&point) {
-            let tabs = geometry.visible_tabs(&pane_id);
-            let spans: Vec<(f32, f32)> = tabs
-                .iter()
-                .map(|(_, bounds)| (f32::from(bounds.left()), f32::from(bounds.right())))
-                .collect();
-            let from = tabs.iter().position(|(chat, _)| chat == dragged);
-            let index = model::strip_index(f32::from(point.x), &spans, from);
-            return Some(DropTarget::Strip { pane_id, index });
-        }
+        let (pane_id, body) = geometry.pane_at(point)?;
         let local = point - body.origin;
         match model::body_zone(
             f32::from(local.x),
@@ -3022,12 +3056,7 @@ impl Shell {
             return;
         };
         let point = event.event.position;
-        let inside = self
-            .workbench
-            .geometry
-            .borrow()
-            .root
-            .is_some_and(|root| root.contains(&point));
+        let inside = self.workbench.geometry.borrow().accepts_drop_at(point);
         if !inside {
             if self.workbench.preview.take().is_some() {
                 cx.notify();
@@ -3118,12 +3147,7 @@ impl Shell {
                 Some(preview) => Some(preview.command),
                 None => {
                     let release = window.mouse_position();
-                    let inside = self
-                        .workbench
-                        .geometry
-                        .borrow()
-                        .root
-                        .is_some_and(|root| root.contains(&release));
+                    let inside = self.workbench.geometry.borrow().accepts_drop_at(release);
                     inside
                         .then(|| self.workbench_drop_target(release, &tab.chat_id))
                         .flatten()
@@ -3543,18 +3567,24 @@ impl Shell {
             "maxX": f32::from(max.x),
             "maxY": f32::from(max.y),
         });
-        // What the frame's bottom row (checkout, Review changes, Commit &
-        // push) is bound to: the focused chat, or Main.
-        let footer = {
-            let chat = layout
-                .focused_chat_id()
-                .unwrap_or(layout.main_chat_id.as_str());
-            json!({
-                "chat": chat,
-                "cwd": state.chats.iter().find(|row| row.id == chat).and_then(|row| row.cwd.clone()),
-            })
-        };
-        json!({
+        // The frame's bottom row and each group's strip in it.
+        let row_bounds = geometry.footer.as_ref().map(bounds);
+        let strip_bounds: Vec<serde_json::Value> = geometry
+            .strips
+            .iter()
+            .map(|(id, strip)| json!({"pane": id, "bounds": bounds(strip)}))
+            .collect();
+        // The checkout row above each shown chat's prompt: what it names
+        // (its own checkout and branch) and where it sits against the pill.
+        let context_rows: serde_json::Map<String, serde_json::Value> =
+            model::visible_chat_ids(&layout)
+                .iter()
+                .filter_map(|chat| {
+                    let composer = self.workbench_composer(chat, cx)?;
+                    Some((chat.clone(), composer.read(cx).fixture_context_row(cx)))
+                })
+                .collect();
+        let mut readback = json!({
                     "available": self.workbench_available(),
                     "loaded": self.workbench.loaded(),
                     // The layout notice (a latched refusal, or a load that is
@@ -3575,7 +3605,6 @@ impl Shell {
                         .map(|(chat, tab)| (chat.clone(), json!(tab.view.read(cx).composer_slot_width())))
                         .collect::<serde_json::Map<String, serde_json::Value>>(),
                     "canvasScroll": canvas_scroll,
-                    "footer": footer,
                     "root": node_json(&layout.root, &layout.main_chat_id, state),
                     "closed": layout.closed_tabs.iter().map(|closed| closed.tab.chat_id.clone()).collect::<Vec<_>>(),
                     "views": views,
@@ -3657,7 +3686,12 @@ impl Shell {
                         Vec::new()
                     },
                     "noticeDismiss": self.workbench.notice.as_ref().and(geometry.notice_dismiss.as_ref()).map(bounds),
-                })
+                });
+        // (Past `json!`'s recursion limit, so set after it.)
+        readback["rowBounds"] = json!(row_bounds);
+        readback["stripBounds"] = json!(strip_bounds);
+        readback["contextRows"] = serde_json::Value::Object(context_rows);
+        readback
     }
 
     /// The composer bound to `chat_id` in this workbench, if mounted.
@@ -3960,10 +3994,11 @@ impl Shell {
         cx.notify();
     }
 
-    /// The frame's bottom row as last painted, on either route: the row and
-    /// canvas, the thread's context labels and Git actions, the new
-    /// thread's target chips and open target menu, the main composer's pill,
-    /// and the route clock's two chrome opacities (window coordinates).
+    /// The main composer's surroundings as last painted, on either route:
+    /// the frame's bottom row (tab strips) and canvas, the checkout row
+    /// above the pill (the new thread's target chips and open target menu,
+    /// or a chat's read-only checkout and branch), the pill, and the route
+    /// clock's two chrome opacities (window coordinates).
     pub fn fixture_frame_footer(&self, cx: &App) -> serde_json::Value {
         let rect = |b: &Bounds<Pixels>| {
             json!([
@@ -3980,16 +4015,12 @@ impl Shell {
             "framed": self.workbench_framed(cx),
             "row": geometry.footer.as_ref().map(rect),
             "canvas": geometry.canvas.as_ref().map(rect),
-            "labels": geometry
-                .footer_labels
+            "strips": geometry
+                .strips
                 .iter()
-                .map(|(text, bounds)| json!({"text": text, "bounds": rect(bounds)}))
+                .map(|(pane, bounds)| json!({"pane": pane, "bounds": rect(bounds)}))
                 .collect::<Vec<_>>(),
-            "buttons": geometry
-                .footer_buttons
-                .iter()
-                .map(|(id, bounds)| json!({"id": id, "bounds": rect(bounds)}))
-                .collect::<Vec<_>>(),
+            "contextRow": composer.fixture_context_row(cx),
             "targets": composer.pickers().read(cx).fixture_target_readback(cx),
             "pill": composer.surface_bounds().get().as_ref().map(rect),
             "dock": {
@@ -4246,12 +4277,6 @@ impl Shell {
                 "h": f32::from(root.size.height),
             })),
             "rightTarget": self.right_target(cx),
-            "balanceButton": geometry.balance.map(|button| json!({
-                "x": f32::from(button.origin.x),
-                "y": f32::from(button.origin.y),
-                "w": f32::from(button.size.width),
-                "h": f32::from(button.size.height),
-            })),
             // The chat the right pane's active Changes view is bound to (None:
             // not a Changes view, or the selected chat's own).
             "rightDiffTarget": self
@@ -4263,12 +4288,13 @@ impl Shell {
                 "w": f32::from(footer.size.width),
                 "h": f32::from(footer.size.height),
             })),
-            "footerButtons": geometry.footer_buttons.iter().map(|(id, button)| json!({
-                "id": id,
-                "x": f32::from(button.origin.x),
-                "y": f32::from(button.origin.y),
-                "w": f32::from(button.size.width),
-                "h": f32::from(button.size.height),
+            // Each group's tab strip in the bottom row, by pane id.
+            "strips": geometry.strips.iter().map(|(pane, strip)| json!({
+                "pane": pane,
+                "x": f32::from(strip.origin.x),
+                "y": f32::from(strip.origin.y),
+                "w": f32::from(strip.size.width),
+                "h": f32::from(strip.size.height),
             })).collect::<Vec<_>>(),
             // The app-wide reduced-motion flag (from the system setting):
             // under it, width changes land without a transition.

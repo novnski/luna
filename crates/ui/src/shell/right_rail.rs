@@ -852,8 +852,10 @@ impl Shell {
                         theme,
                     )
                     .aria_label("Review changes")
+                    .relative()
                     .child(crate::button::glyph(icons::GIT_DIFF, ControlSize::Sm))
                     .child("Review changes")
+                    .children(self.right_probe_child(|| "overview-review".into()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.add_diff_surface_for(review_chat.clone(), cx);
                     })),
@@ -867,8 +869,10 @@ impl Shell {
                         theme,
                     )
                     .aria_label("Commit and push (preview first)")
+                    .relative()
                     .child(crate::button::glyph(icons::CHECK, ControlSize::Sm))
                     .child("Commit & push…")
+                    .children(self.right_probe_child(|| "overview-commit".into()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(changes) = this.add_diff_surface_for(commit_chat.clone(), cx) {
                             changes.update(cx, |changes, cx| changes.open_git_actions(cx));

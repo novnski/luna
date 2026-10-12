@@ -1,17 +1,18 @@
-//! Painting the workbench: the inset canvas, the split tree, each group's
-//! tab strip and selected chat, the drag ghost and drop preview, dividers,
-//! the empty-group affordances, the tab menu and the frame's bottom row.
+//! Painting the workbench: the inset canvas, the split tree with each
+//! group's selected chat, the frame's bottom row of tab strips (one per
+//! group, under its own column), the drag ghost and drop preview, dividers,
+//! the empty-group affordances and the tab menu.
 //!
 //! Geometry is measured at paint into [`Geometry`] (window coordinates), so
 //! pointer hit-testing between frames uses exactly what was drawn.
 
 use super::*;
 use crate::motion::AnimationExt as _;
+use crate::popover::TooltipAboveExt as _;
 
-/// Height of a group's tab strip; the body starts below it.
-/// The same height as the sidebars' surface toolbars, so the canvas tab
-/// strip and the right sidebar's control row read as one aligned band.
-pub(in crate::shell) const STRIP_HEIGHT: f32 = crate::surface_chrome::HEADER_HEIGHT;
+/// Height of the frame's bottom row, where every group's tab strip sits
+/// under its own column, outside the canvas.
+pub(in crate::shell) const STRIP_HEIGHT: f32 = 36.0;
 /// Width of the fade at an overflowing tab strip's edges.
 const TAB_STRIP_EDGE_FADE: f32 = 24.0;
 const TAB_HEIGHT: f32 = 28.0;
@@ -22,12 +23,6 @@ const TAB_MIN_WIDTH: f32 = 72.0;
 const STRIP_COMPACT_WIDTH: f32 = 220.0;
 const TAB_MIN_WIDTH_COMPACT: f32 = 40.0;
 const TAB_MAX_WIDTH: f32 = 220.0;
-/// Below this frame-row width the Git actions show as icon buttons.
-const FOOTER_COMPACT_WIDTH: f32 = 360.0;
-/// Below this frame-row width (points at the 16 px Interface size) the new
-/// thread's machine and checkout chips show only their glyphs; the project
-/// and branch keep their labels (the branch truncating if it must).
-const TARGET_FOOTER_COMPACT_WIDTH: f32 = 560.0;
 /// The canvas sits this far inside the frame (left/right/bottom).
 const CANVAS_INSET: f32 = 8.0;
 const CANVAS_RADIUS: f32 = 14.0;
@@ -39,8 +34,6 @@ const CANVAS_RADIUS: f32 = 14.0;
 pub(in crate::shell) const VIEWPORT_INSET: f32 = 6.0;
 /// The directional overflow fade at a viewport edge with more content.
 const OVERFLOW_FADE: f32 = 28.0;
-/// The frame's bottom row (checkout/branch, Git entry point).
-const FRAME_FOOTER_HEIGHT: f32 = 32.0;
 /// Divider hit target, centred on the 1px seam (one splitter recipe with
 /// the sidebar seams, audit SH-18).
 const DIVIDER_HIT: f32 = 10.0;
@@ -139,135 +132,6 @@ fn overflow_fades(scroll: &gpui::ScrollHandle, theme: &Theme) -> Vec<AnyElement>
         );
     }
     fades
-}
-
-/// A read-only frame-row label: a 12 pt glyph and the row's 11.5 pt text in
-/// the readable muted ink (the new thread's target chips share these
-/// metrics). `measure` records it for QA readback.
-fn footer_label(
-    path: &'static str,
-    text: SharedString,
-    muted: gpui::Hsla,
-    measure: Option<Rc<RefCell<Geometry>>>,
-) -> gpui::Div {
-    let key = text.to_string();
-    div()
-        .relative()
-        .min_w_0()
-        .flex_shrink(1.0)
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(crate::typography::ui_rems(5.0))
-        .child(
-            icon(path)
-                .size(crate::typography::ui_rems(12.0))
-                .flex_none()
-                .text_color(muted),
-        )
-        .child(div().min_w_0().truncate().child(text))
-        .when_some(measure, |label, measure| {
-            label.child(
-                gpui::canvas(
-                    move |bounds, _, _| {
-                        measure
-                            .borrow_mut()
-                            .footer_labels
-                            .push((key.clone(), bounds));
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
-        })
-}
-
-/// The frame row's read-only thread context: who (a non-Main tab), then
-/// the checkout kind and branch. It shrinks and truncates first; the Git
-/// actions keep their size.
-fn footer_context_row(
-    context: &FooterContext,
-    theme: &Theme,
-    measure: Option<Rc<RefCell<Geometry>>>,
-) -> gpui::Div {
-    let muted = theme.readable_muted(0.7);
-    div()
-        .flex_1()
-        .min_w_0()
-        .overflow_hidden()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(12.0))
-        .when_some(context.who.clone(), |el, who| {
-            el.child(
-                div()
-                    .min_w_0()
-                    .flex_shrink(1.0)
-                    .max_w(px(260.0))
-                    .truncate()
-                    .text_color(theme.text_muted)
-                    .child(who),
-            )
-        })
-        .when_some(context.checkout, |el, (path, text)| {
-            el.child(footer_label(path, text.into(), muted, measure.clone()))
-        })
-        .when_some(context.branch.clone(), |el, branch| {
-            el.child(footer_label(icons::GIT_BRANCH, branch, muted, measure))
-        })
-}
-
-/// The face of a frame-row Git action (Review changes, Commit & push…):
-/// outlined, 22 pt, its label dropped when the row is compact.
-fn footer_button_face(
-    glyph: &'static str,
-    text: &'static str,
-    compact: bool,
-    theme: &Theme,
-) -> gpui::Div {
-    div()
-        .h(crate::typography::ui_rems(22.0))
-        .px(crate::typography::ui_rems(8.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(crate::typography::ui_rems(5.0))
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            icon(glyph)
-                .size(crate::typography::ui_rems(12.0))
-                .text_color(theme.readable_muted(0.7)),
-        )
-        .when(!compact, |button| button.child(text))
-}
-
-/// The departing copy of a working thread's row while the route has
-/// already moved to a new thread: its context and inert Git action faces.
-fn footer_thread_layer(context: &FooterContext, theme: &Theme) -> gpui::Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(12.0))
-        .child(footer_context_row(context, theme, None))
-        .when(context.git, |row| {
-            row.child(footer_button_face(
-                icons::GIT_BRANCH,
-                "Review changes",
-                context.compact,
-                theme,
-            ))
-            .child(footer_button_face(
-                icons::CHECK,
-                "Commit & push…",
-                context.compact,
-                theme,
-            ))
-        })
 }
 
 /// The contained content plane every main route shares: below the overlaid
@@ -388,20 +252,6 @@ pub(in crate::shell) fn min_tree_size(node: &model::Node) -> (f32, f32) {
     }
 }
 
-/// The strip and body of a measured pane.
-pub(in crate::shell) fn pane_regions(bounds: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
-    let strip_height = px(STRIP_HEIGHT).min(bounds.size.height);
-    let strip = Bounds {
-        origin: bounds.origin,
-        size: gpui::size(bounds.size.width, strip_height),
-    };
-    let body = Bounds {
-        origin: gpui::point(bounds.origin.x, bounds.origin.y + strip_height),
-        size: gpui::size(bounds.size.width, bounds.size.height - strip_height),
-    };
-    (strip, body)
-}
-
 /// A split node's fields, borrowed.
 struct SplitView<'a> {
     id: &'a str,
@@ -482,9 +332,9 @@ impl Shell {
     }
 
     /// The new-chat canvas (no chat selected) in the same inset frame as
-    /// the workbench: one canvas, no tab strip, and the frame row holding
-    /// the new thread's target pickers, so the canvas keeps its geometry
-    /// when the first send opens the chat.
+    /// the workbench: one canvas and an empty bottom row (a new thread has
+    /// no tabs; its target pickers sit above its prompt), so the canvas
+    /// keeps its geometry when the first send opens the chat.
     pub(in crate::shell) fn render_canvas_frame(
         &mut self,
         window: &mut Window,
@@ -496,10 +346,8 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let canvas_fill = theme.canvas_fill();
         let width = (main_content_width - 2.0 * CANVAS_INSET).max(0.0);
-        // Renders (and ticks the composer's route clock) before the row
-        // reads it.
         let body = self.render_main(window, width, transcript_width.min(width), 0.0, cx);
-        let footer = self.render_new_thread_footer(&theme, cx);
+        let footer = self.render_empty_tab_row();
         let canvas_geometry = self.workbench.geometry.clone();
         div()
             .id("workbench-frame")
@@ -537,49 +385,21 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The new thread's frame row. On the left, its target pickers
-    /// (machine, project, checkout kind, branch), where a working thread
-    /// names its checkout and branch; nothing on the right, since there is
-    /// no task yet to review or commit. Across the route change the two
-    /// rows crossfade on the composer's route clock: the departing thread's
-    /// context fades out first, then the pickers fade in (the reverse of
-    /// [`Self::render_workbench_footer`]).
-    fn render_new_thread_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let dock = self.composer_dock.borrow().frame;
-        let (target, departing) = (dock.selectors(), dock.footer());
-        let has_projects = !self.state.read(cx).spaces.is_empty();
-        self.workbench.geometry.borrow_mut().footer_buttons.clear();
-        self.workbench.geometry.borrow_mut().footer_labels.clear();
-        let compact = self.target_footer_compact(theme);
-        let pickers = self.composer.read(cx).pickers().clone();
-        let targets = (has_projects && target > 0.0).then(|| {
-            pickers.update(cx, |pickers, cx| {
-                pickers.render_target_footer(true, compact, cx)
-            })
-        });
-        if targets.is_none() {
-            pickers.update(cx, |pickers, cx| pickers.release_target_footer(cx));
+    /// The bottom row with no tabs (the new thread): it keeps the row's
+    /// height so the canvas does not move when the first send opens the
+    /// chat and its tabs arrive.
+    fn render_empty_tab_row(&mut self) -> AnyElement {
+        {
+            let mut geometry = self.workbench.geometry.borrow_mut();
+            geometry.strips.clear();
         }
-        let leaving = self
-            .workbench
-            .footer_context
-            .clone()
-            .filter(|_| departing > 0.0);
         let row_geometry = self.workbench.geometry.clone();
         div()
             .id("workbench-footer")
             .relative()
-            .h(px(FRAME_FOOTER_HEIGHT))
+            .h(px(STRIP_HEIGHT))
             .flex_none()
             .w_full()
-            // The chips carry their own side padding: their glyphs line up
-            // with the thread's labels, their hover plate with the canvas.
-            .pr(px(6.0))
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_size(crate::typography::ui_rems(11.5))
-            .text_color(theme.readable_muted(0.7))
             .child(
                 gpui::canvas(
                     move |bounds, _, _| {
@@ -590,45 +410,12 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             )
-            .when_some(targets, |row, targets| {
-                row.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .opacity(target)
-                        .child(targets),
-                )
-            })
-            .when_some(leaving, |row, context| {
-                row.child(
-                    footer_thread_layer(&context, theme)
-                        .absolute()
-                        .inset_0()
-                        .px(px(6.0))
-                        .opacity(departing),
-                )
-            })
             .into_any_element()
     }
 
-    /// Whether the frame row is too narrow for every target label: the
-    /// machine and checkout chips then show only their glyphs.
-    fn target_footer_compact(&self, theme: &Theme) -> bool {
-        self.workbench
-            .geometry
-            .borrow()
-            .footer
-            .is_some_and(|footer| {
-                f32::from(footer.size.width) < TARGET_FOOTER_COMPACT_WIDTH * theme.ui_scale()
-            })
-    }
-
     /// The center column on the chat route with a selected chat: the inset
-    /// canvas holding the split tree, and the frame's bottom row.
+    /// canvas holding the split tree, and the frame's bottom row with each
+    /// group's tabs under its own column.
     pub(in crate::shell) fn render_workbench(
         &mut self,
         window: &mut Window,
@@ -668,7 +455,6 @@ impl Shell {
         let notice = self.render_workbench_notice(&theme, cx);
         let canvas = div()
             .id("workbench-canvas")
-            .track_focus(&self.workbench.focus)
             .role(gpui::Role::Group)
             .aria_label(SharedString::from(format!(
                 "Chat workbench: {} open",
@@ -687,12 +473,6 @@ impl Shell {
             .on_drag_move(cx.listener(Self::on_workbench_tab_drag))
             .on_drag_move(cx.listener(Self::on_related_row_drag))
             .on_drag_move(cx.listener(Self::on_workbench_divider_drag))
-            .on_drop(cx.listener(|this, drag: &WorkbenchTabDrag, window, cx| {
-                this.drop_workbench_tab(drag, window, cx)
-            }))
-            .on_drop(cx.listener(|this, drag: &SidebarChatDrag, window, cx| {
-                this.drop_related_row(drag, window, cx)
-            }))
             .child(
                 gpui::canvas(
                     move |bounds, _, _| canvas_geometry.borrow_mut().canvas = Some(bounds),
@@ -736,7 +516,7 @@ impl Shell {
                     .children(preview),
             )
             .children(notice);
-        let footer = self.render_workbench_footer(&layout, &theme, cx);
+        let footer = self.render_workbench_tab_row(&frame, window, cx);
         // Any press anywhere starts a new pointer gesture, so an earlier
         // Escape no longer applies, and a press outside the canvas leaves it
         // (see `workbench_focus_vanished`). A window-level listener, not a
@@ -768,10 +548,189 @@ impl Shell {
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
             .px(px(CANVAS_INSET))
+            // The workbench's keyboard scope: the canvas and its bottom row
+            // of tabs (a focused tab is in the workbench, in its group).
+            .track_focus(&self.workbench.focus)
+            // Drops land on the canvas (a group's body) or on the bottom
+            // row (a group's strip): the frame holds both. A drop needs the
+            // pointer over its element; drag moves reach the canvas anyway.
+            .on_drop(cx.listener(|this, drag: &WorkbenchTabDrag, window, cx| {
+                this.drop_workbench_tab(drag, window, cx)
+            }))
+            .on_drop(cx.listener(|this, drag: &SidebarChatDrag, window, cx| {
+                this.drop_related_row(drag, window, cx)
+            }))
             .child(gesture_reset)
             .child(canvas)
             .child(footer)
             .into_any_element()
+    }
+
+    /// The frame's bottom row: every group's tab strip, laid out as the
+    /// split tree is. Side-by-side groups keep their saved ratio (and the
+    /// seam between them), so each strip sits under its own column; stacked
+    /// groups share their column's slot, the upper group first. The row's
+    /// side padding matches the canvas viewport's inset, so the columns line
+    /// up exactly. It fades in with the docked composer's thread chrome when
+    /// the first send opens the chat.
+    fn render_workbench_tab_row(
+        &mut self,
+        frame: &Frame,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let layout = &frame.layout;
+        // The route clock ticks only while a pane renders Main's own
+        // composer (`render_main`). With Main out of view (another tab active
+        // in every group) it holds whatever frame it last had, even the new
+        // thread the window opened on, so the row then shows as settled.
+        let main_shown = model::panes(layout)
+            .iter()
+            .any(|pane| pane.active_chat_id == Some(layout.main_chat_id.as_str()));
+        let dock = self.composer_dock.borrow().frame;
+        let opacity = if main_shown && dock.docked {
+            dock.footer()
+        } else {
+            1.0
+        };
+        let strips = self.render_workbench_strip_node(&layout.root, frame, 1.0, window, cx);
+        let row_geometry = self.workbench.geometry.clone();
+        div()
+            .id("workbench-footer")
+            .relative()
+            .h(px(STRIP_HEIGHT))
+            .flex_none()
+            .w_full()
+            .px(px(VIEWPORT_INSET))
+            .flex()
+            .flex_row()
+            .opacity(opacity)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        row_geometry.borrow_mut().footer = Some(bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(strips)
+            .into_any_element()
+    }
+
+    /// One node of the bottom row (see [`Self::render_workbench_tab_row`]).
+    /// `share` is the node's width share of the row, for the compact strip.
+    fn render_workbench_strip_node(
+        &mut self,
+        node: &model::Node,
+        frame: &Frame,
+        share: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match node {
+            model::Node::Pane { .. } => match model::as_pane(node) {
+                Some(pane) => {
+                    let focused = frame.multi && frame.layout.focused_pane_id == pane.id;
+                    let strip = self.render_workbench_strip(pane, frame, focused, share, cx);
+                    let scope = self.workbench_strip_focus(pane.id, window, cx);
+                    let focus_pane = pane.id.to_string();
+                    let pane_focused = frame.layout.focused_pane_id == pane.id;
+                    div()
+                        .id(SharedString::from(format!("wb-strip-scope-{}", pane.id)))
+                        .size_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        // Keyboard focus on a tab or strip control is in this
+                        // group, as anywhere in its pane is.
+                        .track_focus(&scope)
+                        // A press on the strip focuses its group, like one
+                        // in its pane (controls still get their own press).
+                        .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
+                            if !pane_focused {
+                                this.workbench_pane_focused(&focus_pane, cx);
+                            }
+                        }))
+                        .child(strip)
+                        .into_any_element()
+                }
+                None => Empty.into_any_element(),
+            },
+            model::Node::Split {
+                id,
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let horizontal = *axis == model::Axis::Horizontal;
+                let ratio = if horizontal {
+                    self.workbench_split_ratio(id, *ratio)
+                } else {
+                    0.5
+                };
+                let first =
+                    self.render_workbench_strip_node(first, frame, share * ratio, window, cx);
+                let second = self.render_workbench_strip_node(
+                    second,
+                    frame,
+                    share * (1.0 - ratio),
+                    window,
+                    cx,
+                );
+                // The canvas seam carried into the row: a short hairline at
+                // the same x for side-by-side groups.
+                let seam = div()
+                    .flex_none()
+                    .w(px(SPLIT_SEAM))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(TAB_HEIGHT - 8.0))
+                            .bg(frame.theme.hairline(0.10)),
+                    );
+                div()
+                    .size_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_row()
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .w(gpui::relative(ratio))
+                            .child(first),
+                    )
+                    .child(seam)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(second),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
+    /// A split's ratio as drawn: the live divider drag's, else the saved
+    /// one, bounded as the reducer bounds it.
+    fn workbench_split_ratio(&self, split_id: &str, saved: f64) -> f32 {
+        self.workbench
+            .resize
+            .as_ref()
+            .filter(|(id, _)| id == split_id)
+            .map(|(_, ratio)| *ratio)
+            .unwrap_or(saved as f32)
+            .clamp(model::RATIO_MIN, model::RATIO_MAX)
     }
 
     fn render_workbench_node(
@@ -819,13 +778,10 @@ impl Shell {
             .workbench
             .resize
             .as_ref()
-            .filter(|(id, _)| id == split.id)
-            .map(|(_, ratio)| *ratio);
+            .is_some_and(|(id, _)| id == split.id);
         // The saved (or live-dragged) ratio as is: groups scale with the
         // window in their saved proportions, and nothing is written.
-        let ratio = live
-            .unwrap_or(split.ratio as f32)
-            .clamp(model::RATIO_MIN, model::RATIO_MAX);
+        let ratio = self.workbench_split_ratio(split.id, split.ratio);
         let first = self.render_workbench_node(split.first, frame, window, cx);
         let second = self.render_workbench_node(split.second, frame, window, cx);
         let theme = &frame.theme;
@@ -835,7 +791,7 @@ impl Shell {
         let release_out_id = split.id.to_string();
         let press_split = split.id.to_string();
         let group: SharedString = format!("wb-divider-{}", split.id).into();
-        let active = live.is_some();
+        let active = live;
         let seam = theme.hairline(0.08);
         // Hover raises a neutral hairline; only a live drag takes the accent.
         let hover_seam = theme.hairline(0.18);
@@ -982,8 +938,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let main = frame.layout.main_chat_id.clone();
-        let focused = frame.multi && frame.layout.focused_pane_id == pane.id;
-        let strip = self.render_workbench_strip(pane, frame, focused, cx);
         // The active chat's board strip (ticket badge and status control,
         // reviewer badge, related-ticket receipts); nothing for an
         // ordinary chat.
@@ -1068,7 +1022,6 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             )
-            .child(strip)
             .children(board_strip)
             .child(
                 div()
@@ -1092,11 +1045,15 @@ impl Shell {
         }
     }
 
+    /// A group's tab strip in the frame's bottom row: its tabs, then its
+    /// `+`, split and close-group controls (Group actions when narrow).
+    /// `share` is its width share of the row.
     fn render_workbench_strip(
         &mut self,
         pane: model::PaneRef<'_>,
         frame: &Frame,
         pane_focused: bool,
+        share: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = frame.theme.clone();
@@ -1105,10 +1062,8 @@ impl Shell {
             let tabs = geometry.tabs.entry(pane.id.to_string()).or_default();
             tabs.resize(pane.tabs.len(), (String::new(), Bounds::default()));
         }
-        // This frame's group width (saved share of the current viewport).
-        let compact = pane_width_share(&frame.layout.root, pane.id)
-            .map(|share| viewport_width_in(frame.main_content_width) * share)
-            .is_some_and(|width| width < STRIP_COMPACT_WIDTH);
+        // This frame's strip width (its share of the current row).
+        let compact = viewport_width_in(frame.main_content_width) * share < STRIP_COMPACT_WIDTH;
         let tab_scroll = self.workbench_tab_scroll(pane, cx);
         let tab_min = if compact {
             TAB_MIN_WIDTH_COMPACT
@@ -1179,7 +1134,7 @@ impl Shell {
             .and_then(|preview| match &preview.target {
                 DropTarget::Strip { pane_id, index } if pane_id == pane.id => {
                     let geometry = self.workbench.geometry.borrow();
-                    let strip_left = geometry.panes.get(pane.id)?.origin.x;
+                    let strip_left = geometry.strips.get(pane.id)?.origin.x;
                     let tabs = geometry.visible_tabs(pane.id);
                     let dragged = self.workbench.dragging.as_deref();
                     let from = tabs
@@ -1366,6 +1321,8 @@ impl Shell {
         let accent = theme.accent;
         let view_geometry = self.workbench.geometry.clone();
         let view_pane = pane_id.clone();
+        let strip_geometry = self.workbench.geometry.clone();
+        let strip_pane = pane_id.clone();
         div()
             .id(SharedString::from(format!("wb-strip-{}", pane_id)))
             .relative()
@@ -1376,11 +1333,22 @@ impl Shell {
             .flex_row()
             .items_center()
             .gap(px(if compact { 2.0 } else { 4.0 }))
-            .pl(px(if compact { 2.0 } else { 6.0 }))
-            .pr(px(if compact { 2.0 } else { 6.0 }))
-            // No rule under the strip: the tabs, the selected tab's fill
-            // and the chat's own context line read as one header of the
-            // conversation below (only the split seam separates chats).
+            .pl(px(if compact { 2.0 } else { 4.0 }))
+            .pr(px(if compact { 2.0 } else { 4.0 }))
+            // The whole strip, for drops on it (window coordinates).
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        strip_geometry
+                            .borrow_mut()
+                            .strips
+                            .insert(strip_pane.clone(), bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 // The visible tab viewport (measured outside the scrolled
                 // content): tabs scrolled past it are clipped for hits.
@@ -1656,7 +1624,8 @@ impl Shell {
                 el.hover_wash(format!("wb-tab-{}", tab.chat_id))
             })
             .when(dragging, |el| el.opacity(0.6))
-            .tooltip(move |_, cx| {
+            // The strip sits at the window's bottom: help opens above it.
+            .tooltip_above(move |_, cx| {
                 crate::pickers::ControlTooltip::view(
                     tooltip_title.clone(),
                     Some(tooltip_details.clone()),
@@ -1896,7 +1865,7 @@ impl Shell {
         let rect: Bounds<Pixels> = match &preview.target {
             // The insertion marker in the strip is the preview.
             DropTarget::Strip { .. } => return None,
-            DropTarget::Join { pane_id } => pane_regions(*geometry.panes.get(pane_id.as_str())?).1,
+            DropTarget::Join { pane_id } => *geometry.panes.get(pane_id.as_str())?,
             DropTarget::Split {
                 node_id,
                 edge,
@@ -1905,7 +1874,7 @@ impl Shell {
                 let base = if *outer {
                     root
                 } else {
-                    pane_regions(*geometry.panes.get(node_id.as_str())?).1
+                    *geometry.panes.get(node_id.as_str())?
                 };
                 half(base, *edge)
             }
@@ -2142,295 +2111,6 @@ impl Shell {
         )
     }
 
-    /// The frame's bottom row: the focused chat's checkout and branch on the
-    /// left; on the right the existing Git entry point for that same
-    /// checkout (it never acts on a chat that is not the one named here).
-    /// Arriving from a new thread, its target pickers (inert now: the target
-    /// is fixed) fade out first on the composer's route clock, then this
-    /// row fades in, so the two never show at once.
-    fn render_workbench_footer(
-        &mut self,
-        layout: &Layout,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let focused = layout
-            .focused_chat_id()
-            .unwrap_or(layout.main_chat_id.as_str())
-            .to_string();
-        let (who, checkout, branch, has_checkout, change_request) = {
-            let state = self.state.read(cx);
-            let chat = state.chats.iter().find(|chat| chat.id == focused);
-            let space = chat.and_then(|chat| state.space_for_chat(chat));
-            let worktree = chat
-                .and_then(|chat| chat.cwd.as_deref())
-                .zip(space.map(|space| space.path.as_str()))
-                .is_some_and(|(cwd, root)| cwd != root);
-            let checkout = space.filter(|space| space.git_detected).map(|_| {
-                if worktree {
-                    (icons::FOLDER_WITH_FILES, "Worktree")
-                } else {
-                    (icons::FOLDER, "Local checkout")
-                }
-            });
-            let branch = chat
-                .and_then(|chat| crate::change_requests::conversation_branch(chat, &state.spaces))
-                .map(str::trim)
-                .filter(|branch| !branch.is_empty())
-                .map(SharedString::from);
-            let has_checkout = chat.is_some_and(|chat| chat.cwd.is_some());
-            let (role, _) = tab_role(state, &layout.main_chat_id, &TabRef::chat(focused.clone()));
-            let who: Option<SharedString> = (role != TabRole::Main).then(|| {
-                let title = tab_title(state, &TabRef::chat(focused.clone()), role);
-                if title.as_ref() == role.display()
-                    || title
-                        .as_ref()
-                        .starts_with(&format!("{} · ", role.display()))
-                {
-                    title
-                } else {
-                    format!("{} · {}", role.display(), title).into()
-                }
-            });
-            (
-                who,
-                checkout,
-                branch,
-                has_checkout,
-                chat.and_then(|chat| state.change_request_for_chat(chat).cloned()),
-            )
-        };
-        let muted = theme.readable_muted(0.7);
-        // Too narrow for labelled actions (both sidebars open on a small
-        // window): icon buttons, still named by their tooltip and label.
-        let footer_width = self
-            .workbench
-            .geometry
-            .borrow()
-            .footer
-            .map(|footer| f32::from(footer.size.width));
-        let compact = footer_width.is_some_and(|width| width < FOOTER_COMPACT_WIDTH);
-        let context = FooterContext {
-            who: who.clone(),
-            checkout,
-            branch,
-            git: has_checkout,
-            compact,
-        };
-        self.workbench.footer_context = Some(context.clone());
-        // The route clock ticks only while a pane renders Main's own
-        // composer (`render_main`). With Main out of view (another tab active
-        // in every group) it holds whatever frame it last had, even the new
-        // thread the window opened on, so the row then shows the thread.
-        let main_shown = model::panes(layout)
-            .iter()
-            .any(|pane| pane.active_chat_id == Some(layout.main_chat_id.as_str()));
-        let dock = self.composer_dock.borrow().frame;
-        let (target, thread) = if main_shown && dock.docked {
-            (dock.selectors(), dock.footer())
-        } else {
-            (0.0, 1.0)
-        };
-        let thread_shown = thread > 0.0;
-        // Both act on the FOCUSED chat's own checkout through the existing
-        // Changes/Git workflow, bound to that chat (never the selection);
-        // their labels name the chat when it is not Main.
-        let target_name: SharedString = who.unwrap_or_else(|| SharedString::from("Main"));
-        let footer_geometry = self.workbench.geometry.clone();
-        let footer_button = |id: &'static str,
-                             glyph: &'static str,
-                             text: &'static str,
-                             label: SharedString| {
-            let measure = footer_geometry.clone();
-            footer_button_face(glyph, text, compact, theme)
-                .id(id)
-                .role(gpui::Role::Button)
-                .aria_label(label.clone())
-                .tab_index(0)
-                .cursor_pointer()
-                .hover_wash(id)
-                .on_key_down(crate::swallow_activation_key)
-                .tooltip(move |_, cx| crate::pickers::ControlTooltip::view(label.clone(), None, cx))
-                .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-                .relative()
-                .child(
-                    gpui::canvas(
-                        move |bounds, _, _| {
-                            measure
-                                .borrow_mut()
-                                .footer_buttons
-                                .insert(id.to_string(), bounds);
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-        };
-        let review_chat = focused.clone();
-        let commit_chat = focused.clone();
-        let git: Option<[AnyElement; 2]> = (has_checkout && thread_shown).then(|| {
-            [
-                footer_button(
-                    "wb-footer-review",
-                    icons::GIT_BRANCH,
-                    "Review changes",
-                    format!("Review changes in {target_name}'s checkout").into(),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.add_diff_surface_for(review_chat.clone(), cx);
-                }))
-                .into_any_element(),
-                footer_button(
-                    "wb-footer-commit",
-                    icons::CHECK,
-                    "Commit & push…",
-                    format!("Commit and push from {target_name}'s checkout (preview first)").into(),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(changes) = this.add_diff_surface_for(commit_chat.clone(), cx) {
-                        changes.update(cx, |changes, cx| changes.open_git_actions(cx));
-                    }
-                }))
-                .into_any_element(),
-            ]
-        });
-        // Balance panes: global to the layout, so it leads the row; only
-        // with a split (a single group has nothing to balance).
-        let balance = (thread_shown && model::has_split(layout)).then(|| {
-            let measure = self.workbench.geometry.clone();
-            div()
-                .id("wb-balance-panes")
-                .role(gpui::Role::Button)
-                .aria_label(
-                    "Balance panes: make every group the same size, keeping the arrangement",
-                )
-                .tab_index(0)
-                .relative()
-                .size(px(22.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(gpui::transparent_black())
-                .cursor_pointer()
-                .hover_wash("wb-balance-panes")
-                .focus_visible({
-                    let ring = theme.focus_ring();
-                    move |style| crate::theme::focus_ring(style, ring)
-                })
-                .on_key_down(crate::swallow_activation_key)
-                .tooltip(|_, cx| {
-                    crate::pickers::ControlTooltip::view(
-                        "Balance panes",
-                        Some("Every group the same size; the arrangement stays.".into()),
-                        cx,
-                    )
-                })
-                .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-                .on_click(cx.listener(|this, _, _, cx| this.workbench_balance_panes(cx)))
-                .child(icon(icons::WIDGET).size(px(13.0)).text_color(muted))
-                .child(
-                    gpui::canvas(
-                        move |bounds, _, _| measure.borrow_mut().balance = Some(bounds),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-        });
-        {
-            let mut geometry = self.workbench.geometry.borrow_mut();
-            if balance.is_none() {
-                geometry.balance = None;
-            }
-            if git.is_none() {
-                geometry.footer_buttons.clear();
-            }
-            geometry.footer_labels.clear();
-        }
-        // The departing new thread's target, inert.
-        let compact_targets = self.target_footer_compact(theme);
-        let pickers = self.composer.read(cx).pickers().clone();
-        let targets = (target > 0.0).then(|| {
-            pickers.update(cx, |pickers, cx| {
-                pickers.render_target_footer(false, compact_targets, cx)
-            })
-        });
-        if targets.is_none() {
-            pickers.update(cx, |pickers, cx| pickers.release_target_footer(cx));
-        }
-        let row_geometry = self.workbench.geometry.clone();
-        let label_geometry = self.workbench.geometry.clone();
-        div()
-            .id("workbench-footer")
-            .relative()
-            .h(px(FRAME_FOOTER_HEIGHT))
-            .flex_none()
-            .w_full()
-            .text_size(crate::typography::ui_rems(11.5))
-            .text_color(muted)
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| {
-                        row_geometry.borrow_mut().footer = Some(bounds);
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
-            .when(thread_shown, |row| {
-                row.child(
-                    div()
-                        .size_full()
-                        .px(px(6.0))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(12.0))
-                        .opacity(thread)
-                        .children(balance)
-                        .child(footer_context_row(&context, theme, Some(label_geometry)))
-                        .when_some(change_request, |el, summary| {
-                            el.child(crate::change_requests::pull_request_badge(
-                                "workbench-pull-request".into(),
-                                summary,
-                                crate::change_requests::ChangeRequestBadgeSurface::Composer,
-                                theme,
-                            ))
-                        })
-                        .children(git.into_iter().flatten()),
-                )
-            })
-            .when_some(targets, |row, targets| {
-                row.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .pr(px(6.0))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .opacity(target)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .child(targets),
-                        ),
-                )
-            })
-            .into_any_element()
-    }
-
-    /// The tab context menu: explicit alternatives to every drag gesture.
     pub(in crate::shell) fn render_workbench_menu(
         &self,
         cx: &mut Context<Self>,
@@ -2593,6 +2273,18 @@ impl Shell {
                 },
             )));
         }
+        // Balance panes: global to the layout, offered only with a split (a
+        // single group has nothing to balance).
+        if model::has_split(&layout) {
+            card = card.child(popover::menu_separator()).child(
+                row("wb-menu-balance", icons::WIDGET, "Balance panes").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.close_workbench_menu(cx);
+                        this.workbench_balance_panes(cx);
+                    },
+                )),
+            );
+        }
         if reopen {
             card = card.child(popover::menu_separator()).child(
                 row("wb-menu-reopen", icons::RESTART, "Reopen closed tab").on_click(cx.listener(
@@ -2667,7 +2359,8 @@ impl Shell {
                 })),
             );
         }
-        Some(popover::menu_at(
+        // Opened from the bottom row: the menu rises from the pointer.
+        Some(popover::menu_above(
             "workbench-tab-menu",
             menu.position,
             card.into_any_element(),
@@ -2714,7 +2407,7 @@ fn strip_button_titled(
         .cursor_pointer()
         .hover_wash(id)
         .when_some(shortcut.clone(), |el, keys| el.aria_keyshortcuts(keys))
-        .tooltip(move |_, cx| {
+        .tooltip_above(move |_, cx| {
             crate::pickers::ControlTooltip::with_shortcut(
                 label,
                 shortcut.clone(),

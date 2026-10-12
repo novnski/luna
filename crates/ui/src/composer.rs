@@ -122,10 +122,14 @@ const QUEUE_SIDE_INSET: f32 = 16.0;
 /// The composer covers the tray's lower padding so the queue reads as emerging
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
-// An unframed session's read-only checkout/ref row under its pill. Holds the
-// PR badge without overflowing the row's equal 8px top/bottom gutters. A new
-// thread has no row here: its target pickers sit in the frame's bottom row.
-const SESSION_FOOTER_HEIGHT: f32 = 24.0;
+/// The checkout row above the pill (a chat's checkout and branch, or the
+/// new thread's target pickers): the 22 pt chips plus room for the pull
+/// request badge. Points at the 16 px Interface size.
+const CONTEXT_ROW_HEIGHT: f32 = 24.0;
+/// Below this checkout-row width (points at 16 px) the new thread's machine
+/// and checkout chips show only their glyphs; the project and branch keep
+/// their labels (the branch truncating if it must).
+const TARGET_ROW_COMPACT_WIDTH: f32 = 520.0;
 
 /// Route chrome dissolves around the middle of the shared-element move. The
 /// two ramps never overlap, so the departing and arriving chrome are never
@@ -5164,9 +5168,6 @@ pub struct Composer {
     /// provisional input measurements, this changes only when the actual
     /// conversation column changes and can safely drive a follow-up render.
     last_available_width: Option<f32>,
-    /// The workbench frame's bottom row names the session's checkout and
-    /// branch, so the session footer leaves them out (drafts keep theirs).
-    frame_footer: bool,
     /// The controls row's last measured fit (fixture/diagnostic readback).
     controls_row: Option<ControlsRowMeasure>,
     /// In-flight compact↔expanded morph (one per committed flip; manual
@@ -5180,6 +5181,9 @@ pub struct Composer {
     dock_height_changed: bool,
     dock_clearance_correction: f32,
     surface_bounds: crate::new_thread_background_mask::SurfaceBounds,
+    /// The checkout row above the pill, as last painted: its width sets
+    /// the new thread's compact chips (and QA reads it back).
+    context_row_bounds: Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     last_target_height: f32,
     height_morph: Option<FlipMorph>,
     /// Monotonic clock anchor for the morph timeline.
@@ -5453,15 +5457,6 @@ impl Composer {
 
     /// Feed the stable conversation-column width into responsive composer
     /// controls.
-    /// See [`Self::frame_footer`]: the workbench frame owns the session's
-    /// checkout/branch labels while this composer renders inside it.
-    pub fn set_frame_footer(&mut self, frame_footer: bool, cx: &mut Context<Self>) {
-        if self.frame_footer != frame_footer {
-            self.frame_footer = frame_footer;
-            cx.notify();
-        }
-    }
-
     pub fn set_available_width(&mut self, width: f32, cx: &mut Context<Self>) {
         let composer_width = width.clamp(0.0, COMPOSER_MAX_WIDTH);
         if composer_width_changed(self.last_available_width, composer_width) {
@@ -5721,7 +5716,6 @@ impl Composer {
             queue_previews: HashMap::new(),
             queue_removing: HashSet::new(),
             last_available_width: None,
-            frame_footer: false,
             controls_row: None,
             flip_morph: None,
             last_rendered_height: 0.0,
@@ -5729,6 +5723,7 @@ impl Composer {
             dock_height_changed: false,
             dock_clearance_correction: 0.0,
             surface_bounds: Default::default(),
+            context_row_bounds: Default::default(),
             last_target_height: 0.0,
             height_morph: None,
             morph_clock: Instant::now(),
@@ -5841,6 +5836,34 @@ impl Composer {
         self.drafts.remove(key);
         self.draft_loaded.remove(key);
         true
+    }
+
+    /// The checkout row above the pill as last painted: its bounds, the
+    /// chat it names, its read-only labels (a chat) or target chips (the
+    /// new thread), and the pill under it (window coordinates).
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) fn fixture_context_row(&self, cx: &App) -> serde_json::Value {
+        let rect = |b: &gpui::Bounds<Pixels>| {
+            serde_json::json!([
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            ])
+        };
+        let targets = self.pickers.read(cx).fixture_target_readback(cx);
+        let state = self.state.read(cx);
+        // A goal card or queue tray sits between the row and the pill.
+        let trays = !self.binding.queue(state).is_empty()
+            || self.binding.context_control(state).goal.is_some();
+        serde_json::json!({
+            "chat": self.binding.chat_id(state),
+            "trays": trays,
+            "row": self.context_row_bounds.get().as_ref().map(rect),
+            "labels": targets["contextLabels"].clone(),
+            "chips": targets["chips"].clone(),
+            "pill": self.surface_bounds.get().as_ref().map(rect),
+        })
     }
 
     /// Text-level readback for headless fixtures and diagnostics.
@@ -13778,21 +13801,22 @@ impl Render for Composer {
         // The chat's goal rides on top of the stack (BB's goal card): a tray
         // tucked behind the queue tray or the composer, present only while a
         // goal exists or is being created.
+        // (Placed after the checkout row, below: see `context_slot`.)
         self.sync_goal_placeholder(cx);
-        let container = container.when_some(self.render_goal_card(window, cx), |el, card| {
-            el.child(motion::fade_quick(
+        let goal_card = self.render_goal_card(window, cx).map(|card| {
+            motion::fade_quick(
                 "composer-goal",
                 div()
                     .mx(px(QUEUE_SIDE_INSET))
                     .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
                     .child(card),
-            ))
+            )
         });
         // What is waiting to be sent, stacked directly above the box it was
         // typed in — the queue is a property of this composer, not a panel
         // somewhere else.
-        let container = container.when_some(self.render_queue_panel(window, cx), |el, panel| {
-            el.child(motion::fade_quick(
+        let queue_panel = self.render_queue_panel(window, cx).map(|panel| {
+            motion::fade_quick(
                 "composer-queue",
                 div()
                     .mx(px(QUEUE_SIDE_INSET))
@@ -13800,7 +13824,7 @@ impl Render for Composer {
                     // behind the composer painted after it.
                     .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
                     .child(panel),
-            ))
+            )
         });
         // Escape backs out of a queue-row edit (the row keeps its old text).
         // Bound here rather than in the input: the input's own Escape belongs
@@ -14249,55 +14273,80 @@ impl Render for Composer {
             .children(self.render_chat_reference_popup(&theme, cx))
             .children(self.render_slash_popup(&theme, cx))
             .children(self.render_stash_menu(&theme, cx));
-        let container = container.child(pill_surface);
-
-        // Nothing sits around a new thread's pill: its target pickers
-        // (machine, project, checkout, branch) live in the frame's bottom
-        // row, drawn by the shell (`Pickers::render_target_footer`), where a
-        // framed session's checkout and branch are named too. Only an
-        // unframed session (a standalone composer) keeps its read-only
-        // checkout/ref row under the pill, growing in with the session
-        // chrome. The main composer is always framed or a new thread.
-        let framed_session =
-            self.frame_footer && self.binding.chat_row(self.state.read(cx)).is_some();
-        let bottom_slot = if framed_session || self.dock_frame.is_some() {
-            0.0
+        // The checkout row above the prompt: what this composer's chat works
+        // on (read-only checkout and branch, the pull request at its end),
+        // or, on the main composer's new thread, its target pickers
+        // (machine, project, checkout, branch). The two crossfade in this
+        // one slot on the route clock and never show at once (the ramps of
+        // `route_chrome_opacities` and the dock's never overlap). Only the
+        // main (docked) composer offers the target: a pane's pickers keep
+        // any checkout menu of their own.
+        let docked_main = self.dock_frame.is_some();
+        let targets = (docked_main
+            && new_thread_chrome_opacity > 0.0
+            && !self.state.read(cx).spaces.is_empty())
+        .then(|| {
+            // The row as last painted (its width never depends on this).
+            let compact = self.context_row_bounds.get().is_some_and(|row| {
+                f32::from(row.size.width) < TARGET_ROW_COMPACT_WIDTH * theme.ui_scale()
+            });
+            self.pickers.update(cx, |pickers, cx| {
+                pickers.render_target_footer(new_chat, compact, cx)
+            })
+        });
+        if targets.is_none() && docked_main {
+            self.pickers
+                .update(cx, |pickers, cx| pickers.release_target_footer(cx));
+        }
+        let context = if session_chrome_opacity > 0.0 {
+            self.pickers
+                .update(cx, |pickers, cx| pickers.render_context_row(cx))
         } else {
-            1.0 - new_thread_chrome
+            self.pickers
+                .update(cx, |pickers, _| pickers.release_context_row());
+            None
         };
-        let container = if bottom_slot > 0.0 {
-            let footer = (session_chrome_opacity > 0.0)
-                .then(|| {
-                    self.pickers
-                        .update(cx, |pickers, cx| pickers.render_footer(cx))
-                })
-                .flatten();
-            container.child(
+        let context_slot = (targets.is_some() || context.is_some()).then(|| {
+            let layer = |opacity: f32, row: gpui::AnyElement| {
                 div()
-                    .w_full()
-                    .h(crate::typography::ui_rems(
-                        SESSION_FOOTER_HEIGHT * bottom_slot,
-                    ))
-                    .mt(px(-Theme::SPACE_SM * (1.0 - bottom_slot)))
-                    .mb(px(-Theme::SPACE_SM * bottom_slot))
-                    .relative()
-                    .when(session_chrome_opacity > 0.0, |slot| {
-                        slot.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .w_full()
-                                .h(crate::typography::ui_rems(SESSION_FOOTER_HEIGHT))
-                                .flex()
-                                .items_center()
-                                .opacity(session_chrome_opacity)
-                                .child(div().flex_1().min_w_0().children(footer)),
-                        )
-                    }),
-            )
-        } else {
-            container
-        };
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .opacity(opacity)
+                    .child(div().flex_1().min_w_0().child(row))
+            };
+            let measured = self.context_row_bounds.clone();
+            div()
+                .id("composer-context-row")
+                .relative()
+                .w_full()
+                .h(crate::typography::ui_rems(CONTEXT_ROW_HEIGHT))
+                // Close to the pill it describes: half the column gap.
+                .mb(px(-Theme::SPACE_SM / 2.0))
+                // The chips' own padding lines their glyphs up a little in
+                // from the pill's rounded edge.
+                .px(crate::typography::ui_rems(6.0))
+                .children(targets.map(|row| layer(new_thread_chrome_opacity, row)))
+                .children(context.map(|row| layer(session_chrome_opacity, row)))
+                .child(
+                    gpui::canvas(
+                        move |bounds, _, _| measured.set(Some(bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+        });
+        if context_slot.is_none() {
+            self.context_row_bounds.set(None);
+        }
+        let container = container
+            .children(context_slot)
+            .children(goal_card)
+            .children(queue_panel)
+            .child(pill_surface);
 
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
