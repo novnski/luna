@@ -372,10 +372,16 @@ else:
     # LUNA instructions it was launched with, keyed by its LUNA thread id.
     thread = os.environ.get("LUNA_THREAD_ID")
     if thread:
-        with open(os.path.join(CWD, f".luna-claude-turn-{thread}.txt"), "w") as out:
+        # Publish each file whole: tests poll for them and read them as soon
+        # as they exist.
+        turn = os.path.join(CWD, f".luna-claude-turn-{thread}.txt")
+        with open(f"{turn}.tmp", "w") as out:
             out.write(flag_value("--append-system-prompt") or "")
-        with open(os.path.join(CWD, f".luna-claude-turn-{thread}.input.json"), "w") as out:
+        os.replace(f"{turn}.tmp", turn)
+        captured = os.path.join(CWD, f".luna-claude-turn-{thread}.input.json")
+        with open(f"{captured}.tmp", "w") as out:
             json.dump(input_content, out)
+        os.replace(f"{captured}.tmp", captured)
     init_frame()
     assistant_text("ok")
     result_frame("ok")

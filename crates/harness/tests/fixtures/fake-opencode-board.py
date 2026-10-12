@@ -349,8 +349,12 @@ def run_turn(session, prompt_id, text):
         if label and MCP_URL:
             run_plan(label.group(1), session, message)
         elif TASK:
-            with open(os.path.join(CWD, f".luna-board-turn-{TASK}.txt"), "w") as out:
+            # Publish whole: a test polls for this file and reads it as soon
+            # as it exists.
+            temporary = os.path.join(CWD, f".luna-board-turn-{TASK}.txt.tmp")
+            with open(temporary, "w") as out:
                 out.write((session.get("entries") or {}).get("luna") or "")
+            os.replace(temporary, os.path.join(CWD, f".luna-board-turn-{TASK}.txt"))
     except Exception as error:  # surface fixture faults in the turn
         sys.stderr.write(f"fake-opencode-board: {error!r}\n")
     emit(session_id, "session.text.started", assistantMessageID=message, ordinal=0, text="")
