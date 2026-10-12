@@ -197,6 +197,14 @@ mod gateway {
     /// The gateway refuses loopback, so tests bind this machine's route
     /// address. The UDP connect sends nothing.
     fn lan_ip() -> IpAddr {
+        // A VPN may own the default route without accepting inbound LAN
+        // traffic. A concrete fixture interface still uses production bind
+        // rules and the real gateway; it never enables loopback.
+        if let Ok(address) = std::env::var("LUNA_REMOTE_TEST_IP") {
+            return address
+                .parse()
+                .expect("LUNA_REMOTE_TEST_IP is an IP address");
+        }
         let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
         socket
             .connect("192.0.2.1:9")
@@ -392,12 +400,13 @@ mod gateway {
         http: &reqwest::Client,
         bind: &str,
         label: &str,
+        session_ttl_secs: u64,
     ) -> IssuedSession {
         let issued: IssuedPairing = local
             .call_as(
                 methods::CREATE_REMOTE_PAIRING,
                 json!({"label": label, "scopes": ["environment-read", "tasks-read"],
-                    "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+                    "pairingTtlSecs": 300, "sessionTtlSecs": session_ttl_secs}),
             )
             .await
             .unwrap();
@@ -426,23 +435,27 @@ mod gateway {
         ticket["ticket"].as_str().unwrap().to_owned()
     }
 
-    /// The macOS application firewall (stealth mode) silently drops inbound
-    /// connections to a test binary it has not approved, even from this
-    /// machine; such a run is reported as skipped, and Linux CI runs these
-    /// tests for real. A refused connection (nothing listening) still fails.
+    /// A Mac's default VPN route or firewall may drop this probe. An
+    /// explicitly selected LAN interface and Linux CI must execute the
+    /// campaign; neither can report an unreachable gateway as a pass.
     async fn firewalled(bind: &str) -> bool {
         match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(bind))
             .await
         {
             Ok(Ok(_)) => false,
             Ok(Err(error)) => panic!("the gateway is not listening on {bind}: {error}"),
-            Err(_) => {
+            Err(_)
+                if cfg!(target_os = "macos")
+                    && std::env::var_os("LUNA_REMOTE_TEST_IP").is_none() =>
+            {
                 eprintln!(
-                    "SKIPPED: {bind} is unreachable from this unapproved test binary \
-                     (macOS application firewall); Linux CI runs this test"
+                    "SKIPPED: default-route {bind} is unreachable on this Mac \
+                     (VPN routing or application firewall); select a real LAN \
+                     interface with LUNA_REMOTE_TEST_IP or use Linux CI"
                 );
                 true
             }
+            Err(_) => panic!("the required LAN gateway probe timed out on {bind}"),
         }
     }
 
@@ -515,14 +528,102 @@ mod gateway {
             .await
             .unwrap();
         let redeem = json!({"target": issued.target, "credential": issued.credential, "clientLabel": "phone"});
+        for (field, value, reason) in [
+            (
+                "deviceId",
+                json!("another-host"),
+                "target environment mismatch",
+            ),
+            (
+                "environmentId",
+                json!("another-profile"),
+                "target environment mismatch",
+            ),
+            (
+                "workspaceScope",
+                json!("local"),
+                "target environment mismatch",
+            ),
+            (
+                "protocolVersion",
+                json!(999),
+                "remote protocol or capability mismatch",
+            ),
+        ] {
+            let mut wrong = redeem.clone();
+            wrong["target"][field] = value;
+            let (code, body) = post(&http, &bind, "/remote/v1/pair", None, &wrong).await;
+            assert_eq!(code, 403, "wrong {field}: {body}");
+            assert!(body["error"].as_str().unwrap().contains(reason), "{body}");
+        }
+        let (malformed, body) = post(
+            &http,
+            &bind,
+            "/remote/v1/pair",
+            None,
+            &json!({"target": issued.target, "credential": 42, "clientLabel": "phone"}),
+        )
+        .await;
+        assert_eq!(malformed, 400);
+        assert_eq!(body["error"], "invalid pairing request");
         let (status, session) = post(&http, &bind, "/remote/v1/pair", None, &redeem).await;
-        assert_eq!(status, 200, "{session}");
+        assert_eq!(
+            status, 200,
+            "failed target attempts did not consume the pairing"
+        );
         let session: IssuedSession = serde_json::from_value(session).unwrap();
         let (replayed, _) = post(&http, &bind, "/remote/v1/pair", None, &redeem).await;
         assert_eq!(replayed, 403, "a used credential is refused");
         let oversized = json!({"padding": "x".repeat(20_000)});
         let (too_large, _) = post(&http, &bind, "/remote/v1/pair", None, &oversized).await;
         assert_eq!(too_large, 413);
+
+        for cancelled in [true, false] {
+            let short: IssuedPairing = local
+                .call_as(
+                    methods::CREATE_REMOTE_PAIRING,
+                    json!({"label": "short", "scopes": ["environment-read"],
+                    "pairingTtlSecs": 1, "sessionTtlSecs": 3600}),
+                )
+                .await
+                .unwrap();
+            if cancelled {
+                let revoked = local
+                    .call(
+                        methods::REVOKE_REMOTE_PAIRING,
+                        json!({"id": short.pairing.id}),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(revoked["revoked"], true);
+            } else {
+                // The actual public expiry deadline, without a clock seam.
+                let remaining = short
+                    .pairing
+                    .expires_at_ms
+                    .saturating_sub(chrono::Utc::now().timestamp_millis() as u64);
+                tokio::time::sleep(Duration::from_millis(remaining + 1)).await;
+            }
+            let (code, body) = post(
+                &http,
+                &bind,
+                "/remote/v1/pair",
+                None,
+                &json!({"target": short.target, "credential": short.credential,
+                    "clientLabel": "short"}),
+            )
+            .await;
+            assert_eq!(code, 403, "cancelled={cancelled}: {body}");
+            assert!(
+                body["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pairing unavailable, expired, or already used"),
+                "{body}"
+            );
+        }
+        let recovered = pair(&local, &http, &bind, "fresh after refusals", 3600).await;
+        assert_ne!(recovered.session.id, session.session.id);
 
         let (checked, view) = post(
             &http,
@@ -539,6 +640,25 @@ mod gateway {
         );
 
         let first = ticket(&http, &bind, &session).await;
+        let mut tampered = first.clone().into_bytes();
+        let last = tampered.last_mut().unwrap();
+        *last = if *last == b'0' { b'1' } else { b'0' };
+        let tampered = String::from_utf8(tampered).unwrap();
+        match socket(&bind, &pin, &tampered, None).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), 401);
+                let body: Value =
+                    serde_json::from_slice(response.body().as_deref().unwrap()).unwrap();
+                assert!(
+                    body["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("invalid socket ticket signature"),
+                    "{body}"
+                );
+            }
+            _ => panic!("a tampered signed capability must fail at the HTTP upgrade"),
+        }
         assert!(
             socket(&bind, &pin, &first, Some("https://evil.example"))
                 .await
@@ -552,13 +672,69 @@ mod gateway {
             .await
             .unwrap();
         assert_eq!(info["deviceId"], core.device_id);
-        for (id, method) in [
-            (2, methods::LIST_REMOTE_SESSIONS),
-            (3, methods::EXECUTE_TASK_COMMAND),
+        let task = "remote-denial-task";
+        core.workspace
+            .create_chat(task, None, Some(&core.device_id), None, None)
+            .unwrap();
+        let snapshot: luna_proto::TaskCommandRead = local
+            .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId": task}))
+            .await
+            .unwrap();
+        let command_id = "remote-denied-rename";
+        let command = json!({"commandId": command_id, "taskId": task,
+            "expectedTaskRevision": snapshot.snapshot.task_revision,
+            "actorId": "forged-actor", "clientId": "forged-client",
+            "clientSessionId": "forged-session",
+            "intent": {"kind": "rename", "title": "local command still works"}});
+        for (id, method, params) in [
+            (2, methods::LIST_REMOTE_SESSIONS, json!({})),
+            (3, methods::EXECUTE_TASK_COMMAND, command.clone()),
+            (
+                5,
+                methods::MUTATE,
+                json!({"op": "renameChat", "chatId": task,
+                "title": "remote must not change this"}),
+            ),
         ] {
-            let denied = call(&mut ws, id, method, json!({})).await.unwrap_err();
+            let denied = call(&mut ws, id, method, params).await.unwrap_err();
             assert!(denied.contains("local only"), "{method}: {denied}");
         }
+        let receipt = local
+            .call(
+                methods::GET_TASK_COMMAND_RECEIPT,
+                json!({"commandId": command_id}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt,
+            Value::Null,
+            "a denied remote command creates no receipt"
+        );
+        assert!(
+            core.store
+                .local_executable_hash(task, luna_sync::LocalExecutableKind::Command, command_id)
+                .unwrap()
+                .is_none(),
+            "a denied remote command creates no executable admission"
+        );
+        assert_eq!(
+            core.workspace.chat(task).unwrap().unwrap().title,
+            None,
+            "neither denied mutation changed the task"
+        );
+        let applied = local
+            .call(methods::EXECUTE_TASK_COMMAND, command)
+            .await
+            .unwrap();
+        assert_eq!(
+            applied["status"], "applied",
+            "the refused command was valid locally: {applied}"
+        );
+        assert_eq!(
+            core.workspace.chat(task).unwrap().unwrap().title.as_deref(),
+            Some("local command still works")
+        );
         let denied = call(
             &mut ws,
             4,
@@ -572,6 +748,12 @@ mod gateway {
             socket(&bind, &pin, &first, None).await.is_err(),
             "a ticket opens one socket only"
         );
+        match socket(&bind, &pin, "malformed-ticket", None).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), 401)
+            }
+            _ => panic!("a malformed ticket must be refused at the HTTP upgrade"),
+        }
 
         core.shutdown().await;
         assert!(closed(&mut ws).await, "shutdown closes remote sockets");
@@ -594,8 +776,8 @@ mod gateway {
             return;
         }
         let http = http(&pin);
-        let a = pair(&local, &http, &bind, "phone a").await;
-        let b = pair(&local, &http, &bind, "phone b").await;
+        let a = pair(&local, &http, &bind, "phone a", 3600).await;
+        let b = pair(&local, &http, &bind, "phone b", 3600).await;
         let mut wa = socket(&bind, &pin, &ticket(&http, &bind, &a).await, None)
             .await
             .unwrap();
@@ -608,6 +790,7 @@ mod gateway {
         call(&mut wb, 1, methods::ENGINE_INFO, json!({}))
             .await
             .unwrap();
+        let outstanding = ticket(&http, &bind, &a).await;
 
         local
             .call(methods::REVOKE_REMOTE_SESSION, json!({"id": a.session.id}))
@@ -627,6 +810,28 @@ mod gateway {
         .await;
         assert_eq!(refused, 403);
 
+        // RP-06: issued capabilities retain their short lifetime, but do not
+        // bypass live-session admission after revocation.
+        let mut revoked = socket(&bind, &pin, &outstanding, None)
+            .await
+            .expect("a pre-revoke ticket still upgrades before its expiry");
+        let denied = call(&mut revoked, 1, methods::ENGINE_INFO, json!({}))
+            .await
+            .expect_err("a revoked session cannot call through an outstanding ticket");
+        assert!(
+            denied.contains("closed") || denied.contains("revoked"),
+            "{denied}"
+        );
+        assert!(closed(&mut revoked).await, "the revoked connection closes");
+        assert!(
+            socket(&bind, &pin, &outstanding, None).await.is_err(),
+            "the pre-revoke ticket was consumed exactly once"
+        );
+        local
+            .call(methods::ENGINE_INFO, json!({}))
+            .await
+            .expect("revoke leaves local work available");
+
         let status = local
             .call("SetRemoteAccess", json!({"enabled": false}))
             .await
@@ -636,8 +841,18 @@ mod gateway {
             (json!(false), json!(false))
         );
         assert!(closed(&mut wb).await, "disable closes every socket");
+        let released = std::net::TcpListener::bind(&bind)
+            .expect("disable releases the kernel listener, even behind a stealth firewall");
+        drop(released);
         assert!(
-            tokio::net::TcpStream::connect(&bind).await.is_err(),
+            !matches!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    tokio::net::TcpStream::connect(&bind)
+                )
+                .await,
+                Ok(Ok(_))
+            ),
             "the listener is gone"
         );
 
@@ -659,7 +874,7 @@ mod gateway {
     }
 
     /// RP-19: enabled remote access resumes after a restart with the same pin;
-    /// a live session still checks in and a revoked one stays refused.
+    /// a live session still checks in and revoked/expired ones stay refused.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn remote_access_resumes_after_restart_with_the_same_pin() {
         let root = tempfile::tempdir().unwrap();
@@ -675,8 +890,9 @@ mod gateway {
             return;
         }
         let http = http(&pin);
-        let live = pair(&local, &http, &bind, "kept").await;
-        let gone = pair(&local, &http, &bind, "revoked").await;
+        let live = pair(&local, &http, &bind, "kept", 3600).await;
+        let gone = pair(&local, &http, &bind, "revoked", 3600).await;
+        let expired = pair(&local, &http, &bind, "expired", 1).await;
         local
             .call(
                 methods::REVOKE_REMOTE_SESSION,
@@ -684,6 +900,11 @@ mod gateway {
             )
             .await
             .unwrap();
+        let remaining = expired
+            .session
+            .expires_at_ms
+            .saturating_sub(chrono::Utc::now().timestamp_millis() as u64);
+        tokio::time::sleep(Duration::from_millis(remaining + 1)).await;
         shutdown(core).await;
 
         let reopened = assemble(root.path());
@@ -700,7 +921,11 @@ mod gateway {
         .await
         .expect("enabled remote access resumes on start");
         assert_eq!(status["spkiSha256"], pin);
-        for (session, expected) in [(&live, 200), (&gone, 403)] {
+        assert_eq!(
+            status["target"],
+            serde_json::to_value(&live.target).unwrap()
+        );
+        for (session, expected) in [(&live, 200), (&gone, 403), (&expired, 403)] {
             let (code, _) = post(
                 &http,
                 &bind,

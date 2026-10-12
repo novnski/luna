@@ -5335,6 +5335,7 @@ dependencies = [
  "async-trait",
  "futures",
  "getrandom 0.3.4",
+ "hmac",
  "luna-doc",
  "luna-proto",
  "luna-sync",

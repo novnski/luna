@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use getrandom::fill;
+use hmac::{Hmac, Mac};
 use luna_proto::WorkspaceScope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -176,8 +177,11 @@ pub struct RemoteAuthStore {
     path: PathBuf,
     state: Mutex<State>,
     changed: watch::Sender<u64>,
-    /// Ticket hash → (session id, expiry). Never persisted.
+    /// Nonce hash → (session id, expiry). Never persisted.
     tickets: Mutex<std::collections::HashMap<String, (String, u64)>>,
+    /// One profile authority owner's epoch key. Like the ticket inventory,
+    /// it is never persisted: outstanding tickets do not survive restart.
+    ticket_signing_key: [u8; 32],
 }
 
 impl RemoteAuthStore {
@@ -218,11 +222,14 @@ impl RemoteAuthStore {
             ));
         }
         let (changed, _) = watch::channel(0);
+        let mut ticket_signing_key = [0; 32];
+        fill(&mut ticket_signing_key).map_err(|_| denied("secure random source unavailable"))?;
         Ok(Arc::new(Self {
             path,
             state: Mutex::new(state),
             changed,
             tickets: Mutex::default(),
+            ticket_signing_key,
         }))
     }
 
@@ -433,12 +440,14 @@ impl RemoteAuthStore {
         token: &str,
     ) -> Result<SocketTicket, RpcError> {
         let session = self.authenticate(target, token)?;
-        let ticket = random_secret()?;
+        let nonce = random_secret()?;
         let now = now_ms();
         let expires_at_ms = now.saturating_add(SOCKET_TICKET_TTL_MS);
+        let mac = self.socket_ticket_mac(&self.target(), &nonce, &session.id, expires_at_ms);
+        let ticket = format!("st1.{nonce}.{}", hex(&mac.finalize().into_bytes()));
         let mut tickets = lock(&self.tickets);
         tickets.retain(|_, (_, expires)| *expires > now);
-        tickets.insert(hash_secret(&ticket), (session.id, expires_at_ms));
+        tickets.insert(hash_secret(&nonce), (session.id, expires_at_ms));
         Ok(SocketTicket {
             ticket,
             expires_at_ms,
@@ -448,13 +457,55 @@ impl RemoteAuthStore {
     /// Consumes a ticket and names its session. Revocation is not checked
     /// here (owner decision); the socket checks the session on every call.
     pub fn redeem_socket_ticket(&self, ticket: &str) -> Result<String, RpcError> {
-        let (session, expires_at_ms) = lock(&self.tickets)
-            .remove(&hash_secret(ticket))
+        let (nonce, signature) = ticket
+            .strip_prefix("st1.")
+            .and_then(|ticket| ticket.split_once('.'))
+            .filter(|(nonce, signature)| {
+                nonce.len() == 64
+                    && signature.len() == 64
+                    && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && signature.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .ok_or_else(|| denied("invalid socket ticket format"))?;
+        let mut tag = [0; 32];
+        for (index, byte) in tag.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&signature[index * 2..index * 2 + 2], 16)
+                .map_err(|_| denied("invalid socket ticket signature"))?;
+        }
+        let target = self.target();
+        let nonce_hash = hash_secret(nonce);
+        let mut tickets = lock(&self.tickets);
+        let (session, expires_at_ms) = tickets
+            .get(&nonce_hash)
+            .cloned()
             .ok_or_else(|| denied("socket ticket unknown or already used"))?;
+        self.socket_ticket_mac(&target, nonce, &session, expires_at_ms)
+            .verify_slice(&tag)
+            .map_err(|_| denied("invalid socket ticket signature"))?;
+        // Verify before consuming, under the same lock as the one-use check:
+        // a changed signature neither burns the original nor permits replay.
+        tickets.remove(&nonce_hash);
         if expires_at_ms <= now_ms() {
             return Err(denied("socket ticket expired"));
         }
         Ok(session)
+    }
+
+    fn socket_ticket_mac(
+        &self,
+        target: &RemoteTarget,
+        nonce: &str,
+        session: &str,
+        expires_at_ms: u64,
+    ) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.ticket_signing_key)
+            .expect("HMAC accepts the fixed 256-bit key");
+        mac.update(b"luna-remote-socket-ticket-v1\0");
+        mac.update(
+            &serde_json::to_vec(&(target, session, expires_at_ms, nonce))
+                .expect("the typed ticket claims serialize"),
+        );
+        mac
     }
 
     /// Records that a session connected, at most once a minute.

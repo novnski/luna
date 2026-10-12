@@ -428,6 +428,14 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
     fs::write(root.join("credentials/synthetic-only.txt"), b"do not touch").unwrap();
     let remote_grants = root.join("profiles/local/remote-auth.json");
     fs::write(&remote_grants, b"synthetic remote grant excluded").unwrap();
+    let remote_config = root.join("profiles/local/remote-access.json");
+    fs::write(&remote_config, br#"{"enabled":true}"#).unwrap();
+    let remote_identity = root.join("profiles/local/remote-identity");
+    fs::create_dir(&remote_identity).unwrap();
+    let remote_key = remote_identity.join("tls-key.pem");
+    let remote_target = remote_identity.join("target.json");
+    fs::write(&remote_key, b"synthetic old TLS identity").unwrap();
+    fs::write(&remote_target, br#"{"deviceId":"synthetic-old-host"}"#).unwrap();
     let db = root.join("profiles/local/docs.sqlite3");
     let conn = Connection::open(&db).unwrap();
     conn.execute(
@@ -454,7 +462,9 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
             .manifest
             .entries
             .iter()
-            .any(|entry| entry.path.ends_with("remote-auth.json"))
+            .any(|entry| entry.path.ends_with("remote-auth.json")
+                || entry.path.ends_with("remote-access.json")
+                || entry.path.contains("/remote-identity/"))
     );
     let preview = BackupService::preview_managed_offline(&root, &receipt.archive).unwrap();
     assert_eq!(preview.manifest, receipt.manifest);
@@ -480,6 +490,12 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
             .any(|reason| reason.contains("original data-root path"))
     );
     fs::write(root.join("ui-settings.json"), b"synthetic newer settings").unwrap();
+    // Remote material changed after the archive: restoring it would revive
+    // an old grant, enabled listener or TLS key. All current bytes stay put.
+    fs::write(&remote_grants, b"synthetic newer revoked grant").unwrap();
+    fs::write(&remote_config, br#"{"enabled":false}"#).unwrap();
+    fs::write(&remote_key, b"synthetic newer TLS identity").unwrap();
+    fs::write(&remote_target, br#"{"deviceId":"synthetic-newer-host"}"#).unwrap();
     let journals = root.join("profiles/local/journals");
     fs::create_dir_all(&journals).unwrap();
     fs::write(journals.join("new.jsonl"), b"synthetic newer journal\n").unwrap();
@@ -516,7 +532,16 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
     );
     assert_eq!(
         fs::read(&remote_grants).unwrap(),
-        b"synthetic remote grant excluded"
+        b"synthetic newer revoked grant"
+    );
+    assert_eq!(fs::read(&remote_config).unwrap(), br#"{"enabled":false}"#);
+    assert_eq!(
+        fs::read(&remote_key).unwrap(),
+        b"synthetic newer TLS identity"
+    );
+    assert_eq!(
+        fs::read(&remote_target).unwrap(),
+        br#"{"deviceId":"synthetic-newer-host"}"#
     );
     assert_eq!(
         fs::read(restored.rollback_dir.join("ui-settings.json")).unwrap(),

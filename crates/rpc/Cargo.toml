@@ -19,6 +19,7 @@ async-trait.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 sha2.workspace = true
+hmac = "0.12.1"
 getrandom.workspace = true
 schemars = { workspace = true, optional = true }
 

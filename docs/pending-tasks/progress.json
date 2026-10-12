@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791811435.789537,
+  "created_at": 1791819526.913729,
   "summary": {
     "counts": {
       "blocked": 1,
@@ -9,9 +9,9 @@
       "deferred": 25,
       "done": 14,
       "in_progress": 0,
-      "paused": 1,
+      "paused": 0,
       "ready": 65,
-      "review": 0
+      "review": 1
     },
     "groups": [
       {
@@ -217,9 +217,9 @@
         "tasks": 11,
         "done": 1,
         "remaining": 10,
-        "accepted_units": 3,
+        "accepted_units": 6,
         "total_units": 40,
-        "acceptance_percent": 7.5,
+        "acceptance_percent": 15.0,
         "milestone_status": {
           "M0": {
             "done": true,
@@ -375,13 +375,12 @@
       "tasks": 76,
       "done": 9,
       "remaining": 67,
-      "accepted_units": 35,
+      "accepted_units": 38,
       "total_units": 296,
-      "acceptance_percent": 11.8
+      "acceptance_percent": 12.8
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "RM-01",
       "IC-0",
       "ZI-01",
       "ZI-03",
@@ -2302,21 +2301,53 @@
       "updated_at": 1791805123.020137
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
-      "checks": {},
+      "checks": {
+        "authority": {
+          "at": 1791819526.5491772,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+              "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+            }
+          ],
+          "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+        },
+        "gateway": {
+          "at": 1791819526.6434612,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+              "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+            }
+          ],
+          "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+        },
+        "verification": {
+          "at": 1791819526.7359428,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+              "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+            }
+          ],
+          "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
+        }
+      },
       "id": "RM-01",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791805796.3936698,
-        "expires_at": 1791815035.495235,
-        "heartbeat_at": 1791811435.495235,
-        "owner": "claude-code-opus-5.5",
-        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        "claimed_at": 1791817197.3612869,
+        "expires_at": 1791822486.666517,
+        "heartbeat_at": 1791818886.666517,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
+        "expired": false
       },
-      "note": "Milestones A (ce43e491: authority store v2 migration, corrupt-store reset) and B (fb6a87ce: engine-owned TLS gateway with pairing, session check, socket tickets, RPC WebSocket, enable/disable/status ops and CLI; deny-before-teardown, revoke closes only its sockets, resume on start) are on main, landed at the owner request before full testing. Gateway keepers passed on Linux CI (0.15 s, real LAN route) and over loopback locally; the rest of branch CI run 38250744982 (UI, Linux browser, macOS) was stopped before finishing. Next (milestone C): extend crates/engine/tests/remote_access.rs for RP-02 (no receipt after a denied remote command), RP-03 (expired and wrong-target pairing, malformed body), RP-06 (ticket minted before revoke); extend backup_restore managed_offline_restore_preserves_excluded_files_and_keeps_rollback with remote-access.json and remote-identity/ (RP-19); then a native readback on LUNA Dev (luna remote enable --bind <LAN ip:port>; macOS will ask to allow incoming connections; disable afterwards). Read docs/pending-tasks/control-this-mac/rm-01/README.md and failures.md first.",
+      "note": "Final patch reviewed against test authoring gate; accepted host evidence and app handoff ready. Final delivery criterion will be checked after SSH origin/main readback.",
       "status": "paused",
-      "updated_at": 1791811435.639873
+      "updated_at": 1791819526.8250701
     }
   ],
   "events": [
@@ -8651,6 +8682,284 @@
           "heartbeat_at": 1791811435.495235,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 235,
+      "task": "RM-01",
+      "at": 1791817197.361375,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Milestones A (ce43e491: authority store v2 migration, corrupt-store reset) and B (fb6a87ce: engine-owned TLS gateway with pairing, session check, socket tickets, RPC WebSocket, enable/disable/status ops and CLI; deny-before-teardown, revoke closes only its sockets, resume on start) are on main, landed at the owner request before full testing. Gateway keepers passed on Linux CI (0.15 s, real LAN route) and over loopback locally; the rest of branch CI run 38250744982 (UI, Linux browser, macOS) was stopped before finishing. Next (milestone C): extend crates/engine/tests/remote_access.rs for RP-02 (no receipt after a denied remote command), RP-03 (expired and wrong-target pairing, malformed body), RP-06 (ticket minted before revoke); extend backup_restore managed_offline_restore_preserves_excluded_files_and_keeps_rollback with remote-access.json and remote-identity/ (RP-19); then a native readback on LUNA Dev (luna remote enable --bind <LAN ip:port>; macOS will ask to allow incoming connections; disable afterwards). Read docs/pending-tasks/control-this-mac/rm-01/README.md and failures.md first.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791820797.3612869,
+          "heartbeat_at": 1791817197.3612869,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 236,
+      "task": "RM-01",
+      "at": 1791817583.760152,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Milestones A (ce43e491: authority store v2 migration, corrupt-store reset) and B (fb6a87ce: engine-owned TLS gateway with pairing, session check, socket tickets, RPC WebSocket, enable/disable/status ops and CLI; deny-before-teardown, revoke closes only its sockets, resume on start) are on main, landed at the owner request before full testing. Gateway keepers passed on Linux CI (0.15 s, real LAN route) and over loopback locally; the rest of branch CI run 38250744982 (UI, Linux browser, macOS) was stopped before finishing. Next (milestone C): extend crates/engine/tests/remote_access.rs for RP-02 (no receipt after a denied remote command), RP-03 (expired and wrong-target pairing, malformed body), RP-06 (ticket minted before revoke); extend backup_restore managed_offline_restore_preserves_excluded_files_and_keeps_rollback with remote-access.json and remote-identity/ (RP-19); then a native readback on LUNA Dev (luna remote enable --bind <LAN ip:port>; macOS will ask to allow incoming connections; disable afterwards). Read docs/pending-tasks/control-this-mac/rm-01/README.md and failures.md first.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791821183.760055,
+          "heartbeat_at": 1791817583.760055,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 237,
+      "task": "RM-01",
+      "at": 1791818394.549641,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Milestones A (ce43e491: authority store v2 migration, corrupt-store reset) and B (fb6a87ce: engine-owned TLS gateway with pairing, session check, socket tickets, RPC WebSocket, enable/disable/status ops and CLI; deny-before-teardown, revoke closes only its sockets, resume on start) are on main, landed at the owner request before full testing. Gateway keepers passed on Linux CI (0.15 s, real LAN route) and over loopback locally; the rest of branch CI run 38250744982 (UI, Linux browser, macOS) was stopped before finishing. Next (milestone C): extend crates/engine/tests/remote_access.rs for RP-02 (no receipt after a denied remote command), RP-03 (expired and wrong-target pairing, malformed body), RP-06 (ticket minted before revoke); extend backup_restore managed_offline_restore_preserves_excluded_files_and_keeps_rollback with remote-access.json and remote-identity/ (RP-19); then a native readback on LUNA Dev (luna remote enable --bind <LAN ip:port>; macOS will ask to allow incoming connections; disable afterwards). Read docs/pending-tasks/control-this-mac/rm-01/README.md and failures.md first.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791821994.549532,
+          "heartbeat_at": 1791818394.549532,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 238,
+      "task": "RM-01",
+      "at": 1791818886.6666062,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Milestones A (ce43e491: authority store v2 migration, corrupt-store reset) and B (fb6a87ce: engine-owned TLS gateway with pairing, session check, socket tickets, RPC WebSocket, enable/disable/status ops and CLI; deny-before-teardown, revoke closes only its sockets, resume on start) are on main, landed at the owner request before full testing. Gateway keepers passed on Linux CI (0.15 s, real LAN route) and over loopback locally; the rest of branch CI run 38250744982 (UI, Linux browser, macOS) was stopped before finishing. Next (milestone C): extend crates/engine/tests/remote_access.rs for RP-02 (no receipt after a denied remote command), RP-03 (expired and wrong-target pairing, malformed body), RP-06 (ticket minted before revoke); extend backup_restore managed_offline_restore_preserves_excluded_files_and_keeps_rollback with remote-access.json and remote-identity/ (RP-19); then a native readback on LUNA Dev (luna remote enable --bind <LAN ip:port>; macOS will ask to allow incoming connections; disable afterwards). Read docs/pending-tasks/control-this-mac/rm-01/README.md and failures.md first.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 239,
+      "task": "RM-01",
+      "at": 1791819526.549372,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          }
+        },
+        "criterion": "authority",
+        "evidence": null,
+        "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 240,
+      "task": "RM-01",
+      "at": 1791819526.64361,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          },
+          "gateway": {
+            "at": 1791819526.6434612,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+          }
+        },
+        "criterion": "gateway",
+        "evidence": null,
+        "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 241,
+      "task": "RM-01",
+      "at": 1791819526.736089,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          },
+          "gateway": {
+            "at": 1791819526.6434612,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+          },
+          "verification": {
+            "at": 1791819526.7359428,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 242,
+      "task": "RM-01",
+      "at": 1791819526.825152,
+      "action": "review",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          },
+          "gateway": {
+            "at": 1791819526.6434612,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+          },
+          "verification": {
+            "at": 1791819526.7359428,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Final patch reviewed against test authoring gate; accepted host evidence and app handoff ready. Final delivery criterion will be checked after SSH origin/main readback.",
+        "status": "review",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }
       }
     }

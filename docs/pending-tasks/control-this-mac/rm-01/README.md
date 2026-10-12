@@ -123,15 +123,50 @@ way, both unsigned and signed with the Apple Development identity. So:
 | Clippy (`luna-remote`, `luna-rpc`, `luna-engine`, `luna`), rustfmt, `git diff --check` | Clean on changed lines |
 | LUNA Dev refresh | 121 s, PID 84796, IPC 59777, signature verified. `luna remote status`: disabled, not listening (the default) |
 
-**Pending (milestone C), landed untested at the owner's request:**
-- **The rest of the branch CI run** (UI, Linux browser, macOS) was stopped
-  before it finished.
-- **The RP campaign extensions:**
-  - RP-02: no receipt after a denied remote command;
-  - RP-03: expired and wrong-target pairing;
-  - RP-06: a ticket minted before a revoke;
-  - RP-19: extend `backup_restore`'s exclusion keeper with `remote-access.json`
-    and `remote-identity/`.
-- **The native readback on LUNA Dev.** It opens a LAN port, and macOS will ask
-  to allow incoming connections.
+## Milestone C: campaign and headed readback
+
+The [authoring gate, repeatable commands and evidence](verification-c.md)
+record the completed campaign on 12 October 2026:
+- RP-02 uses a valid command and mutation, verifies no receipt, executable
+  admission or title change, then applies the same command locally.
+- RP-03 covers wrong host/profile/workspace/protocol, malformed bodies,
+  cancellation, expiry, reuse, wrong TLS pin and recovery with a fresh grant.
+- RP-06 redeems a ticket issued before revocation: the upgrade succeeds during
+  its short lifetime, the revoked session cannot call, and the other session
+  and local IPC remain available.
+- RP-19 preserves the exact target/pin and valid session across restart while
+  revoked/expired sessions remain refused. Restore excludes newer authority,
+  listener config, TLS key and target metadata from the archive.
+
+Review also found that milestone B's opaque tickets did not implement the
+owner's selected signed-capability policy. Tickets now carry HMAC-SHA256 over
+their nonce, exact target, session and expiry. Signature verification happens
+before one-use consumption. The profile authority owns an in-memory epoch key;
+restart invalidates outstanding tickets as before, without changing the v2
+durable store or paired-session lifecycle. The tampering regression failed on
+the original gateway and original headed app, then passed after the repair.
+
+**Route finding:** the default probe chose VPN address `10.6.12.2`. Selecting
+the real Wi-Fi interface through `LUNA_REMOTE_TEST_IP=192.168.18.2` exercised
+the production TLS gateway on this Mac without a loopback patch or firewall
+change. An explicit-interface run or Linux CI now fails on timeout instead of
+silently skipping. The earlier firewall explanation was not enough to establish
+the cause of default-route failure.
+
+**Verification:** 42 engine integration tests and 37 RPC/contract tests passed;
+one existing relay test remains ignored. Locked compilation, affected Clippy,
+Rust/Python formatting and queue validation passed, with existing unrelated
+compiler/lint warnings. The native command verified signed ticket tampering,
+two sessions, denial, revoke, disable, stable-pin re-enable and local IPC.
+
+LUNA Dev built in **81 s** (83.26 s total refresh); exact bundle PID 28646,
+loopback IPC 59777 and strict signature were verified. Remote access is disabled
+and port 7744 has no listener. QA-created sessions were revoked. This is headed
+host acceptance on the real LAN interface, without physical-phone or outside
+network acceptance; those remain with the later remote/iOS owners.
+
+The later pre-C CI run 38255387117 completed engine, UI, Linux browser and iOS
+jobs successfully. Its macOS browser fixture failed on `closing sidebar skipped
+intermediate live frames`, outside RM-01's changed runtime paths. C does not
+claim that unrelated fixture was repaired.
 

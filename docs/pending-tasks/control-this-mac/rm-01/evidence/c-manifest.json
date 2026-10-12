@@ -1,0 +1,439 @@
+{
+  "task": "RM-01",
+  "milestone": "C",
+  "date": "2026-10-12",
+  "baseline": "dba6350510043fb412fcee935563a337022334e6",
+  "workingTreeImplementation": true,
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "LUNA_REMOTE_TEST_IP": "192.168.18.2",
+    "route": "real Wi-Fi interface on the same Mac; no loopback patch or firewall mutation"
+  },
+  "checks": [
+    {
+      "name": "signed-check",
+      "command": [
+        "scripts/cargo.sh",
+        "check",
+        "--locked",
+        "-p",
+        "luna-rpc",
+        "-p",
+        "luna-engine",
+        "--tests"
+      ],
+      "exitCode": 0,
+      "seconds": 32.24,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-check.log"
+    },
+    {
+      "name": "signed-rpc-clippy",
+      "command": [
+        "scripts/cargo.sh",
+        "clippy",
+        "--locked",
+        "-p",
+        "luna-rpc",
+        "--lib"
+      ],
+      "exitCode": 0,
+      "seconds": 13.58,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-rpc-clippy.log"
+    },
+    {
+      "name": "signed-engine-clippy",
+      "command": [
+        "scripts/cargo.sh",
+        "clippy",
+        "--locked",
+        "-p",
+        "luna-engine",
+        "--test",
+        "remote_access",
+        "--test",
+        "backup_restore"
+      ],
+      "exitCode": 0,
+      "seconds": 29.45,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-engine-clippy.log"
+    },
+    {
+      "name": "signed-rpc-tests",
+      "command": [
+        "scripts/cargo.sh",
+        "test",
+        "--locked",
+        "-p",
+        "luna-rpc",
+        "--features",
+        "schema",
+        "--",
+        "--nocapture"
+      ],
+      "exitCode": 0,
+      "seconds": 32.43,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-rpc-tests.log"
+    },
+    {
+      "name": "signed-acceptance",
+      "command": [
+        "scripts/cargo.sh",
+        "test",
+        "--locked",
+        "-p",
+        "luna-engine",
+        "--test",
+        "remote_access",
+        "--test",
+        "remote_auth",
+        "--test",
+        "backup_restore",
+        "--test",
+        "local_profiles",
+        "--",
+        "--nocapture"
+      ],
+      "exitCode": 0,
+      "seconds": 58.69,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-acceptance.log"
+    },
+    {
+      "name": "signed-app-refresh",
+      "command": [
+        "scripts/run-macos-dev.sh",
+        "--refresh"
+      ],
+      "exitCode": 0,
+      "seconds": 83.26,
+      "log": "target/qa/control-this-mac/rm01-c-01a130a0/signed-app-refresh.log"
+    },
+    {
+      "name": "backup-final-clippy",
+      "command": [
+        "scripts/cargo.sh",
+        "clippy",
+        "--locked",
+        "-p",
+        "luna-engine",
+        "--test",
+        "backup_restore"
+      ],
+      "exitCode": 0,
+      "seconds": 2.81
+    },
+    {
+      "name": "backup-final",
+      "command": [
+        "scripts/cargo.sh",
+        "test",
+        "--locked",
+        "-p",
+        "luna-engine",
+        "--test",
+        "backup_restore",
+        "--",
+        "--nocapture"
+      ],
+      "exitCode": 0,
+      "seconds": 6.19
+    },
+    {
+      "name": "native-signed-final",
+      "command": [
+        "agent-python",
+        "scripts/qa-rm01-headed.py",
+        "--bind",
+        "192.168.18.2:7744",
+        "--ipc-port",
+        "59777",
+        "--output",
+        "target/qa/control-this-mac/rm01-c-01a130a0/native-signed-final"
+      ],
+      "exitCode": 0
+    },
+    {
+      "name": "format-and-queue",
+      "commands": [
+        "scripts/cargo.sh fmt --all -- --check",
+        "agent-python -m ruff check scripts/qa-rm01-headed.py",
+        "agent-python -m ruff format --check scripts/qa-rm01-headed.py",
+        "python3 scripts/pending_tasks.py validate",
+        "git diff --check"
+      ],
+      "exitCode": 0
+    }
+  ],
+  "counts": {
+    "signed-acceptance": {
+      "passed": 42,
+      "failed": 0,
+      "ignored": 0,
+      "gatewaySkips": 0
+    },
+    "signed-rpc-tests": {
+      "passed": 37,
+      "failed": 0,
+      "ignored": 1,
+      "gatewaySkips": 0
+    },
+    "backup-final": {
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "gatewaySkips": 0
+    }
+  },
+  "native": {
+    "ok": true,
+    "checks": [
+      "wrong TLS SPKI pin refused before any credential",
+      "changed ticket signature refused without consuming the original",
+      "two native headed sessions authenticate over pinned LAN TLS/WebSocket",
+      "remote local-only command refused with no durable receipt",
+      "pre-revoke ticket upgrades once, revoked socket refuses calls, other session survives",
+      "disable stops LAN listener and preserves local IPC; re-enable preserves pin and valid session"
+    ],
+    "route": "same Mac via real LAN address",
+    "physicalPhone": false,
+    "ipcPort": 59777,
+    "remoteAddress": "192.168.18.2:7744",
+    "spkiSha256": "ed9106fc25637fe140e06057b3107e1e230c5fe273b50b58f948e9784e59028f",
+    "finalDisabled": true
+  },
+  "appHandoff": {
+    "bundle": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA Dev.app",
+    "bundleId": "com.novnski.luna.dev",
+    "pid": 28646,
+    "ipcPort": 59777,
+    "ipcLoopbackListening": true,
+    "signatureExitCode": 0,
+    "remotePort": 7744,
+    "remotePortListening": false,
+    "remoteDisabled": true,
+    "buildSeconds": 81,
+    "refreshSeconds": 83.26,
+    "binarySha256": "51e807500a971fa62731331d906848dea7e1eec1ebf0dcb2c9e7e58205c9d93a"
+  },
+  "negativeControls": {
+    "gatewayBeforeRepairExitCode": 101,
+    "gatewayBeforeRepairReason": "unsigned ticket rejected as unknown instead of verifying a changed signature",
+    "oldHeadedApp": {
+      "ok": false,
+      "checks": [
+        "wrong TLS SPKI pin refused before any credential"
+      ],
+      "errorType": "AssertionError",
+      "finalDisabled": true
+    }
+  },
+  "rawEvidenceRoot": "/Users/iulian/workspace/code/personal/luna/target/qa/control-this-mac/rm01-c-01a130a0",
+  "artifacts": [
+    {
+      "path": "acceptance.log",
+      "bytes": 7444,
+      "sha256": "a135a3a4f174a3a148722c7aeafb385137c9317f0048cd5c2f19356e1c065880"
+    },
+    {
+      "path": "app-handoff.json",
+      "bytes": 443,
+      "sha256": "90b977c104545d8d4b4744e2270d03d48ab1489ab04af8438ae05b3723beaa4f"
+    },
+    {
+      "path": "app-refresh.log",
+      "bytes": 554,
+      "sha256": "fcaf792f90dad74509f847c8cc445fe9f4eb2d0c5e492607c9e3c00e2034b3f3"
+    },
+    {
+      "path": "backup-final-checks.json",
+      "bytes": 505,
+      "sha256": "6006204eb7dc4e480d38b08e0c8da97a9bde4e0276e21fe8c8d121ae96bdbc14"
+    },
+    {
+      "path": "backup-final-clippy.log",
+      "bytes": 50467,
+      "sha256": "06033eab9ced8dedd5117cb6f5cbfa10f31aae845c14448b33cf643908202b98"
+    },
+    {
+      "path": "backup-final.log",
+      "bytes": 5599,
+      "sha256": "92d4d71eca8d8f2878e338a1228da8fce396fa0ca3cb938ed5534da7f3160eed"
+    },
+    {
+      "path": "check.log",
+      "bytes": 17749,
+      "sha256": "03cefcf02c4239e89147f0b7f28e894a11ec5f18933a84d68fb97d1f0bd8c784"
+    },
+    {
+      "path": "checks.json",
+      "bytes": 1056,
+      "sha256": "a58ad627890375405e0cc964752fbbcb1516cc20e28dd331fa8ce4c5fb0d99f1"
+    },
+    {
+      "path": "clippy.log",
+      "bytes": 51486,
+      "sha256": "7c848d0ac45c9605ed2b163e2f70fc8b95e68defc216132aafadcd768e0e498b"
+    },
+    {
+      "path": "final-acceptance.log",
+      "bytes": 7427,
+      "sha256": "944e1a70cd85fe3a1f4a6867f00be203e481e85ab6702dd512f13645eb84e471"
+    },
+    {
+      "path": "final-checks.json",
+      "bytes": 1432,
+      "sha256": "e0d55553891d392591181e143d3116b49ec03a4c49f00af3b03cda36a0cabba9"
+    },
+    {
+      "path": "final-clippy.log",
+      "bytes": 50462,
+      "sha256": "f3ebfb1a7cc212c9df004865854bfc534c297cd4cfc7e9e570bf95399d80feb1"
+    },
+    {
+      "path": "focused-tests.json",
+      "bytes": 314,
+      "sha256": "c8065a3dd06492165ae9f4382bea14e5740008084febfcd6212d10009e0115dd"
+    },
+    {
+      "path": "focused-tests.log",
+      "bytes": 20992,
+      "sha256": "63d36a1c4658274059fdc1098d9e8229234545857af157ca3cca3ee519cda65c"
+    },
+    {
+      "path": "gateway-lan-final.json",
+      "bytes": 299,
+      "sha256": "f6a6dc5d922edcb7faff31d8ef7879156f2a5260946c805ea9c0a419ff4d3e60"
+    },
+    {
+      "path": "gateway-lan-final.log",
+      "bytes": 4035,
+      "sha256": "3205a63589d424095e91911dc86c7d216065894d421b153e8f694e4a4c6702b5"
+    },
+    {
+      "path": "gateway-lan.json",
+      "bytes": 302,
+      "sha256": "7bd98608f4069990ddfc27013e066b39e3d34554a24c820fc998aff7bc22b484"
+    },
+    {
+      "path": "gateway-lan.log",
+      "bytes": 5277,
+      "sha256": "0a6b7973245ec84aa219678633364cfb4d1b77fec919b38069447e7fbbc55ac5"
+    },
+    {
+      "path": "native-enable.txt",
+      "bytes": 185,
+      "sha256": "3dc1277ead77670231db77e608f8cdec72e2de8316b4fdff179cc6ca27ea2f4c"
+    },
+    {
+      "path": "native-final/native-readback.json",
+      "bytes": 666,
+      "sha256": "fac026e6d0e225edf461bd0918bdbc2d66819292b32b000fed1cf2e4d070f2c8"
+    },
+    {
+      "path": "native-readback.json",
+      "bytes": 666,
+      "sha256": "fac026e6d0e225edf461bd0918bdbc2d66819292b32b000fed1cf2e4d070f2c8"
+    },
+    {
+      "path": "native-readback.py",
+      "bytes": 6901,
+      "sha256": "12447cb572ec5d5763f649a37ee797e90dc1449f99ac003d9b68e9a8dfa9c913"
+    },
+    {
+      "path": "native-repeatable/native-readback.json",
+      "bytes": 666,
+      "sha256": "fac026e6d0e225edf461bd0918bdbc2d66819292b32b000fed1cf2e4d070f2c8"
+    },
+    {
+      "path": "native-script.log",
+      "bytes": 624,
+      "sha256": "4ed2e56ac7d8b102959d0985adb67f25763074115dc4c82006e103e40503cbfc"
+    },
+    {
+      "path": "native-signed-final/native-readback.json",
+      "bytes": 737,
+      "sha256": "88b76a8e31409af02fe7ddba7041338d00c90d8c172c109865224008c05e3310"
+    },
+    {
+      "path": "native-signing-before/native-readback.json",
+      "bytes": 150,
+      "sha256": "beb1788e95c9ea96482c6639841abc6171dfdafe143e84efe1fc11eb59fc260f"
+    },
+    {
+      "path": "prior-macos-ci.log",
+      "bytes": 26847,
+      "sha256": "7682259f4edf14c786ae5834deb1e6f6051a6392922cfc646935b7be23756fbc"
+    },
+    {
+      "path": "queue-validate.json",
+      "bytes": 153,
+      "sha256": "2c554df6fb8bd43541268945b62c7637d5488f41caf91110de3941afb99df04a"
+    },
+    {
+      "path": "signed-acceptance.log",
+      "bytes": 7912,
+      "sha256": "6cc8a29855fb66a31b8313251f08d1e329684fe2af0ef5d621409b5ec643487d"
+    },
+    {
+      "path": "signed-app-refresh.log",
+      "bytes": 553,
+      "sha256": "7021eea3932d014323d38d7731189e2e1ea6e576a5bde267db9a656a026d536c"
+    },
+    {
+      "path": "signed-check.log",
+      "bytes": 4693,
+      "sha256": "8da70cbbd483051828d90a3f229cc89225c04d57559377ac1acf640dc08b53d8"
+    },
+    {
+      "path": "signed-checks.json",
+      "bytes": 2403,
+      "sha256": "2582a06d25c24cd1c308387e2a7abdb5264d6bd557c20194e7b0592a8742cb5b"
+    },
+    {
+      "path": "signed-engine-clippy.log",
+      "bytes": 50759,
+      "sha256": "b42b9f78df3fbef03a905471fa2b9bb1467002cfee75c3b2778f816f4e44014d"
+    },
+    {
+      "path": "signed-native.log",
+      "bytes": 1424,
+      "sha256": "cf4540b503b3cffc7466c0c4011491803315038d57c009b32334c07d6e03606e"
+    },
+    {
+      "path": "signed-rpc-clippy.log",
+      "bytes": 13737,
+      "sha256": "e9eb38699c29d1301bf491575d74ae390adf75d5a530ddbc0e1b591704e1874f"
+    },
+    {
+      "path": "signed-rpc-tests.log",
+      "bytes": 9013,
+      "sha256": "05e770be2380014479d188ba0125b7f9e22ee844679c61886c9e96431dc9b842"
+    },
+    {
+      "path": "signed-ticket-before.json",
+      "bytes": 214,
+      "sha256": "43758aef57f20fd2b92b15057fdde191f9276a564cc1aa1b8f66fc50903ac4a7"
+    },
+    {
+      "path": "signed-ticket-before.log",
+      "bytes": 4240,
+      "sha256": "255e1162a1dc0e03f279896e3d907ed9d850b3403b5c38d7a1ea3dc5c02c6053"
+    },
+    {
+      "path": "signing-lock-update.json",
+      "bytes": 222,
+      "sha256": "1dbf788cd64da0de27d98b44d94190e22488b866b06c7417aebe8940ee7df51b"
+    },
+    {
+      "path": "signing-lock-update.log",
+      "bytes": 5428,
+      "sha256": "324c673fe90445c1423e7b4d89f3b2c7ad215d80381b2239d820ec6fe1b6580d"
+    }
+  ],
+  "limitations": [
+    "No physical-phone, Keychain or outside-network acceptance in RM-01 C",
+    "RP-04 phone recovery belongs to RM-02; uploads and assets belong to RM-06",
+    "Earlier default-route gateway skips are excluded from acceptance",
+    "Existing unrelated compiler and Clippy warnings remain",
+    "Pre-C CI macOS browser fixture failed on sidebar animation; no claim to repair it"
+  ]
+}
