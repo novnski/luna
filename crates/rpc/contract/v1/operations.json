@@ -746,6 +746,18 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "ResetRemoteAuthority",
+      "id": "luna.core/reset-remote-authority",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "RedeemRemotePairing",
       "id": "luna.core/redeem-remote-pairing",
       "version": 1,

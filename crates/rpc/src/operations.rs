@@ -696,6 +696,15 @@ pub const OPERATIONS: &[OperationSpec] = &[
         30,
     ),
     op(
+        methods::RESET_REMOTE_AUTHORITY,
+        "luna.core/reset-remote-authority",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
         methods::REDEEM_REMOTE_PAIRING,
         "luna.core/redeem-remote-pairing",
         Command,

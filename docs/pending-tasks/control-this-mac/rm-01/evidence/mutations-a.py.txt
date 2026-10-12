@@ -1,0 +1,63 @@
+"""RM-01 milestone A mutation proofs for the remote authority keepers.
+Each file is restored byte-for-byte and verified afterwards."""
+import json, os, subprocess, sys, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+os.chdir(ROOT)
+ENV = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0"}
+CMD = ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--test", "remote_access"]
+CLOSE_FIND = "    pub(crate) fn close(&self) {\n        self.inner.lock().open = false;\n    }\n"
+CLOSE_REPL = "    pub(crate) fn close(&self) {}\n"
+LEASE_FIND = "        (lease.epoch.phase() != luna_sync::write_epoch::Phase::Retired)\n            .then_some(DeviceLease { _lease: lease })\n"
+LEASE_REPL = "        Some(DeviceLease { _lease: lease })\n"
+MUTATIONS = [
+    {"id": "A1", "expect_caught": True,
+     "contract": "a v1 store migrates on open instead of being refused",
+     "edits": [("crates/rpc/src/remote_auth.rs", "            if state.version == 1 && state.environment == environment {\n", "            if false && state.version == 1 && state.environment == environment {\n")]},
+    {"id": "A2", "expect_caught": False,
+     "contract": "the store's own healthy check is defence in depth: the engine refuses a healthy reset before calling it",
+     "edits": [("crates/rpc/src/remote_auth.rs", "        if Self::open(root, environment).is_ok() {\n", "        if false && Self::open(root, environment).is_ok() {\n")]},
+    {"id": "A2b", "expect_caught": True,
+     "contract": "the engine reports why the store is unavailable",
+     "edits": [("crates/engine/src/rpc.rs", "                    unavailable.reason\n", "                    \"unknown\"\n")]},
+    {"id": "A2c", "expect_caught": True,
+     "contract": "the engine never resets a healthy store",
+     "edits": [("crates/engine/src/rpc.rs", "                if self.remote_auth.is_some() {\n                    return Err(RpcError::Failed(\n                        \"remote authority is healthy; nothing to reset\".into(),", "                if false && self.remote_auth.is_some() {\n                    return Err(RpcError::Failed(\n                        \"remote authority is healthy; nothing to reset\".into(),")]},
+]
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+results = []
+for m in MUTATIONS:
+    originals = {f: Path(f).read_bytes() for f, _, _ in m["edits"]}
+    before = {f: sha(f) for f in originals}
+    ok = True
+    for f, find, repl in m["edits"]:
+        text = Path(f).read_text()
+        if text.count(find) != 1:
+            ok = False
+            results.append({"id": m["id"], "outcome": "anchor-not-unique", "file": f, "count": text.count(find)})
+            break
+        Path(f).write_text(text.replace(find, repl, 1))
+    if not ok:
+        for f, b in originals.items():
+            Path(f).write_bytes(b)
+        continue
+    log = ROOT / f"target/qa/rm-01/mutation-{m['id']}.log"
+    started = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(CMD, env=ENV, stdout=out, stderr=subprocess.STDOUT).returncode
+    for f, b in originals.items():
+        Path(f).write_bytes(b)
+    lines = log.read_text().splitlines()
+    failed = [l for l in lines if l.startswith("test ") and l.endswith("FAILED")]
+    caught = code != 0 and bool(failed)
+    results.append({"id": m["id"], "contract": m["contract"], "files": list(originals), "command": " ".join(CMD),
+                    "exit": code, "caught": caught, "expectCaught": m["expect_caught"],
+                    "asExpected": caught == m["expect_caught"], "failedTests": failed,
+                    "restored": all(sha(f) == before[f] for f in originals), "seconds": round(time.time() - started)})
+    print(m["id"], "exit", code, "caught" if caught else "not caught", "(expected)" if caught == m["expect_caught"] else "(UNEXPECTED)", flush=True)
+Path("target/qa/rm-01/mutations-a.json").write_text(json.dumps(results, indent=1) + "\n")
+sys.exit(0 if all(r.get("asExpected") and r.get("restored") for r in results) else 1)

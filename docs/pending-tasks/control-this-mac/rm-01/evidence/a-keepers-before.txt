@@ -1,0 +1,8 @@
+test a_corrupt_authority_store_stays_refused_until_an_explicit_reset ... FAILED
+test a_v1_authority_store_migrates_once_and_keeps_its_sessions ... FAILED
+thread 'a_corrupt_authority_store_stays_refused_until_an_explicit_reset' (51817034) panicked at crates/engine/tests/remote_access.rs:133:5:
+the reason is reported: remote authority unavailable
+thread 'a_v1_authority_store_migrates_once_and_keeps_its_sessions' (51817035) panicked at crates/engine/tests/remote_access.rs:83:5:
+  left: Number(1)
+ right: 2
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s

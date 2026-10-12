@@ -1,0 +1,68 @@
+[
+ {
+  "id": "A1",
+  "contract": "a v1 store migrates on open instead of being refused",
+  "files": [
+   "crates/rpc/src/remote_auth.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test a_v1_authority_store_migrates_once_and_keeps_its_sessions ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 5
+ },
+ {
+  "id": "A2",
+  "contract": "the store's own healthy check is defence in depth: the engine refuses a healthy reset before calling it",
+  "files": [
+   "crates/rpc/src/remote_auth.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access",
+  "exit": 0,
+  "caught": false,
+  "expectCaught": false,
+  "asExpected": true,
+  "failedTests": [],
+  "restored": true,
+  "seconds": 5
+ },
+ {
+  "id": "A2b",
+  "contract": "the engine reports why the store is unavailable",
+  "files": [
+   "crates/engine/src/rpc.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test a_corrupt_authority_store_stays_refused_until_an_explicit_reset ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 41
+ },
+ {
+  "id": "A2c",
+  "contract": "the engine never resets a healthy store",
+  "files": [
+   "crates/engine/src/rpc.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test a_corrupt_authority_store_stays_refused_until_an_explicit_reset ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 42
+ }
+]

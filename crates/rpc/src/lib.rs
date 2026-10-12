@@ -109,6 +109,7 @@ pub mod methods {
     pub const REVOKE_REMOTE_PAIRING: &str = "RevokeRemotePairing";
     pub const LIST_REMOTE_SESSIONS: &str = "ListRemoteSessions";
     pub const REVOKE_REMOTE_SESSION: &str = "RevokeRemoteSession";
+    pub const RESET_REMOTE_AUTHORITY: &str = "ResetRemoteAuthority";
     pub const REDEEM_REMOTE_PAIRING: &str = "RedeemRemotePairing";
     pub const AUTHENTICATE_REMOTE: &str = "AuthenticateRemote";
     /// L17 local-only backup control. Raw recovery material is accepted only
@@ -531,6 +532,7 @@ pub mod methods {
         REVOKE_REMOTE_PAIRING,
         LIST_REMOTE_SESSIONS,
         REVOKE_REMOTE_SESSION,
+        RESET_REMOTE_AUTHORITY,
         REDEEM_REMOTE_PAIRING,
         AUTHENTICATE_REMOTE,
         GET_BACKUP_STATUS,

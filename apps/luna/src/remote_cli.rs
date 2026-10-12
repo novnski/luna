@@ -40,6 +40,9 @@ enum RemoteCommand {
     Sessions,
     /// Revoke a device session, including current streams and reconnects.
     RevokeSession { id: String },
+    /// Move an unreadable remote authority store aside (bytes kept) so the
+    /// next start begins empty. Devices must pair again. Refused when healthy.
+    ResetAuthority,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -150,6 +153,15 @@ pub async fn run(args: RemoteArgs, default_port: u16) -> anyhow::Result<()> {
             let value: serde_json::Value =
                 call(&client, methods::REVOKE_REMOTE_SESSION, json!({ "id": id })).await?;
             println!("session revoked: {}", value["revoked"] == true);
+        }
+        RemoteCommand::ResetAuthority => {
+            let value: serde_json::Value =
+                call(&client, methods::RESET_REMOTE_AUTHORITY, json!({})).await?;
+            match value["quarantined"].as_str() {
+                Some(path) => println!("quarantined: {path}"),
+                None => println!("no authority store to quarantine"),
+            }
+            println!("restart LUNA, then pair devices again");
         }
     }
     Ok(())

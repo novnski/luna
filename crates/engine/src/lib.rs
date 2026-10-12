@@ -297,6 +297,15 @@ impl std::fmt::Debug for EngineConfig {
     }
 }
 
+/// A remote authority store that failed to open: remote access stays off
+/// until `ResetRemoteAuthority` quarantines it (RM-01 A2).
+#[derive(Clone)]
+pub(crate) struct RemoteAuthorityUnavailable {
+    pub(crate) root: std::path::PathBuf,
+    pub(crate) environment: luna_rpc::RemoteEnvironment,
+    pub(crate) reason: String,
+}
+
 /// How long shutdown waits for already admitted commands before settling runs.
 const COMMAND_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 /// How long shutdown waits for cancelled maintenance tasks to finish.
@@ -330,6 +339,8 @@ pub struct EngineCore {
     pub task_identity: TaskIdentityService,
     pub device_id: String,
     remote_auth: Option<Arc<luna_rpc::RemoteAuthStore>>,
+    /// Why the remote authority store could not be opened, for the explicit reset.
+    remote_auth_unavailable: Option<RemoteAuthorityUnavailable>,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
@@ -526,18 +537,26 @@ impl EngineCore {
                 profile.user_id(),
             ))?)
         );
-        let remote_auth = match luna_rpc::RemoteAuthStore::open(
+        let remote_environment = luna_rpc::RemoteEnvironment {
+            device_id: device_id.clone(),
+            workspace_scope: profile.scope(),
+            environment_id,
+        };
+        let (remote_auth, remote_auth_unavailable) = match luna_rpc::RemoteAuthStore::open(
             profile.store_root(),
-            luna_rpc::RemoteEnvironment {
-                device_id: device_id.clone(),
-                workspace_scope: profile.scope(),
-                environment_id,
-            },
+            remote_environment.clone(),
         ) {
-            Ok(store) => Some(store),
+            Ok(store) => (Some(store), None),
             Err(error) => {
                 tracing::error!(%error, "remote authority disabled; local engine remains available");
-                None
+                (
+                    None,
+                    Some(RemoteAuthorityUnavailable {
+                        root: profile.store_root().to_path_buf(),
+                        environment: remote_environment,
+                        reason: error.to_string(),
+                    }),
+                )
             }
         };
         // This device's harness enablement (Settings → Agents) rides the
@@ -747,6 +766,7 @@ impl EngineCore {
             task_identity,
             device_id,
             remote_auth,
+            remote_auth_unavailable,
             local_import,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
@@ -968,6 +988,13 @@ impl EngineCore {
         }
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());
+        }
+        if let Some(unavailable) = self
+            .remote_auth_unavailable
+            .clone()
+            .filter(|_| include_backup)
+        {
+            rpc = rpc.with_remote_authority_unavailable(unavailable);
         }
         if let Some(control) = self.backup_control.clone().filter(|_| include_backup) {
             rpc = rpc.with_backup_control(control);

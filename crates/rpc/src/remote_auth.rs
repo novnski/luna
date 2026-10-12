@@ -21,6 +21,9 @@ use crate::{RpcClient, RpcError, RpcReply, RpcService, methods, parse_params};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const CAPABILITY: &str = luna_proto::capabilities::REMOTE_AUTH_V1;
+/// On-disk store version. v2 records each session's last use; a v1 store
+/// migrates on open. A newer store is refused, never guessed at.
+const STORE_VERSION: u16 = 2;
 const MAX_PAIRING_TTL_SECS: u64 = 600;
 const MAX_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
@@ -94,6 +97,9 @@ pub struct SessionView {
     pub scopes: Vec<RemoteScope>,
     pub expires_at_ms: u64,
     pub revoked: bool,
+    /// When the session last opened a connection (store v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,23 +173,32 @@ impl RemoteAuthStore {
             File::open(&path)
                 .and_then(|mut file| file.read_to_string(&mut text))
                 .map_err(storage_error)?;
-            serde_json::from_str::<State>(&text)
-                .map_err(|_| denied("invalid remote authority state"))?
+            let mut state = serde_json::from_str::<State>(&text)
+                .map_err(|_| denied("invalid remote authority state"))?;
+            if state.version == 1 && state.environment == environment {
+                // v1 → v2 adds only optional fields: publish it atomically.
+                // A failed publish leaves the v1 file as it was.
+                state.version = STORE_VERSION;
+                if !persist(&path, &state)? {
+                    tracing::warn!("remote authority migrated; directory sync uncertain");
+                }
+            }
+            state
         } else {
             // A dangling symlink must not be treated as an absent store.
             if fs::symlink_metadata(&path).is_ok() {
                 return Err(denied("remote authority path is not a regular file"));
             }
             State {
-                version: PROTOCOL_VERSION,
+                version: STORE_VERSION,
                 environment: environment.clone(),
                 pairings: Vec::new(),
                 sessions: Vec::new(),
             }
         };
-        if state.version != PROTOCOL_VERSION || state.environment != environment {
+        if state.version != STORE_VERSION || state.environment != environment {
             return Err(denied(
-                "remote authority belongs to a different environment or protocol",
+                "remote authority belongs to a different environment or store version",
             ));
         }
         let (changed, _) = watch::channel(0);
@@ -192,6 +207,25 @@ impl RemoteAuthStore {
             state: Mutex::new(state),
             changed,
         }))
+    }
+
+    /// Explicit recovery for a store that cannot be opened (corrupt, foreign
+    /// or unreadable): move it aside, keeping its bytes, so the next start
+    /// begins empty and devices pair again. A healthy store is never reset.
+    pub fn quarantine_unreadable(
+        root: &Path,
+        environment: RemoteEnvironment,
+    ) -> Result<Option<PathBuf>, RpcError> {
+        let path = root.join("remote-auth.json");
+        if fs::symlink_metadata(&path).is_err() {
+            return Ok(None);
+        }
+        if Self::open(root, environment).is_ok() {
+            return Err(denied("remote authority is healthy; nothing to reset"));
+        }
+        let quarantined = root.join(format!("remote-auth.corrupt-{}.json", now_ms()));
+        fs::rename(&path, &quarantined).map_err(storage_error)?;
+        Ok(Some(quarantined))
     }
 
     pub fn environment(&self) -> RemoteEnvironment {
@@ -314,6 +348,7 @@ impl RemoteAuthStore {
                 scopes: pairing.view.scopes,
                 expires_at_ms: now.saturating_add(pairing.session_ttl_secs * 1000),
                 revoked: false,
+                last_used_at_ms: None,
             };
             state.sessions.push(StoredSession {
                 view: view.clone(),

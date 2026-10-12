@@ -1274,6 +1274,7 @@ pub struct EngineRpc {
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
     remote_auth: Option<std::sync::Arc<luna_rpc::RemoteAuthStore>>,
+    remote_auth_unavailable: Option<crate::RemoteAuthorityUnavailable>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<luna_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
@@ -1490,6 +1491,7 @@ impl EngineRpc {
             task_identity,
             auth: None,
             remote_auth: None,
+            remote_auth_unavailable: None,
             links: None,
             updater: None,
             local_import: None,
@@ -2090,6 +2092,27 @@ impl EngineRpc {
 
     /// The scheduler reads only a separately marked copy-isolated source. A
     /// normal LUNA root never constructs this control or starts a backup job.
+    pub(crate) fn with_remote_authority_unavailable(
+        mut self,
+        unavailable: crate::RemoteAuthorityUnavailable,
+    ) -> Self {
+        self.remote_auth_unavailable = Some(unavailable);
+        self
+    }
+
+    /// The profile's remote authority store, or why it is unavailable.
+    fn remote_store(&self) -> Result<&std::sync::Arc<luna_rpc::RemoteAuthStore>, RpcError> {
+        self.remote_auth.as_ref().ok_or_else(|| {
+            RpcError::Failed(match &self.remote_auth_unavailable {
+                Some(unavailable) => format!(
+                    "remote authority unavailable: {}. Run `luna remote reset-authority` to quarantine it and pair devices again.",
+                    unavailable.reason
+                ),
+                None => "remote authority unavailable".into(),
+            })
+        })
+    }
+
     pub fn with_backup_control(mut self, control: BackupControl) -> Self {
         self.backup_control = Some(control);
         self
@@ -9399,17 +9422,11 @@ impl EngineRpc {
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::CREATE_REMOTE_PAIRING => {
                 let request: luna_rpc::remote_auth::CreatePairing = parse_params(params)?;
-                let store = self
-                    .remote_auth
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                let store = self.remote_store()?;
                 RpcReply::value(&store.create_pairing(request)?)
             }
             methods::LIST_REMOTE_PAIRINGS => {
-                let store = self
-                    .remote_auth
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                let store = self.remote_store()?;
                 RpcReply::value(&store.list_pairings())
             }
             methods::REVOKE_REMOTE_PAIRING => {
@@ -9418,19 +9435,13 @@ impl EngineRpc {
                     id: String,
                 }
                 let request: P = parse_params(params)?;
-                let store = self
-                    .remote_auth
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                let store = self.remote_store()?;
                 RpcReply::value(
                     &serde_json::json!({ "revoked": store.revoke_pairing(&request.id)? }),
                 )
             }
             methods::LIST_REMOTE_SESSIONS => {
-                let store = self
-                    .remote_auth
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                let store = self.remote_store()?;
                 RpcReply::value(&store.list_sessions())
             }
             methods::REVOKE_REMOTE_SESSION => {
@@ -9439,13 +9450,28 @@ impl EngineRpc {
                     id: String,
                 }
                 let request: P = parse_params(params)?;
-                let store = self
-                    .remote_auth
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                let store = self.remote_store()?;
                 RpcReply::value(
                     &serde_json::json!({ "revoked": store.revoke_session(&request.id)? }),
                 )
+            }
+            methods::RESET_REMOTE_AUTHORITY => {
+                if self.remote_auth.is_some() {
+                    return Err(RpcError::Failed(
+                        "remote authority is healthy; nothing to reset".into(),
+                    ));
+                }
+                let unavailable = self.remote_auth_unavailable.as_ref().ok_or_else(|| {
+                    RpcError::Failed("remote authority is not part of this engine".into())
+                })?;
+                let quarantined = luna_rpc::RemoteAuthStore::quarantine_unreadable(
+                    &unavailable.root,
+                    unavailable.environment.clone(),
+                )?;
+                RpcReply::value(&serde_json::json!({
+                    "quarantined": quarantined,
+                    "restartRequired": true,
+                }))
             }
             methods::GET_BACKUP_STATUS => {
                 let Some(control) = self.backup_control.clone() else {
