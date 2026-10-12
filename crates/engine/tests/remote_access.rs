@@ -170,3 +170,547 @@ async fn a_corrupt_authority_store_stays_refused_until_an_explicit_reset() {
     );
     shutdown(reopened).await;
 }
+
+/// The direct gateway at its real boundary: a client that pins the host's
+/// SPKI, as the phone does, over HTTPS and WebSocket.
+#[cfg(unix)]
+mod gateway {
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures::{SinkExt, StreamExt};
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::{DigitallySignedStruct, SignatureScheme};
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    use super::*;
+
+    type Socket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// The gateway refuses loopback, so tests bind this machine's route
+    /// address. The UDP connect sends nothing.
+    fn lan_ip() -> IpAddr {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket
+            .connect("192.0.2.1:9")
+            .expect("a non-loopback route; the gateway refuses loopback");
+        socket.local_addr().unwrap().ip()
+    }
+
+    /// A port free on the route address and on loopback (the gateway's rule).
+    fn free_bind() -> String {
+        let ip = lan_ip();
+        loop {
+            let port = std::net::TcpListener::bind((ip, 0))
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                return SocketAddr::new(ip, port).to_string();
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct Pin(String, Arc<rustls::crypto::CryptoProvider>);
+
+    impl ServerCertVerifier for Pin {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            let (_, certificate) = x509_parser::parse_x509_certificate(end_entity.as_ref())
+                .map_err(|_| rustls::Error::General("unparsable certificate".into()))?;
+            let spki = hex(&Sha256::digest(certificate.public_key().raw));
+            if spki == self.0 {
+                Ok(ServerCertVerified::assertion())
+            } else {
+                Err(rustls::Error::General("pin mismatch".into()))
+            }
+        }
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &self.1.signature_verification_algorithms,
+            )
+        }
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &self.1.signature_verification_algorithms,
+            )
+        }
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.1.signature_verification_algorithms.supported_schemes()
+        }
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn tls(pin: &str) -> Arc<rustls::ClientConfig> {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(Pin(pin.into(), provider)))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Arc::new(config)
+    }
+
+    fn http(pin: &str) -> reqwest::Client {
+        reqwest::Client::builder()
+            .use_preconfigured_tls((*tls(pin)).clone())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap()
+    }
+
+    async fn post(
+        http: &reqwest::Client,
+        bind: &str,
+        path: &str,
+        bearer: Option<&str>,
+        body: &Value,
+    ) -> (u16, Value) {
+        let mut request = http.post(format!("https://{bind}{path}")).json(body);
+        if let Some(token) = bearer {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.expect("the gateway answers");
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Value::Null))
+    }
+
+    async fn socket(
+        bind: &str,
+        pin: &str,
+        ticket: &str,
+        origin: Option<&str>,
+    ) -> Result<Socket, tokio_tungstenite::tungstenite::Error> {
+        let mut request = format!("wss://{bind}/remote/v1/ws")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", format!("Ticket {ticket}").parse().unwrap());
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(tls(pin))),
+        )
+        .await
+        .map(|(socket, _)| socket)
+    }
+
+    /// One unary call over the socket: `Ok(ok)` or `Err(err)`.
+    async fn call(
+        socket: &mut Socket,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        socket
+            .send(Message::Text(
+                json!({"id": id, "method": method, "params": params}).to_string(),
+            ))
+            .await
+            .map_err(|error| format!("closed: {error}"))?;
+        loop {
+            let message = tokio::time::timeout(Duration::from_secs(10), socket.next())
+                .await
+                .map_err(|_| "no reply".to_string())?;
+            match message {
+                Some(Ok(Message::Text(text))) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    if frame["id"] != id {
+                        continue;
+                    }
+                    if let Some(error) = frame.get("err") {
+                        return Err(error.as_str().unwrap_or_default().to_owned());
+                    }
+                    return Ok(frame["ok"].clone());
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(error)) => return Err(format!("closed: {error}")),
+                None => return Err("closed".into()),
+            }
+        }
+    }
+
+    /// Waits for the server to close the socket (a positive event).
+    async fn closed(socket: &mut Socket) -> bool {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match socket.next().await {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    async fn pair(
+        local: &luna_rpc::RpcClient,
+        http: &reqwest::Client,
+        bind: &str,
+        label: &str,
+    ) -> IssuedSession {
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": label, "scopes": ["environment-read", "tasks-read"],
+                    "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let (status, session) = post(
+            http,
+            bind,
+            "/remote/v1/pair",
+            None,
+            &json!({"target": issued.target, "credential": issued.credential, "clientLabel": label}),
+        )
+        .await;
+        assert_eq!(status, 200, "pairing over the gateway: {session}");
+        serde_json::from_value(session).unwrap()
+    }
+
+    async fn ticket(http: &reqwest::Client, bind: &str, session: &IssuedSession) -> String {
+        let (status, ticket) = post(
+            http,
+            bind,
+            "/remote/v1/socket-ticket",
+            Some(&session.session_token),
+            &json!({"target": session.target}),
+        )
+        .await;
+        assert_eq!(status, 200, "{ticket}");
+        ticket["ticket"].as_str().unwrap().to_owned()
+    }
+
+    /// The macOS application firewall (stealth mode) silently drops inbound
+    /// connections to a test binary it has not approved, even from this
+    /// machine; such a run is reported as skipped, and Linux CI runs these
+    /// tests for real. A refused connection (nothing listening) still fails.
+    async fn firewalled(bind: &str) -> bool {
+        match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(bind))
+            .await
+        {
+            Ok(Ok(_)) => false,
+            Ok(Err(error)) => panic!("the gateway is not listening on {bind}: {error}"),
+            Err(_) => {
+                eprintln!(
+                    "SKIPPED: {bind} is unreachable from this unapproved test binary \
+                     (macOS application firewall); Linux CI runs this test"
+                );
+                true
+            }
+        }
+    }
+
+    async fn enable(local: &luna_rpc::RpcClient, bind: &str) -> Value {
+        local
+            .call("SetRemoteAccess", json!({"enabled": true, "bind": bind}))
+            .await
+            .expect("remote access enables")
+    }
+
+    /// B1–B3, B7, RP-02, RP-03: off until enabled; then the pinned host pairs
+    /// once, admits a ticketed socket for that session's scopes only, and
+    /// refuses replays, browser origins, oversized bodies and local-only methods.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_access_is_off_until_enabled_then_admits_only_its_paired_session() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble(root.path());
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let status = local.call("GetRemoteAccess", json!({})).await.unwrap();
+        assert_eq!(
+            (status["enabled"].clone(), status["listening"].clone()),
+            (json!(false), json!(false))
+        );
+
+        let bind = free_bind();
+        let port = bind.rsplit(':').next().unwrap();
+        let loopback = local
+            .call(
+                "SetRemoteAccess",
+                json!({"enabled": true, "bind": format!("127.0.0.1:{port}")}),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(loopback.contains("loopback"), "{loopback}");
+
+        let status = enable(&local, &bind).await;
+        assert_eq!(status["listening"], true, "{status}");
+        if firewalled(&bind).await {
+            core.shutdown().await;
+            return;
+        }
+        let pin = status["spkiSha256"].as_str().unwrap().to_owned();
+        let http = http(&pin);
+        let descriptor: Value = http
+            .get(format!("https://{bind}/remote/v1/descriptor"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(descriptor["spkiSha256"], pin);
+        assert_eq!(descriptor["target"], status["target"]);
+        assert!(
+            crate::gateway::http(&"0".repeat(64))
+                .get(format!("https://{bind}/remote/v1/descriptor"))
+                .send()
+                .await
+                .is_err(),
+            "a wrong pin fails at TLS"
+        );
+
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": "phone", "scopes": ["environment-read"],
+                    "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let redeem = json!({"target": issued.target, "credential": issued.credential, "clientLabel": "phone"});
+        let (status, session) = post(&http, &bind, "/remote/v1/pair", None, &redeem).await;
+        assert_eq!(status, 200, "{session}");
+        let session: IssuedSession = serde_json::from_value(session).unwrap();
+        let (replayed, _) = post(&http, &bind, "/remote/v1/pair", None, &redeem).await;
+        assert_eq!(replayed, 403, "a used credential is refused");
+        let oversized = json!({"padding": "x".repeat(20_000)});
+        let (too_large, _) = post(&http, &bind, "/remote/v1/pair", None, &oversized).await;
+        assert_eq!(too_large, 413);
+
+        let (checked, view) = post(
+            &http,
+            &bind,
+            "/remote/v1/session/check",
+            Some(&session.session_token),
+            &json!({"target": session.target}),
+        )
+        .await;
+        assert_eq!(checked, 200, "{view}");
+        assert!(
+            view["lastUsedAtMs"].is_u64(),
+            "the check records a use: {view}"
+        );
+
+        let first = ticket(&http, &bind, &session).await;
+        assert!(
+            socket(&bind, &pin, &first, Some("https://evil.example"))
+                .await
+                .is_err(),
+            "a browser origin is refused"
+        );
+        let mut ws = socket(&bind, &pin, &first, None)
+            .await
+            .expect("a ticketed socket opens");
+        let info = call(&mut ws, 1, methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(info["deviceId"], core.device_id);
+        for (id, method) in [
+            (2, methods::LIST_REMOTE_SESSIONS),
+            (3, methods::EXECUTE_TASK_COMMAND),
+        ] {
+            let denied = call(&mut ws, id, method, json!({})).await.unwrap_err();
+            assert!(denied.contains("local only"), "{method}: {denied}");
+        }
+        let denied = call(
+            &mut ws,
+            4,
+            methods::GET_TASK_COMMAND_RECEIPT,
+            json!({"commandId": "x"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(denied.contains("lacks required scope"), "{denied}");
+        assert!(
+            socket(&bind, &pin, &first, None).await.is_err(),
+            "a ticket opens one socket only"
+        );
+
+        core.shutdown().await;
+        assert!(closed(&mut ws).await, "shutdown closes remote sockets");
+    }
+
+    /// B5, B6, RP-05: revoking one session closes only its socket; disabling
+    /// closes the rest and stops the listener; re-enabling keeps the pin.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn revoke_closes_only_its_session_and_disable_closes_everything() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble(root.path());
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let pin = enable(&local, &bind).await["spkiSha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if firewalled(&bind).await {
+            core.shutdown().await;
+            return;
+        }
+        let http = http(&pin);
+        let a = pair(&local, &http, &bind, "phone a").await;
+        let b = pair(&local, &http, &bind, "phone b").await;
+        let mut wa = socket(&bind, &pin, &ticket(&http, &bind, &a).await, None)
+            .await
+            .unwrap();
+        let mut wb = socket(&bind, &pin, &ticket(&http, &bind, &b).await, None)
+            .await
+            .unwrap();
+        call(&mut wa, 1, methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        call(&mut wb, 1, methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+
+        local
+            .call(methods::REVOKE_REMOTE_SESSION, json!({"id": a.session.id}))
+            .await
+            .unwrap();
+        assert!(closed(&mut wa).await, "the revoked session's socket closes");
+        call(&mut wb, 2, methods::ENGINE_INFO, json!({}))
+            .await
+            .expect("the other session keeps working");
+        let (refused, _) = post(
+            &http,
+            &bind,
+            "/remote/v1/session/check",
+            Some(&a.session_token),
+            &json!({"target": a.target}),
+        )
+        .await;
+        assert_eq!(refused, 403);
+
+        let status = local
+            .call("SetRemoteAccess", json!({"enabled": false}))
+            .await
+            .unwrap();
+        assert_eq!(
+            (status["enabled"].clone(), status["listening"].clone()),
+            (json!(false), json!(false))
+        );
+        assert!(closed(&mut wb).await, "disable closes every socket");
+        assert!(
+            tokio::net::TcpStream::connect(&bind).await.is_err(),
+            "the listener is gone"
+        );
+
+        let again = enable(&local, &bind).await;
+        assert_eq!(
+            again["spkiSha256"], pin,
+            "the identity, and so the pin, is stable"
+        );
+        let (checked, _) = post(
+            &http,
+            &bind,
+            "/remote/v1/session/check",
+            Some(&b.session_token),
+            &json!({"target": b.target}),
+        )
+        .await;
+        assert_eq!(checked, 200, "an unrevoked session survives disable");
+        core.shutdown().await;
+    }
+
+    /// RP-19: enabled remote access resumes after a restart with the same pin;
+    /// a live session still checks in and a revoked one stays refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_access_resumes_after_restart_with_the_same_pin() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble(root.path());
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let pin = enable(&local, &bind).await["spkiSha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if firewalled(&bind).await {
+            core.shutdown().await;
+            return;
+        }
+        let http = http(&pin);
+        let live = pair(&local, &http, &bind, "kept").await;
+        let gone = pair(&local, &http, &bind, "revoked").await;
+        local
+            .call(
+                methods::REVOKE_REMOTE_SESSION,
+                json!({"id": gone.session.id}),
+            )
+            .await
+            .unwrap();
+        shutdown(core).await;
+
+        let reopened = assemble(root.path());
+        let local = luna_rpc::memory_client(reopened.rpc_service());
+        let status = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let status = local.call("GetRemoteAccess", json!({})).await.unwrap();
+                if status["listening"] == true {
+                    break status;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("enabled remote access resumes on start");
+        assert_eq!(status["spkiSha256"], pin);
+        for (session, expected) in [(&live, 200), (&gone, 403)] {
+            let (code, _) = post(
+                &http,
+                &bind,
+                "/remote/v1/session/check",
+                Some(&session.session_token),
+                &json!({"target": session.target}),
+            )
+            .await;
+            assert_eq!(code, expected, "{}", session.session.client_label);
+        }
+        reopened.shutdown().await;
+    }
+}

@@ -1275,6 +1275,7 @@ pub struct EngineRpc {
     auth: Option<Auth>,
     remote_auth: Option<std::sync::Arc<luna_rpc::RemoteAuthStore>>,
     remote_auth_unavailable: Option<crate::RemoteAuthorityUnavailable>,
+    remote_access: Option<std::sync::Arc<crate::remote_access::RemoteAccess>>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<luna_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
@@ -1492,6 +1493,7 @@ impl EngineRpc {
             auth: None,
             remote_auth: None,
             remote_auth_unavailable: None,
+            remote_access: None,
             links: None,
             updater: None,
             local_import: None,
@@ -2097,6 +2099,14 @@ impl EngineRpc {
         unavailable: crate::RemoteAuthorityUnavailable,
     ) -> Self {
         self.remote_auth_unavailable = Some(unavailable);
+        self
+    }
+
+    pub(crate) fn with_remote_access(
+        mut self,
+        access: std::sync::Arc<crate::remote_access::RemoteAccess>,
+    ) -> Self {
+        self.remote_access = Some(access);
         self
     }
 
@@ -9454,6 +9464,28 @@ impl EngineRpc {
                 RpcReply::value(
                     &serde_json::json!({ "revoked": store.revoke_session(&request.id)? }),
                 )
+            }
+            methods::GET_REMOTE_ACCESS | methods::SET_REMOTE_ACCESS => {
+                let access = self
+                    .remote_access
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote access is local only".into()))?;
+                if method == methods::GET_REMOTE_ACCESS {
+                    return RpcReply::value(&access.status().await);
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    enabled: bool,
+                    #[serde(default)]
+                    bind: Option<String>,
+                }
+                let request: P = parse_params(params)?;
+                let status = access
+                    .set(request.enabled, request.bind)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&status)
             }
             methods::RESET_REMOTE_AUTHORITY => {
                 if self.remote_auth.is_some() {

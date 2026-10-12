@@ -26,6 +26,11 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 time = "0.3"
+async-trait.workspace = true
+futures.workspace = true
+tracing.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 
 [[example]]
 name = "probe"

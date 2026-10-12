@@ -758,6 +758,30 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "GetRemoteAccess",
+      "id": "luna.core/get-remote-access",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetRemoteAccess",
+      "id": "luna.core/set-remote-access",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "RedeemRemotePairing",
       "id": "luna.core/redeem-remote-pairing",
       "version": 1,

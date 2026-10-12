@@ -43,6 +43,17 @@ enum RemoteCommand {
     /// Move an unreadable remote authority store aside (bytes kept) so the
     /// next start begins empty. Devices must pair again. Refused when healthy.
     ResetAuthority,
+    /// Serve paired devices directly on one LAN address (off by default).
+    Enable {
+        /// The interface address and port, for example 192.168.1.20:7744.
+        /// Loopback and wildcard addresses are refused.
+        #[arg(long)]
+        bind: Option<String>,
+    },
+    /// Stop direct remote access: refuse new calls, then close every socket.
+    Disable,
+    /// Show whether direct remote access is enabled and listening.
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -163,8 +174,49 @@ pub async fn run(args: RemoteArgs, default_port: u16) -> anyhow::Result<()> {
             }
             println!("restart LUNA, then pair devices again");
         }
+        RemoteCommand::Enable { bind } => {
+            let status: serde_json::Value = call(
+                &client,
+                methods::SET_REMOTE_ACCESS,
+                json!({ "enabled": true, "bind": bind }),
+            )
+            .await?;
+            print_access(&status);
+        }
+        RemoteCommand::Disable => {
+            let status: serde_json::Value = call(
+                &client,
+                methods::SET_REMOTE_ACCESS,
+                json!({ "enabled": false }),
+            )
+            .await?;
+            print_access(&status);
+        }
+        RemoteCommand::Status => {
+            let status: serde_json::Value =
+                call(&client, methods::GET_REMOTE_ACCESS, json!({})).await?;
+            print_access(&status);
+        }
     }
     Ok(())
+}
+
+fn print_access(status: &serde_json::Value) {
+    let text = |key: &str| status[key].as_str().unwrap_or("-").to_owned();
+    println!(
+        "enabled: {}  listening: {}",
+        status["enabled"] == true,
+        status["listening"] == true
+    );
+    println!(
+        "address: {}  (configured {})",
+        text("address"),
+        text("bind")
+    );
+    println!("pin (SHA-256 of the TLS key): {}", text("spkiSha256"));
+    if let Some(error) = status["error"].as_str() {
+        println!("error: {error}");
+    }
 }
 
 async fn call<T: DeserializeOwned>(

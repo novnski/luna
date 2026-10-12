@@ -5155,6 +5155,7 @@ dependencies = [
  "luna-harness",
  "luna-preview",
  "luna-proto",
+ "luna-remote",
  "luna-rpc",
  "luna-sync",
  "luna-update",
@@ -5164,6 +5165,7 @@ dependencies = [
  "portable-pty",
  "reqwest",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -5179,6 +5181,7 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.61.2",
+ "x509-parser 0.18.1",
  "zeroize",
 ]
 
@@ -5301,7 +5304,9 @@ dependencies = [
 name = "luna-remote"
 version = "0.2.73"
 dependencies = [
+ "async-trait",
  "bytes",
+ "futures",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -5316,6 +5321,9 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
  "uuid",
 ]
 

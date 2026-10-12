@@ -24,6 +24,12 @@ pub const CAPABILITY: &str = luna_proto::capabilities::REMOTE_AUTH_V1;
 /// On-disk store version. v2 records each session's last use; a v1 store
 /// migrates on open. A newer store is refused, never guessed at.
 const STORE_VERSION: u16 = 2;
+/// A socket ticket's lifetime. Tickets are single use and kept only in
+/// memory; per the owner decision they stay valid until expiry even after
+/// their session is revoked, and the socket still re-checks every call.
+pub const SOCKET_TICKET_TTL_MS: u64 = 30_000;
+/// A session's recorded last use is refreshed at most this often.
+const LAST_USE_GRANULARITY_MS: u64 = 60_000;
 const MAX_PAIRING_TTL_SECS: u64 = 600;
 const MAX_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
@@ -102,6 +108,14 @@ pub struct SessionView {
     pub last_used_at_ms: Option<u64>,
 }
 
+/// A single-use credential that opens one WebSocket for a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SocketTicket {
+    pub ticket: String,
+    pub expires_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssuedSession {
@@ -162,6 +176,8 @@ pub struct RemoteAuthStore {
     path: PathBuf,
     state: Mutex<State>,
     changed: watch::Sender<u64>,
+    /// Ticket hash → (session id, expiry). Never persisted.
+    tickets: Mutex<std::collections::HashMap<String, (String, u64)>>,
 }
 
 impl RemoteAuthStore {
@@ -206,6 +222,7 @@ impl RemoteAuthStore {
             path,
             state: Mutex::new(state),
             changed,
+            tickets: Mutex::default(),
         }))
     }
 
@@ -386,6 +403,81 @@ impl RemoteAuthStore {
         })
     }
 
+    /// A device session presented with its target, as an HTTP route sees it.
+    pub fn authenticate(
+        &self,
+        target: &RemoteTarget,
+        token: &str,
+    ) -> Result<SessionView, RpcError> {
+        self.check_target(target)?;
+        self.validate_token(token)
+    }
+
+    /// A live session by id: the check a ticket-opened socket repeats.
+    pub fn validate_session(&self, id: &str) -> Result<SessionView, RpcError> {
+        let state = lock(&self.state);
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.view.id == id)
+            .ok_or_else(|| denied("unknown device session"))?;
+        if session.view.revoked || session.view.expires_at_ms <= now_ms() {
+            return Err(denied("device session revoked or expired"));
+        }
+        Ok(session.view.clone())
+    }
+
+    pub fn issue_socket_ticket(
+        &self,
+        target: &RemoteTarget,
+        token: &str,
+    ) -> Result<SocketTicket, RpcError> {
+        let session = self.authenticate(target, token)?;
+        let ticket = random_secret()?;
+        let now = now_ms();
+        let expires_at_ms = now.saturating_add(SOCKET_TICKET_TTL_MS);
+        let mut tickets = lock(&self.tickets);
+        tickets.retain(|_, (_, expires)| *expires > now);
+        tickets.insert(hash_secret(&ticket), (session.id, expires_at_ms));
+        Ok(SocketTicket {
+            ticket,
+            expires_at_ms,
+        })
+    }
+
+    /// Consumes a ticket and names its session. Revocation is not checked
+    /// here (owner decision); the socket checks the session on every call.
+    pub fn redeem_socket_ticket(&self, ticket: &str) -> Result<String, RpcError> {
+        let (session, expires_at_ms) = lock(&self.tickets)
+            .remove(&hash_secret(ticket))
+            .ok_or_else(|| denied("socket ticket unknown or already used"))?;
+        if expires_at_ms <= now_ms() {
+            return Err(denied("socket ticket expired"));
+        }
+        Ok(session)
+    }
+
+    /// Records that a session connected, at most once a minute.
+    pub fn record_use(&self, id: &str) -> Result<SessionView, RpcError> {
+        let view = self.validate_session(id)?;
+        let now = now_ms();
+        if view
+            .last_used_at_ms
+            .is_some_and(|last| now.saturating_sub(last) < LAST_USE_GRANULARITY_MS)
+        {
+            return Ok(view);
+        }
+        self.mutate(|state| {
+            let session = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.view.id == id)
+                .ok_or_else(|| denied("unknown device session"))?;
+            session.view.last_used_at_ms = Some(now);
+            Ok(session.view.clone())
+        })
+    }
+
     fn validate_token(&self, token: &str) -> Result<SessionView, RpcError> {
         let hash = hash_secret(token);
         let state = lock(&self.state);
@@ -418,7 +510,8 @@ impl RemoteAuthStore {
         Ok(result)
     }
 
-    fn subscribe(&self) -> watch::Receiver<u64> {
+    /// Wakes on every change, including revocations.
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
 }
@@ -429,7 +522,24 @@ impl RemoteAuthStore {
 pub struct RemoteRpcService {
     inner: Arc<dyn RpcService>,
     auth: Arc<RemoteAuthStore>,
-    token: Mutex<Option<String>>,
+    credential: Mutex<Option<Credential>>,
+}
+
+/// What a connection authenticated with; checked again on every call.
+#[derive(Clone)]
+enum Credential {
+    Token(String),
+    /// A socket opened with a ticket for this session.
+    Session(String),
+}
+
+impl Credential {
+    fn validate(&self, auth: &RemoteAuthStore) -> Result<SessionView, RpcError> {
+        match self {
+            Self::Token(token) => auth.validate_token(token),
+            Self::Session(id) => auth.validate_session(id),
+        }
+    }
 }
 
 impl RemoteRpcService {
@@ -437,7 +547,20 @@ impl RemoteRpcService {
         Self {
             inner,
             auth,
-            token: Mutex::new(None),
+            credential: Mutex::new(None),
+        }
+    }
+
+    /// A socket opened with a ticket: already bound to `session_id`.
+    pub fn for_session(
+        inner: Arc<dyn RpcService>,
+        auth: Arc<RemoteAuthStore>,
+        session_id: String,
+    ) -> Self {
+        Self {
+            inner,
+            auth,
+            credential: Mutex::new(Some(Credential::Session(session_id))),
         }
     }
 }
@@ -450,11 +573,12 @@ impl RpcService for RemoteRpcService {
             return RpcReply::value(&self.auth.redeem(request)?);
         }
         if method == methods::AUTHENTICATE_REMOTE {
-            *lock(&self.token) = None;
+            *lock(&self.credential) = None;
             let request: AuthenticateRemote = parse_params(params)?;
-            self.auth.check_target(&request.target)?;
-            let session = self.auth.validate_token(&request.session_token)?;
-            *lock(&self.token) = Some(request.session_token);
+            let session = self
+                .auth
+                .authenticate(&request.target, &request.session_token)?;
+            *lock(&self.credential) = Some(Credential::Token(request.session_token));
             return RpcReply::value(&session);
         }
         let policy =
@@ -462,10 +586,10 @@ impl RpcService for RemoteRpcService {
         let Some(required_scope) = policy else {
             return Err(denied("method is local only"));
         };
-        let token = lock(&self.token)
+        let credential = lock(&self.credential)
             .clone()
             .ok_or_else(|| denied("device session required"))?;
-        let session = self.auth.validate_token(&token)?;
+        let session = credential.validate(&self.auth)?;
         if !session.scopes.contains(&required_scope) {
             return Err(denied("device session lacks required scope"));
         }
@@ -480,25 +604,25 @@ impl RpcService for RemoteRpcService {
         let reply = self.inner.handle(method, params).await?;
         match reply {
             RpcReply::Value(value) => {
-                self.auth.validate_token(&token)?;
+                credential.validate(&self.auth)?;
                 Ok(RpcReply::Value(value))
             }
             RpcReply::Stream(source) => {
                 let auth = self.auth.clone();
                 let changes = auth.subscribe();
                 let stream = stream::unfold(
-                    (source, changes, auth, token),
-                    |(mut source, mut changes, auth, token)| async move {
+                    (source, changes, auth, credential),
+                    |(mut source, mut changes, auth, credential)| async move {
                         loop {
-                            let session = auth.validate_token(&token).ok()?;
+                            let session = credential.validate(&auth).ok()?;
                             let wait = Duration::from_millis(
                                 session.expires_at_ms.saturating_sub(now_ms()),
                             );
                             tokio::select! {
                                 item = source.next() => {
                                     let item = item?;
-                                    auth.validate_token(&token).ok()?;
-                                    return Some((item, (source, changes, auth, token)));
+                                    credential.validate(&auth).ok()?;
+                                    return Some((item, (source, changes, auth, credential)));
                                 }
                                 result = changes.changed() => {
                                     result.ok()?;

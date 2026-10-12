@@ -46,6 +46,10 @@ nucleo-matcher.workspace = true
 
 tempfile.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# RM-01 direct gateway (the host is Unix-only).
+luna-remote.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
 
@@ -60,6 +64,11 @@ luna-sync = { workspace = true, features = ["mock-server"] }
 # builds. Engine tests must see the app's map semantics: an order-sensitive
 # authority hash quarantined the app's own sends (2026-10-06).
 serde_json = { workspace = true, features = ["preserve_order"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# remote_access.rs pins the gateway's key the way the phone does.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+x509-parser = "0.18"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mimalloc.workspace = true

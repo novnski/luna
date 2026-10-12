@@ -20,6 +20,18 @@ pub const DESCRIPTOR_PATH: &str = "/remote/v1/descriptor";
 /// Path of the minimal unauthenticated availability check.
 pub const HEALTH_PATH: &str = "/remote/v1/health";
 
+/// Redeem a one-time pairing credential (body: `RedeemPairing`).
+pub const PAIR_PATH: &str = "/remote/v1/pair";
+
+/// Check a device session (bearer token; body: `{target}`).
+pub const SESSION_CHECK_PATH: &str = "/remote/v1/session/check";
+
+/// Issue a single-use socket ticket (bearer token; body: `{target}`).
+pub const SOCKET_TICKET_PATH: &str = "/remote/v1/socket-ticket";
+
+/// The RPC WebSocket (`Authorization: Ticket <ticket>`; no `Origin`).
+pub const SOCKET_PATH: &str = "/remote/v1/ws";
+
 /// Current [`HostTicket`] format.
 pub const HOST_TICKET_VERSION: u16 = 1;
 

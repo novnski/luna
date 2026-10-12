@@ -6,13 +6,14 @@
 //! - [`host`]: an explicit-interface TLS listener serving only the harmless
 //!   descriptor and health endpoints.
 //!
-//! Nothing here authenticates a device or reaches engine methods; RM-01 adds
-//! the authenticated gateway over the same identity and listener rules.
+//! RM-01 adds [`gateway`]: the engine-owned, authenticated gateway over the
+//! same identity and listener rules.
 //! The host is Unix-only (macOS is the supported host); elsewhere the crate is
 //! empty.
 
 #![cfg(unix)]
 
+pub mod gateway;
 pub mod host;
 pub mod identity;
 

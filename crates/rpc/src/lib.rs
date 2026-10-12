@@ -110,6 +110,9 @@ pub mod methods {
     pub const LIST_REMOTE_SESSIONS: &str = "ListRemoteSessions";
     pub const REVOKE_REMOTE_SESSION: &str = "RevokeRemoteSession";
     pub const RESET_REMOTE_AUTHORITY: &str = "ResetRemoteAuthority";
+    /// RM-01 direct remote access: local only, off by default.
+    pub const GET_REMOTE_ACCESS: &str = "GetRemoteAccess";
+    pub const SET_REMOTE_ACCESS: &str = "SetRemoteAccess";
     pub const REDEEM_REMOTE_PAIRING: &str = "RedeemRemotePairing";
     pub const AUTHENTICATE_REMOTE: &str = "AuthenticateRemote";
     /// L17 local-only backup control. Raw recovery material is accepted only
@@ -533,6 +536,8 @@ pub mod methods {
         LIST_REMOTE_SESSIONS,
         REVOKE_REMOTE_SESSION,
         RESET_REMOTE_AUTHORITY,
+        GET_REMOTE_ACCESS,
+        SET_REMOTE_ACCESS,
         REDEEM_REMOTE_PAIRING,
         AUTHENTICATE_REMOTE,
         GET_BACKUP_STATUS,

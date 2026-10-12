@@ -156,6 +156,7 @@ mod provider_inputs;
 mod provider_updates;
 pub mod recovery;
 pub mod registry;
+pub mod remote_access;
 pub mod repos;
 pub mod rpc;
 pub mod run_journal;
@@ -341,6 +342,8 @@ pub struct EngineCore {
     remote_auth: Option<Arc<luna_rpc::RemoteAuthStore>>,
     /// Why the remote authority store could not be opened, for the explicit reset.
     remote_auth_unavailable: Option<RemoteAuthorityUnavailable>,
+    /// Direct remote access (RM-01): config, identity and the running gateway.
+    remote_access: Arc<remote_access::RemoteAccess>,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
@@ -740,6 +743,8 @@ impl EngineCore {
         let provider_defaults =
             provider_defaults::ProviderDefaults::open(profile.store_root(), device_write.handle())?;
         let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
+        let remote_access =
+            remote_access::RemoteAccess::new(profile.store_root(), remote_auth.clone());
         Ok(Self {
             provider_defaults,
             chat_workbenches,
@@ -767,6 +772,7 @@ impl EngineCore {
             device_id,
             remote_auth,
             remote_auth_unavailable,
+            remote_access,
             local_import,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
@@ -906,6 +912,7 @@ impl EngineCore {
                 self.sessions
                     .set_cross_task_backend(Arc::downgrade(&backend));
                 rpc::board_engine::authoring::register_service(&service);
+                self.remote_access.attach_service(self.remote_service());
                 service
             })
             .clone();
@@ -915,6 +922,9 @@ impl EngineCore {
             && let Some(scope) = self.maintenance.claim_start()
         {
             service.start_maintenance(scope);
+            // Remote access left enabled resumes with the engine.
+            let access = self.remote_access.clone();
+            scope.spawn(async move { access.resume().await });
         }
         service
     }
@@ -948,6 +958,11 @@ impl EngineCore {
         // The local service owns maintenance and agent tools, so it exists
         // before any remote transport does.
         self.rpc_service();
+        self.remote_service()
+    }
+
+    /// The restricted service behind every remote transport, built once.
+    fn remote_service(&self) -> Arc<EngineRpc> {
         self.remote_service
             .get_or_init(|| self.build_rpc_service(false))
             .clone()
@@ -996,6 +1011,9 @@ impl EngineCore {
         {
             rpc = rpc.with_remote_authority_unavailable(unavailable);
         }
+        if include_backup {
+            rpc = rpc.with_remote_access(self.remote_access.clone());
+        }
         if let Some(control) = self.backup_control.clone().filter(|_| include_backup) {
             rpc = rpc.with_backup_control(control);
         } else if include_backup {
@@ -1030,6 +1048,8 @@ impl EngineCore {
     /// `aborted`), kill live PTYs, stamp our workspace `lastSeenAt`, and flush
     /// every open doc snapshot.
     pub async fn shutdown(&self) -> bool {
+        // Remote devices first: refuse their calls, then close their sockets.
+        self.remote_access.stop().await;
         // Close admission first: no client, including one kept from before,
         // starts a command while runs settle and stores flush.
         let still_running = self.lifetime.close_and_drain(COMMAND_DRAIN).await;
@@ -1101,6 +1121,7 @@ impl EngineCore {
 
 impl Drop for EngineCore {
     fn drop(&mut self) {
+        self.remote_access.abort();
         self.lifetime.close();
         self.usage_cache.shutdown();
         self.model_cache.shutdown();
