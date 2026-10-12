@@ -1,0 +1,25 @@
+{
+ "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+ "binaries": 102,
+ "totals": {
+  "passed": 964,
+  "failed": 2,
+  "ignored": 12
+ },
+ "failedBinaries": [
+  {
+   "target": "tests/board_tools_codex_e2e.rs",
+   "result": "FAILED",
+   "passed": 0,
+   "failed": 1,
+   "ignored": 0
+  },
+  {
+   "target": "tests/chat_workbench.rs",
+   "result": "FAILED",
+   "passed": 8,
+   "failed": 1,
+   "ignored": 0
+  }
+ ]
+}

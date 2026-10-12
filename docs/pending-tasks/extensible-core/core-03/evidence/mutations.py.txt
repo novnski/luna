@@ -1,0 +1,64 @@
+"""CORE-03 M1 mutation proofs for the lifetime/admission keeper.
+Each file is restored byte-for-byte and verified afterwards."""
+import json, os, subprocess, sys, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+os.chdir(ROOT)
+ENV = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0"}
+CMD = ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--test", "task_commands",
+       "stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger"]
+CLOSE_FIND = "    pub(crate) fn close(&self) {\n        self.inner.lock().open = false;\n    }\n"
+CLOSE_REPL = "    pub(crate) fn close(&self) {}\n"
+LEASE_FIND = "        (lease.epoch.phase() != luna_sync::write_epoch::Phase::Retired)\n            .then_some(DeviceLease { _lease: lease })\n"
+LEASE_REPL = "        Some(DeviceLease { _lease: lease })\n"
+MUTATIONS = [
+    {"id": "M1", "expect_caught": True,
+     "contract": "EngineRpc admits no catalogued command without the engine's gate",
+     "edits": [("crates/engine/src/rpc.rs",
+                "        let admitted = match spec.kind {\n",
+                "        let admitted = match luna_rpc::operations::OperationKind::Query {\n")]},
+    {"id": "M2", "expect_caught": False,
+     "contract": "closing admission alone: after shutdown the retired lease still refuses (defence in depth)",
+     "edits": [("crates/engine/src/engine_lifetime.rs", CLOSE_FIND, CLOSE_REPL)]},
+    {"id": "M3", "expect_caught": True,
+     "contract": "with close() a no-op and the lease ignoring retirement, a stopped engine admits commands",
+     "edits": [("crates/engine/src/engine_lifetime.rs", CLOSE_FIND, CLOSE_REPL),
+               ("crates/engine/src/device_write.rs", LEASE_FIND, LEASE_REPL)]},
+]
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+results = []
+for m in MUTATIONS:
+    originals = {f: Path(f).read_bytes() for f, _, _ in m["edits"]}
+    before = {f: sha(f) for f in originals}
+    ok = True
+    for f, find, repl in m["edits"]:
+        text = Path(f).read_text()
+        if text.count(find) != 1:
+            ok = False
+            results.append({"id": m["id"], "outcome": "anchor-not-unique", "file": f, "count": text.count(find)})
+            break
+        Path(f).write_text(text.replace(find, repl, 1))
+    if not ok:
+        for f, b in originals.items():
+            Path(f).write_bytes(b)
+        continue
+    log = ROOT / f"target/qa/core-03/mutation-{m['id']}.log"
+    started = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(CMD, env=ENV, stdout=out, stderr=subprocess.STDOUT).returncode
+    for f, b in originals.items():
+        Path(f).write_bytes(b)
+    lines = log.read_text().splitlines()
+    failed = [l for l in lines if l.startswith("test ") and l.endswith("FAILED")]
+    caught = code != 0 and bool(failed)
+    results.append({"id": m["id"], "contract": m["contract"], "files": list(originals), "command": " ".join(CMD),
+                    "exit": code, "caught": caught, "expectCaught": m["expect_caught"],
+                    "asExpected": caught == m["expect_caught"], "failedTests": failed,
+                    "restored": all(sha(f) == before[f] for f in originals), "seconds": round(time.time() - started)})
+    print(m["id"], "exit", code, "caught" if caught else "not caught", "(expected)" if caught == m["expect_caught"] else "(UNEXPECTED)", flush=True)
+Path("target/qa/core-03/mutations.json").write_text(json.dumps(results, indent=1) + "\n")
+sys.exit(0 if all(r.get("asExpected") and r.get("restored") for r in results) else 1)

@@ -1,0 +1,4 @@
+test stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger ... FAILED
+thread 'stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger' (48409243) panicked at crates/engine/tests/task_commands.rs:2443:10:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.09s
+a stopped engine admits no command: Object {"commandId": String("create-command-after-shutdown"), "taskId": String("after-shutdown"), "intent": String("createChat"), "payloadHash": String("32072a54d11af0cefb9566f3edaa3f3ee6b0e0328a92950d35093ae1ddfe7218"), "status": String("applied"), "snapshot": Object {"taskId": String("after-shutdown"), "taskRevision": Number(1), "taskSequence": Number(1)}, "eventSequence": Number

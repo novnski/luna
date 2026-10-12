@@ -2417,6 +2417,77 @@ async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
     reopened.shutdown().await;
 }
 
+/// CORE-03 L1/L2: a client kept from a stopped engine admits no command, and
+/// cannot leave a receipt that the reopened engine would then deduplicate
+/// into a permanently lost create.
+#[tokio::test]
+async fn stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let first = assemble(root.path(), runs.clone(), false);
+    let device_id = first.device_id.clone();
+    let stale = luna_rpc::memory_client(first.rpc_service());
+    ensure_test_project(&stale, &device_id).await;
+    let create = |task_id: &str| {
+        envelope(
+            &format!("create-command-{task_id}"),
+            task_id,
+            None,
+            serde_json::json!({ "kind": "createChat", "spaceId": "test-project" }),
+        )
+    };
+    assert!(first.shutdown().await);
+    let refused = stale
+        .call(methods::EXECUTE_TASK_COMMAND, create("after-shutdown"))
+        .await
+        .expect_err("a stopped engine admits no command");
+    assert!(refused.to_string().contains("stopped"), "{refused}");
+    drop(first);
+
+    let reopened = assemble(root.path(), runs, false);
+    let current = luna_rpc::memory_client(reopened.rpc_service());
+    let task_id = "stale-after-reopen";
+    assert!(
+        stale
+            .call(methods::EXECUTE_TASK_COMMAND, create(task_id))
+            .await
+            .is_err()
+    );
+    assert!(
+        stale
+            .call(
+                methods::MUTATE,
+                serde_json::json!({
+                    "op": "createSpace", "spaceId": "stale-project",
+                    "deviceId": device_id, "path": "/tmp"
+                }),
+            )
+            .await
+            .is_err()
+    );
+    for command_id in [
+        "create-command-after-shutdown",
+        "create-command-stale-after-reopen",
+    ] {
+        let receipt: Option<CommandReceipt> = current
+            .call_as(
+                methods::GET_TASK_COMMAND_RECEIPT,
+                serde_json::json!({ "commandId": command_id }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            receipt.is_none(),
+            "{command_id} left a receipt: {receipt:?}"
+        );
+    }
+    assert!(reopened.workspace.chat("after-shutdown").unwrap().is_none());
+    let applied = execute(&current, create(task_id)).await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    assert!(reopened.workspace.chat(task_id).unwrap().is_some());
+    reopened.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
     let root = tempfile::tempdir().unwrap();

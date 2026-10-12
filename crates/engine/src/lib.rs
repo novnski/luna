@@ -135,6 +135,7 @@ pub mod cross_task_tools;
 mod device_write;
 pub mod diff_sync;
 pub mod doc_host;
+mod engine_lifetime;
 pub mod git_actions;
 pub mod git_checkpoints;
 pub mod history_operations;
@@ -295,6 +296,9 @@ impl std::fmt::Debug for EngineConfig {
     }
 }
 
+/// How long shutdown waits for already admitted commands before settling runs.
+const COMMAND_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
@@ -337,6 +341,8 @@ pub struct EngineCore {
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Owns the exclusive data-dir lock and retires future write admission.
     device_write: device_write::DeviceWriteOwner,
+    /// Command admission shared by every RPC service this engine hands out.
+    lifetime: engine_lifetime::EngineLifetime,
     /// Shared by every RPC service in this engine; changes on a real reopen.
     cleanup_boot_id: String,
     cleanup_cancel: tokio_util::sync::CancellationToken,
@@ -707,6 +713,7 @@ impl EngineCore {
             chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
         let provider_defaults =
             provider_defaults::ProviderDefaults::open(profile.store_root(), device_write.handle())?;
+        let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
         Ok(Self {
             provider_defaults,
             chat_workbenches,
@@ -740,6 +747,7 @@ impl EngineCore {
             updater: std::sync::Mutex::new(None),
             updater_wake: std::sync::Mutex::new(None),
             device_write,
+            lifetime,
             cleanup_boot_id: uuid::Uuid::new_v4().to_string(),
             cleanup_cancel: tokio_util::sync::CancellationToken::new(),
             cleanup_worker: std::sync::Mutex::new(None),
@@ -914,6 +922,7 @@ impl EngineCore {
             self.task_identity.clone(),
             self.workspace_scope,
             self.cleanup_boot_id.clone(),
+            self.lifetime.admission(),
         )
         .with_work_write_handle(self.device_write.handle())
         .with_auth(self.auth())
@@ -945,7 +954,8 @@ impl EngineCore {
             rpc = rpc.with_local_import(importer);
         }
         let rpc = Arc::new(rpc);
-        if tokio::runtime::Handle::try_current().is_ok() {
+        // A stopped engine never restarts its maintenance workers.
+        if self.lifetime.is_open() && tokio::runtime::Handle::try_current().is_ok() {
             let mut worker = self
                 .cleanup_worker
                 .lock()
@@ -984,10 +994,20 @@ impl EngineCore {
         self.workspace.disconnect_edge();
     }
 
-    /// Graceful teardown: settle live runs (streaming entries stamped `aborted`),
-    /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
-    /// snapshot.
+    /// Graceful teardown: close command admission (waiting briefly for
+    /// admitted commands), settle live runs (streaming entries stamped
+    /// `aborted`), kill live PTYs, stamp our workspace `lastSeenAt`, and flush
+    /// every open doc snapshot.
     pub async fn shutdown(&self) -> bool {
+        // Close admission first: no client, including one kept from before,
+        // starts a command while runs settle and stores flush.
+        let still_running = self.lifetime.close_and_drain(COMMAND_DRAIN).await;
+        if still_running > 0 {
+            tracing::warn!(
+                still_running,
+                "admitted commands still running as shutdown proceeds"
+            );
+        }
         self.usage_cache.shutdown();
         self.model_cache.shutdown();
         self.cleanup_cancel.cancel();
@@ -1052,6 +1072,7 @@ impl EngineCore {
 
 impl Drop for EngineCore {
     fn drop(&mut self) {
+        self.lifetime.close();
         self.usage_cache.shutdown();
         self.model_cache.shutdown();
         self.cleanup_cancel.cancel();

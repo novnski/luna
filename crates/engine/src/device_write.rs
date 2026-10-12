@@ -2,8 +2,7 @@
 //!
 //! A ticket owns the InstanceLock
 //! lease until its epoch count is released, even if EngineCore is dropped.
-
-#![allow(dead_code)] // Internal lifecycle prerequisite; product writers are unwired.
+//! An admitted RPC command holds the same lease through a `DeviceLease`.
 
 use std::io;
 use std::path::Path;
@@ -92,6 +91,22 @@ impl DeviceWriteHandle {
             ticket,
             _lease: lease,
         })
+    }
+}
+
+/// Keeps the InstanceLock held without an epoch ticket: an admitted RPC
+/// command holds one until its handler returns, so a replacement engine
+/// cannot open this root while the command still runs.
+pub(crate) struct DeviceLease {
+    _lease: Arc<Inner>,
+}
+
+impl DeviceWriteHandle {
+    /// `None` once the owner is retired or dropped.
+    pub(crate) fn lease(&self) -> Option<DeviceLease> {
+        let lease = self.inner.upgrade()?;
+        (lease.epoch.phase() != luna_sync::write_epoch::Phase::Retired)
+            .then_some(DeviceLease { _lease: lease })
     }
 }
 

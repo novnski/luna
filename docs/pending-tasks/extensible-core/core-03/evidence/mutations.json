@@ -1,0 +1,52 @@
+[
+ {
+  "id": "M1",
+  "contract": "EngineRpc admits no catalogued command without the engine's gate",
+  "files": [
+   "crates/engine/src/rpc.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test task_commands stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 46
+ },
+ {
+  "id": "M2",
+  "contract": "closing admission alone: after shutdown the retired lease still refuses (defence in depth)",
+  "files": [
+   "crates/engine/src/engine_lifetime.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test task_commands stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger",
+  "exit": 0,
+  "caught": false,
+  "expectCaught": false,
+  "asExpected": true,
+  "failedTests": [],
+  "restored": true,
+  "seconds": 44
+ },
+ {
+  "id": "M3",
+  "contract": "with close() a no-op and the lease ignoring retirement, a stopped engine admits commands",
+  "files": [
+   "crates/engine/src/engine_lifetime.rs",
+   "crates/engine/src/device_write.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test task_commands stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test stopped_engine_refuses_commands_and_cannot_poison_the_reopened_ledger ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 44
+ }
+]

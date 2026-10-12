@@ -1001,7 +1001,11 @@ async fn command_receipts_revision_conflicts_and_account_profiles_are_isolated()
         )
         .await
         .unwrap_err();
-    assert!(retired.to_string().contains("storage is unavailable"));
+    // The engine's command gate refuses before the workbench's own guard.
+    assert!(
+        retired.to_string().contains("engine has stopped"),
+        "{retired}"
+    );
     drop(stale_client);
     let core = assemble(dir.path(), "account-b");
     let client = luna_rpc::memory_client(core.rpc_service());

@@ -1243,6 +1243,8 @@ mod side_chats;
 mod task_work;
 
 pub struct EngineRpc {
+    /// The owning engine's command gate, shared by all of its services.
+    admission: crate::engine_lifetime::CommandAdmission,
     provider_defaults: Option<crate::provider_defaults::ProviderDefaults>,
     work_writes: Option<crate::device_write::DeviceWriteHandle>,
     chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
@@ -1446,6 +1448,7 @@ impl EngineRpc {
         task_identity: crate::TaskIdentityService,
         workspace_scope: WorkspaceScope,
         cleanup_boot_id: String,
+        admission: crate::engine_lifetime::CommandAdmission,
     ) -> Self {
         let git_checkpoints = sessions.git_checkpoints().cloned();
         let git_actions = git_checkpoints
@@ -1462,6 +1465,7 @@ impl EngineRpc {
                 .collect(),
         };
         let rpc = Self {
+            admission,
             work_writes: None,
             chat_workbenches: None,
             provider_defaults: None,
@@ -9269,14 +9273,39 @@ impl RpcService for EngineRpc {
     {
         // CORE-01: only catalogued operations reach a handler, so a method
         // added without a reviewed catalog row cannot be called at all.
-        if luna_rpc::operations::spec(method).is_none() {
+        let Some(spec) = luna_rpc::operations::spec(method) else {
             let method = method.to_owned();
             return Box::pin(async move { Err(RpcError::UnknownMethod(method)) });
-        }
-        if board::handles(method) {
-            return self.handle_board(method, params);
-        }
-        Box::pin(self.handle_engine(method, params))
+        };
+        // CORE-03: a command runs only while this engine admits work.
+        let admitted = match spec.kind {
+            luna_rpc::operations::OperationKind::Command => match self.admission.admit() {
+                Ok(admitted) => Some(admitted),
+                Err(error) => return Box::pin(async move { Err(error) }),
+            },
+            luna_rpc::operations::OperationKind::Query
+            | luna_rpc::operations::OperationKind::Watch => None,
+        };
+        let reply = if board::handles(method) {
+            self.handle_board(method, params)
+        } else {
+            Box::pin(self.handle_engine(method, params))
+        };
+        let Some(admitted) = admitted else {
+            return reply;
+        };
+        Box::pin(async move {
+            match reply.await? {
+                // A streamed command keeps its admission until the stream ends.
+                RpcReply::Stream(stream) => {
+                    Ok(RpcReply::Stream(Box::pin(stream.map(move |item| {
+                        let _held = &admitted;
+                        item
+                    }))))
+                }
+                value => Ok(value),
+            }
+        })
     }
 }
 

@@ -1,0 +1,97 @@
+[
+ {
+  "name": "baseline-probe",
+  "command": "temporary crates/engine/tests/core03_probe.rs (deleted): retained memory_client across shutdown and same-root reopen",
+  "exit_code": 0,
+  "note": "reproduced: applied after shutdown; stale applied receipt after reopen with no chat; retry deduped to applied"
+ },
+ {
+  "name": "keeper-before",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test task_commands stopped_engine_refuses",
+  "exit_code": 101,
+  "log": "target/qa/core-03/keeper-before.log"
+ },
+ {
+  "name": "task-commands-after",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test task_commands",
+  "exit_code": 0,
+  "result": "41 passed",
+  "log": "target/qa/core-03/task-commands-after.log"
+ },
+ {
+  "name": "engine-full",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit_code": 101,
+  "result": "964 passed, 2 failed, 12 ignored (102 binaries)",
+  "log": "target/qa/core-03/engine-full.log",
+  "note": "chat_workbench assertion updated to the engine-level refusal; board_tools_codex_e2e load flake (3/3 isolated)"
+ },
+ {
+  "name": "board-codex-isolated",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test board_tools_codex_e2e (x3)",
+  "exit_code": 0,
+  "result": "1 passed each"
+ },
+ {
+  "name": "chat-workbench-after",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test chat_workbench",
+  "exit_code": 0,
+  "result": "9 passed"
+ },
+ {
+  "name": "mutations",
+  "command": "python3 target/qa/core-03/mutations.py",
+  "exit_code": 0,
+  "result": "M1 caught, M2 not caught (expected), M3 caught; all files restored"
+ },
+ {
+  "name": "luna-headless",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-headless",
+  "exit_code": 0,
+  "result": "3 passed"
+ },
+ {
+  "name": "luna-app",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna --tests",
+  "exit_code": 0,
+  "result": "31 passed, 1 ignored"
+ },
+ {
+  "name": "ui-state",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib state:: -- --test-threads=1",
+  "exit_code": 0,
+  "result": "55 passed"
+ },
+ {
+  "name": "clippy",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine --all-targets",
+  "exit_code": 0,
+  "note": "no finding on a changed line; device_write.rs clean without its dead_code allow"
+ },
+ {
+  "name": "fmt",
+  "command": "cargo fmt -p luna-engine -- --check; git diff --check",
+  "exit_code": 0
+ },
+ {
+  "name": "engine-focused-final",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test task_commands --test chat_workbench --test local_profiles --test restart_resume --test recovery",
+  "exit_code": 0,
+  "result": "91 passed, 1 ignored",
+  "log": "target/qa/core-03/engine-focused-final.log"
+ },
+ {
+  "name": "ui-lib",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib -- --test-threads=1",
+  "exit_code": 0,
+  "result": "1095 passed",
+  "log": "target/qa/core-03/ui-lib.log"
+ },
+ {
+  "name": "refresh-luna-dev",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 95,
+  "note": "PID 61353, IPC 59777 listening, codesign --verify --deep --strict exit 0; EngineInfo answered over IPC"
+ }
+]
