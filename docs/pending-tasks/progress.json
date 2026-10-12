@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791841018.8193622,
+  "created_at": 1791841247.531508,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 16,
-      "in_progress": 1,
+      "done": 17,
+      "in_progress": 0,
       "paused": 0,
       "ready": 63,
       "review": 0
@@ -58,11 +58,11 @@
         },
         "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 4,
-        "remaining": 20,
-        "accepted_units": 19,
+        "done": 5,
+        "remaining": 19,
+        "accepted_units": 20,
         "total_units": 96,
-        "acceptance_percent": 19.8,
+        "acceptance_percent": 20.8,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -373,17 +373,22 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 11,
-      "remaining": 65,
-      "accepted_units": 46,
+      "done": 12,
+      "remaining": 64,
+      "accepted_units": 47,
       "total_units": 296,
-      "acceptance_percent": 15.5
+      "acceptance_percent": 15.9
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
+      "SW-01",
       "CORE-05",
       "IC-0",
-      "ZI-04"
+      "ZI-01",
+      "CORE-06",
+      "ZI-03",
+      "ZI-04",
+      "ZI-05"
     ]
   },
   "tasks": [
@@ -2447,6 +2452,19 @@
           ],
           "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
         },
+        "handoff": {
+          "at": 1791841247.322187,
+          "evidence": [
+            {
+              "ref": "commit:8b1b1bff07ec3eb4c349abe80e23c65950b337f0"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+              "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+            }
+          ],
+          "note": "Reviewed complete feature diff and evidence. Focused E2E, isolated contract, all-target Clippy, configured fixture compile and formatting pass. QA bundle stopped/hashed/unregistered/removed; data/cache kept. Primary LUNA Dev refreshed in 45s, PID 79283/IPC 59777/signature verified. SSH push and remote readback confirm 8b1b1bff on origin/main."
+        },
         "verification": {
           "at": 1791841018.727069,
           "evidence": [
@@ -2462,6 +2480,11 @@
           "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "commit:8b1b1bff07ec3eb4c349abe80e23c65950b337f0"
+        }
+      ],
       "id": "CORE-04",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
@@ -2469,12 +2492,11 @@
         "expires_at": 1791843475.6275861,
         "heartbeat_at": 1791839875.6275861,
         "owner": "codex",
-        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
-        "expired": false
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
       },
-      "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim.",
-      "status": "paused",
-      "updated_at": 1791841018.72717
+      "note": "CORE-04 delivered on verified origin/main 8b1b1bff. Opaque provider IDs, collision-safe registry, host capability/model provenance and live picker are functional. 10 focused engine + 3 contract cases pass; native unavailable-provider/restart/external-toggle proof retained. Primary Dev ready. External installed provider execution remains CORE-08; no iOS changes or physical-phone use.",
+      "status": "done",
+      "updated_at": 1791841247.441602
     }
   ],
   "events": [
@@ -10145,6 +10167,159 @@
           "checkout": "/Users/iulian/workspace/code/personal/luna",
           "claimed_at": 1791836068.768116,
           "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 274,
+      "task": "CORE-04",
+      "at": 1791841247.333399,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791841018.549381,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+                "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+              }
+            ],
+            "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+          },
+          "delivery": {
+            "at": 1791841018.639143,
+            "evidence": [
+              {
+                "ref": "target/qa/core04/20261012T210735Z/native-proof.json",
+                "sha256": "61955895f5b15cd66883a622c8f4a6cf3a31d3f540e99b1ad3eb892c018fb07c"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/engine-final.log",
+                "sha256": "fa30e225f287ec8f30f17fcfd20c8daad4ab8f8f95b8ef7d6a363cd1617165b6"
+              }
+            ],
+            "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
+          },
+          "handoff": {
+            "at": 1791841247.322187,
+            "evidence": [
+              {
+                "ref": "commit:8b1b1bff07ec3eb4c349abe80e23c65950b337f0"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+                "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+              }
+            ],
+            "note": "Reviewed complete feature diff and evidence. Focused E2E, isolated contract, all-target Clippy, configured fixture compile and formatting pass. QA bundle stopped/hashed/unregistered/removed; data/cache kept. Primary LUNA Dev refreshed in 45s, PID 79283/IPC 59777/signature verified. SSH push and remote readback confirm 8b1b1bff on origin/main."
+          },
+          "verification": {
+            "at": 1791841018.727069,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+                "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/SHA256SUMS",
+                "sha256": "803da78059baa0d3ffd089775aa2909fd0a54a462ae5659a80763d1049bcc26c"
+              }
+            ],
+            "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Reviewed complete feature diff and evidence. Focused E2E, isolated contract, all-target Clippy, configured fixture compile and formatting pass. QA bundle stopped/hashed/unregistered/removed; data/cache kept. Primary LUNA Dev refreshed in 45s, PID 79283/IPC 59777/signature verified. SSH push and remote readback confirm 8b1b1bff on origin/main.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 275,
+      "task": "CORE-04",
+      "at": 1791841247.441772,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791841018.549381,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+                "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+              }
+            ],
+            "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+          },
+          "delivery": {
+            "at": 1791841018.639143,
+            "evidence": [
+              {
+                "ref": "target/qa/core04/20261012T210735Z/native-proof.json",
+                "sha256": "61955895f5b15cd66883a622c8f4a6cf3a31d3f540e99b1ad3eb892c018fb07c"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/engine-final.log",
+                "sha256": "fa30e225f287ec8f30f17fcfd20c8daad4ab8f8f95b8ef7d6a363cd1617165b6"
+              }
+            ],
+            "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
+          },
+          "handoff": {
+            "at": 1791841247.322187,
+            "evidence": [
+              {
+                "ref": "commit:8b1b1bff07ec3eb4c349abe80e23c65950b337f0"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+                "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+              }
+            ],
+            "note": "Reviewed complete feature diff and evidence. Focused E2E, isolated contract, all-target Clippy, configured fixture compile and formatting pass. QA bundle stopped/hashed/unregistered/removed; data/cache kept. Primary LUNA Dev refreshed in 45s, PID 79283/IPC 59777/signature verified. SSH push and remote readback confirm 8b1b1bff on origin/main."
+          },
+          "verification": {
+            "at": 1791841018.727069,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+                "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/SHA256SUMS",
+                "sha256": "803da78059baa0d3ffd089775aa2909fd0a54a462ae5659a80763d1049bcc26c"
+              }
+            ],
+            "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8b1b1bff07ec3eb4c349abe80e23c65950b337f0"
+          }
+        ],
+        "note": "CORE-04 delivered on verified origin/main 8b1b1bff. Opaque provider IDs, collision-safe registry, host capability/model provenance and live picker are functional. 10 focused engine + 3 contract cases pass; native unavailable-provider/restart/external-toggle proof retained. Primary Dev ready. External installed provider execution remains CORE-08; no iOS changes or physical-phone use.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
           "expires_at": 1791843475.6275861,
           "heartbeat_at": 1791839875.6275861,
           "owner": "codex",
