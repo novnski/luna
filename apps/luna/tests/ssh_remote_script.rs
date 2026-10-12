@@ -1,5 +1,7 @@
 //! The shipped POSIX remote helper against a disposable HOME and dummy binary.
 
+#![cfg(unix)]
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
