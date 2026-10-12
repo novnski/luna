@@ -144,6 +144,7 @@ pub mod instance_lock;
 pub mod integration_settings;
 pub mod live_usage;
 pub mod local_import;
+mod maintenance;
 mod model_cache;
 mod native_tasks;
 mod opencode_mcp;
@@ -298,6 +299,8 @@ impl std::fmt::Debug for EngineConfig {
 
 /// How long shutdown waits for already admitted commands before settling runs.
 const COMMAND_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long shutdown waits for cancelled maintenance tasks to finish.
+const MAINTENANCE_STOP: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
@@ -345,8 +348,12 @@ pub struct EngineCore {
     lifetime: engine_lifetime::EngineLifetime,
     /// Shared by every RPC service in this engine; changes on a real reopen.
     cleanup_boot_id: String,
-    cleanup_cancel: tokio_util::sync::CancellationToken,
-    cleanup_worker: std::sync::Mutex<Option<(Arc<rpc::EngineRpc>, tokio::task::JoinHandle<()>)>>,
+    /// The engine's one full RPC service: in-process, IPC and the owner of
+    /// agent tools, Board discussions and maintenance. Built on first request.
+    local_service: std::sync::OnceLock<Arc<EngineRpc>>,
+    /// The restricted service behind every remote transport, built once.
+    remote_service: std::sync::OnceLock<Arc<EngineRpc>>,
+    maintenance: maintenance::Maintenance,
     /// Shared by every RPC service of this engine (board gates/notifier).
     board_hub: rpc::board_engine::BoardHub,
 }
@@ -749,8 +756,9 @@ impl EngineCore {
             device_write,
             lifetime,
             cleanup_boot_id: uuid::Uuid::new_v4().to_string(),
-            cleanup_cancel: tokio_util::sync::CancellationToken::new(),
-            cleanup_worker: std::sync::Mutex::new(None),
+            local_service: std::sync::OnceLock::new(),
+            remote_service: std::sync::OnceLock::new(),
+            maintenance: maintenance::Maintenance::new(),
             board_hub: rpc::board_engine::BoardHub::default(),
         })
     }
@@ -766,12 +774,7 @@ impl EngineCore {
 
     #[doc(hidden)]
     pub fn cleanup_worker_count_for_tests(&self) -> usize {
-        usize::from(
-            self.cleanup_worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_some(),
-        )
+        usize::from(self.maintenance.started())
     }
 
     /// Attach the auth service (before building the RPC service / relays).
@@ -870,8 +873,30 @@ impl EngineCore {
         ))
     }
 
+    /// The engine's local service. Every call returns the same service; the
+    /// first one inside a Tokio runtime starts the engine's maintenance.
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
-        self.rpc_service_with_local_backup(true)
+        let service = self
+            .local_service
+            .get_or_init(|| {
+                let service = self.build_rpc_service(true);
+                // Agent tools and Board discussions reach the engine through
+                // this service only, whichever transports are built later.
+                let backend: Arc<dyn cross_task_tools::CrossTaskBackend> = service.clone();
+                self.sessions
+                    .set_cross_task_backend(Arc::downgrade(&backend));
+                rpc::board_engine::authoring::register_service(&service);
+                service
+            })
+            .clone();
+        // A stopped engine never starts its maintenance.
+        if self.lifetime.is_open()
+            && tokio::runtime::Handle::try_current().is_ok()
+            && let Some(scope) = self.maintenance.claim_start()
+        {
+            service.start_maintenance(scope);
+        }
+        service
     }
 
     /// One authenticated remote connection, using the same guard installed
@@ -900,10 +925,15 @@ impl EngineCore {
     /// Relay RPCs never expose backup configuration, key ingress, or archive
     /// paths. Only the in-process/localhost service receives the control.
     fn rpc_service_without_backup(&self) -> Arc<EngineRpc> {
-        self.rpc_service_with_local_backup(false)
+        // The local service owns maintenance and agent tools, so it exists
+        // before any remote transport does.
+        self.rpc_service();
+        self.remote_service
+            .get_or_init(|| self.build_rpc_service(false))
+            .clone()
     }
 
-    fn rpc_service_with_local_backup(&self, include_backup: bool) -> Arc<EngineRpc> {
+    fn build_rpc_service(&self, include_backup: bool) -> Arc<EngineRpc> {
         let mut rpc = EngineRpc::new(
             self.store.clone(),
             self.sessions.clone(),
@@ -953,33 +983,7 @@ impl EngineCore {
         if let Some(importer) = self.local_import.clone() {
             rpc = rpc.with_local_import(importer);
         }
-        let rpc = Arc::new(rpc);
-        // A stopped engine never restarts its maintenance workers.
-        if self.lifetime.is_open() && tokio::runtime::Handle::try_current().is_ok() {
-            let mut worker = self
-                .cleanup_worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if worker.is_none() {
-                let (task_after, project_after) = rpc.resume_cleanup_initial();
-                let handle = rpc.start_cleanup_maintenance(
-                    self.cleanup_cancel.clone(),
-                    task_after,
-                    project_after,
-                );
-                rpc.start_child_thread_maintenance(self.cleanup_cancel.clone());
-                rpc.start_automation_maintenance(self.cleanup_cancel.clone());
-                rpc.start_board_review_maintenance(self.cleanup_cancel.clone());
-                rpc.start_board_lifecycle_maintenance(self.cleanup_cancel.clone());
-                *worker = Some((rpc.clone(), handle));
-            }
-        }
-        let backend: Arc<dyn cross_task_tools::CrossTaskBackend> = rpc.clone();
-        self.sessions
-            .set_cross_task_backend(Arc::downgrade(&backend));
-        // Board discussion turns reach the board service through it (weakly).
-        rpc::board_engine::authoring::register_service(&rpc);
-        rpc
+        Arc::new(rpc)
     }
 
     /// Revoke every account-scoped transport before any slower graceful
@@ -1010,14 +1014,12 @@ impl EngineCore {
         }
         self.usage_cache.shutdown();
         self.model_cache.shutdown();
-        self.cleanup_cancel.cancel();
-        let cleanup = self
-            .cleanup_worker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some((_, task)) = cleanup {
-            let _ = task.await;
+        let still_running = self.maintenance.stop(MAINTENANCE_STOP).await;
+        if still_running > 0 {
+            tracing::warn!(
+                still_running,
+                "maintenance tasks still running as shutdown proceeds"
+            );
         }
         self.previews.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally
@@ -1075,15 +1077,7 @@ impl Drop for EngineCore {
         self.lifetime.close();
         self.usage_cache.shutdown();
         self.model_cache.shutdown();
-        self.cleanup_cancel.cancel();
-        if let Some((_, task)) = self
-            .cleanup_worker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
-        }
+        self.maintenance.cancel();
         self.device_write.retire();
     }
 }

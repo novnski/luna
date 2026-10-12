@@ -1,0 +1,4 @@
+test codex_create_thread_schema_grant_cap_deny_and_child_identity ... FAILED
+thread 'codex_create_thread_schema_grant_cap_deny_and_child_identity' (49661234) panicked at crates/engine/tests/pane_chat_mcp.rs:363:9:
+get_workspace is not offered: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"luna_status","description":"Read this LUNA task's stable identity and granted LUNA capabilities.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destruc
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.47s

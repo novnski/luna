@@ -45,6 +45,31 @@ enforced by the code order and the [contract](contract.md) instead. L4's lease
 is likewise held by construction (`AdmittedCommand` owns it); no timing test
 was added.
 
+## Milestone 2: composition root and maintenance supervisor
+
+Written before the M2 code, on `431662b0`. Each `rpc_service*()` call built a
+new `EngineRpc`, and every copy brought its own side effects:
+- a session-history indexer (the activity bootstrap) writing the store;
+- an hourly backup scheduler, when the root is a copy-isolated backup root;
+- registration as the agent's cross-task backend, where the newest live copy
+  wins;
+- a Board authoring service.
+
+The first copy built inside a runtime also owned the five maintenance workers,
+and only the cleanup worker was joined at shutdown.
+
+| ID | Failure | Required behaviour | Owner proof |
+| --- | --- | --- | --- |
+| S1 (reproduced) | The agent's tools depend on which transport was built last. A remote factory built after the local service, as `luna headless --remote-port` does, becomes the newest cross-task backend. It has no chat workbenches, so `get_workspace` and `manage_workspace` disappear from the agent's LUNA MCP tool list. | Agent tools, Board discussions and maintenance always use the engine's one full local service. | `pane_chat_mcp` Codex E2E with the headless build order. It failed on `431662b0`. |
+| S2 | Maintenance runs on whichever copy was built first. In a synced runtime that is the host relay's restricted copy (no project commands or workbenches), so behaviour differs by profile. | Maintenance always runs on the local service. | Construction (one supervisor, started from the local service). Review. |
+| S3 | Indexers and backup schedulers multiply with every `rpc_service()` call, and outlive shutdown until the last client drops. | Exactly one of each per engine. They stop at shutdown. | Construction and review; existing session-history suites stay green. |
+| S4 | Child-thread, automation and Board maintenance are cancelled but not joined, so they can still be running after `shutdown()` returns. | Shutdown cancels every supervised task and waits for it, bounded at 10 s. Anything still running at the bound is logged and stops at its next cancellation point. | Construction (`TaskTracker`). Existing cleanup, automation and Board suites stay green. |
+| S5 | The remote transports start running the user's saved project commands, for example when a phone starts a Board ticket in a new worktree. | Remote transports keep today's restricted service, without project commands, workbenches or backup. Every one of those methods is `LocalOnly` in the catalog. | Catalog check plus existing remote suites |
+| S6 | The single service misses state attached after assembly (auth, links, updater) or a test's late field change. | Services are built lazily on first request, as each copy was. | Existing device-routing, inspect, SSH and remote CLI suites |
+
+A timing test that proves a task is *absent* after shutdown would need a sleep
+standing in for an event, so S3 and S4 are proven by construction instead.
+
 ## Remaining CORE-03 failure focus (later milestones)
 
 - **Run coordination:** a split moves globals but leaves competing writers, for

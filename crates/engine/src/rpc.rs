@@ -1284,7 +1284,6 @@ pub struct EngineRpc {
     pending_child_worktrees: std::sync::Mutex<
         std::collections::HashMap<String, child_threads::ProvisionedChildWorktree>,
     >,
-    activity_cancel: CancellationToken,
     /// Engine-shared board gates and observation notifier.
     board: board_engine::BoardHub,
 }
@@ -1308,12 +1307,6 @@ impl Drop for NativeMetadataCommandGuard<'_> {
         {
             tracing::error!(command_id = %self.command_id, %error, "failed to mark canceled native metadata command unknown");
         }
-    }
-}
-
-impl Drop for EngineRpc {
-    fn drop(&mut self) {
-        self.activity_cancel.cancel();
     }
 }
 
@@ -1464,7 +1457,7 @@ impl EngineRpc {
                 .filter(|capability| capability != luna_proto::capabilities::CHAT_WORKBENCH_V1)
                 .collect(),
         };
-        let rpc = Self {
+        Self {
             admission,
             work_writes: None,
             chat_workbenches: None,
@@ -1504,13 +1497,26 @@ impl EngineRpc {
             cleanup_boot_id,
             automation_reconcile_cursor: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_child_worktrees: Default::default(),
-            activity_cancel: CancellationToken::new(),
             board: board_engine::BoardHub::default(),
-        };
-        rpc.spawn_activity_bootstrap();
-        rpc.model_cache.start_background_refresh();
-        rpc.usage_cache.start();
-        rpc
+        }
+    }
+
+    /// The engine's background work. The engine starts it once, on its local
+    /// service, and its supervisor cancels and joins every task at shutdown.
+    pub(crate) fn start_maintenance(
+        self: &std::sync::Arc<Self>,
+        scope: &crate::maintenance::WorkerScope,
+    ) {
+        let (task_after, project_after) = self.resume_cleanup_initial();
+        self.start_cleanup_maintenance(scope, task_after, project_after);
+        self.start_child_thread_maintenance(scope);
+        self.start_automation_maintenance(scope);
+        self.start_board_review_maintenance(scope);
+        self.start_board_lifecycle_maintenance(scope);
+        self.spawn_activity_bootstrap(scope);
+        self.start_backup_schedule(scope);
+        self.model_cache.start_background_refresh();
+        self.usage_cache.start();
     }
 
     pub(crate) fn with_work_write_handle(
@@ -1887,14 +1893,15 @@ impl EngineRpc {
     /// pages continue after a yield; idle/blocked work waits for the next
     /// thirty-second tick. The keyset cursor prevents a failed first row from
     /// starving later rows, and every destructive step rechecks authority.
-    pub(crate) fn start_cleanup_maintenance(
+    fn start_cleanup_maintenance(
         self: &std::sync::Arc<Self>,
-        cancel: CancellationToken,
+        scope: &crate::maintenance::WorkerScope,
         mut task_after: String,
         mut project_after: String,
-    ) -> tokio::task::JoinHandle<()> {
+    ) {
         let weak = std::sync::Arc::downgrade(self);
-        tokio::spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -1930,7 +1937,7 @@ impl EngineRpc {
                     }
                 }
             }
-        })
+        });
     }
 
     async fn retire_unsupported_history(&self) {
@@ -1976,19 +1983,15 @@ impl EngineRpc {
     /// independently of search, so showing results never fetches sensitive
     /// source payload on demand. Only tasks whose index-relevant workspace
     /// metadata changed are reread; deleted tasks lose their derived rows.
-    fn spawn_activity_bootstrap(&self) {
+    fn spawn_activity_bootstrap(&self, scope: &crate::maintenance::WorkerScope) {
         let store = self.store.clone();
         let doc_host = self.doc_host.clone();
         let workspace = self.workspace.clone();
         let identity = self.task_identity.clone();
         let sessions = self.sessions.clone();
         let local_device_id = self.engine_info.device_id.clone();
-        let cancel = self.activity_cancel.clone();
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            tracing::debug!("session history bootstrap deferred: no Tokio runtime");
-            return;
-        };
-        runtime.spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             let mut chats = workspace.watch_chats();
             let mut indexed = HashMap::<String, String>::new();
             let mut opening = true;
@@ -2088,29 +2091,33 @@ impl EngineRpc {
     /// The scheduler reads only a separately marked copy-isolated source. A
     /// normal LUNA root never constructs this control or starts a backup job.
     pub fn with_backup_control(mut self, control: BackupControl) -> Self {
-        let scheduler = control.clone();
-        let cancel = self.activity_cancel.clone();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => break,
-                        _ = interval.tick() => {
-                            let control = scheduler.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                if let Err(error) = control.tick_automatic(crate::now_ms()) {
-                                    let message = error.to_string();
-                                    let _ = control.record_scheduler_error(message);
-                                }
-                            }).await;
-                        }
-                    }
-                }
-            });
-        }
         self.backup_control = Some(control);
         self
+    }
+
+    /// The hourly schedule of a copy-isolated root's backup control.
+    fn start_backup_schedule(&self, scope: &crate::maintenance::WorkerScope) {
+        let Some(scheduler) = self.backup_control.clone() else {
+            return;
+        };
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        let control = scheduler.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Err(error) = control.tick_automatic(crate::now_ms()) {
+                                let message = error.to_string();
+                                let _ = control.record_scheduler_error(message);
+                            }
+                        }).await;
+                    }
+                }
+            }
+        });
     }
 
     pub fn with_managed_backup_root(mut self, root: std::path::PathBuf) -> Self {

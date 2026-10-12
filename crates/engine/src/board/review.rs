@@ -1434,13 +1434,11 @@ impl EngineRpc {
     /// verdict application, cleanup) after start-up and on a short tick.
     pub(crate) fn start_board_review_maintenance(
         self: &std::sync::Arc<Self>,
-        cancel: CancellationToken,
+        scope: &crate::maintenance::WorkerScope,
     ) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         let weak = std::sync::Arc::downgrade(self);
-        runtime.spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             let mut tracked: HashSet<String> = HashSet::new();
             let mut cursor: Option<u64> = None;
             let mut next_scan = tokio::time::Instant::now();

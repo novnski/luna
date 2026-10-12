@@ -30,8 +30,8 @@ metadata seam is used. In order, assembly:
 8. Starts task-identity reconciliation. Opens backup control, the model and
    usage caches, chat workbenches and provider defaults.
 
-**Per-transport services.** `rpc_service*()` builds a new `EngineRpc` on every
-call. A headed or headless runtime holds several at once: the in-process UI
+**Per-transport services (before M2).** `rpc_service*()` built a new
+`EngineRpc` on every call. A headed or headless runtime holds several at once: the in-process UI
 and IPC service, the remote listener's shared inner service, and the host
 relay's.
 - Each copy has its own composer-catalog cache, child-worktree reservations,
@@ -45,8 +45,21 @@ relay's.
   and in the Board authoring registry: a process-global table keyed by the
   engine's `BoardHub`.
 
-This is the coupling CORE-03 removes: composition and long-lived workers are
+This is the coupling CORE-03 removes: composition and long-lived workers were
 started from an operation-service factory.
+
+**Since M2,** `EngineCore` owns exactly two services, each built once, lazily,
+on first request. That keeps late `set_auth`/`set_links`/`set_updater` working,
+as with each copy before.
+- **The local service** serves in-process, IPC and the headless owner. It
+  alone is registered as the agent's cross-task backend and for Board
+  discussions. The first request inside a runtime starts the engine's
+  maintenance on it.
+- **The remote service** sits behind the host relay, the direct listener and
+  every per-connection remote guard. It is restricted as before: no project
+  commands, chat workbenches or backup control. Every method that needs those
+  is `LocalOnly` in the catalog anyway.
+- **`EngineRpc::new` has no side effects.**
 
 ## 2. Write and instance ownership
 
@@ -79,25 +92,27 @@ Every writer must keep this order: `InstanceLock` (lifetime), then
 | --- | --- | --- |
 | `EngineLifetime` | `admission()`, `is_open()`, `close()`, `close_and_drain(timeout)` | **Delivered (M1)** |
 | `CommandAdmission` | `admit() -> AdmittedCommand`, held for the handler and any streamed reply | **Delivered (M1)**, applied in `EngineRpc`'s `RpcService::handle` |
-| `EngineServices` (composition root) | One builder that owns the assembly order above and returns typed handles. It replaces the five `assemble_*` variants with one hermetic option set. | M2 |
-| `MaintenanceSupervisor` | `start(services)` once per engine, `stop()` cancels and joins | M2: moves the five workers, the activity bootstrap and cache starts out of `rpc_service`/`EngineRpc::new`. It also makes the cross-task backend and Board authoring registration engine-scoped instead of per-copy. |
+| Engine-owned services (composition) | `rpc_service()` (local) and the remote transports' one restricted service | **Delivered (M2).** The five public `assemble_*` entry points stay. They differ only in where the lock comes from and in hermetic test seams, and merging them is API churn across about 100 call sites with no behaviour change. Revisit with the CORE-05 SDK. |
+| `Maintenance` (supervisor) | `claim_start() -> WorkerScope` once per engine; `stop(timeout)` cancels and waits; `cancel()` on drop. Workers spawn through `WorkerScope` into one `TaskTracker`. | **Delivered (M2).** Supervises cleanup, child-thread, automation (two producers), Board review, Board lifecycle (plus its runtime watch), the session-history indexer and the copy-isolated backup schedule. |
 | `RunCoordinator` | Run admission, live-run table, interrupt/settle, provider subprocess ownership (extracted from `SessionsEngine`) | M3 |
 | `ProjectionHost` | Queue projection install, command drain, replay cursor and transcript import (extracted from `DocHost`) | M3 |
 
 Each port is an in-process Rust handle; no network hop is added. A domain
-service must be constructible headless from `EngineServices` without the UI.
+service must be constructible headless from `EngineCore` without the UI.
 
 ## 4. Start and stop order
 
-**Start:** the assembly order in section 1. Maintenance starts once, after
-assembly. Today that is lazily in `rpc_service`, gated by `is_open()`; from M2
-it moves to `MaintenanceSupervisor::start`.
+**Start:** the assembly order in section 1. Maintenance starts once, on the
+local service, at the first `rpc_service()` inside a runtime (or a remote
+transport's, which builds the local service first). It never starts on a
+stopped engine.
 
 **Stop** (`EngineCore::shutdown`, in this order):
 
 1. **Close admission (new).** Then wait up to `COMMAND_DRAIN` (5 s) for
    admitted commands, logging any still running.
-2. Stop the usage and model caches, cancel and join cleanup maintenance, and
+2. Stop the usage and model caches. Cancel every supervised maintenance task
+   and wait up to `MAINTENANCE_STOP` (10 s), logging any still running. Then
    shut previews.
 3. Pause every queue, so settling a run never releases queued work.
 4. Shut down side chats and sessions: interrupt runs, stamp `aborted`.
@@ -110,16 +125,15 @@ it moves to `MaintenanceSupervisor::start`.
 8. Break the sessions/doc-host cycle and retire the write epoch.
 
 `EngineRuntime::shutdown` first revokes the host relay and Edge transports.
-`Drop` closes admission, stops the caches, cancels and aborts maintenance, and
-retires the epoch, without waiting.
+`Drop` closes admission, stops the caches, cancels maintenance and retires the
+epoch, without waiting.
 
 ## 5. Cancellation
 
 | Resource | Cancelled by |
 | --- | --- |
 | New RPC commands | `EngineLifetime::close` (M1) |
-| Maintenance workers | `cleanup_cancel`, then join (cleanup) or cancel-only (the other four). M2 joins all five. |
-| Per-copy activity bootstrap | That copy's `activity_cancel`, on drop |
+| Maintenance, the session-history indexer and the backup schedule | `Maintenance::stop`: one token cancels all of them, then a bounded wait on the tracker (M2) |
 | Provider runs and subprocesses | `SessionsEngine::shutdown` interrupt and settle |
 | PTYs | `Terminals::shutdown` |
 | Edge transports and relays | `disconnect_edge` before draining |
@@ -152,10 +166,11 @@ command.
 
 ## 8. Milestones
 
-1. **M1 (this change):** lifetime and admission owner; L1/L2 keeper in
+1. **M1 (`431662b0`):** lifetime and admission owner; L1/L2 keeper in
    `task_commands`.
-2. **M2:** composition root and maintenance supervisor; engine-scoped
-   registrations; remove side effects from `EngineRpc::new`.
+2. **M2 (this change):** two engine-owned services and the maintenance
+   supervisor; engine-scoped registrations; `EngineRpc::new` without side
+   effects; S1 keeper in `pane_chat_mcp`.
 3. **M3:** run coordinator and projection host extracted behind the ports
    above, with E05 restart, identity and race keepers re-run before old paths
    are deleted.

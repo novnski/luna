@@ -93,5 +93,74 @@
   "exit_code": 0,
   "seconds": 95,
   "note": "PID 61353, IPC 59777 listening, codesign --verify --deep --strict exit 0; EngineInfo answered over IPC"
+ },
+ {
+  "name": "m2-control",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test pane_chat_mcp codex_create_thread (workspace-tool assertion, no remote factory, on 431662b0)",
+  "exit_code": 0,
+  "log": "target/qa/core-03/m2-control.log"
+ },
+ {
+  "name": "m2-keeper-before",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test pane_chat_mcp codex_create_thread (remote factory after the local service, on 431662b0)",
+  "exit_code": 101,
+  "log": "target/qa/core-03/m2-before.log"
+ },
+ {
+  "name": "m2-keeper-after",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test pane_chat_mcp",
+  "exit_code": 0,
+  "result": "2 passed",
+  "log": "target/qa/core-03/m2-after.log"
+ },
+ {
+  "name": "m2-engine-full",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit_code": 0,
+  "result": "966 passed, 0 failed, 12 ignored (102 binaries)",
+  "log": "target/qa/core-03/m2-engine-full.log"
+ },
+ {
+  "name": "m2-mutations",
+  "command": "python3 target/qa/core-03/mutations-m2.py",
+  "exit_code": 0,
+  "result": "M2-S1 caught; file restored"
+ },
+ {
+  "name": "m2-clippy",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine --all-targets",
+  "exit_code": 0,
+  "note": "the one new finding (let-and-return in EngineRpc::new) fixed before this run"
+ },
+ {
+  "name": "m2-focused",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test pane_chat_mcp --test task_commands --test chat_workbench",
+  "exit_code": 0,
+  "result": "52 passed"
+ },
+ {
+  "name": "m2-luna-app",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna --tests",
+  "exit_code": 0,
+  "result": "31 passed, 1 ignored"
+ },
+ {
+  "name": "m2-headless",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-headless",
+  "exit_code": 0,
+  "result": "3 passed"
+ },
+ {
+  "name": "m2-ui-lib",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib -- --test-threads=1",
+  "exit_code": 0,
+  "result": "1095 passed"
+ },
+ {
+  "name": "m2-refresh-luna-dev",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 103,
+  "note": "PID 30561, IPC 59777 listening, codesign ok, EngineInfo answered"
  }
 ]

@@ -51,9 +51,9 @@ pub(crate) fn runtimes(hub: &BoardHub) -> Arc<AuthoringRuntimes> {
     runtimes
 }
 
-/// Called once per `EngineRpc` the engine hands out: a running turn reaches
-/// the board service through the newest live one (held weakly, so a turn
-/// never keeps a dropped engine alive).
+/// Called once, for the engine's local service: a running turn reaches the
+/// board service through it (held weakly, so a turn never keeps a dropped
+/// engine alive).
 pub(crate) fn register_service(rpc: &Arc<EngineRpc>) {
     let runtimes = runtimes(rpc.board_hub());
     let mut services = lock(&runtimes.services);

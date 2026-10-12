@@ -1,0 +1,19 @@
+[
+ {
+  "id": "M2-S1",
+  "contract": "only the engine's local service is the agent's cross-task backend, whichever transport is built last",
+  "files": [
+   "crates/engine/src/lib.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test pane_chat_mcp codex_create_thread_schema_grant_cap_deny_and_child_identity",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test codex_create_thread_schema_grant_cap_deny_and_child_identity ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 46
+ }
+]

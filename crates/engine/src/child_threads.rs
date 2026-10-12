@@ -1300,12 +1300,13 @@ impl EngineRpc {
         "durable-startup-intent".into()
     }
 
-    pub(crate) fn start_child_thread_maintenance(self: &Arc<Self>, cancel: CancellationToken) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
+    pub(crate) fn start_child_thread_maintenance(
+        self: &Arc<Self>,
+        scope: &crate::maintenance::WorkerScope,
+    ) {
         let weak = Arc::downgrade(self);
-        runtime.spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
             loop {
                 tokio::select! { _ = cancel.cancelled() => break, _ = interval.tick() => {} }

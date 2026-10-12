@@ -1162,14 +1162,14 @@ impl EngineRpc {
     }
     pub(crate) fn start_automation_maintenance(
         self: &std::sync::Arc<Self>,
-        cancel: CancellationToken,
+        scope: &crate::maintenance::WorkerScope,
     ) {
         // Independent clocks keep bounded but slow network reads off the timed
         // prompt lane. Each producer is sequential; SQLite CAS owns deduplication.
         for pr_watches in [false, true] {
             let weak = std::sync::Arc::downgrade(self);
-            let cancel = cancel.clone();
-            tokio::spawn(async move {
+            let cancel = scope.cancel.clone();
+            scope.spawn(async move {
                 let mut tick = tokio::time::interval(Duration::from_secs(2));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {

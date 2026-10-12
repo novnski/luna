@@ -2115,14 +2115,12 @@ impl EngineRpc {
     /// Restart reconciliation first, then a bounded periodic sweep.
     pub(crate) fn start_board_lifecycle_maintenance(
         self: &std::sync::Arc<Self>,
-        cancel: CancellationToken,
+        scope: &crate::maintenance::WorkerScope,
     ) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        self.start_board_runtime_watch(cancel.clone());
+        self.start_board_runtime_watch(scope);
         let weak = std::sync::Arc::downgrade(self);
-        runtime.spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             if let Some(rpc) = weak.upgrade() {
                 match rpc.board_reconcile_on_boot().await {
                     Ok(report) => tracing::info!(
@@ -2151,13 +2149,14 @@ impl EngineRpc {
     /// fails, or goes idle), so an open Board re-reads those tickets'
     /// phase and Needs attention without waiting for a journal event.
     /// Status heartbeats are ignored; bursts are coalesced.
-    fn start_board_runtime_watch(self: &std::sync::Arc<Self>, cancel: CancellationToken) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
+    fn start_board_runtime_watch(
+        self: &std::sync::Arc<Self>,
+        scope: &crate::maintenance::WorkerScope,
+    ) {
         let weak = std::sync::Arc::downgrade(self);
         let mut sessions = self.sessions.watch_sessions();
-        runtime.spawn(async move {
+        let cancel = scope.cancel.clone();
+        scope.spawn(async move {
             let mut last: HashMap<String, (luna_proto::SessionStatus, Option<String>)> =
                 HashMap::new();
             loop {

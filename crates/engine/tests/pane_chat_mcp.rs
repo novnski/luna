@@ -309,6 +309,9 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     )
     .unwrap();
     let _rpc = core.rpc_service();
+    // As `luna headless --remote-port` does: the remote listener's service is
+    // built after the local one. The agent's tools must not depend on that.
+    let _remote = core.remote_rpc_factory().expect("remote authority");
     let repo_name = "repo-pane-codex-mcp";
     let repo = base.join(repo_name);
     init_repo(&repo);
@@ -356,6 +359,16 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
         .expect("create_thread listed");
     schema_has_new_fields(&create["inputSchema"], json!(["codex"]));
     evidence("codex-create-thread-tool.json", &create);
+    for name in ["get_workspace", "manage_workspace"] {
+        assert!(
+            listed["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name),
+            "{name} is not offered: {listed}"
+        );
+    }
     // The parent session's instructions name its role.
     let thread_request =
         std::fs::read_to_string(hold_dir.join(format!("{source}.thread"))).unwrap();
