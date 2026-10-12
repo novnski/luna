@@ -45,6 +45,7 @@ use crate::settings::accounts::AccountsPage;
 use crate::settings::appearance::{AppearancePage, AppearanceSettingsEvent};
 use crate::settings::archived::ArchivedPage;
 use crate::settings::backup::BackupsPage;
+use crate::settings::connections::{ConnectionsPage, HostingChanged};
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::general::{GeneralEvent, GeneralPage};
@@ -521,6 +522,7 @@ pub enum SettingsSection {
     General,
     Projects,
     Devices,
+    Connections,
     /// Per-device providers, CLI enablement, accounts, and usage.
     Providers,
     Appearance,
@@ -537,7 +539,7 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 14] = [
+    pub const ALL: [SettingsSection; 15] = [
         SettingsSection::General,
         SettingsSection::Projects,
         SettingsSection::Providers,
@@ -549,6 +551,7 @@ impl SettingsSection {
         SettingsSection::Automations,
         SettingsSection::Usage,
         SettingsSection::Updates,
+        SettingsSection::Connections,
         SettingsSection::Devices,
         SettingsSection::Backups,
         SettingsSection::Archived,
@@ -562,6 +565,7 @@ impl SettingsSection {
             "settings" | "settings/general" => Self::General,
             "settings/projects" => Self::Projects,
             "settings/devices" => Self::Devices,
+            "settings/connections" => Self::Connections,
             "settings/harnesses" | "settings/agents" | "settings/providers" => Self::Providers,
             "settings/appearance" => Self::Appearance,
             "settings/files" => Self::Files,
@@ -584,6 +588,7 @@ impl SettingsSection {
             SettingsSection::General => "General",
             SettingsSection::Projects => "Projects",
             SettingsSection::Devices => "Devices",
+            SettingsSection::Connections => "Connections",
             SettingsSection::Providers => "Providers",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
@@ -2535,6 +2540,9 @@ pub struct Shell {
     general_page: Option<Entity<GeneralPage>>,
     projects_page: Option<Entity<ProjectsPage>>,
     devices_page: Option<Entity<DevicesPage>>,
+    connections_page: Option<Entity<ConnectionsPage>>,
+    connections_sub: Option<Subscription>,
+    remote_host_ready: bool,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
@@ -2987,6 +2995,18 @@ impl Shell {
             _observation: cx.observe(&shell, |_, _, cx| cx.notify()),
         });
         let history_engine_generation = state.read(cx).engine_generation();
+        // Hosting and power eligibility must be observed even before settings
+        // is opened, including after restoring an opted-in preference.
+        let connections_page = cx.new(|cx| ConnectionsPage::new(state.clone(), cx));
+        let connections_sub = cx.subscribe(
+            &connections_page,
+            |this: &mut Shell, _, event: &HostingChanged, cx| {
+                this.remote_host_ready = event.ready;
+                this.settings.keep_awake_while_hosting =
+                    settings::current(cx).keep_awake_while_hosting;
+                this.reconcile_keep_awake(cx);
+            },
+        );
         Self {
             state,
             sidebar_pane,
@@ -3096,6 +3116,9 @@ impl Shell {
             general_page: None,
             projects_page: None,
             devices_page: None,
+            connections_page: Some(connections_page),
+            connections_sub: Some(connections_sub),
+            remote_host_ready: false,
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
@@ -5519,6 +5542,11 @@ impl Shell {
         if section == SettingsSection::Backups {
             self.backups_page = None;
         }
+        if section != SettingsSection::Connections {
+            if let Some(page) = &self.connections_page {
+                page.update(cx, |page, cx| page.cancel_pairing(cx));
+            }
+        }
         self.route = Route::Settings(section);
         if section == SettingsSection::Usage {
             self.usage_card_open = false;
@@ -5692,6 +5720,27 @@ impl Shell {
                     page.update(cx, |page, cx| page.sync(&self.settings, cx));
                 }
                 self.general_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
+            SettingsSection::Connections => {
+                if self.connections_page.is_none() {
+                    let state = self.state.clone();
+                    let page = cx.new(|cx| ConnectionsPage::new(state, cx));
+                    self.connections_sub = Some(cx.subscribe(
+                        &page,
+                        |this: &mut Shell, _, event: &HostingChanged, cx| {
+                            this.remote_host_ready = event.ready;
+                            this.settings.keep_awake_while_hosting =
+                                settings::current(cx).keep_awake_while_hosting;
+                            this.reconcile_keep_awake(cx);
+                        },
+                    ));
+                    self.connections_page = Some(page);
+                }
+                self.connections_page
                     .as_ref()
                     .unwrap()
                     .clone()
@@ -8833,6 +8882,7 @@ impl Shell {
             SettingsSection::General => icons::SETTINGS,
             SettingsSection::Projects => icons::FOLDER_WITH_FILES,
             SettingsSection::Devices => icons::MONITOR,
+            SettingsSection::Connections => icons::GLOBAL,
             SettingsSection::Providers => icons::SERVER_2,
             SettingsSection::Appearance => icons::PAINT_BRUSH,
             SettingsSection::Files => icons::FOLDER,
@@ -15643,6 +15693,11 @@ impl Render for Shell {
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
         self.sync_restored_page(cx);
+        if !matches!(self.route, Route::Settings(SettingsSection::Connections)) {
+            if let Some(page) = &self.connections_page {
+                page.update(cx, |page, cx| page.cancel_pairing(cx));
+            }
+        }
         self.automations_frame_begin();
         self.sync_execution_focus(cx);
         self.sync_confirmation_focus(window, cx);

@@ -74,6 +74,54 @@ pub struct HostTicket {
     pub spki_sha256: String,
 }
 
+/// Explicit native enrollment input. The secret travels only in the local
+/// QR/manual fragment and the pinned redemption body, never an HTTP URL.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingTicket {
+    pub version: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    pub host: HostTicket,
+    pub pairing_id: String,
+    pub credential: String,
+    pub expires_at_ms: u64,
+    pub scopes: Vec<String>,
+}
+
+impl PairingTicket {
+    pub const PREFIX: &str = "luna://pair#";
+    pub const MAX_BYTES: usize = 8192;
+
+    pub fn encode(&self) -> Result<String, &'static str> {
+        use base64::Engine;
+        let bytes = serde_json::to_vec(self).map_err(|_| "Cannot encode pairing")?;
+        let code = format!(
+            "{}{}",
+            Self::PREFIX,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        );
+        (code.len() <= Self::MAX_BYTES)
+            .then_some(code)
+            .ok_or("Pairing code is too large")
+    }
+
+    pub fn decode(code: &str) -> Result<Self, &'static str> {
+        use base64::Engine;
+        if code.len() > Self::MAX_BYTES {
+            return Err("Pairing code is too large");
+        }
+        let encoded = code
+            .trim()
+            .strip_prefix(Self::PREFIX)
+            .ok_or("Not a LUNA pairing code")?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| "Invalid pairing code")?;
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid pairing code")
+    }
+}
+
 /// Whether `value` is a well-formed pin: 64 lowercase hex digits.
 pub fn is_spki_sha256(value: &str) -> bool {
     value.len() == 64

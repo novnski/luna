@@ -20,7 +20,12 @@ PLATFORM="${1:-iphoneos}"
 SWIFT_OUT="${2:-}"
 case "$PLATFORM" in
   iphoneos) TARGET=aarch64-apple-ios ;;
-  iphonesimulator) TARGET=aarch64-apple-ios-sim ;;
+  iphonesimulator)
+    case "$(uname -m)" in
+      arm64|aarch64) TARGET=aarch64-apple-ios-sim ;;
+      x86_64) TARGET=x86_64-apple-ios ;;
+      *) echo "error: unsupported simulator host architecture" >&2; exit 64 ;;
+    esac ;;
   *) echo "error: unsupported platform $PLATFORM" >&2; exit 64 ;;
 esac
 
@@ -43,6 +48,14 @@ GEN="$OUT/gen"
 rm -rf "$GEN"
 "$ROOT/target/debug/uniffi-bindgen" generate --library "$LIB" --language swift \
   --out-dir "$GEN" >/dev/null
+# UniFFI templates contain whitespace-only lines; keep committed output clean
+# and stable across repeated Xcode builds without changing generated APIs.
+python3 - "$GEN/luna_core.swift" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1])
+source.write_text('\n'.join(line.rstrip() for line in source.read_text().splitlines()) + '\n')
+PY
 cp "$GEN/luna_coreFFI.h" "$OUT/include/luna_coreFFI.h"
 cp "$GEN/luna_coreFFI.modulemap" "$OUT/include/module.modulemap"
 if [[ -n "$SWIFT_OUT" ]]; then

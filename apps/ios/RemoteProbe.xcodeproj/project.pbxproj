@@ -16,6 +16,7 @@
 			path = RemoteProbe;
 			sourceTree = "<group>";
 		};
+		F20000000000000000000001 /* SharedRemote */ = {isa = PBXFileSystemSynchronizedRootGroup; path = SharedRemote; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +33,7 @@
 		B10000000000000000000003 = {
 			isa = PBXGroup;
 			children = (
+				F20000000000000000000001 /* SharedRemote */,
 				B10000000000000000000001 /* RemoteProbe */,
 				B10000000000000000000004 /* Products */,
 			);
@@ -62,6 +64,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				B10000000000000000000001 /* RemoteProbe */,
+							F20000000000000000000001 /* SharedRemote */,
 			);
 			name = RemoteProbe;
 			productName = RemoteProbe;

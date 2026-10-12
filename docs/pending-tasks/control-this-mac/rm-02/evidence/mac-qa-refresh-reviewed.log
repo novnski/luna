@@ -1,0 +1,6 @@
+building LUNA QA Pairing (com.novnski.luna.qa.pairing); full output: <feature-checkout>/target/luna-macos-dev/last-build.log
+build succeeded in 52s
+<feature-checkout>/target/luna-macos-dev/.stage.GVZSV5/LUNA QA Pairing.app: replacing existing signature
+asking LUNA QA Pairing to quit after the successful build
+launching LUNA QA Pairing (data <feature-checkout>/target/luna-qa-data/rm02, IPC 59836)
+LUNA QA Pairing is running from <feature-checkout>/target/luna-macos-dev/LUNA QA Pairing.app (PID 24695)

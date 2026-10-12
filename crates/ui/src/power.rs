@@ -122,7 +122,7 @@ mod macos {
                 CFStringCreateWithCString(std::ptr::null(), c"NoIdleSleepAssertion".as_ptr(), UTF8);
             let name = CFStringCreateWithCString(
                 std::ptr::null(),
-                c"LUNA selected active task".as_ptr(),
+                c"LUNA active work or remote hosting".as_ptr(),
                 UTF8,
             );
             if assertion_type.is_null() || name.is_null() {
@@ -259,5 +259,44 @@ mod tests {
             selected_active_task(Some("task"), &enabled, Some("local"), &[session], now),
             None
         );
+    }
+}
+
+/// Remote availability is opt-in and eligible only on external power. The
+/// existing shell coordinator samples it alongside its task/host reasons.
+pub(crate) fn external_power() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use std::ffi::{c_char, c_void};
+        #[link(name = "IOKit", kind = "framework")]
+        unsafe extern "C" {
+            fn IOPSCopyPowerSourcesInfo() -> *const c_void;
+            fn IOPSGetProvidingPowerSourceType(info: *const c_void) -> *const c_void;
+        }
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFStringGetCString(
+                value: *const c_void,
+                bytes: *mut c_char,
+                size: isize,
+                encoding: u32,
+            ) -> u8;
+            fn CFRelease(value: *const c_void);
+        }
+        let info = IOPSCopyPowerSourcesInfo();
+        if info.is_null() {
+            return false;
+        }
+        let source = IOPSGetProvidingPowerSourceType(info);
+        let mut bytes = [0i8; 64];
+        let valid = !source.is_null()
+            && CFStringGetCString(source, bytes.as_mut_ptr(), 64, 0x0800_0100) != 0;
+        let ac = valid && std::ffi::CStr::from_ptr(bytes.as_ptr()).to_bytes() == b"AC Power";
+        CFRelease(info);
+        ac
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }

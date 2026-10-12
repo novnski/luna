@@ -195,7 +195,30 @@ impl Shell {
                 None
             }
         };
-        if let Err(error) = self.keep_awake.reconcile(target.as_deref()) {
+        let external_power = crate::power::external_power();
+        let target = target.or_else(|| {
+            (self.settings.keep_awake_while_hosting && self.remote_host_ready && external_power)
+                .then(|| "remote-host".to_string())
+        });
+        let result = self.keep_awake.reconcile(target.as_deref());
+        let power_status = if !self.settings.keep_awake_while_hosting {
+            "Off".to_string()
+        } else if !self.remote_host_ready {
+            "Waiting for hosting to be ready.".to_string()
+        } else if !external_power {
+            "Waiting for external power. Hosting does not prevent sleep on battery.".to_string()
+        } else {
+            match &result {
+                Ok(()) => "Active: idle system sleep is prevented.".to_string(),
+                Err(error) => format!("Keep awake is unavailable: {error}"),
+            }
+        };
+        if let Some(page) = &self.connections_page {
+            page.update(cx, |page, cx| {
+                page.set_power_status(power_status.into(), cx)
+            });
+        }
+        if let Err(error) = result {
             self.activity.error = Some(error.into());
         }
     }

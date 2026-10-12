@@ -1,0 +1,118 @@
+Incremental cache: 0.00 GiB accounted; removing 0 old duplicate directories (0.00 GiB accounted)
+{
+  "accounting": "max(logical, allocated) per file; APFS clones charged separately",
+  "paths": [
+    {
+      "path": "<feature-checkout>/target",
+      "bytes": 7691541632
+    },
+    {
+      "path": "/Users/iulian/Library/Caches/mbx",
+      "bytes": 23033259144
+    },
+    {
+      "path": "<primary-checkout>/target",
+      "bytes": 60538810460
+    }
+  ],
+  "total_bytes": 91263611236,
+  "free_bytes": 331130912768,
+  "operating_ceiling_bytes": 182536110080,
+  "growth_reservation_bytes": 26843545600,
+  "absolute_policy_max_bytes": 214748364800
+}
+[WARN ] CARGO_INCREMENTAL=0 is set in the environment, so this build is not incremental after all
+warning: unused import: `ToolDiffStat`
+  --> crates/doc/src/schema.rs:22:82
+   |
+22 | use crate::parts::{MessagePart, MessageStatus, SubagentActivity, SubagentStatus, ToolDiffStat};
+   |                                                                                  ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `luna-doc` (lib) generated 1 warning (run `cargo fix --lib -p luna-doc` to apply 1 suggestion)
+warning: unnecessary `unsafe` block
+  --> crates/sync/src/net_path.rs:58:30
+   |
+51 |         unsafe {
+   |         ------ because it's nested under this `unsafe` block
+...
+58 |                 let status = unsafe { nw_path_get_status(path) };
+   |                              ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `connect_with_tuned` is never used
+   --> crates/sync/src/registry.rs:656:25
+    |
+518 | impl RegistryClient {
+    | ------------------- associated function in this implementation
+...
+656 |     pub(crate) async fn connect_with_tuned(
+    |                         ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `luna-sync` (lib) generated 2 warnings
+   Compiling luna-rpc v0.2.73 (<feature-checkout>/crates/rpc)
+warning: unused import: `IpAddr`
+ --> crates/preview/src/discovery.rs:5:11
+  |
+5 |     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+  |           ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `luna-preview` (lib) generated 1 warning (run `cargo fix --lib -p luna-preview` to apply 1 suggestion)
+   Compiling luna-mobile v0.2.73 (<feature-checkout>/crates/mobile)
+   Compiling luna-remote v0.2.73 (<feature-checkout>/crates/remote)
+   Compiling luna-engine v0.2.73 (<feature-checkout>/crates/engine)
+mbx[progress]: 15s elapsed; 0 hits, 2 misses, 1 bypassed, 0 not looked up; ~0s compiler work saved
+warning: function `aggregate_records` is never used
+    --> crates/engine/src/usage.rs:1517:4
+     |
+1517 | fn aggregate_records(
+     |    ^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+mbx[progress]: 30s elapsed; 0 hits, 2 misses, 1 bypassed, 0 not looked up; ~0s compiler work saved
+mbx[progress]: 45s elapsed; 0 hits, 2 misses, 1 bypassed, 0 not looked up; ~0s compiler work saved
+warning: `luna-engine` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 51.73s
+     Running tests/remote_access.rs (target/debug/deps/remote_access-df9b0fa381a7da62)
+
+running 6 tests
+test a_corrupt_authority_store_stays_refused_until_an_explicit_reset ... ok
+test a_v1_authority_store_migrates_once_and_keeps_its_sessions ... ok
+test gateway::enrollment_preflights_identity_before_spending_a_code_and_commits_only_after_storage ... ok
+test gateway::remote_access_resumes_after_restart_with_the_same_pin ... ok
+test gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session ... ok
+test gateway::revoke_closes_only_its_session_and_disable_closes_everything ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+
+mbx[cache]: 0 hits, 4 misses, 1 bypassed; 0 B downloaded, 0 B uploaded, 581.1 MiB stored locally
+mbx[savings]: 106045 compilations served from cache to date
+{
+  "accounting": "max(logical, allocated) per file; APFS clones charged separately",
+  "paths": [
+    {
+      "path": "<feature-checkout>/target",
+      "bytes": 7725554816
+    },
+    {
+      "path": "/Users/iulian/Library/Caches/mbx",
+      "bytes": 23642683304
+    },
+    {
+      "path": "<primary-checkout>/target",
+      "bytes": 60481683548
+    }
+  ],
+  "total_bytes": 91849921668,
+  "free_bytes": 330543788032,
+  "operating_ceiling_bytes": 182536110080,
+  "growth_reservation_bytes": 26843545600,
+  "absolute_policy_max_bytes": 214748364800
+}

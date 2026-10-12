@@ -6,6 +6,7 @@
 //   supplies a fake org claim.
 
 import Foundation
+import LocalAuthentication
 
 struct AuthUser: Codable, Equatable {
     var id: String
@@ -87,6 +88,51 @@ struct AuthClient {
 
 enum Keychain {
     private static let service = "com.novnski.luna.ios"
+
+    /// App-owned pairing tokens use the same quiet iOS API as login tokens.
+    /// No access-control / user-presence / biometric flags are installed.
+    static func saveRemoteToken(_ token: String, account: String) -> OSStatus {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service + ".paired-macs",
+            kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: false,
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updated != errSecItemNotFound { return updated }
+        return SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil)
+    }
+
+    static func remoteToken(account: String) -> (OSStatus, String?) {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service + ".paired-macs",
+            kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: false,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return (status, (result as? Data).flatMap { String(data: $0, encoding: .utf8) })
+    }
+
+    static func forgetRemoteToken(account: String) -> OSStatus {
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service + ".paired-macs",
+            kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: false,
+        ] as CFDictionary)
+    }
+
 
     static func save(_ value: String, key: String) {
         let data = Data(value.utf8)

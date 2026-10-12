@@ -100,6 +100,10 @@ impl RemoteAccess {
         let mut config = self.config()?;
         if !enabled {
             self.stop().await;
+            if let Some(auth) = &self.auth {
+                auth.revoke_all_pairings()
+                    .map_err(|error| error.to_string())?;
+            }
             config.enabled = false;
             self.save(&config)?;
             self.set_error(None);

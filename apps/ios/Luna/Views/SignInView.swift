@@ -63,6 +63,10 @@ struct SignInView: View {
                 }
 
                 VStack(spacing: 12) {
+                    Button("Connect to a Mac") { model.showPairedMacs = true }
+                        .font(Theme.sans(15, weight: .semibold))
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("remote.open")
                     Button {
                         signIn()
                     } label: {
