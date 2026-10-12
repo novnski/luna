@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791760996.599218,
+  "created_at": 1791794076.6419032,
   "summary": {
     "counts": {
       "blocked": 1,
@@ -9,8 +9,8 @@
       "deferred": 25,
       "done": 13,
       "in_progress": 0,
-      "paused": 0,
-      "ready": 67,
+      "paused": 1,
+      "ready": 66,
       "review": 0
     },
     "groups": [
@@ -60,9 +60,9 @@
         "tasks": 24,
         "done": 3,
         "remaining": 21,
-        "accepted_units": 12,
+        "accepted_units": 13,
         "total_units": 96,
-        "acceptance_percent": 12.5,
+        "acceptance_percent": 13.5,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -375,18 +375,16 @@
       "tasks": 76,
       "done": 8,
       "remaining": 68,
-      "accepted_units": 31,
+      "accepted_units": 32,
       "total_units": 296,
-      "acceptance_percent": 10.5
+      "acceptance_percent": 10.8
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
       "CORE-03",
       "IC-0",
-      "ZI-01",
       "ZI-03",
-      "ZI-04",
-      "ZI-05"
+      "ZI-04"
     ]
   },
   "tasks": [
@@ -769,16 +767,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-03",
-      "last_worker": null,
-      "note": "Read the CORE-03 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.0082638
     },
     {
       "attempts": 0,
@@ -2222,6 +2210,48 @@
       "note": "E15 passed on 8ff34b56 without a correction; evidence delivered in 5be7861f and pushed to origin/main",
       "status": "done",
       "updated_at": 1791760996.506337
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791767767.294622,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+              "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+              "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+              "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+            }
+          ],
+          "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+        }
+      },
+      "id": "CORE-03",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791794069.026239,
+        "expires_at": 1791801269.026239,
+        "heartbeat_at": 1791794069.026239,
+        "owner": "claude-code-opus-5.5",
+        "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+      },
+      "note": "M1 (431662b0: engine lifetime/command admission; stale-engine ledger loss fixed) and M2 (71f441c8: one local + one restricted remote EngineRpc per engine, maintenance supervisor; agent workspace tools no longer lost when a remote service is built later) are delivered with evidence in docs/pending-tasks/extensible-core/core-03/. Contract criterion checked. Next: M3 per contract.md sections 3 and 8 - extract RunCoordinator from SessionsEngine and ProjectionHost from DocHost behind in-process ports, re-run the E05 owners (task_commands, task_identity, local_profiles, restart_resume, recovery, device_routing) before deleting old paths; then the close-out items (watch cancellation on close, bounded provider event queue, DocsStore writers behind admitted APIs). Resume by reading README.md, contract.md and failures.md there.",
+      "recovery_evidence": [
+        {
+          "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+          "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791794076.549945
     }
   ],
   "events": [
@@ -7759,6 +7789,256 @@
           "claimed_at": 1791760044.391399,
           "expires_at": 1791764574.678422,
           "heartbeat_at": 1791760974.678422,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 217,
+      "task": "CORE-03",
+      "at": 1791765415.820947,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-03 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791765415.82086,
+          "expired": false,
+          "expires_at": 1791772615.82086,
+          "heartbeat_at": 1791765415.82086,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 218,
+      "task": "CORE-03",
+      "at": 1791766145.779872,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-03 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791765415.82086,
+          "expired": false,
+          "expires_at": 1791769745.7797918,
+          "heartbeat_at": 1791766145.7797918,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 219,
+      "task": "CORE-03",
+      "at": 1791767767.197768,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-03 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791765415.82086,
+          "expired": false,
+          "expires_at": 1791771367.197676,
+          "heartbeat_at": 1791767767.197676,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 220,
+      "task": "CORE-03",
+      "at": 1791767767.294867,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791765415.82086,
+          "expired": false,
+          "expires_at": 1791771367.197676,
+          "heartbeat_at": 1791767767.197676,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 221,
+      "task": "CORE-03",
+      "at": 1791794068.9338508,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "Same worker (claude-code-opus-5.5, this session): lease lapsed during long test runs; no other process is working CORE-03. M1 431662b0 and M2 71f441c8 delivered.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791765415.82086,
+          "expires_at": 1791771367.197676,
+          "heartbeat_at": 1791767767.197676,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 222,
+      "task": "CORE-03",
+      "at": 1791794069.026324,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "Same worker (claude-code-opus-5.5, this session): lease lapsed during long test runs; no other process is working CORE-03. M1 431662b0 and M2 71f441c8 delivered.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791794069.026239,
+          "expired": false,
+          "expires_at": 1791801269.026239,
+          "heartbeat_at": 1791794069.026239,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 223,
+      "task": "CORE-03",
+      "at": 1791794076.550019,
+      "action": "pause",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "M1 (431662b0: engine lifetime/command admission; stale-engine ledger loss fixed) and M2 (71f441c8: one local + one restricted remote EngineRpc per engine, maintenance supervisor; agent workspace tools no longer lost when a remote service is built later) are delivered with evidence in docs/pending-tasks/extensible-core/core-03/. Contract criterion checked. Next: M3 per contract.md sections 3 and 8 - extract RunCoordinator from SessionsEngine and ProjectionHost from DocHost behind in-process ports, re-run the E05 owners (task_commands, task_identity, local_profiles, restart_resume, recovery, device_routing) before deleting old paths; then the close-out items (watch cancellation on close, bounded provider event queue, DocsStore writers behind admitted APIs). Resume by reading README.md, contract.md and failures.md there.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791794069.026239,
+          "expires_at": 1791801269.026239,
+          "heartbeat_at": 1791794069.026239,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
