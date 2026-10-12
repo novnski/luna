@@ -1110,11 +1110,11 @@ fn pick_choice(options: &BoardExecutionOptions) -> Option<Choice> {
                     .or_else(|| entry.permission_modes.first().copied())?;
                 return Some(Choice {
                     harness: entry.harness,
-                    harness_label: match entry.harness {
-                        HarnessId::Codex => "Codex".into(),
-                        HarnessId::ClaudeCode => "Claude Code".into(),
-                        HarnessId::Opencode => "OpenCode".into(),
-                        HarnessId::Mock => "Mock".into(),
+                    harness_label: match (entry.harness).kind() {
+                        luna_proto::BuiltinHarnessId::Codex => "Codex".into(),
+                        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code".into(),
+                        luna_proto::BuiltinHarnessId::Opencode => "OpenCode".into(),
+                        luna_proto::BuiltinHarnessId::Mock => "Mock".into(),
                         other => format!("{other:?}"),
                     },
                     a: a.clone(),

@@ -2,41 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum HarnessId {
-    ClaudeCode,
-    Codex,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Cursor,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Devin,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Grok,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Hermes,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Pi,
-    /// SST's opencode agent, driven natively over its own HTTP/SSE server
-    /// protocol (`opencode serve` — the same wire the opencode desktop app
-    /// speaks).
-    Opencode,
-    /// Legacy wire value, retained only until old LUNA task rows are retired.
-    Antigravity,
-    /// Test harness; never shown in production pickers.
-    Mock,
-}
-
-impl HarnessId {
-    /// Old ids remain decodable until their LUNA task rows have been retired.
-    /// They have no runnable integration in the current engine.
-    pub fn is_retired(self) -> bool {
-        !matches!(
-            self,
-            Self::ClaudeCode | Self::Codex | Self::Opencode | Self::Mock
-        )
-    }
-}
+pub use crate::provider_id::{BuiltinHarnessId, HarnessId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

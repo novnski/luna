@@ -100,9 +100,9 @@ pub(crate) fn command_line_review(
     harness: HarnessId,
     target: &ReviewTarget,
 ) -> Option<Result<String, EngineError>> {
-    match harness {
-        HarnessId::ClaudeCode => Some(review_prompt(target)),
-        HarnessId::Opencode => Some(opencode_review_prompt(target)),
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => Some(review_prompt(target)),
+        luna_proto::BuiltinHarnessId::Opencode => Some(opencode_review_prompt(target)),
         _ => None,
     }
 }

@@ -158,8 +158,8 @@ impl Harness for Peer {
         self.id
     }
     fn display_name(&self) -> &str {
-        match self.id {
-            HarnessId::ClaudeCode => "Claude Code review peer",
+        match (self.id).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code review peer",
             _ => "Codex implementation peer",
         }
     }
@@ -185,14 +185,19 @@ impl Harness for Peer {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let (release, released) = oneshot::channel();
         let interrupted = Arc::new(AtomicBool::new(false));
-        let reported = match self.id {
-            HarnessId::ClaudeCode => self.control.reviewer_reports.lock().unwrap().clone(),
-            HarnessId::Codex if request.prompt.contains("# LUNA review packet") => self
-                .control
-                .inherited_reviewer_reports
-                .lock()
-                .unwrap()
-                .clone(),
+        let reported = match (self.id).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => {
+                self.control.reviewer_reports.lock().unwrap().clone()
+            }
+            luna_proto::BuiltinHarnessId::Codex
+                if request.prompt.contains("# LUNA review packet") =>
+            {
+                self.control
+                    .inherited_reviewer_reports
+                    .lock()
+                    .unwrap()
+                    .clone()
+            }
             _ => None,
         };
         let model = reported

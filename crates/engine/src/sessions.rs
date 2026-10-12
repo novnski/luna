@@ -883,8 +883,10 @@ impl RuntimeConfig {
         // fallback is at-least-once. Native review targets require a fresh
         // adapter dispatch (resuming the same binding) at a safe boundary.
         request.review.is_none()
-            && (matches!(harness_id, HarnessId::Codex | HarnessId::Opencode)
-                || (request.attachments.is_empty() && request.input_items.is_empty()))
+            && (matches!(
+                (harness_id).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Opencode
+            ) || (request.attachments.is_empty() && request.input_items.is_empty()))
             && self == &Self::from_request(harness_id, request)
     }
 }
@@ -1019,8 +1021,10 @@ struct PreparedControlEvidence {
 /// attach LUNA tools, so their claims fail closed.
 fn provider_turn_fence(harness: HarnessId) -> bool {
     matches!(
-        harness,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+        (harness).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Opencode
     )
 }
 
@@ -1711,11 +1715,11 @@ impl SessionsEngine {
             escalation: (requested > ceiling).then_some(requested),
             checkout,
             provider: selected
-                .map(|config| match config.harness {
-                    HarnessId::Codex => "Codex",
-                    HarnessId::ClaudeCode => "Claude Code",
-                    HarnessId::Opencode => "OpenCode",
-                    HarnessId::Mock => "Mock",
+                .map(|config| match (config.harness).kind() {
+                    luna_proto::BuiltinHarnessId::Codex => "Codex",
+                    luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+                    luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+                    luna_proto::BuiltinHarnessId::Mock => "Mock",
                     _ => "Unavailable",
                 })
                 .unwrap_or("Unavailable")
@@ -2490,11 +2494,13 @@ impl SessionsEngine {
     /// send their frozen seed through that section and fall back to a quoted
     /// first-prompt prefix only without one.
     pub(crate) fn provider_has_instruction_channel(&self, harness: HarnessId) -> bool {
-        match harness {
-            HarnessId::Codex | HarnessId::ClaudeCode => true,
-            HarnessId::Opencode => self.inner.registry.resolve(harness).is_ok_and(|adapter| {
-                adapter.luna_runtime_delivery() != luna_proto::RuntimeDelivery::Unsupported
-            }),
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode => true,
+            luna_proto::BuiltinHarnessId::Opencode => {
+                self.inner.registry.resolve(harness).is_ok_and(|adapter| {
+                    adapter.luna_runtime_delivery() != luna_proto::RuntimeDelivery::Unsupported
+                })
+            }
             _ => false,
         }
     }
@@ -3095,7 +3101,10 @@ impl SessionsEngine {
         &self,
         config: &mut ChatConfig,
     ) -> Result<(), EngineError> {
-        if matches!(config.harness, HarnessId::Codex | HarnessId::ClaudeCode) {
+        if matches!(
+            (config.harness).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+        ) {
             let accounts = self
                 .inner
                 .agent_accounts
@@ -3511,7 +3520,10 @@ impl SessionsEngine {
             }
         }
         if let Some(goal) = request.goal.as_ref() {
-            if !matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode) {
+            if !matches!(
+                (harness_id).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+            ) {
                 return Err(EngineError::Other(
                     "Goals need a Codex or Claude Code task".into(),
                 ));
@@ -3536,8 +3548,10 @@ impl SessionsEngine {
         // CC-15 / OC-15: Claude's review is its own `/code-review` line and
         // OpenCode's its built-in `/review` line (or an ordinary message for
         // custom instructions), never `review/start`. Both are text reviews.
-        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Opencode)
-            && let Some(review) = request.review.take()
+        if matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Opencode
+        ) && let Some(review) = request.review.take()
         {
             if self.turn_in_flight(chat_id) {
                 return Err(EngineError::Other(
@@ -3760,9 +3774,11 @@ impl SessionsEngine {
         // otherwise it keeps the no-contract path, its run retires a stale
         // `luna` instruction entry, and its side chats keep the quoted seed
         // (`provider_has_instruction_channel`).
-        if (matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode)
-            || (harness_id == HarnessId::Opencode
-                && provider_delivery != luna_proto::RuntimeDelivery::Unsupported))
+        if (matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+        ) || (harness_id == HarnessId::Opencode
+            && provider_delivery != luna_proto::RuntimeDelivery::Unsupported))
             && self.inner.task_identity.get().is_some()
         {
             let known_session_id = self
@@ -3998,7 +4014,11 @@ impl SessionsEngine {
         if request.goal.is_some() {
             self.mark_goal_sent(chat_id, &user_id);
         }
-        if matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) && !attach_existing_goal {
+        if matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Opencode
+        ) && !attach_existing_goal
+        {
             // The first turn/start carries the same correlation id as every
             // steer, so native readback can prove this message's delivery.
             // OpenCode posts it as the prompt's caller id (`msg_…`), which is
@@ -4488,7 +4508,10 @@ impl SessionsEngine {
             // pending inputs. Legacy identity-free adapters remain
             // single-flight.
             let mut pending = lock(&ledger);
-            if !matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) && !pending.is_empty()
+            if !matches!(
+                (harness_id).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Opencode
+            ) && !pending.is_empty()
             {
                 return Ok(SteerOutcome::Busy);
             }
@@ -8577,8 +8600,10 @@ async fn drive_run(
         // OpenCode's at each prompt it posts. Inside a turn it only arms the
         // LUNA tool fence; Claude wake turns keep their self-continued
         // lifecycle.
-        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Opencode)
-            && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
+        if matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Opencode
+        ) && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
         {
             if inner
                 .current_codex_binding_key(&chat_id)
@@ -8668,7 +8693,10 @@ async fn drive_run(
         {
             // Codex and OpenCode report provider-owned (automatic)
             // compaction as lifecycle, bound to the current provider session.
-            if !matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) {
+            if !matches!(
+                (harness_id).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Opencode
+            ) {
                 tracing::warn!(chat = %chat_id, harness = ?harness_id, "ignoring context compaction from unsupported harness");
                 continue;
             }
@@ -8716,8 +8744,10 @@ async fn drive_run(
             }
             continue;
         }
-        if matches!(harness_id, HarnessId::Codex | HarnessId::Opencode)
-            && matches!(&event, AgentEvent::Done { .. })
+        if matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Opencode
+        ) && matches!(&event, AgentEvent::Done { .. })
         {
             let binding = inner
                 .task_identity

@@ -36,9 +36,9 @@ pub(super) struct McpPanel {
 
 /// Whose readback an MCP row shows.
 fn provider_label(provider: HarnessId) -> &'static str {
-    match provider {
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Codex => "Codex",
+    match (provider).kind() {
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
         _ => "Claude",
     }
 }

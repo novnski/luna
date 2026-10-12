@@ -143,17 +143,18 @@ pub enum SettingsEditorEvent {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn harness_label(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Codex => "Codex",
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Mock => "Mock",
-        HarnessId::Cursor => "Cursor",
-        HarnessId::Devin => "Devin",
-        HarnessId::Grok => "Grok",
-        HarnessId::Hermes => "Hermes",
-        HarnessId::Pi => "Pi",
-        HarnessId::Antigravity => "Antigravity",
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+        luna_proto::BuiltinHarnessId::Mock => "Mock",
+        luna_proto::BuiltinHarnessId::Cursor => "Cursor",
+        luna_proto::BuiltinHarnessId::Devin => "Devin",
+        luna_proto::BuiltinHarnessId::Grok => "Grok",
+        luna_proto::BuiltinHarnessId::Hermes => "Hermes",
+        luna_proto::BuiltinHarnessId::Pi => "Pi",
+        luna_proto::BuiltinHarnessId::Antigravity => "Antigravity",
+        luna_proto::BuiltinHarnessId::Other => "Unavailable provider",
     }
 }
 

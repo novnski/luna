@@ -24,6 +24,7 @@ impl Shell {
             SettingsSection::General => self.general_page.is_some(),
             SettingsSection::Projects => self.projects_page.is_some(),
             SettingsSection::Providers => self.accounts_page.is_some(),
+            SettingsSection::Connections => self.connections_page.is_some(),
             SettingsSection::Appearance => self.appearance_page.is_some(),
             SettingsSection::Files => self.files_settings_page.is_some(),
             SettingsSection::Backups => self.backups_page.is_some(),

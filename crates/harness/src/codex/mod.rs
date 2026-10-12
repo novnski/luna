@@ -793,6 +793,12 @@ impl Harness for CodexHarness {
         )
     }
 
+    fn model_catalog_source(&self) -> String {
+        self.resolve_executable()
+            .map(|path| crate::executable::catalog_source(&path))
+            .unwrap_or_else(|_| "unavailable".into())
+    }
+
     /// Skills from a short-lived `skills/list` probe, cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands

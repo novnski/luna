@@ -412,6 +412,14 @@ impl Harness for OpencodeHarness {
     fn installed(&self) -> bool {
         self.executable.is_some() || self.base_url.is_some() || opencode_present()
     }
+    fn model_catalog_source(&self) -> String {
+        if let Some(url) = &self.base_url {
+            return format!("server:{url}");
+        }
+        self.resolve_executable()
+            .map(|path| crate::executable::catalog_source(&path))
+            .unwrap_or_else(|_| "unavailable".into())
+    }
     /// The execution terminal frames are real per-turn terminals: the
     /// engine can retire its quiesce watchdogs.
     fn deterministic_turn_end(&self) -> bool {

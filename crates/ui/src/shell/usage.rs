@@ -1676,10 +1676,10 @@ impl Shell {
             .visible_chats()
             .filter(|chat| state.display_status_for(chat, now) == ChatIndicator::Working)
             .filter_map(|chat| {
-                let provider = match chat.config.as_ref()?.harness {
-                    HarnessId::Codex => UsageProvider::Codex,
-                    HarnessId::Opencode => UsageProvider::OpenCodeGo,
-                    HarnessId::ClaudeCode => UsageProvider::Claude,
+                let provider = match (chat.config.as_ref()?.harness).kind() {
+                    luna_proto::BuiltinHarnessId::Codex => UsageProvider::Codex,
+                    luna_proto::BuiltinHarnessId::Opencode => UsageProvider::OpenCodeGo,
+                    luna_proto::BuiltinHarnessId::ClaudeCode => UsageProvider::Claude,
                     _ => return None,
                 };
                 Some((chat.device_id.clone(), provider))

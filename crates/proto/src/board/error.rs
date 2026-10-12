@@ -53,12 +53,12 @@ pub enum BoardError {
         reason: String,
     },
     UnavailableProvider {
-        harness: HarnessId,
+        harness: Box<HarnessId>,
     },
     /// No silent fallback: the requested settings are kept and the
     /// supported choices are returned.
     UnavailableModel {
-        harness: HarnessId,
+        harness: Box<HarnessId>,
         model: String,
         #[serde(default)]
         supported: Vec<String>,

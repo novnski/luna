@@ -546,8 +546,8 @@ fn synthetic_models(harness: HarnessId) -> Vec<Model> {
         options: vec![],
         first_seen_at_ms: None,
     };
-    match harness {
-        HarnessId::Codex => {
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => {
             let speed = ModelOption {
                 id: "serviceTier".into(),
                 label: "Speed".into(),
@@ -588,7 +588,7 @@ fn synthetic_models(harness: HarnessId) -> Vec<Model> {
             }
             models
         }
-        HarnessId::ClaudeCode => vec![
+        luna_proto::BuiltinHarnessId::ClaudeCode => vec![
             model(
                 "opus",
                 "Opus",
@@ -603,7 +603,7 @@ fn synthetic_models(harness: HarnessId) -> Vec<Model> {
             ),
             model("haiku", "Haiku", "Fastest for quick answers", &[]),
         ],
-        HarnessId::Opencode => vec![
+        luna_proto::BuiltinHarnessId::Opencode => vec![
             model("opencode/big-pickle", "Big Pickle", "OpenCode Zen", &[]),
             model("opencode/grok-code", "Grok Code Fast", "OpenCode Zen", &[]),
         ],

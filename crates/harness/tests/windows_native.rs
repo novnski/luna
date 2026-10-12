@@ -294,9 +294,9 @@ async fn batch_overrides_launch_through_cmd() {
         Box::new(luna_harness::CodexHarness::new().with_executable(script)),
     ];
     for harness in harnesses {
-        let expected_prefix: Vec<String> = match harness.id() {
-            HarnessId::ClaudeCode => vec!["--print".into()],
-            HarnessId::Codex => vec!["app-server".into()],
+        let expected_prefix: Vec<String> = match (harness.id()).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => vec!["--print".into()],
+            luna_proto::BuiltinHarnessId::Codex => vec!["app-server".into()],
             other => panic!("unexpected harness: {other:?}"),
         };
         let _ = std::fs::remove_file(&received);

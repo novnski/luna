@@ -491,8 +491,11 @@ impl EngineRpc {
             .config
             .ok_or_else(|| failed("Choose a provider and model first"))?;
         if !matches!(
-            config.harness,
-            HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode | HarnessId::Mock
+            (config.harness).kind(),
+            luna_proto::BuiltinHarnessId::Codex
+                | luna_proto::BuiltinHarnessId::ClaudeCode
+                | luna_proto::BuiltinHarnessId::Opencode
+                | luna_proto::BuiltinHarnessId::Mock
         ) {
             return Err(failed(
                 "Choose Codex, Claude Code, or OpenCode for this automation",
@@ -897,11 +900,11 @@ impl EngineRpc {
                     })
                 })
                 .unwrap_or_else(|| authority.project_id.clone());
-            let provider = match authority.config.harness {
-                HarnessId::ClaudeCode => "Claude Code",
-                HarnessId::Codex => "Codex",
-                HarnessId::Opencode => "OpenCode",
-                HarnessId::Mock => "Mock",
+            let provider = match (authority.config.harness).kind() {
+                luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+                luna_proto::BuiltinHarnessId::Codex => "Codex",
+                luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+                luna_proto::BuiltinHarnessId::Mock => "Mock",
                 _ => "Unavailable provider",
             };
             format!(

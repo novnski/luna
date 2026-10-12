@@ -798,10 +798,10 @@ impl AuthoringPane {
 }
 
 fn harness_name(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Codex => "Codex",
-        HarnessId::Opencode => "OpenCode",
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
         _ => "Provider",
     }
 }

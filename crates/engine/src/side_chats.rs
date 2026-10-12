@@ -426,8 +426,8 @@ impl SideChats {
         ensure!(
             config.sandbox != luna_proto::SandboxLevel::ReadOnly
                 || matches!(
-                    config.harness,
-                    luna_proto::HarnessId::Codex | luna_proto::HarnessId::Mock
+                    config.harness.kind(),
+                    luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Mock
                 ),
             "This provider cannot preserve the parent's read-only sandbox in a side chat"
         );

@@ -34,10 +34,14 @@ fn cache() -> &'static Mutex<HashMap<HarnessId, (Instant, ProviderUpdateStatus)>
 }
 
 fn path_for(harness: HarnessId) -> Option<PathBuf> {
-    match harness {
-        HarnessId::Codex => luna_harness::codex::resolve_codex_executable(),
-        HarnessId::ClaudeCode => luna_harness::claude::resolve_claude_executable(),
-        HarnessId::Opencode => luna_harness::opencode::resolve_opencode_executable(),
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => luna_harness::codex::resolve_codex_executable(),
+        luna_proto::BuiltinHarnessId::ClaudeCode => {
+            luna_harness::claude::resolve_claude_executable()
+        }
+        luna_proto::BuiltinHarnessId::Opencode => {
+            luna_harness::opencode::resolve_opencode_executable()
+        }
         _ => None,
     }
 }
@@ -47,10 +51,10 @@ fn path_for(harness: HarnessId) -> Option<PathBuf> {
 /// agree); `opencode-ai@latest` is still OpenCode 1.x and is never offered
 /// (OC-17, PD-15).
 fn package_for(harness: HarnessId) -> Option<&'static str> {
-    match harness {
-        HarnessId::Codex => Some("@openai/codex"),
-        HarnessId::ClaudeCode => Some("@anthropic-ai/claude-code"),
-        HarnessId::Opencode => Some("@opencode/cli"),
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => Some("@openai/codex"),
+        luna_proto::BuiltinHarnessId::ClaudeCode => Some("@anthropic-ai/claude-code"),
+        luna_proto::BuiltinHarnessId::Opencode => Some("@opencode/cli"),
         _ => None,
     }
 }
@@ -204,10 +208,10 @@ fn update_command(harness: HarnessId, path: &Path) -> Option<(&'static str, Vec<
             return Some(("opencode", vec!["upgrade".into()]));
         }
     }
-    let brew_name = match harness {
-        HarnessId::Codex => "codex",
-        HarnessId::ClaudeCode => "claude-code",
-        HarnessId::Opencode => "opencode",
+    let brew_name = match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => "codex",
+        luna_proto::BuiltinHarnessId::ClaudeCode => "claude-code",
+        luna_proto::BuiltinHarnessId::Opencode => "opencode",
         _ => return None,
     };
     let mut brew_prefixes = vec![PathBuf::from("/opt/homebrew"), PathBuf::from("/usr/local")];
@@ -243,10 +247,10 @@ fn update_command(harness: HarnessId, path: &Path) -> Option<(&'static str, Vec<
     let marker = format!("/lib/node_modules/{package}/");
     if let Some((prefix, _)) = real_normalized.split_once(&marker) {
         let prefix = PathBuf::from(prefix);
-        let binary = match harness {
-            HarnessId::Codex => "codex",
-            HarnessId::ClaudeCode => "claude",
-            HarnessId::Opencode => "opencode",
+        let binary = match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => "codex",
+            luna_proto::BuiltinHarnessId::ClaudeCode => "claude",
+            luna_proto::BuiltinHarnessId::Opencode => "opencode",
             _ => return None,
         };
         if path.starts_with(prefix.join("bin"))
@@ -265,10 +269,10 @@ fn update_command(harness: HarnessId, path: &Path) -> Option<(&'static str, Vec<
         }
     }
     if let Some(home) = home.as_deref() {
-        let name = match harness {
-            HarnessId::Codex => "codex",
-            HarnessId::ClaudeCode => "claude",
-            HarnessId::Opencode => "opencode",
+        let name = match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => "codex",
+            luna_proto::BuiltinHarnessId::ClaudeCode => "claude",
+            luna_proto::BuiltinHarnessId::Opencode => "opencode",
             _ => return None,
         };
         if path == home.join(".bun/bin").join(name) {

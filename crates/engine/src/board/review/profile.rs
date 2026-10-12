@@ -222,7 +222,7 @@ impl EngineRpc {
         let harness = self.registry.resolve(resolved.harness).map_err(|_| {
             (
                 BoardError::UnavailableProvider {
-                    harness: resolved.harness,
+                    harness: Box::new(resolved.harness),
                 },
                 BoardAttentionKind::ReviewUnavailable,
             )
@@ -230,7 +230,7 @@ impl EngineRpc {
         if !harness.installed() {
             return Err((
                 BoardError::UnavailableProvider {
-                    harness: resolved.harness,
+                    harness: Box::new(resolved.harness),
                 },
                 BoardAttentionKind::ReviewUnavailable,
             ));
@@ -267,7 +267,7 @@ impl EngineRpc {
         let Some(found) = models.iter().find(|candidate| candidate.id == model) else {
             return Err((
                 BoardError::UnavailableModel {
-                    harness: resolved.harness,
+                    harness: Box::new(resolved.harness),
                     model: model.into(),
                     supported: models.iter().take(20).map(|m| m.id.clone()).collect(),
                 },

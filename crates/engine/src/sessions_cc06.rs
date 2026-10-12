@@ -110,10 +110,16 @@ impl SessionsEngine {
                 return false;
             };
             let provider_matches = matches!(
-                (run.runtime_config.harness_id, row.provider),
-                (HarnessId::Codex, UsageProvider::Codex)
-                    | (HarnessId::ClaudeCode, UsageProvider::Claude)
-                    | (HarnessId::Opencode, UsageProvider::OpenCodeGo)
+                ((run.runtime_config.harness_id).kind(), row.provider),
+                (luna_proto::BuiltinHarnessId::Codex, UsageProvider::Codex)
+                    | (
+                        luna_proto::BuiltinHarnessId::ClaudeCode,
+                        UsageProvider::Claude
+                    )
+                    | (
+                        luna_proto::BuiltinHarnessId::Opencode,
+                        UsageProvider::OpenCodeGo
+                    )
             );
             let session = run
                 .run_provider_binding

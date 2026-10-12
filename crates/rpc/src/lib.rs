@@ -126,6 +126,9 @@ pub mod methods {
     pub const STAGE_BACKUP_RESTORE: &str = "StageBackupRestore";
     pub const WATCH_PREVIEWS: &str = "WatchPreviews";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
+    pub const GET_PROVIDER_CATALOG: &str = "GetProviderCatalog";
+    pub const WATCH_PROVIDER_CATALOG: &str = "WatchProviderCatalog";
+    pub const GET_PROVIDER_MODELS: &str = "GetProviderModels";
     /// Per-device CLI versions and available updates; cached between checks.
     pub const GET_PROVIDER_UPDATES: &str = "GetProviderUpdates";
     /// Explicitly update one locally installed CLI through its install method.
@@ -549,6 +552,9 @@ pub mod methods {
         STAGE_BACKUP_RESTORE,
         WATCH_PREVIEWS,
         LIST_HARNESSES,
+        GET_PROVIDER_CATALOG,
+        WATCH_PROVIDER_CATALOG,
+        GET_PROVIDER_MODELS,
         GET_PROVIDER_UPDATES,
         UPDATE_PROVIDER,
         GET_TITLE_SETTINGS,

@@ -1913,9 +1913,6 @@ impl EngineRpc {
                     _ = cancel.cancelled() => break,
                     _ = interval.tick() => {},
                 }
-                if let Some(rpc) = weak.upgrade() {
-                    rpc.retire_unsupported_history().await;
-                }
                 let mut task_done = false;
                 let mut project_done = false;
                 loop {
@@ -1942,45 +1939,6 @@ impl EngineRpc {
                 }
             }
         });
-    }
-
-    async fn retire_unsupported_history(&self) {
-        let chats = match self.workspace.read_chats() {
-            Ok(chats) => chats,
-            Err(error) => {
-                tracing::warn!(%error, "retired provider history scan failed");
-                return;
-            }
-        };
-        for chat in chats
-            .into_iter()
-            .filter(|chat| {
-                chat.device_id == self.engine_info.device_id
-                    && (chat
-                        .config
-                        .as_ref()
-                        .is_some_and(|config| config.harness.is_retired())
-                        || self.task_identity.view(&chat.id).is_some_and(|view| {
-                            view.current_binding
-                                .as_ref()
-                                .is_some_and(|binding| binding.provider_id.is_retired())
-                        }))
-            })
-            .take(16)
-        {
-            let command = legacy_task_command(chat.id.clone(), TaskCommandIntent::Delete {});
-            match self.execute_task_command(command, true).await {
-                Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
-                    tracing::info!(task = %chat.id, "retired provider task removed from LUNA history");
-                }
-                Ok(receipt) => {
-                    tracing::warn!(task = %chat.id, status = ?receipt.status, "retired provider task cleanup deferred")
-                }
-                Err(error) => {
-                    tracing::warn!(task = %chat.id, %error, "retired provider task cleanup failed")
-                }
-            }
-        }
     }
 
     /// Migration/reopen ingestion plus metadata reconciliation. This runs
@@ -3244,7 +3202,13 @@ impl EngineRpc {
                 .flatten()
                 .and_then(|chat| chat.config)
                 .map(|config| config.harness)
-                .filter(|harness| matches!(harness, HarnessId::ClaudeCode | HarnessId::Opencode))
+                .filter(|harness| {
+                    matches!(
+                        (harness).kind(),
+                        luna_proto::BuiltinHarnessId::ClaudeCode
+                            | luna_proto::BuiltinHarnessId::Opencode
+                    )
+                })
         {
             let refusal = if harness == HarnessId::ClaudeCode
                 && request.goal.is_some()
@@ -4280,8 +4244,8 @@ impl EngineRpc {
         // reaching this publication path.
         if side_chat
             && matches!(
-                source_binding.provider_id,
-                HarnessId::ClaudeCode | HarnessId::Codex
+                (source_binding.provider_id).kind(),
+                luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Codex
             )
             && result.checkpoint_map.len() != source_turns.len()
         {
@@ -4908,8 +4872,8 @@ impl EngineRpc {
             .map_err(TaskProjectionError::Mutation)?;
 
         let cwd = chat.cwd.unwrap_or_else(|| ".".into());
-        let result = match config.harness {
-            HarnessId::Codex => {
+        let result = match (config.harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => {
                 let execution = self
                     .agent_accounts
                     .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref());
@@ -4936,7 +4900,7 @@ impl EngineRpc {
             // OpenCode reports completion only on `compaction.ended` and
             // bounds its own wait after admission; a cold server boot must
             // not count against that bound (OCF-113).
-            HarnessId::Opencode => {
+            luna_proto::BuiltinHarnessId::Opencode => {
                 self.sessions
                     .compact_context(
                         HarnessId::Opencode,
@@ -4946,10 +4910,14 @@ impl EngineRpc {
                     )
                     .await
             }
-            harness => tokio::time::timeout(
+            _ => tokio::time::timeout(
                 Duration::from_secs(30),
-                self.sessions
-                    .compact_context(harness, binding.provider_task_id, cwd, config.model),
+                self.sessions.compact_context(
+                    config.harness,
+                    binding.provider_task_id,
+                    cwd,
+                    config.model,
+                ),
             )
             .await
             .map_err(|_| crate::EngineError::Other("Provider compaction timed out".into()))
@@ -8736,8 +8704,10 @@ impl CrossTaskBackend for EngineRpc {
         let snapshot = self
             .current_task_command_snapshot(&child_id)
             .map_err(|_| CrossTaskError::Backend("child snapshot unavailable".into()))?;
-        let auth_instance = if matches!(execution.harness, HarnessId::Codex | HarnessId::ClaudeCode)
-        {
+        let auth_instance = if matches!(
+            (execution.harness).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+        ) {
             Some(
                 self.agent_accounts
                     .resolve_execution(execution.harness, execution.provider_account_id.as_deref())
@@ -10592,6 +10562,39 @@ impl EngineRpc {
                     .boxed(),
                 ))
             }
+            methods::GET_PROVIDER_CATALOG => RpcReply::value(&self.registry.catalog(&self.engine_info.device_id)),
+            methods::WATCH_PROVIDER_CATALOG => {
+                let registry = self.registry.clone();
+                let host = self.engine_info.device_id.clone();
+                let changes = registry.watch();
+                let stream = futures::stream::unfold((registry, host, changes, None),
+                    |(registry, host, mut changes, mut last)| async move {
+                        loop {
+                            if last.is_some() {
+                                tokio::select! {
+                                    result = changes.changed() => { result.ok()?; },
+                                    _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                                }
+                            }
+                            let catalog = registry.catalog(&host);
+                            if last == Some(catalog.generation) { continue; }
+                            last = Some(catalog.generation);
+                            let value = serde_json::to_value(catalog).ok()?;
+                            return Some((value, (registry, host, changes, last)));
+                        }
+                    }).boxed();
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::GET_PROVIDER_MODELS => {
+                let p: ListModelsParams = parse_params(params)?;
+                let provenance = self.model_cache.provenance(p.harness, p.account_id.as_deref(), &self.engine_info.device_id)
+                    .map_err(RpcError::Failed)?;
+                let models = self.model_cache.list(p.harness, p.account_id.as_deref(), p.refresh).await.map_err(RpcError::Failed)?;
+                if provenance != self.model_cache.provenance(p.harness, p.account_id.as_deref(), &self.engine_info.device_id).map_err(RpcError::Failed)? {
+                    return Err(RpcError::Failed("Provider catalog changed during discovery; retry".into()));
+                }
+                RpcReply::value(&luna_proto::ProviderModels { provenance, models })
+            }
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::GET_PROVIDER_UPDATES => RpcReply::value(
                 &crate::provider_updates::check(
@@ -12317,7 +12320,7 @@ impl EngineRpc {
                         return Err(RpcError::Failed("Provider account selection changed during account usage refresh".into()));
                     }
                     for account in snapshot.accounts.iter_mut().filter(|a| a.active) {
-                        let provider = match account.harness { HarnessId::Codex => luna_proto::UsageProvider::Codex, HarnessId::ClaudeCode => luna_proto::UsageProvider::Claude, _ => continue };
+                        let provider = match (account.harness).kind() { luna_proto::BuiltinHarnessId::Codex => luna_proto::UsageProvider::Codex, luna_proto::BuiltinHarnessId::ClaudeCode => luna_proto::UsageProvider::Claude, _ => continue };
                         if let Some(limit) = usage.snapshot.limits.iter().find(|l| l.provider == provider) {
                             account.usage_windows = limit.windows.iter().map(|w| luna_proto::AgentUsageWindow {
                                 label: w.label.clone(), used_fraction: w.used_percent / 100.0,

@@ -59,10 +59,10 @@ pub(super) fn sidebar_thread_tooltip(
     status: Option<SharedString>,
 ) -> SidebarThreadTooltip {
     let model = chat.config.as_ref().map(|config| {
-        let provider = match config.harness {
-            luna_proto::HarnessId::Codex => "Codex",
-            luna_proto::HarnessId::ClaudeCode => "Claude Code",
-            luna_proto::HarnessId::Opencode => "OpenCode",
+        let provider = match (config.harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => "Codex",
+            luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+            luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
             _ => "Provider",
         };
         match config.model.as_deref() {

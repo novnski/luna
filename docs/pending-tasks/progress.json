@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791833458.041416,
+  "created_at": 1791841018.8193622,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
       "done": 16,
-      "in_progress": 0,
+      "in_progress": 1,
       "paused": 0,
-      "ready": 64,
+      "ready": 63,
       "review": 0
     },
     "groups": [
@@ -60,9 +60,9 @@
         "tasks": 24,
         "done": 4,
         "remaining": 20,
-        "accepted_units": 16,
+        "accepted_units": 19,
         "total_units": 96,
-        "acceptance_percent": 16.7,
+        "acceptance_percent": 19.8,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -375,20 +375,15 @@
       "tasks": 76,
       "done": 11,
       "remaining": 65,
-      "accepted_units": 43,
+      "accepted_units": 46,
       "total_units": 296,
-      "acceptance_percent": 14.5
+      "acceptance_percent": 15.5
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-04",
       "CORE-05",
       "IC-0",
-      "ZI-01",
-      "CORE-06",
-      "ZI-03",
-      "ZI-04",
-      "ZI-05"
+      "ZI-04"
     ]
   },
   "tasks": [
@@ -771,16 +766,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-04",
-      "last_worker": null,
-      "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.0844228
     },
     {
       "attempts": 0,
@@ -2433,6 +2418,63 @@
       "note": "Connections and native pairing delivered on verified main and refreshed LUNA Dev. User-directed Simulator acceptance passed actual pin/profile validation, OS secure storage/relaunch, camera fallback and per-host Forget/revoke. Physical camera capture/preview was observed, but physical LAN pairing/restart remains uncertified and is explicitly documented; no firewall rules changed.",
       "status": "done",
       "updated_at": 1791833457.949117
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791841018.549381,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+              "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+            }
+          ],
+          "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+        },
+        "delivery": {
+          "at": 1791841018.639143,
+          "evidence": [
+            {
+              "ref": "target/qa/core04/20261012T210735Z/native-proof.json",
+              "sha256": "61955895f5b15cd66883a622c8f4a6cf3a31d3f540e99b1ad3eb892c018fb07c"
+            },
+            {
+              "ref": "target/qa/core04/20261012T210735Z/engine-final.log",
+              "sha256": "fa30e225f287ec8f30f17fcfd20c8daad4ab8f8f95b8ef7d6a363cd1617165b6"
+            }
+          ],
+          "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
+        },
+        "verification": {
+          "at": 1791841018.727069,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+              "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+            },
+            {
+              "ref": "target/qa/core04/20261012T210735Z/SHA256SUMS",
+              "sha256": "803da78059baa0d3ffd089775aa2909fd0a54a462ae5659a80763d1049bcc26c"
+            }
+          ],
+          "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim."
+        }
+      },
+      "id": "CORE-04",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791836068.768116,
+        "expires_at": 1791843475.6275861,
+        "heartbeat_at": 1791839875.6275861,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
+        "expired": false
+      },
+      "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim.",
+      "status": "paused",
+      "updated_at": 1791841018.72717
     }
   ],
   "events": [
@@ -9846,6 +9888,265 @@
           "claimed_at": 1791822356.161988,
           "expires_at": 1791836013.0470011,
           "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 266,
+      "task": "CORE-04",
+      "at": 1791836068.768357,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791839668.768116,
+          "heartbeat_at": 1791836068.768116,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 267,
+      "task": "CORE-04",
+      "at": 1791837790.9837189,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791841390.98364,
+          "heartbeat_at": 1791837790.983639,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 268,
+      "task": "CORE-04",
+      "at": 1791838341.477262,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791841941.477188,
+          "heartbeat_at": 1791838341.477188,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 269,
+      "task": "CORE-04",
+      "at": 1791839194.970935,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791842794.970816,
+          "heartbeat_at": 1791839194.970816,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 270,
+      "task": "CORE-04",
+      "at": 1791839875.627666,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-04 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 271,
+      "task": "CORE-04",
+      "at": 1791841018.5496058,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791841018.549381,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+                "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+              }
+            ],
+            "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 272,
+      "task": "CORE-04",
+      "at": 1791841018.6393201,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791841018.549381,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+                "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+              }
+            ],
+            "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+          },
+          "delivery": {
+            "at": 1791841018.639143,
+            "evidence": [
+              {
+                "ref": "target/qa/core04/20261012T210735Z/native-proof.json",
+                "sha256": "61955895f5b15cd66883a622c8f4a6cf3a31d3f540e99b1ad3eb892c018fb07c"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/engine-final.log",
+                "sha256": "fa30e225f287ec8f30f17fcfd20c8daad4ab8f8f95b8ef7d6a363cd1617165b6"
+              }
+            ],
+            "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 273,
+      "task": "CORE-04",
+      "at": 1791841018.7272441,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791841018.549381,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/README.md",
+                "sha256": "fdcfd0d2541dbc83f31aec0b0282283f49ef0dd3232cfa2a31412bb7bc4e7b58"
+              }
+            ],
+            "note": "Validated namespaced/legacy IDs preserve wire spelling and canonical identity. Scoped provenance covers host, registry lifetime/generation, account/auth scope and actual launch source. Missing/retired preferences and history stay readable."
+          },
+          "delivery": {
+            "at": 1791841018.639143,
+            "evidence": [
+              {
+                "ref": "target/qa/core04/20261012T210735Z/native-proof.json",
+                "sha256": "61955895f5b15cd66883a622c8f4a6cf3a31d3f540e99b1ad3eb892c018fb07c"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/engine-final.log",
+                "sha256": "fa30e225f287ec8f30f17fcfd20c8daad4ab8f8f95b8ef7d6a363cd1617165b6"
+              }
+            ],
+            "note": "Collision-safe dynamic registration/removal, typed host registry/model projections and versioned subscription update the real open picker; built-in registrations and original task/session choices retained."
+          },
+          "verification": {
+            "at": 1791841018.727069,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-04/verification.json",
+                "sha256": "eef7e39f8e482c8734e8b78fe7cc5ba32ec7af5819f65706bd6a609a164d948e"
+              },
+              {
+                "ref": "target/qa/core04/20261012T210735Z/SHA256SUMS",
+                "sha256": "803da78059baa0d3ffd089775aa2909fd0a54a462ae5659a80763d1049bcc26c"
+              }
+            ],
+            "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "10 focused engine scenarios and 3 contract cases pass. Native external enable/disable watch, unavailable-provider readback and restart preserve model/access; history config/transcript hashes and native/account bindings verified. Discovery fixture makes no native execution claim.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791836068.768116,
+          "expired": false,
+          "expires_at": 1791843475.6275861,
+          "heartbeat_at": 1791839875.6275861,
           "owner": "codex",
           "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }

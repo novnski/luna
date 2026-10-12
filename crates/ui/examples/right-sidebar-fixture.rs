@@ -467,7 +467,13 @@ async fn run(
     let keys: Vec<&str> = order.iter().map(|(key, _)| key.as_str()).collect();
     anyhow::ensure!(
         keys == [
-            "overview", "agents", "related", "automations", "files", "changes", "terminal",
+            "overview",
+            "agents",
+            "related",
+            "automations",
+            "files",
+            "changes",
+            "terminal",
             "browser"
         ],
         "case 2: rail order: {keys:?}"
@@ -479,9 +485,10 @@ async fn run(
     );
     let rail_left = WIDTH - shell::RIGHT_RAIL_WIDTH;
     anyhow::ensure!(
-        order
-            .iter()
-            .all(|(_, r)| (r[0] + r[2] / 2.0 - (rail_left + shell::RIGHT_RAIL_WIDTH / 2.0)).abs() < 1.0),
+        order.iter().all(|(_, r)| (r[0] + r[2] / 2.0
+            - (rail_left + shell::RIGHT_RAIL_WIDTH / 2.0))
+            .abs()
+            < 1.0),
         "case 2: the rail must run along the sidebar's right edge: {order:?}"
     );
     let page = need(&open, "home-viewport")?;

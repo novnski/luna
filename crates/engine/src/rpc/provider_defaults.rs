@@ -24,8 +24,10 @@ impl EngineRpc {
         let snapshot = if method == methods::SET_PROVIDER_DEFAULTS {
             let request: luna_proto::SetProviderDefaultsRequest = parse_params(params)?;
             if !matches!(
-                request.provider,
-                HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+                (request.provider).kind(),
+                luna_proto::BuiltinHarnessId::Codex
+                    | luna_proto::BuiltinHarnessId::ClaudeCode
+                    | luna_proto::BuiltinHarnessId::Opencode
             ) {
                 return Err(RpcError::BadParams(
                     "Choose an available agent provider".into(),

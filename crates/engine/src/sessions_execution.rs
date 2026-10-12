@@ -118,8 +118,10 @@ impl SessionsEngine {
             )?;
             self.inner.registry.resolve(harness_id)?;
             request.cwd = super::expand_home(&request.cwd);
-            if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)
-                && let Some(accounts) = self.inner.agent_accounts.get()
+            if matches!(
+                (harness_id).kind(),
+                luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Codex
+            ) && let Some(accounts) = self.inner.agent_accounts.get()
             {
                 let execution = accounts
                     .resolve_execution(harness_id, request.provider_account_id.as_deref())?;

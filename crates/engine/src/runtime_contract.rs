@@ -791,9 +791,9 @@ mod tests {
     fn input(harness: HarnessId) -> CompileInput {
         CompileInput {
             context: context(harness),
-            provider_delivery: match harness {
-                HarnessId::Codex => RuntimeDelivery::CodexMcpTools,
-                HarnessId::ClaudeCode => RuntimeDelivery::ClaudeInstructionsOnly,
+            provider_delivery: match (harness).kind() {
+                luna_proto::BuiltinHarnessId::Codex => RuntimeDelivery::CodexMcpTools,
+                luna_proto::BuiltinHarnessId::ClaudeCode => RuntimeDelivery::ClaudeInstructionsOnly,
                 _ => RuntimeDelivery::Unsupported,
             },
             user_instructions: vec![],

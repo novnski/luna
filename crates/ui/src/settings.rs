@@ -2553,6 +2553,7 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
+            keep_awake_while_hosting: false,
             collapsed_child_chats: Vec::new(),
             window_geometry: None,
             confirm_archive: false,

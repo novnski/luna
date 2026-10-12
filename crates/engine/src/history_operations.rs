@@ -19,14 +19,14 @@ const HISTORY_RECOVERY_INDEX_PREFIX: &str = "luna-history-recovery-index-v1";
 const HISTORY_RECOVERY_SCHEMA_VERSION: u32 = 1;
 
 pub fn capability_for(provider: HarnessId) -> ProviderForkCapability {
-    match provider {
-        HarnessId::Codex => ProviderForkCapability::Checkpoint,
+    match (provider).kind() {
+        luna_proto::BuiltinHarnessId::Codex => ProviderForkCapability::Checkpoint,
         // CC-10: native prompt uuids are checkpoints; forks follow the Agent
         // SDK `forkSession` contract and are loaded by the CLI before binding.
-        HarnessId::ClaudeCode => ProviderForkCapability::Checkpoint,
+        luna_proto::BuiltinHarnessId::ClaudeCode => ProviderForkCapability::Checkpoint,
         // OC-12: a turn's first user message id is its checkpoint; forks use
         // OpenCode 2's exclusive `before` boundary at whole turns.
-        HarnessId::Opencode => ProviderForkCapability::Checkpoint,
+        luna_proto::BuiltinHarnessId::Opencode => ProviderForkCapability::Checkpoint,
         _ => ProviderForkCapability::None,
     }
 }
@@ -36,21 +36,30 @@ pub fn capability_for(provider: HarnessId) -> ProviderForkCapability {
 /// the shared `rewind_native_conversation` hook.
 pub fn same_chat_rewind_supported(provider: HarnessId) -> bool {
     matches!(
-        provider,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+        (provider).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Opencode
     )
 }
 
 /// Providers whose same-chat rewind runs through the provider-neutral
 /// `native_history_turns` / `rewind_native_conversation` hooks.
 pub fn rewinds_through_native_hooks(provider: HarnessId) -> bool {
-    matches!(provider, HarnessId::ClaudeCode | HarnessId::Opencode)
+    matches!(
+        (provider).kind(),
+        luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Opencode
+    )
 }
 
 pub fn unavailable_reason(provider: HarnessId) -> Option<&'static str> {
-    match provider {
-        HarnessId::Mock => Some("The synthetic Mock provider has no native history store."),
-        HarnessId::Codex | HarnessId::Opencode | HarnessId::ClaudeCode => None,
+    match (provider).kind() {
+        luna_proto::BuiltinHarnessId::Mock => {
+            Some("The synthetic Mock provider has no native history store.")
+        }
+        luna_proto::BuiltinHarnessId::Codex
+        | luna_proto::BuiltinHarnessId::Opencode
+        | luna_proto::BuiltinHarnessId::ClaudeCode => None,
         _ => Some("This provider is no longer supported by LUNA."),
     }
 }

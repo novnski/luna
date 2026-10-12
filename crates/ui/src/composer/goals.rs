@@ -52,9 +52,9 @@ pub(super) enum GoalProvider {
 
 impl GoalProvider {
     pub(super) fn of(harness: HarnessId) -> Option<Self> {
-        match harness {
-            HarnessId::Codex => Some(Self::Codex),
-            HarnessId::ClaudeCode => Some(Self::Claude),
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => Some(Self::Codex),
+            luna_proto::BuiltinHarnessId::ClaudeCode => Some(Self::Claude),
             _ => None,
         }
     }

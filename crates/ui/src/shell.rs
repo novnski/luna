@@ -10640,10 +10640,10 @@ impl Shell {
             .filter(|status| status.update_available)
             .collect();
         let first = pending.first()?;
-        let mark = match first.harness {
-            HarnessId::Codex => icons::OPENAI_MARK,
-            HarnessId::ClaudeCode => icons::CLAUDE_MARK,
-            HarnessId::Opencode => icons::OPENCODE_MARK,
+        let mark = match (first.harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => icons::OPENAI_MARK,
+            luna_proto::BuiltinHarnessId::ClaudeCode => icons::CLAUDE_MARK,
+            luna_proto::BuiltinHarnessId::Opencode => icons::OPENCODE_MARK,
             _ => icons::ARROW_DOWN,
         };
         let summary: SharedString = format!(
@@ -11996,7 +11996,11 @@ impl Shell {
                     pin_index.is_some_and(|index| index + 1 < pins.len()),
                     chat.and_then(|chat| chat.config.as_ref())
                         .is_some_and(|config| {
-                            matches!(config.harness, HarnessId::Codex | HarnessId::Opencode)
+                            matches!(
+                                (config.harness).kind(),
+                                luna_proto::BuiltinHarnessId::Codex
+                                    | luna_proto::BuiltinHarnessId::Opencode
+                            )
                         }),
                 )
             };
@@ -12016,8 +12020,10 @@ impl Shell {
                 .and_then(|chat| chat.config.as_ref())
                 .is_some_and(|config| {
                     matches!(
-                        config.harness,
-                        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+                        (config.harness).kind(),
+                        luna_proto::BuiltinHarnessId::Codex
+                            | luna_proto::BuiltinHarnessId::ClaudeCode
+                            | luna_proto::BuiltinHarnessId::Opencode
                     )
                 });
             let fork_task_id = chat_id.clone();

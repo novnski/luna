@@ -7,10 +7,13 @@
 //! Per-device because CLI installs are — a viewer retargets the settings page at
 //! another device and edits THAT device's set over the forwarded RPCs.
 
+use luna_proto::{ProviderCapabilities, ProviderForkCapability, RuntimeDelivery};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use tokio::sync::watch;
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +86,52 @@ fn describe(harness: &dyn Harness) -> HarnessDescriptor {
     }
 }
 
+/// One authoritative host registry projection; never executes a provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalog {
+    pub host_id: String,
+    pub registry_id: String,
+    pub generation: u64,
+    pub providers: Vec<ProviderDescriptor>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDescriptor {
+    #[serde(flatten)]
+    pub descriptor: HarnessDescriptor,
+    pub capabilities: ProviderCapabilities,
+    pub activated: bool,
+    pub executable: Option<String>,
+    pub available: bool,
+}
+fn capabilities(harness: &dyn Harness) -> ProviderCapabilities {
+    ProviderCapabilities {
+        version: 1,
+        steering: harness.supports_steering(),
+        steering_mode: harness.steering_mode(),
+        reasoning_levels: harness.reasoning_levels().to_vec(),
+        runtime_delivery: harness.luna_runtime_delivery(),
+        fork: harness.fork_capability(),
+        authoritative_prompt_end: harness.authoritative_prompt_end(),
+        safe_recovery: harness.supports_safe_recovery_continuation(),
+        native_child_stop: harness.supports_native_child_stop(),
+    }
+}
+fn conservative_capabilities(descriptor: &HarnessDescriptor) -> ProviderCapabilities {
+    ProviderCapabilities {
+        version: 1,
+        steering: descriptor.supports_steering,
+        steering_mode: descriptor.steering_mode,
+        reasoning_levels: descriptor.reasoning_levels.clone(),
+        runtime_delivery: RuntimeDelivery::Unsupported,
+        fork: ProviderForkCapability::None,
+        authoritative_prompt_end: false,
+        safe_recovery: false,
+        native_child_stop: false,
+    }
+}
+
 /// The persisted shape of `harness-prefs.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -119,10 +168,15 @@ enum Slot {
         /// shows up on the next settings/picker open, no restart needed.
         installed: InstalledProbe,
         factory: Factory,
+        capabilities: Box<ProviderCapabilities>,
     },
 }
 
 pub struct HarnessRegistry {
+    registry_id: String,
+    generation: AtomicU64,
+    changes: watch::Sender<u64>,
+    catalog_signature: Mutex<Option<Vec<u8>>>,
     slots: Mutex<HashMap<HarnessId, Slot>>,
     order: Mutex<Vec<HarnessId>>,
     /// This device's enabled set; `None` inner value = the default set.
@@ -173,6 +227,10 @@ impl Default for HarnessRegistry {
 impl HarnessRegistry {
     pub fn new() -> Self {
         Self {
+            registry_id: uuid::Uuid::new_v4().to_string(),
+            generation: AtomicU64::new(1),
+            changes: watch::channel(1).0,
+            catalog_signature: Mutex::new(None),
             slots: Mutex::new(HashMap::new()),
             order: Mutex::new(Vec::new()),
             prefs: Mutex::new(HarnessPrefsFile::default()),
@@ -269,12 +327,6 @@ impl HarnessRegistry {
             .and_then(|text| serde_json::from_str::<HarnessPrefsFile>(&text).ok())
             .unwrap_or_default();
         let had_legacy = loaded.enabled.is_some();
-        let had_retired = loaded.disabled.iter().any(|id| id.is_retired())
-            || loaded.titles.harness.is_some_and(HarnessId::is_retired);
-        loaded.disabled.retain(|id| !id.is_retired());
-        if loaded.titles.harness.is_some_and(HarnessId::is_retired) {
-            loaded.titles = TitleSettings::default();
-        }
         let needs_sync = *self
             .prefs_needs_sync
             .lock()
@@ -282,14 +334,17 @@ impl HarnessRegistry {
         let result = if let Some(legacy) = loaded.enabled.take() {
             // Fold the legacy allow-list into explicit opt-outs, but publish
             // before exposing the migrated in-memory state.
-            loaded.disabled = self
-                .order()
-                .iter()
-                .copied()
-                .filter(|id| auto_enabled(*id) && !legacy.contains(id))
-                .collect();
+            let mut disabled = loaded.disabled.clone();
+            disabled.extend(
+                self.order()
+                    .iter()
+                    .copied()
+                    .filter(|id| auto_enabled(*id) && !legacy.contains(id))
+                    .filter(|id| !loaded.disabled.contains(id)),
+            );
+            loaded.disabled = disabled;
             self.publish_prefs(&path, &loaded)
-        } else if had_retired || needs_sync {
+        } else if needs_sync {
             self.publish_prefs(&path, &loaded)
         } else {
             Ok(())
@@ -304,12 +359,12 @@ impl HarnessRegistry {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(path);
         }
-        if (had_legacy || had_retired || needs_sync) && result.is_ok() {
+        if (had_legacy || needs_sync) && result.is_ok() {
             *self
                 .prefs_needs_sync
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = false;
-        } else if (had_legacy || had_retired || needs_sync)
+        } else if (had_legacy || needs_sync)
             && result.as_ref().is_err_and(|error| error.published())
         {
             *self
@@ -324,9 +379,7 @@ impl HarnessRegistry {
     /// user's explicit opt-outs. Enablement follows detection, so installing
     /// an agent is all it takes for it to appear in the composer.
     pub fn enabled_set(&self) -> Vec<HarnessId> {
-        // Both guards drop before the installed probes run: `descriptors()`
-        // takes `slots` then `order`, so holding `order` across a probe (which
-        // takes `slots`) would invert the lock order.
+        // Drop the order and prefs guards before provider installation probes.
         let registered: Vec<HarnessId> = self.order().iter().copied().collect();
         let disabled = self.prefs().disabled.clone();
         registered
@@ -449,6 +502,7 @@ impl HarnessRegistry {
             .clone()
         else {
             *self.prefs() = candidate;
+            self.changed();
             return Ok(());
         };
         let result = self.publish_prefs(&path, &candidate);
@@ -457,6 +511,7 @@ impl HarnessRegistry {
             .map_or_else(PrefsMutationError::published, |_| true)
         {
             *self.prefs() = candidate;
+            self.changed();
         }
         if result.is_ok() {
             *self
@@ -559,36 +614,124 @@ impl HarnessRegistry {
             .map_err(|error| error.to_string())
     }
 
-    pub fn register(&self, harness: Arc<dyn Harness>) {
-        let id = harness.id();
-        if self.slots().insert(id, Slot::Ready(harness)).is_none() {
-            self.order().push(id);
-        }
+    fn changed(&self) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.changes.send_replace(generation);
+        generation
+    }
+    pub fn watch(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
-    /// Register a slot resolved on first `resolve` (the factory result is
-    /// cached). `installed` is the CLI-presence probe run per `descriptors()`
-    /// call; it must never spawn.
+    /// Compatibility registration for the engine's fixed initial adapters.
+    /// Runtime installers use the fallible form so collisions are reportable.
+    pub fn register(&self, harness: Arc<dyn Harness>) {
+        self.try_register(harness)
+            .expect("duplicate provider registration");
+    }
+    pub fn try_register(&self, harness: Arc<dyn Harness>) -> Result<(), HarnessError> {
+        self.insert_slot(harness.id(), Slot::Ready(harness))
+    }
+    fn insert_slot(&self, id: HarnessId, slot: Slot) -> Result<(), HarnessError> {
+        let mut order = self.order();
+        let mut slots = self.slots();
+        if slots.contains_key(&id) {
+            return Err(HarnessError::Protocol(format!(
+                "provider {id} is already registered"
+            )));
+        }
+        slots.insert(id, slot);
+        order.push(id);
+        self.changed();
+        Ok(())
+    }
+    /// Removal changes availability, never persisted task bindings or prefs.
+    pub fn unregister(&self, id: HarnessId) -> bool {
+        let mut order = self.order();
+        let mut slots = self.slots();
+        if slots.remove(&id).is_none() {
+            return false;
+        }
+        order.retain(|existing| *existing != id);
+        self.changed();
+        true
+    }
     pub fn register_lazy(
         &self,
         descriptor: HarnessDescriptor,
         installed: InstalledProbe,
         factory: Factory,
     ) {
-        let id = descriptor.id;
-        if self
-            .slots()
-            .insert(
-                id,
-                Slot::Lazy {
-                    descriptor,
-                    installed,
-                    factory,
-                },
-            )
-            .is_none()
-        {
-            self.order().push(id);
+        let caps = conservative_capabilities(&descriptor);
+        self.register_lazy_with_capabilities(descriptor, caps, installed, factory)
+            .expect("duplicate provider registration");
+    }
+    pub fn register_lazy_with_capabilities(
+        &self,
+        descriptor: HarnessDescriptor,
+        capabilities: ProviderCapabilities,
+        installed: InstalledProbe,
+        factory: Factory,
+    ) -> Result<(), HarnessError> {
+        self.insert_slot(
+            descriptor.id,
+            Slot::Lazy {
+                descriptor,
+                installed,
+                factory,
+                capabilities: Box::new(capabilities),
+            },
+        )
+    }
+
+    pub fn catalog(&self, host_id: &str) -> ProviderCatalog {
+        loop {
+            let generation = self.generation.load(Ordering::Acquire);
+            let descriptors = self.descriptors();
+            let slots = self.slots();
+            let providers: Vec<_> = descriptors
+                .into_iter()
+                .filter_map(|descriptor| {
+                    let (caps, activated, executable) = match slots.get(&descriptor.id)? {
+                        Slot::Ready(harness) => (
+                            capabilities(harness.as_ref()),
+                            true,
+                            Some(harness.model_catalog_source()),
+                        ),
+                        Slot::Lazy { capabilities, .. } => {
+                            (capabilities.as_ref().clone(), false, None)
+                        }
+                    };
+                    Some(ProviderDescriptor {
+                        available: descriptor.installed && descriptor_enabled(&descriptor),
+                        descriptor,
+                        capabilities: caps,
+                        activated,
+                        executable,
+                    })
+                })
+                .collect();
+            drop(slots);
+            let mut signature = self
+                .catalog_signature
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if generation != self.generation.load(Ordering::Acquire) {
+                continue;
+            }
+            let next = serde_json::to_vec(&providers).expect("serializable catalog");
+            let generation = if signature.as_ref().is_some_and(|old| *old != next) {
+                self.changed()
+            } else {
+                generation
+            };
+            *signature = Some(next);
+            return ProviderCatalog {
+                host_id: host_id.into(),
+                registry_id: self.registry_id.clone(),
+                generation,
+                providers,
+            };
         }
     }
 
@@ -598,7 +741,14 @@ impl HarnessRegistry {
             Some(Slot::Ready(harness)) => Ok(harness.clone()),
             Some(Slot::Lazy { factory, .. }) => {
                 let harness = factory()?;
+                if harness.id() != id {
+                    return Err(HarnessError::Protocol(format!(
+                        "provider factory returned {} for {id}",
+                        harness.id()
+                    )));
+                }
                 slots.insert(id, Slot::Ready(harness.clone()));
+                self.changed();
                 Ok(harness)
             }
             None => Err(HarnessError::NotInstalled(format!("{id:?}"))),
@@ -608,8 +758,9 @@ impl HarnessRegistry {
     /// Catalog for `ListHarnesses` — never forces a lazy resolve.
     pub fn descriptors(&self) -> Vec<HarnessDescriptor> {
         let enabled = self.enabled_set();
+        let order = self.order().clone();
         let slots = self.slots();
-        self.order()
+        order
             .iter()
             .filter_map(|id| {
                 let mut descriptor = match slots.get(id) {
@@ -683,54 +834,60 @@ pub fn default_registry() -> HarnessRegistry {
             },
         ],
     }));
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::ClaudeCode,
-            name: "Claude Code".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            // Must mirror ClaudeHarness exactly — the descriptor-stability
-            // rule (see the codex test below).
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-            ],
-            installed: true,
-            enabled: None,
-        },
-        Box::new(|| luna_harness::ClaudeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(luna_harness::ClaudeHarness::new()) as Arc<dyn Harness>)),
-    );
+    registry
+        .register_lazy_with_capabilities(
+            HarnessDescriptor {
+                id: HarnessId::ClaudeCode,
+                name: "Claude Code".into(),
+                supports_steering: true,
+                steering_mode: SteeringMode::StepBoundary,
+                // Must mirror ClaudeHarness exactly — the descriptor-stability
+                // rule (see the codex test below).
+                reasoning_levels: vec![
+                    ReasoningLevel::Low,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::High,
+                    ReasoningLevel::XHigh,
+                    ReasoningLevel::Max,
+                ],
+                installed: true,
+                enabled: None,
+            },
+            capabilities(&luna_harness::ClaudeHarness::new()),
+            Box::new(|| luna_harness::ClaudeHarness::new().installed()),
+            Box::new(|| Ok(Arc::new(luna_harness::ClaudeHarness::new()) as Arc<dyn Harness>)),
+        )
+        .expect("unique built-in provider");
     // Codex, same lazy pattern: the static descriptor mirrors CodexHarness
     // exactly (`describe()` after the first resolve must not change the
     // catalog entry) — "Codex" per the original HARNESS_LABEL, StepBoundary
     // steering via native `turn/steer`, and the unified reasoning ladder from
     // luna_harness::codex::catalog. CLI discovery only happens when a
     // run/model call actually resolves the slot.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Codex,
-            name: "Codex".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            reasoning_levels: vec![
-                ReasoningLevel::Minimal,
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-                ReasoningLevel::Ultra,
-            ],
-            installed: true,
-            enabled: None,
-        },
-        Box::new(|| luna_harness::CodexHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(luna_harness::CodexHarness::new()) as Arc<dyn Harness>)),
-    );
+    registry
+        .register_lazy_with_capabilities(
+            HarnessDescriptor {
+                id: HarnessId::Codex,
+                name: "Codex".into(),
+                supports_steering: true,
+                steering_mode: SteeringMode::StepBoundary,
+                reasoning_levels: vec![
+                    ReasoningLevel::Minimal,
+                    ReasoningLevel::Low,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::High,
+                    ReasoningLevel::XHigh,
+                    ReasoningLevel::Max,
+                    ReasoningLevel::Ultra,
+                ],
+                installed: true,
+                enabled: None,
+            },
+            capabilities(&luna_harness::CodexHarness::new()),
+            Box::new(|| luna_harness::CodexHarness::new().installed()),
+            Box::new(|| Ok(Arc::new(luna_harness::CodexHarness::new()) as Arc<dyn Harness>)),
+        )
+        .expect("unique built-in provider");
     // OpenCode 2 over its NATIVE HTTP/SSE protocol (the one the OpenCode
     // desktop app speaks — `opencode serve --stdio` + the /api/event bus),
     // same lazy pattern: the static descriptor mirrors OpencodeHarness
@@ -738,25 +895,28 @@ pub fn default_registry() -> HarnessRegistry {
     // `delivery: "steer"` prompt, confirmed by its inbox delivery); the
     // effort ladder rides model VARIANTS (the run sends the first advertised
     // variant id for the picked level).
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Opencode,
-            name: "OpenCode".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-            ],
-            installed: true,
-            enabled: None,
-        },
-        Box::new(|| luna_harness::OpencodeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(luna_harness::OpencodeHarness::new()) as Arc<dyn Harness>)),
-    );
+    registry
+        .register_lazy_with_capabilities(
+            HarnessDescriptor {
+                id: HarnessId::Opencode,
+                name: "OpenCode".into(),
+                supports_steering: true,
+                steering_mode: SteeringMode::StepBoundary,
+                reasoning_levels: vec![
+                    ReasoningLevel::Low,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::High,
+                    ReasoningLevel::XHigh,
+                    ReasoningLevel::Max,
+                ],
+                installed: true,
+                enabled: None,
+            },
+            capabilities(&luna_harness::OpencodeHarness::new()),
+            Box::new(|| luna_harness::OpencodeHarness::new().installed()),
+            Box::new(|| Ok(Arc::new(luna_harness::OpencodeHarness::new()) as Arc<dyn Harness>)),
+        )
+        .expect("unique built-in provider");
     registry
 }
 

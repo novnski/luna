@@ -23,14 +23,16 @@ pub(crate) fn admit(
     attachments: &[String],
     input_items: &[ComposerInput],
 ) -> Result<(), EngineError> {
-    match harness {
-        HarnessId::Codex => luna_harness::validate_composer_inputs(attachments, input_items)?,
-        HarnessId::ClaudeCode => {
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => {
+            luna_harness::validate_composer_inputs(attachments, input_items)?
+        }
+        luna_proto::BuiltinHarnessId::ClaudeCode => {
             luna_harness::claude::validate_inputs(attachments, input_items)?;
             // CC-12: one Claude skill invocation per line, no plugin/app.
             luna_harness::claude::extensions::typed_skill(input_items)?;
         }
-        HarnessId::Opencode => {
+        luna_proto::BuiltinHarnessId::Opencode => {
             luna_harness::opencode::validate_inputs(model, attachments, input_items)?;
         }
         _ if !input_items.is_empty() => {
@@ -48,7 +50,9 @@ pub(crate) fn admit(
 /// native `files[]` at its boundary, like any other route.
 pub(crate) fn steers_native_inputs(harness: HarnessId) -> bool {
     matches!(
-        harness,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+        (harness).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Opencode
     )
 }

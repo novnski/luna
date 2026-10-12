@@ -3,26 +3,26 @@
 use luna_proto::{CompactMechanism, ContextControlCapabilities, HarnessId};
 
 pub fn capabilities_for(harness: HarnessId) -> ContextControlCapabilities {
-    let (context_usage, compact, unavailable, note) = match harness {
-        HarnessId::Codex => (
+    let (context_usage, compact, unavailable, note) = match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => (
             true,
             Some(CompactMechanism::NativeOperation),
             None,
             "Applies to the next turn on the same Codex thread; the provider retains its context unless it reports otherwise.",
         ),
-        HarnessId::Opencode => (
+        luna_proto::BuiltinHarnessId::Opencode => (
             true,
             Some(CompactMechanism::ProviderCommand),
             None,
             "Applies to the next turn on the same OpenCode session; OpenCode owns any resulting compaction.",
         ),
-        HarnessId::Mock => (
+        luna_proto::BuiltinHarnessId::Mock => (
             true,
             Some(CompactMechanism::NativeOperation),
             None,
             "Applies to the next synthetic turn without changing the current turn.",
         ),
-        HarnessId::ClaudeCode => (
+        luna_proto::BuiltinHarnessId::ClaudeCode => (
             true,
             None,
             Some("LUNA has no verified out-of-turn Claude compact operation."),

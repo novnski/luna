@@ -42,10 +42,10 @@ fn provider_identity(
     for value in [
         "luna-integration-v1",
         machine_id,
-        match provider {
-            HarnessId::Codex => "codex",
-            HarnessId::ClaudeCode => "claude-code",
-            HarnessId::Opencode => "opencode",
+        match (provider).kind() {
+            luna_proto::BuiltinHarnessId::Codex => "codex",
+            luna_proto::BuiltinHarnessId::ClaudeCode => "claude-code",
+            luna_proto::BuiltinHarnessId::Opencode => "opencode",
             _ => "unsupported",
         },
         source,
@@ -101,8 +101,8 @@ impl SkillRoots {
         provider: HarnessId,
         scope: IntegrationSkillScope,
     ) -> Result<SkillLocation, EngineError> {
-        let (base, suffix, source, source_id) = match (provider, scope) {
-            (HarnessId::Codex, IntegrationSkillScope::Global) => (
+        let (base, suffix, source, source_id) = match ((provider).kind(), scope) {
+            (luna_proto::BuiltinHarnessId::Codex, IntegrationSkillScope::Global) => (
                 self.codex_home.as_ref().ok_or_else(|| {
                     EngineError::Other("Selected Codex skill home is unavailable".into())
                 })?,
@@ -110,31 +110,31 @@ impl SkillRoots {
                 "Codex home / skills",
                 "codex-home-skill",
             ),
-            (HarnessId::Codex, IntegrationSkillScope::Project) => (
+            (luna_proto::BuiltinHarnessId::Codex, IntegrationSkillScope::Project) => (
                 self.selected_project_root()?,
                 ".agents/skills",
                 "project / .agents/skills",
                 "project-agents-skill",
             ),
-            (HarnessId::ClaudeCode, IntegrationSkillScope::Global) => (
+            (luna_proto::BuiltinHarnessId::ClaudeCode, IntegrationSkillScope::Global) => (
                 &self.claude_home,
                 "skills",
                 "Claude config / skills",
                 "claude-home-skill",
             ),
-            (HarnessId::ClaudeCode, IntegrationSkillScope::Project) => (
+            (luna_proto::BuiltinHarnessId::ClaudeCode, IntegrationSkillScope::Project) => (
                 self.selected_project_root()?,
                 ".claude/skills",
                 "project / .claude/skills",
                 "project-claude-skill",
             ),
-            (HarnessId::Opencode, IntegrationSkillScope::Global) => (
+            (luna_proto::BuiltinHarnessId::Opencode, IntegrationSkillScope::Global) => (
                 &self.opencode_home,
                 "skills",
                 "OpenCode config / skills",
                 "opencode-home-skill",
             ),
-            (HarnessId::Opencode, IntegrationSkillScope::Project) => (
+            (luna_proto::BuiltinHarnessId::Opencode, IntegrationSkillScope::Project) => (
                 self.selected_project_root()?,
                 ".opencode/skills",
                 "project / .opencode/skills",
@@ -194,8 +194,10 @@ pub fn skill_inventory(provider: HarnessId, roots: &SkillRoots) -> IntegrationIn
         unavailable_inventory(provider, &roots.machine_id)
     };
     if !matches!(
-        provider,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+        (provider).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Opencode
     ) {
         return view;
     }
@@ -661,15 +663,17 @@ pub fn mark_codex_mcp_config_unavailable(view: &mut IntegrationInventoryView) {
 }
 
 pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> IntegrationInventoryView {
-    let reason = match provider {
-        HarnessId::ClaudeCode => {
+    let reason = match (provider).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => {
             "Claude's adapter exposes slash commands and MCP tool-use events, but no verified integration catalog, enable, authentication, or session-attachment API."
         }
-        HarnessId::Opencode => {
+        luna_proto::BuiltinHarnessId::Opencode => {
             "OpenCode's adapter discovers slash commands and uses the provider's existing plugin/MCP configuration, but has no verified integration enable, authentication, or session-attachment API."
         }
-        HarnessId::Mock => "The synthetic test harness has no provider integrations.",
-        HarnessId::Codex => {
+        luna_proto::BuiltinHarnessId::Mock => {
+            "The synthetic test harness has no provider integrations."
+        }
+        luna_proto::BuiltinHarnessId::Codex => {
             "Codex configuration has a separate read-only inventory; LUNA has no verified enable, authentication, or session-attachment action."
         }
         _ => "This provider is no longer supported by LUNA.",

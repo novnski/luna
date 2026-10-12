@@ -346,10 +346,10 @@ pub(crate) struct QueuePreview {
 /// (mirrors the engine's admission gate; OpenCode sends them as `files[]`).
 fn steers_native_inputs(harness: luna_proto::HarnessId) -> bool {
     matches!(
-        harness,
-        luna_proto::HarnessId::Codex
-            | luna_proto::HarnessId::ClaudeCode
-            | luna_proto::HarnessId::Opencode
+        (harness).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Opencode
     )
 }
 

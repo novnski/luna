@@ -1,0 +1,75 @@
+{
+  "task": "CORE-04",
+  "baseline": "71087aa0",
+  "engineTests": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0
+  },
+  "rpcContractTests": {
+    "passed": 3,
+    "failed": 0
+  },
+  "checks": {
+    "clippyAllTargets": 0,
+    "configuredFixtureCompile": 0,
+    "format": 0,
+    "whitespace": 0,
+    "nativeQa": 0
+  },
+  "nativeProof": {
+    "bundle": "com.novnski.luna.qa.discovery",
+    "ipcPort": 59843,
+    "initialPid": 70166,
+    "restartPid": 72111,
+    "buildSeconds": 90,
+    "openPickerObserved": {
+      "before": [
+        "Claude Code",
+        "Codex",
+        "OpenCode"
+      ],
+      "disabled": [
+        "Claude Code",
+        "Codex"
+      ],
+      "restored": [
+        "Claude Code",
+        "Codex",
+        "OpenCode"
+      ],
+      "selectedModel": "Opus 5.5",
+      "reasoning": "High",
+      "contextWindow": "200K",
+      "speed": "Standard",
+      "restartRequired": false
+    },
+    "missingProvider": {
+      "id": "acme.provider/missing",
+      "modelAfterRestart": "original-model",
+      "accessAfterRestart": "Limited access",
+      "readable": true,
+      "unavailableErrorObserved": true
+    },
+    "watchGenerations": [
+      10,
+      12,
+      14
+    ],
+    "registryLifetimeChangedOnRestart": true,
+    "iosChanges": false,
+    "physicalPhoneUsed": false,
+    "limits": [
+      "Separate installed provider execution belongs to CORE-08; discovery adapters do not claim native execution."
+    ]
+  },
+  "primaryApp": {
+    "name": "LUNA Dev",
+    "pid": 79283,
+    "ipcPort": 59777,
+    "buildSeconds": 45,
+    "signatureVerified": true
+  },
+  "evidenceDirectory": "target/qa/core04/20261012T210735Z",
+  "scope": "Stable IDs, host discovery, scoped models, live picker and preserved history. External installed-provider execution remains CORE-08."
+}

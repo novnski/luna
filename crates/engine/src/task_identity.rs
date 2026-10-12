@@ -2473,10 +2473,17 @@ fn external_import_key(
 }
 
 fn provider_name(provider_id: HarnessId) -> String {
-    serde_json::to_string(&provider_id)
-        .unwrap_or_else(|_| format!("{provider_id:?}"))
-        .trim_matches('"')
-        .to_string()
+    let canonical = provider_id.canonical();
+    if provider_id.kind() == luna_proto::BuiltinHarnessId::Other {
+        canonical.as_str().to_string()
+    } else {
+        canonical
+            .as_str()
+            .split_once('/')
+            .expect("canonical provider")
+            .1
+            .to_string()
+    }
 }
 
 fn provider_title(title: Option<&str>) -> String {

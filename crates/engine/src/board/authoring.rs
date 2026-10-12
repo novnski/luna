@@ -370,14 +370,14 @@ impl EngineRpc {
         };
         if !enabled.contains(&harness_id) {
             return Err(BoardError::UnavailableProvider {
-                harness: harness_id,
+                harness: Box::new(harness_id),
             });
         }
         let harness =
             self.registry
                 .resolve(harness_id)
                 .map_err(|_| BoardError::UnavailableProvider {
-                    harness: harness_id,
+                    harness: Box::new(harness_id),
                 })?;
         if !delivers(harness_id) {
             return Err(BoardError::Unavailable {
@@ -749,14 +749,14 @@ impl EngineRpc {
         })?;
         if !self.registry.enabled_set().contains(&harness_id) {
             return Err(BoardError::UnavailableProvider {
-                harness: harness_id,
+                harness: Box::new(harness_id),
             });
         }
         let harness =
             self.registry
                 .resolve(harness_id)
                 .map_err(|_| BoardError::UnavailableProvider {
-                    harness: harness_id,
+                    harness: Box::new(harness_id),
                 })?;
         let delivery = harness.luna_runtime_delivery();
         if !crate::permissions::provider_can_run(harness_id) || !delivery.attaches_luna_tools() {
@@ -784,8 +784,8 @@ impl EngineRpc {
         // commands; the others run with Limited access (Codex read-only
         // sandbox) and the engine answers their approvals (file changes
         // refused, commands allowed; `runtime::answer_inputs`).
-        let permission_mode = match harness_id {
-            HarnessId::ClaudeCode => PermissionMode::Full,
+        let permission_mode = match (harness_id).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => PermissionMode::Full,
             _ => PermissionMode::Ask,
         };
         model_options.insert(luna_harness::LUNA_NO_FILE_EDITS_OPTION.into(), true.into());
@@ -819,7 +819,10 @@ impl EngineRpc {
             &request.input_items,
         )
         .map_err(|error| BoardError::invalid("message", error.to_string()))?;
-        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex) {
+        if matches!(
+            (harness_id).kind(),
+            luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Codex
+        ) {
             let execution = self
                 .agent_accounts
                 .resolve_execution(harness_id, request.provider_account_id.as_deref())

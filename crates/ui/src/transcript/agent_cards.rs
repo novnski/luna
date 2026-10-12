@@ -79,8 +79,8 @@ fn codex_model_label(id: &str) -> String {
 /// Any other provider (OpenCode) shows its own id as-is — still readable,
 /// never hidden.
 fn friendly_model_label(harness: luna_proto::HarnessId, id: &str) -> String {
-    match harness {
-        luna_proto::HarnessId::ClaudeCode | luna_proto::HarnessId::Mock => {
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Mock => {
             fn normalize(value: &str) -> String {
                 value
                     .chars()
@@ -95,7 +95,7 @@ fn friendly_model_label(harness: luna_proto::HarnessId, id: &str) -> String {
                 .map(|model| model.label)
                 .unwrap_or_else(|| id.to_string())
         }
-        luna_proto::HarnessId::Codex => codex_model_label(id),
+        luna_proto::BuiltinHarnessId::Codex => codex_model_label(id),
         _ => id.to_string(),
     }
 }

@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-12T22:30:58+03:00.
+Generated 2026-10-13T00:36:58+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **14.5% accepted**, **11/76 Done**.
+Active scope: **15.5% accepted**, **11/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: CORE-04, CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04, ZI-05
+Next eligible: CORE-05, IC-0, ZI-04
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -14,7 +14,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [CORE-04 — Make provider IDs, capabilities and discovery dynamic](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-07 — Implement extension supervision and capability broker](extensible-core/README.md) | ready | 0.0% | — |
@@ -38,6 +37,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-01 — Publish canonical domain and operation contracts](extensible-core/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [CORE-02 — Reorganize tests around retained public contract owners](extensible-core/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [CORE-03 — Extract cohesive engine services and supervised lifetimes](extensible-core/README.md) | done | 100.0% | claude-code-opus-5.5 |
+| [CORE-04 — Make provider IDs, capabilities and discovery dynamic](extensible-core/README.md) | in_progress | 75.0% | codex |
 
 ## Provider access, effective tools and skills
 

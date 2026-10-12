@@ -70,11 +70,19 @@ enum AccountLifecycleAction {
 }
 
 fn account_lifecycle_action(account: &AgentAccount) -> Option<AccountLifecycleAction> {
-    match (account.harness, account.active, account.switchable) {
-        (HarnessId::ClaudeCode, true, _) => Some(AccountLifecycleAction::DisconnectClaude),
-        (HarnessId::ClaudeCode, false, true) => Some(AccountLifecycleAction::ReconnectClaude),
-        (HarnessId::Codex, true, _) => Some(AccountLifecycleAction::DisconnectCodex),
-        (HarnessId::Codex, false, true) => Some(AccountLifecycleAction::SelectCodexDefault),
+    match ((account.harness).kind(), account.active, account.switchable) {
+        (luna_proto::BuiltinHarnessId::ClaudeCode, true, _) => {
+            Some(AccountLifecycleAction::DisconnectClaude)
+        }
+        (luna_proto::BuiltinHarnessId::ClaudeCode, false, true) => {
+            Some(AccountLifecycleAction::ReconnectClaude)
+        }
+        (luna_proto::BuiltinHarnessId::Codex, true, _) => {
+            Some(AccountLifecycleAction::DisconnectCodex)
+        }
+        (luna_proto::BuiltinHarnessId::Codex, false, true) => {
+            Some(AccountLifecycleAction::SelectCodexDefault)
+        }
         _ => None,
     }
 }
@@ -221,8 +229,8 @@ impl LoginFlow {
             | LoginFlow::PasteCode { harness, .. }
             | LoginFlow::Browser { harness, .. } => *harness,
         };
-        match harness {
-            HarnessId::Codex => "Sign in to Codex",
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => "Sign in to Codex",
             _ => "Sign in to Claude Code",
         }
     }
@@ -1822,16 +1830,16 @@ impl AccountsPage {
             })
             .unwrap_or_default();
         let replacing_existing = !accounts.is_empty();
-        let sign_in_label = match (harness, replacing_existing) {
-            (HarnessId::ClaudeCode, true) => "Sign in another",
-            (HarnessId::Codex, true) => "Add account",
+        let sign_in_label = match ((harness).kind(), replacing_existing) {
+            (luna_proto::BuiltinHarnessId::ClaudeCode, true) => "Sign in another",
+            (luna_proto::BuiltinHarnessId::Codex, true) => "Add account",
             _ => "Sign in",
         };
 
         // ---- header ----
-        let (mark, tint) = match harness {
-            HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
-            HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
+        let (mark, tint) = match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => (crate::icons::OPENAI_MARK, None),
+            luna_proto::BuiltinHarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
             _ => (
                 crate::icons::CLAUDE_MARK,
                 Some(crate::icons::claude_brand()),

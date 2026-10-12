@@ -14,8 +14,8 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
     use ApprovalActionKind::{Command, ExternalPath, FileChange, Network, Tool};
     use PermissionMode::{Ask, Auto, Full};
 
-    match harness {
-        HarnessId::Codex => ProviderPermissionCapabilities {
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Auto, Full],
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: true,
@@ -30,7 +30,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                     .into(),
             ],
         },
-        HarnessId::ClaudeCode => ProviderPermissionCapabilities {
+        luna_proto::BuiltinHarnessId::ClaudeCode => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Auto, Full],
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: true,
@@ -48,7 +48,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                     .into(),
             ],
         },
-        HarnessId::Opencode => ProviderPermissionCapabilities {
+        luna_proto::BuiltinHarnessId::Opencode => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Full],
             // Rule-based workspace confinement (external paths ask in Ask),
             // like Claude's restricted workspace: LUNA writes the session's
@@ -76,7 +76,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                     .into(),
             ],
         },
-        HarnessId::Mock => ProviderPermissionCapabilities {
+        luna_proto::BuiltinHarnessId::Mock => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Auto, Full],
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: true,
@@ -105,8 +105,10 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
 /// every other provider instead of silently running with write access.
 pub fn provider_preserves_read_only(harness: HarnessId) -> bool {
     matches!(
-        harness,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Mock
+        (harness).kind(),
+        luna_proto::BuiltinHarnessId::Codex
+            | luna_proto::BuiltinHarnessId::ClaudeCode
+            | luna_proto::BuiltinHarnessId::Mock
     )
 }
 
@@ -172,7 +174,11 @@ pub(crate) fn effective_sandbox(
     sandbox: SandboxLevel,
     mode: PermissionMode,
 ) -> SandboxLevel {
-    if matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode) && mode == PermissionMode::Full {
+    if matches!(
+        (harness).kind(),
+        luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+    ) && mode == PermissionMode::Full
+    {
         SandboxLevel::DangerFullAccess
     } else {
         sandbox
@@ -201,32 +207,32 @@ fn mode_from_env(name: &str) -> Option<PermissionMode> {
 }
 
 fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
-    match (harness, mode) {
-        (HarnessId::Codex, PermissionMode::Ask) => {
+    match ((harness).kind(), mode) {
+        (luna_proto::BuiltinHarnessId::Codex, PermissionMode::Ask) => {
             "workspace-write + on-request + reviewer user".into()
         }
-        (HarnessId::Codex, PermissionMode::Auto) => {
+        (luna_proto::BuiltinHarnessId::Codex, PermissionMode::Auto) => {
             "workspace-write + on-request + reviewer auto_review".into()
         }
-        (HarnessId::Codex, PermissionMode::Full) => "danger-full-access + never".into(),
-        (HarnessId::ClaudeCode, PermissionMode::Ask) => {
+        (luna_proto::BuiltinHarnessId::Codex, PermissionMode::Full) => "danger-full-access + never".into(),
+        (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Ask) => {
             "acceptEdits + restricted workspace + named command/web tools + interactive escalation"
                 .into()
         }
-        (HarnessId::ClaudeCode, PermissionMode::Auto) => {
+        (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Auto) => {
             "auto + restricted workspace + named command/web tools + user escalation".into()
         }
-        (HarnessId::ClaudeCode, PermissionMode::Full) => {
+        (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Full) => {
             "bypassPermissions + dangerously-skip-permissions".into()
         }
-        (HarnessId::Opencode, PermissionMode::Ask) => {
+        (luna_proto::BuiltinHarnessId::Opencode, PermissionMode::Ask) => {
             "session rules: reads allow; shell, edits, web and external paths ask; configured denies stay"
                 .into()
         }
-        (HarnessId::Opencode, PermissionMode::Full) => {
+        (luna_proto::BuiltinHarnessId::Opencode, PermissionMode::Full) => {
             "session rules: allow all except configured denies; stray requests allow once".into()
         }
-        (HarnessId::Mock, mode) => format!("mock {mode:?}"),
+        (luna_proto::BuiltinHarnessId::Mock, mode) => format!("mock {mode:?}"),
         _ => "unavailable: provider enforcement is unverified".into(),
     }
 }
@@ -299,13 +305,13 @@ pub fn resolve_run_policy(harness: HarnessId, request: &mut RunRequest) -> Permi
             PermissionEscalation::None,
         ),
     };
-    let network_policy = match (harness, effective) {
+    let network_policy = match ((harness).kind(), effective) {
         (_, PermissionMode::Full) => PermissionNetworkPolicy::Unrestricted,
         // Codex workspace-write deliberately enables network access, matching
         // the adapter's thread config and turn policy. The workspace boundary
         // applies to filesystem writes, not a network deny policy.
-        (HarnessId::Codex, _) => PermissionNetworkPolicy::Unrestricted,
-        (HarnessId::ClaudeCode, _) => PermissionNetworkPolicy::Restricted,
+        (luna_proto::BuiltinHarnessId::Codex, _) => PermissionNetworkPolicy::Unrestricted,
+        (luna_proto::BuiltinHarnessId::ClaudeCode, _) => PermissionNetworkPolicy::Restricted,
         _ => PermissionNetworkPolicy::ProviderDefault,
     };
     let policy = PermissionPolicy {

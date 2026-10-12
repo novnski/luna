@@ -136,8 +136,8 @@ impl Harness for Synthetic {
         self.id
     }
     fn luna_runtime_delivery(&self) -> RuntimeDelivery {
-        match self.id {
-            HarnessId::Codex => RuntimeDelivery::CodexMcpTools,
+        match (self.id).kind() {
+            luna_proto::BuiltinHarnessId::Codex => RuntimeDelivery::CodexMcpTools,
             _ => RuntimeDelivery::ClaudeMcpTools,
         }
     }
@@ -330,9 +330,9 @@ impl Harness for Synthetic {
 }
 
 fn provider_name(id: HarnessId) -> &'static str {
-    match id {
-        HarnessId::Codex => "codex",
-        HarnessId::ClaudeCode => "claude-code",
+    match (id).kind() {
+        luna_proto::BuiltinHarnessId::Codex => "codex",
+        luna_proto::BuiltinHarnessId::ClaudeCode => "claude-code",
         _ => "other",
     }
 }

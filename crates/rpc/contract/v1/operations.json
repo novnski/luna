@@ -902,6 +902,45 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "GetProviderCatalog",
+      "id": "luna.core/get-provider-catalog",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchProviderCatalog",
+      "id": "luna.core/watch-provider-catalog",
+      "version": 1,
+      "kind": "watch",
+      "reply": "streamAfterReady",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProviderModels",
+      "id": "luna.core/get-provider-models",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "ListHarnesses",
       "id": "luna.core/list-harnesses",
       "version": 1,

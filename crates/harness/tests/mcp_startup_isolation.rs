@@ -123,9 +123,9 @@ fn luna_contract(harness: HarnessId) -> LunaAgentRuntimeContract {
             activity_classification: "status".into(),
         }],
         omitted_tools: Vec::new(),
-        delivery: match harness {
-            HarnessId::ClaudeCode => RuntimeDelivery::ClaudeMcpTools,
-            HarnessId::Codex => RuntimeDelivery::CodexMcpTools,
+        delivery: match (harness).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => RuntimeDelivery::ClaudeMcpTools,
+            luna_proto::BuiltinHarnessId::Codex => RuntimeDelivery::CodexMcpTools,
             _ => unreachable!(),
         },
     }

@@ -1164,13 +1164,14 @@ impl ProjectsPage {
             ),
         ];
         let current = defaults.provider.as_ref().map(|provider| provider.harness);
-        let provider_ix = match current {
+        let provider_ix = match (current).map(|provider| provider.kind()) {
             None => 0,
-            Some(HarnessId::Codex) => 1,
-            Some(HarnessId::ClaudeCode) => 2,
-            Some(HarnessId::Opencode) => 3,
+            Some(luna_proto::BuiltinHarnessId::Codex) => 1,
+            Some(luna_proto::BuiltinHarnessId::ClaudeCode) => 2,
+            Some(luna_proto::BuiltinHarnessId::Opencode) => 3,
             // A legacy provider set elsewhere still shows as the choice.
-            Some(other) => {
+            Some(_) => {
+                let other = current.expect("saved provider");
                 providers.push((
                     "other",
                     format!("{other:?}").into(),

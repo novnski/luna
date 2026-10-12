@@ -3,6 +3,18 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+/// Identity of the actual launch source, refreshed without spawning a process.
+pub(crate) fn catalog_source(path: &Path) -> String {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let metadata = std::fs::metadata(&path).ok();
+    format!(
+        "{}:{:?}:{:?}",
+        path.display(),
+        metadata.as_ref().map(|m| m.len()),
+        metadata.and_then(|m| m.modified().ok())
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Platform {
     Unix,

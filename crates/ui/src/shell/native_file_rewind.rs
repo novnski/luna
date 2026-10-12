@@ -35,14 +35,14 @@ impl NativeFiles {
 
 /// Body copy for the shared rewind dialog, named for the task's provider.
 pub(super) fn rewind_copy(provider: Option<HarnessId>, pending: bool) -> &'static str {
-    match (pending, provider) {
+    match (pending, (provider).map(|provider| provider.kind())) {
         (true, _) => {
             "Read the saved provider history to finish or dismiss the unresolved rewind. Revert will not be sent again. Later LUNA rows stay visible until the retained prefix is verified."
         }
-        (false, Some(HarnessId::ClaudeCode)) => {
+        (false, Some(luna_proto::BuiltinHarnessId::ClaudeCode)) => {
             "Remove this message and every later turn from this same Claude Code session. Claude keeps the removed turns only as an unreachable branch; an audit snapshot is kept in LUNA. Your draft, files and external effects are kept."
         }
-        (false, Some(HarnessId::Opencode)) => {
+        (false, Some(luna_proto::BuiltinHarnessId::Opencode)) => {
             "Remove this message and every later turn from this same OpenCode session. OpenCode deletes the removed turns; an audit snapshot is kept in LUNA. Your draft, files and external effects are kept."
         }
         (false, _) => {

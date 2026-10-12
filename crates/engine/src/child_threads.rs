@@ -206,7 +206,10 @@ impl EngineRpc {
             };
             config.model_options.extend(request.model_options.clone());
         }
-        if matches!(provider, HarnessId::Codex | HarnessId::ClaudeCode) {
+        if matches!(
+            (provider).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+        ) {
             config.provider_account_id = Some(
                 self.agent_accounts
                     .resolve_execution(provider, config.provider_account_id.as_deref())?
@@ -255,7 +258,10 @@ impl EngineRpc {
                 Some(luna_proto::PermissionDegradationReason::ProviderUnsupported);
         }
         if config.sandbox == luna_proto::SandboxLevel::ReadOnly
-            && !matches!(provider, HarnessId::Codex | HarnessId::Mock)
+            && !matches!(
+                (provider).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Mock
+            )
             && requested <= parent.effective_permission_mode
         {
             return Err(crate::EngineError::Other("This provider cannot preserve the parent's read-only sandbox; choose a compatible provider or request an explicit access grant".into()));
@@ -1051,7 +1057,10 @@ impl EngineRpc {
                 Some(luna_proto::PermissionDegradationReason::ParentCeiling);
         }
         if config.sandbox == luna_proto::SandboxLevel::ReadOnly
-            && !matches!(config.harness, HarnessId::Codex | HarnessId::Mock)
+            && !matches!(
+                (config.harness).kind(),
+                luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::Mock
+            )
         {
             return Err(fail("This child provider cannot preserve the parent's read-only sandbox; choose a compatible provider or explicitly grant supported access".into()));
         }

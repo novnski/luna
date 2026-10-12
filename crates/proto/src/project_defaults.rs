@@ -37,11 +37,8 @@ impl ProjectExecutionDefaults {
 
     pub fn validate(&self) -> Result<(), &'static str> {
         if let Some(provider) = &self.provider {
-            if !matches!(
-                provider.harness,
-                HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
-            ) {
-                return Err("Choose Codex, Claude Code, or OpenCode as the project provider.");
+            if provider.harness.is_retired() || provider.harness == HarnessId::Mock {
+                return Err("Choose an available provider as the project provider.");
             }
             if let Some(model) = &provider.model
                 && (model.trim().is_empty()

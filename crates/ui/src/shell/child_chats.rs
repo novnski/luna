@@ -143,11 +143,11 @@ pub(crate) fn child_chat_status(
 }
 
 pub(crate) fn provider_label(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::Codex => "Codex",
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Mock => "Mock",
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+        luna_proto::BuiltinHarnessId::Mock => "Mock",
         _ => "Provider",
     }
 }

@@ -232,8 +232,9 @@ impl HarnessesPage {
                 // Claude and OpenCode MCP attachment is per selected chat
                 // session.
                 if matches!(
-                    page.integration_provider,
-                    HarnessId::ClaudeCode | HarnessId::Opencode
+                    (page.integration_provider).kind(),
+                    luna_proto::BuiltinHarnessId::ClaudeCode
+                        | luna_proto::BuiltinHarnessId::Opencode
                 ) {
                     page.load_inventory(false, cx);
                 }
@@ -1506,8 +1507,10 @@ impl HarnessesPage {
                 .iter()
                 .filter(|harness| {
                     matches!(
-                        harness.id,
-                        HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Opencode
+                        (harness.id).kind(),
+                        luna_proto::BuiltinHarnessId::ClaudeCode
+                            | luna_proto::BuiltinHarnessId::Codex
+                            | luna_proto::BuiltinHarnessId::Opencode
                     )
                 })
                 .map(|harness| (harness.id, SharedString::from(harness.name.clone())))
@@ -2214,9 +2217,9 @@ impl HarnessesPage {
             } else {
                 settings
                     .harness
-                    .map(|id| match id {
-                        HarnessId::ClaudeCode => "Claude Code".to_string(),
-                        HarnessId::Codex => "Codex".to_string(),
+                    .map(|id| match (id).kind() {
+                        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code".to_string(),
+                        luna_proto::BuiltinHarnessId::Codex => "Codex".to_string(),
                         _ => format!("{id:?}"),
                     })
                     .unwrap_or_else(|| "Automatic (session agent when supported)".into())

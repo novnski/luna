@@ -20,7 +20,7 @@ use gpui::{
     Subscription, Task, Window, div, prelude::*, px,
 };
 
-use luna_engine::registry::HarnessDescriptor;
+use luna_engine::registry::{HarnessDescriptor, ProviderCatalog};
 use luna_proto::{
     AgentAccountsSnapshot, ChatConfig, ContextHandoff, ContextHandoffKind, ExecutionSettingField,
     ExecutionSettings, FolderListing, HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef,
@@ -1057,7 +1057,10 @@ pub struct Pickers {
     /// new worktree's base ref) beside the model.
     show_checkout: bool,
     load_task: Option<Task<()>>,
+    catalog_watch_task: Option<Task<()>>,
+    provider_catalog: Option<ProviderCatalog>,
     accounts_task: Option<Task<()>>,
+    accounts_revision: u64,
     /// Own slot: the refs load runs concurrently with the eager
     /// harness/model loads — sharing `load_task` would abort one mid-flight.
     refs_task: Option<Task<()>>,
@@ -1215,6 +1218,8 @@ impl Pickers {
                 this.setting_bounds = None;
                 this.refs_task = None;
                 this.load_task = None;
+                this.catalog_watch_task = None;
+                this.provider_catalog = None;
                 this.accounts_task = None;
                 this.config.branch = None;
                 this.config.checkout = CheckoutKind::default();
@@ -1255,6 +1260,7 @@ impl Pickers {
         // force-refresh the cached catalog so the rail/chips follow without a
         // restart (stale rows stay visible while the reload runs).
         let catalog_observe = cx.observe_global::<HarnessCatalogChanged>(|this: &mut Self, cx| {
+            this.ensure_accounts(true, cx);
             this.ensure_harnesses(true, cx);
             this.prefetch_models(true, cx);
             cx.notify();
@@ -1380,7 +1386,10 @@ impl Pickers {
             show_access: true,
             show_checkout: false,
             load_task: None,
+            catalog_watch_task: None,
+            provider_catalog: None,
             accounts_task: None,
+            accounts_revision: 0,
             refs_task: None,
             switching: None,
             switch_task: None,
@@ -1994,11 +2003,11 @@ impl Pickers {
         let model = self.permission_model_id(cx);
         let capabilities = luna_engine::provider_capabilities_for(harness, model);
         if !capabilities.supports(mode) {
-            return Some(match (harness, mode) {
-                (HarnessId::ClaudeCode, PermissionMode::Auto) => {
+            return Some(match ((harness).kind(), mode) {
+                (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Auto) => {
                     "Unavailable: this Claude model/account has no verified Auto reviewer.".into()
                 }
-                (HarnessId::Opencode, PermissionMode::Auto) => {
+                (luna_proto::BuiltinHarnessId::Opencode, PermissionMode::Auto) => {
                     "Unavailable: OpenCode auto-approve is not a reviewer.".into()
                 }
                 (_, PermissionMode::Auto) => {
@@ -2711,21 +2720,103 @@ impl Pickers {
                 if pickers.target_generation != generation {
                     return;
                 }
-                let previous_codex = pickers.codex_model_account_id(cx);
+                pickers.accounts_revision = pickers.accounts_revision.wrapping_add(1);
                 pickers.accounts = match result {
                     Ok(value) => serde_json::from_value::<AgentAccountsSnapshot>(value)
                         .map(Loadable::Ready)
                         .unwrap_or_else(|error| Loadable::Error(error.to_string())),
                     Err(error) => Loadable::Error(error.to_string()),
                 };
-                if pickers.codex_model_account_id(cx) != previous_codex {
-                    pickers.models.remove(&HarnessId::Codex);
-                    pickers.catalog_rev += 1;
-                    pickers.ensure_models(HarnessId::Codex, true, cx);
-                }
+                // Authentication may change while the account ID stays the same.
+                // Rebuild scoped catalogs and fence already-returned replies too.
+                pickers.models.clear();
+                pickers.catalog_rev += 1;
+                pickers.prefetch_models(false, cx);
                 cx.notify();
             })
             .ok();
+        }));
+    }
+
+    fn apply_provider_catalog(&mut self, catalog: ProviderCatalog, cx: &mut Context<Self>) {
+        let expected_host = self
+            .space_target(cx)
+            .or_else(|| self.state.read(cx).local_device_id.clone());
+        if expected_host
+            .as_deref()
+            .is_some_and(|id| id != catalog.host_id)
+        {
+            return;
+        }
+        if let Some(previous) = &self.provider_catalog {
+            if previous.registry_id == catalog.registry_id
+                && previous.generation >= catalog.generation
+            {
+                return;
+            }
+        }
+        self.models.clear();
+        self.catalog_rev += 1;
+        self.harnesses = Loadable::Ready(
+            catalog
+                .providers
+                .iter()
+                .map(|p| p.descriptor.clone())
+                .collect(),
+        );
+        self.provider_catalog = Some(catalog);
+        self.prefetch_models(false, cx);
+        cx.notify();
+    }
+    fn ensure_catalog_watch(&mut self, cx: &mut Context<Self>) {
+        if self.catalog_watch_task.is_some() {
+            return;
+        }
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let target = self.space_target(cx);
+        let generation = self.target_generation;
+        self.catalog_watch_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let mut params = serde_json::json!({});
+                if let Some(target) = &target {
+                    params["targetDeviceId"] = target.clone().into();
+                }
+                let stream = engine
+                    .client()
+                    .subscribe_checked(methods::WATCH_PROVIDER_CATALOG, params)
+                    .await;
+                if matches!(stream, Err(luna_rpc::RpcError::UnknownMethod(_))) {
+                    return;
+                }
+                if let Ok(mut events) = stream {
+                    while let Some(value) = events.recv().await {
+                        let Ok(catalog) = serde_json::from_value::<ProviderCatalog>(value) else {
+                            continue;
+                        };
+                        let keep = this
+                            .update(cx, |pickers, cx| {
+                                if pickers.target_generation != generation {
+                                    return false;
+                                }
+                                pickers.apply_provider_catalog(catalog, cx);
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !keep {
+                            return;
+                        }
+                    }
+                }
+                if !this
+                    .update(cx, |pickers, _| pickers.target_generation == generation)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+            }
         }));
     }
 
@@ -2751,6 +2842,7 @@ impl Pickers {
         };
         let target = self.space_target(cx);
         let generation = self.target_generation;
+        self.ensure_catalog_watch(cx);
         if !matches!(self.harnesses, Loadable::Ready(_)) {
             self.harnesses = Loadable::Loading;
             self.catalog_rev += 1;
@@ -2765,8 +2857,20 @@ impl Pickers {
             }
             let result = engine
                 .client()
-                .call(methods::LIST_HARNESSES, serde_json::Value::Object(params))
+                .call(
+                    methods::GET_PROVIDER_CATALOG,
+                    serde_json::Value::Object(params.clone()),
+                )
                 .await;
+            let legacy = matches!(result, Err(luna_rpc::RpcError::UnknownMethod(_)));
+            let result = if legacy {
+                engine
+                    .client()
+                    .call(methods::LIST_HARNESSES, serde_json::Value::Object(params))
+                    .await
+            } else {
+                result
+            };
             if let Some(delay) = slow_catalog_delay() {
                 cx.background_executor().timer(delay).await;
             }
@@ -2774,15 +2878,25 @@ impl Pickers {
                 if pickers.target_generation != generation {
                     return;
                 }
-                pickers.catalog_rev += 1;
-                pickers.harnesses = match result {
-                    Ok(value) => match serde_json::from_value::<Vec<HarnessDescriptor>>(value) {
-                        Ok(list) => Loadable::Ready(list),
-                        Err(err) => Loadable::Error(err.to_string()),
+                if legacy {
+                    pickers.harnesses = match result {
+                        Ok(value) => serde_json::from_value::<Vec<HarnessDescriptor>>(value)
+                            .map(Loadable::Ready)
+                            .unwrap_or_else(|error| Loadable::Error(error.to_string())),
+                        Err(error) => Loadable::Error(error.to_string()),
+                    };
+                    pickers.catalog_rev += 1;
+                    pickers.prefetch_models(false, cx);
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(value) => match serde_json::from_value::<ProviderCatalog>(value) {
+                        Ok(catalog) => pickers.apply_provider_catalog(catalog, cx),
+                        Err(err) => pickers.harnesses = Loadable::Error(err.to_string()),
                     },
-                    Err(err) => Loadable::Error(err.to_string()),
-                };
-                pickers.prefetch_models(false, cx);
+                    Err(err) => pickers.harnesses = Loadable::Error(err.to_string()),
+                }
                 cx.notify();
             })
             .ok();
@@ -2834,8 +2948,13 @@ impl Pickers {
         let Some(engine) = self.engine(cx) else {
             return;
         };
+        let catalog_identity = self
+            .provider_catalog
+            .as_ref()
+            .map(|c| (c.host_id.clone(), c.registry_id.clone(), c.generation));
         let target = self.space_target(cx);
         let generation = self.target_generation;
+        let accounts_revision = self.accounts_revision;
         let account_id = (harness == HarnessId::Codex)
             .then(|| self.codex_model_account_id(cx))
             .flatten();
@@ -2865,7 +2984,14 @@ impl Pickers {
             let result = loop {
                 let result = engine
                     .client()
-                    .call(methods::LIST_MODELS, params.clone())
+                    .call(
+                        if catalog_identity.is_some() {
+                            methods::GET_PROVIDER_MODELS
+                        } else {
+                            methods::LIST_MODELS
+                        },
+                        params.clone(),
+                    )
                     .await;
                 if result.is_ok() || harness != HarnessId::Opencode || attempt >= 3 {
                     break result;
@@ -2889,7 +3015,17 @@ impl Pickers {
                 cx.background_executor().timer(delay).await;
             }
             this.update(cx, |pickers, cx| {
-                if pickers.target_generation != generation {
+                if pickers.target_generation != generation
+                    || pickers.accounts_revision != accounts_revision
+                {
+                    return;
+                }
+                if pickers
+                    .provider_catalog
+                    .as_ref()
+                    .map(|c| (&c.host_id, &c.registry_id, c.generation))
+                    != catalog_identity.as_ref().map(|c| (&c.0, &c.1, c.2))
+                {
                     return;
                 }
                 if harness == HarnessId::Codex && pickers.codex_model_account_id(cx) != account_id {
@@ -2902,14 +3038,46 @@ impl Pickers {
                     pickers.ensure_models(harness, false, cx);
                     return;
                 }
+                let result = if catalog_identity.is_none() {
+                    result.map(|models| serde_json::json!({"models": models, "legacy": true}))
+                } else {
+                    result
+                };
                 let loaded = match result {
-                    Ok(value) => match serde_json::from_value::<Vec<Model>>(value) {
-                        // Display hygiene for catalogs from older engines
-                        // (`default` alias rows, orphan `[1m]` variants,
-                        // version-less alias labels).
-                        Ok(models) => Loadable::Ready(normalize_model_rows(harness, models)),
-                        Err(err) => Loadable::Error(err.to_string()),
-                    },
+                    Ok(value) if catalog_identity.is_none() => {
+                        serde_json::from_value::<Vec<Model>>(value["models"].clone())
+                            .map(|models| Loadable::Ready(normalize_model_rows(harness, models)))
+                            .unwrap_or_else(|error| Loadable::Error(error.to_string()))
+                    }
+                    Ok(value) => {
+                        match serde_json::from_value::<luna_proto::ProviderModels>(value) {
+                            Ok(snapshot)
+                                if catalog_identity.as_ref().is_some_and(|catalog| {
+                                    snapshot.provenance.host_id == catalog.0
+                                        && snapshot.provenance.registry_id == catalog.1
+                                        && snapshot.provenance.generation == catalog.2
+                                }) && snapshot.provenance.provider_id == harness
+                                    && pickers.provider_catalog.as_ref().is_some_and(
+                                        |catalog| {
+                                            catalog.providers.iter().any(|provider| {
+                                                provider.descriptor.id == harness
+                                                    && provider.executable.as_deref()
+                                                        == Some(
+                                                            snapshot.provenance.executable.as_str(),
+                                                        )
+                                            })
+                                        },
+                                    ) =>
+                            {
+                                Loadable::Ready(normalize_model_rows(harness, snapshot.models))
+                            }
+                            Ok(_) => {
+                                pickers.ensure_harnesses(true, cx);
+                                return;
+                            }
+                            Err(err) => Loadable::Error(err.to_string()),
+                        }
+                    }
                     Err(err) => Loadable::Error(err.to_string()),
                 };
                 if let Loadable::Ready(models) = &loaded {
@@ -8851,8 +9019,8 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
             .collect::<String>()
             .to_ascii_lowercase()
     }
-    let catalog = match harness {
-        HarnessId::ClaudeCode => luna_harness::claude::catalog::static_models(),
+    let catalog = match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => luna_harness::claude::catalog::static_models(),
         _ => Vec::new(),
     };
     // Curated label for an id: exact normalized match, else — for bare
@@ -8919,14 +9087,14 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
 }
 
 pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gpui::Hsla>) {
-    match harness {
-        HarnessId::ClaudeCode | HarnessId::Mock => (
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode | luna_proto::BuiltinHarnessId::Mock => (
             crate::icons::CLAUDE_MARK,
             Some(crate::icons::claude_brand()),
         ),
-        HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
+        luna_proto::BuiltinHarnessId::Codex => (crate::icons::OPENAI_MARK, None),
         // The pixel-"o" from opencode's wordmark (their favicon), monochrome.
-        HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
+        luna_proto::BuiltinHarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
         _ => (crate::icons::WIDGET, None),
     }
 }
@@ -8986,11 +9154,11 @@ fn offered_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
 /// controls row (audit CP-01).
 /// The QA name of a harness's rail tab in the model picker.
 fn rail_key(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "rail-claude-code",
-        HarnessId::Codex => "rail-codex",
-        HarnessId::Opencode => "rail-opencode",
-        HarnessId::Mock => "rail-mock",
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "rail-claude-code",
+        luna_proto::BuiltinHarnessId::Codex => "rail-codex",
+        luna_proto::BuiltinHarnessId::Opencode => "rail-opencode",
+        luna_proto::BuiltinHarnessId::Mock => "rail-mock",
         _ => "rail-other",
     }
 }
@@ -10320,9 +10488,9 @@ mod tests {
         let claude = vec![bare_model("fable-5", "Fable 5")];
         let codex = vec![bare_model("gpt-fable", "Fable (Codex)")];
         let models_for = |harness: HarnessId| -> Option<&[Model]> {
-            match harness {
-                HarnessId::ClaudeCode => Some(claude.as_slice()),
-                HarnessId::Codex => Some(codex.as_slice()),
+            match (harness).kind() {
+                luna_proto::BuiltinHarnessId::ClaudeCode => Some(claude.as_slice()),
+                luna_proto::BuiltinHarnessId::Codex => Some(codex.as_slice()),
                 _ => None,
             }
         };
@@ -10350,9 +10518,9 @@ mod tests {
         let claude = vec![bare_model("fable-5", "Fable 5")];
         let codex = vec![bare_model("gpt-fable", "Fable (Codex)")];
         let models_for = |harness: HarnessId| -> Option<&[Model]> {
-            match harness {
-                HarnessId::ClaudeCode => Some(claude.as_slice()),
-                HarnessId::Codex => Some(codex.as_slice()),
+            match (harness).kind() {
+                luna_proto::BuiltinHarnessId::ClaudeCode => Some(claude.as_slice()),
+                luna_proto::BuiltinHarnessId::Codex => Some(codex.as_slice()),
                 _ => None,
             }
         };

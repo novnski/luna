@@ -1879,8 +1879,8 @@ impl EngineRpc {
                         .and_then(|provider| provider.model.clone())
                 })
                 .or_else(|| matching.first().map(|model| model.id.clone()));
-            let accounts = match harness {
-                HarnessId::Codex => {
+            let accounts = match (harness).kind() {
+                luna_proto::BuiltinHarnessId::Codex => {
                     let active = self
                         .agent_accounts
                         .resolve_execution(harness, None)
@@ -1896,7 +1896,7 @@ impl EngineRpc {
                         })
                         .collect()
                 }
-                HarnessId::ClaudeCode => self
+                luna_proto::BuiltinHarnessId::ClaudeCode => self
                     .agent_accounts
                     .resolve_execution(harness, None)
                     .ok()

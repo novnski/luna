@@ -431,6 +431,11 @@ impl Harness for ClaudeHarness {
     fn display_name(&self) -> &str {
         "Claude Code"
     }
+    fn model_catalog_source(&self) -> String {
+        self.resolve_executable()
+            .map(|path| crate::executable::catalog_source(&path))
+            .unwrap_or_else(|_| "unavailable".into())
+    }
     fn supports_steering(&self) -> bool {
         true
     }

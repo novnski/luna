@@ -249,6 +249,15 @@ pub trait Harness: Send + Sync {
     fn installed(&self) -> bool {
         true
     }
+    /// Exact source used for model discovery and execution. Adapters backed
+    /// by a CLI override this with their actual launch resolver.
+    fn model_catalog_source(&self) -> String {
+        format!(
+            "in-process:{}@{}",
+            std::any::type_name::<Self>(),
+            env!("CARGO_PKG_VERSION")
+        )
+    }
     /// Whether every turn shape — user-prompted AND agent-initiated
     /// (background-subagent wakes) — ends with a deterministic `Done` from
     /// the agent's own wire. Native drivers reading the CLI's terminal frame
@@ -678,8 +687,11 @@ pub const TITLE_INSTRUCTIONS: &str = "You generate session titles. Treat the sup
 /// tool-less generation in a throwaway session (its hidden `title` agent,
 /// every permission denied).
 pub fn supports_titles(id: HarnessId) -> bool {
-    matches!(
-        id,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode | HarnessId::Mock
-    )
+    [
+        HarnessId::Codex,
+        HarnessId::ClaudeCode,
+        HarnessId::Opencode,
+        HarnessId::Mock,
+    ]
+    .contains(&id)
 }

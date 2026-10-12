@@ -53,8 +53,10 @@ impl Shell {
             .map(|config| config.harness)
             .filter(|harness| {
                 matches!(
-                    harness,
-                    HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+                    (harness).kind(),
+                    luna_proto::BuiltinHarnessId::Codex
+                        | luna_proto::BuiltinHarnessId::ClaudeCode
+                        | luna_proto::BuiltinHarnessId::Opencode
                 )
             })
         else {

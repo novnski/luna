@@ -54,7 +54,7 @@ pub(crate) fn check_model_choice<'a>(
         .iter()
         .find(|candidate| candidate.id == model)
         .ok_or_else(|| BoardError::UnavailableModel {
-            harness,
+            harness: Box::new(harness),
             model: model.into(),
             supported: models
                 .iter()
@@ -371,7 +371,9 @@ impl EngineRpc {
         };
         sources.push(source("harness", origin));
         if !self.board_provider_available(harness) {
-            return Err(BoardError::UnavailableProvider { harness });
+            return Err(BoardError::UnavailableProvider {
+                harness: Box::new(harness),
+            });
         }
         // A choice made for another provider never carries over.
         let ticket_applies = explicit.harness.is_none_or(|h| ticket.harness == Some(h))
@@ -398,7 +400,10 @@ impl EngineRpc {
                     .then(|| parent_config.as_ref()?.provider_account_id.clone())
                     .flatten()
             });
-        let account = if matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode) {
+        let account = if matches!(
+            (harness).kind(),
+            luna_proto::BuiltinHarnessId::Codex | luna_proto::BuiltinHarnessId::ClaudeCode
+        ) {
             Some(
                 self.agent_accounts
                     .resolve_execution(harness, account.as_deref())
@@ -720,7 +725,9 @@ impl EngineRpc {
         }
         let harness = review.harness.unwrap_or(implementation.harness);
         if !self.board_provider_available(harness) {
-            return Err(BoardError::UnavailableProvider { harness });
+            return Err(BoardError::UnavailableProvider {
+                harness: Box::new(harness),
+            });
         }
         let models = self
             .model_cache
@@ -804,7 +811,9 @@ impl EngineRpc {
                 return Ok(());
             };
             if !self.board_provider_available(harness) {
-                return Err(BoardError::UnavailableProvider { harness });
+                return Err(BoardError::UnavailableProvider {
+                    harness: Box::new(harness),
+                });
             }
             let Some(models) = self.model_cache.cached(harness, account) else {
                 return Ok(());

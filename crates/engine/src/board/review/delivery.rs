@@ -95,11 +95,11 @@ fn engine_command(task_id: &str, command_id: &str, intent: TaskCommandIntent) ->
 }
 
 fn harness_label(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Codex => "Codex",
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Mock => "Test harness",
+    match (harness).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+        luna_proto::BuiltinHarnessId::Mock => "Test harness",
         _ => "Provider",
     }
 }

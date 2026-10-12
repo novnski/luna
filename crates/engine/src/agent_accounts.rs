@@ -379,8 +379,8 @@ impl AgentAccounts {
         requested_account_id: Option<&str>,
     ) -> Result<ProviderExecutionAccount, EngineError> {
         let state = lock(&self.inner.state).clone();
-        match harness {
-            HarnessId::ClaudeCode => {
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => {
                 if requested_account_id.is_some_and(|id| id != CLAUDE_NATIVE_ACCOUNT_ID) {
                     return Err(EngineError::Other(
                         "Claude Code supports one provider-native account on this device.".into(),
@@ -421,7 +421,7 @@ impl AgentAccounts {
                     codex_file_auth: false,
                 })
             }
-            HarnessId::Codex => {
+            luna_proto::BuiltinHarnessId::Codex => {
                 if state.default_codex_account_id.is_empty() {
                     return Err(EngineError::Other(
                         "No Codex account is connected in LUNA. Connect one in Providers first."
@@ -840,8 +840,8 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        match harness {
-            HarnessId::ClaudeCode if account_id == CLAUDE_NATIVE_ACCOUNT_ID => {
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode if account_id == CLAUDE_NATIVE_ACCOUNT_ID => {
                 if self.detect_claude().await.0.is_none() {
                     return Err(EngineError::Other(
                         "Claude Code has no provider-native login to reconnect; sign in first."
@@ -850,7 +850,7 @@ impl AgentAccounts {
                 }
                 self.update_state(|state| state.claude_enabled = true)?;
             }
-            HarnessId::Codex => {
+            luna_proto::BuiltinHarnessId::Codex => {
                 self.codex_home_for_account(account_id)?;
                 self.update_state(|state| {
                     state.default_codex_account_id = account_id.to_string();
@@ -964,9 +964,9 @@ impl AgentAccounts {
 
     pub async fn start_login(&self, harness: HarnessId) -> Result<AgentLoginStart, EngineError> {
         self.sweep_flows();
-        match harness {
-            HarnessId::ClaudeCode => Ok(self.start_claude_login()),
-            HarnessId::Codex => self.start_codex_login().await,
+        match (harness).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => Ok(self.start_claude_login()),
+            luna_proto::BuiltinHarnessId::Codex => self.start_codex_login().await,
             other => Err(EngineError::Other(format!(
                 "agent logins are not supported for {other:?}"
             ))),
@@ -1311,8 +1311,8 @@ impl AgentAccounts {
                 ),
             };
         let auth_file = home.join("auth.json");
-        let detected = read_json(&auth_file).and_then(|auth| match harness {
-            HarnessId::Codex => parse_codex_auth(auth),
+        let detected = read_json(&auth_file).and_then(|auth| match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => parse_codex_auth(auth),
             _ => None,
         });
         if detected.is_some() && file_fingerprint(&auth_file) != baseline_fingerprint {
@@ -1605,9 +1605,9 @@ impl AgentAccounts {
             // Non-forced lists never hit the network (see module docs).
             return None;
         }
-        let usage = match harness {
-            HarnessId::ClaudeCode => self.claude_usage(slot).await,
-            HarnessId::Codex => self.codex_usage(slot).await,
+        let usage = match (harness).kind() {
+            luna_proto::BuiltinHarnessId::ClaudeCode => self.claude_usage(slot).await,
+            luna_proto::BuiltinHarnessId::Codex => self.codex_usage(slot).await,
             _ => None,
         };
         let mut cache = lock(&self.inner.usage_cache);
@@ -1779,13 +1779,19 @@ fn incompatible_auth_store_source(
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-fn harness_slug(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "claude-code",
-        HarnessId::Codex => "codex",
-        HarnessId::Opencode => "opencode",
-        HarnessId::Mock => "mock",
-        _ => "retired",
+fn harness_slug(harness: HarnessId) -> String {
+    match harness.kind() {
+        luna_proto::BuiltinHarnessId::Other => format!(
+            "provider-{}",
+            &crate::repos::hex(&Sha256::digest(harness.canonical().as_str().as_bytes()))[..24]
+        ),
+        _ => harness
+            .canonical()
+            .as_str()
+            .split_once('/')
+            .expect("canonical provider")
+            .1
+            .to_string(),
     }
 }
 

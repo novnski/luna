@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use futures::{StreamExt, stream};
 use luna_proto::{HarnessId, Model};
@@ -19,7 +19,7 @@ use crate::agent_accounts::AgentAccounts;
 use crate::device_write::DeviceWriteHandle;
 use crate::registry::{HarnessRegistry, descriptor_enabled};
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -29,23 +29,6 @@ struct CatalogFile {
     checked_at_ms: i64,
     source_signature: Option<String>,
     models: Vec<Model>,
-}
-
-/// Bind Codex's cached list to the exact executable used for task execution.
-/// Canonicalizing follows package-manager symlinks when an update replaces
-/// their target. Metadata avoids spawning the CLI on the picker hot path.
-fn codex_source_signature() -> Option<String> {
-    let path = luna_harness::codex::resolve_codex_executable()?
-        .canonicalize()
-        .ok()?;
-    let metadata = fs::metadata(&path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(format!(
-        "{}:{}:{}",
-        path.display(),
-        metadata.len(),
-        modified.as_nanos()
-    ))
 }
 
 /// The id a catalog row stands for across spellings: the long-context
@@ -111,7 +94,7 @@ impl ModelCache {
     }
 
     fn path(&self, harness: HarnessId, identity: &str) -> PathBuf {
-        let key = format!("{harness:?}:{identity}");
+        let key = format!("{}:{identity}", harness.canonical().as_str());
         let digest = Sha256::digest(key.as_bytes());
         self.root
             .join("model-cache")
@@ -137,8 +120,9 @@ impl ModelCache {
             return None;
         }
         let catalog: CatalogFile = serde_json::from_slice(&bytes).ok()?;
-        let source_matches = harness != HarnessId::Codex
-            || codex_source_signature().as_deref() == catalog.source_signature.as_deref();
+        let source_matches = self.registry.resolve(harness).ok().is_some_and(|provider| {
+            Some(provider.model_catalog_source()).as_deref() == catalog.source_signature.as_deref()
+        });
         (catalog.version == CACHE_VERSION
             && source_matches
             && (!catalog.models.is_empty() || harness == HarnessId::Codex))
@@ -192,6 +176,7 @@ impl ModelCache {
         harness: HarnessId,
         identity: &str,
         models: &[Model],
+        source: &str,
     ) -> Result<Vec<Model>, String> {
         let _permit = self
             .write
@@ -215,13 +200,11 @@ impl ModelCache {
         let catalog = CatalogFile {
             version: CACHE_VERSION,
             checked_at_ms: now,
-            source_signature: (harness == HarnessId::Codex)
-                .then(codex_source_signature)
-                .flatten(),
+            source_signature: Some(source.to_string()),
             models,
         };
-        if harness == HarnessId::Codex && catalog.source_signature.is_none() {
-            return Err("Codex CLI executable is unavailable".into());
+        if catalog.source_signature.as_deref() == Some("unavailable") {
+            return Err("Provider executable is unavailable".into());
         }
         let bytes = serde_json::to_vec(&catalog).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_CACHE_BYTES {
@@ -244,14 +227,14 @@ impl ModelCache {
         account_id: Option<&str>,
     ) -> Option<Vec<Model>> {
         // Same cache key as `list`.
-        let identity = match harness {
-            HarnessId::Codex => {
+        let identity = match (harness).kind() {
+            luna_proto::BuiltinHarnessId::Codex => {
                 self.accounts
                     .resolve_execution(harness, account_id)
                     .ok()?
                     .auth_instance_id
             }
-            HarnessId::ClaudeCode => self
+            luna_proto::BuiltinHarnessId::ClaudeCode => self
                 .accounts
                 .resolve_execution(HarnessId::ClaudeCode, None)
                 .map_or_else(
@@ -261,6 +244,39 @@ impl ModelCache {
             _ => "device".to_owned(),
         };
         self.read(harness, &identity)
+    }
+
+    pub(crate) fn provenance(
+        &self,
+        harness: HarnessId,
+        account_id: Option<&str>,
+        host_id: &str,
+    ) -> Result<luna_proto::ProviderCatalogProvenance, String> {
+        let provider = self.registry.resolve(harness).map_err(|e| e.to_string())?;
+        let execution = if harness == HarnessId::ClaudeCode && account_id.is_none() {
+            self.accounts.resolve_execution(harness, None).ok()
+        } else if harness == HarnessId::Codex || harness == HarnessId::ClaudeCode {
+            Some(
+                self.accounts
+                    .resolve_execution(harness, account_id)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            if account_id.is_some() {
+                return Err("Provider does not support a selected execution account".into());
+            }
+            None
+        };
+        let catalog = self.registry.catalog(host_id);
+        Ok(luna_proto::ProviderCatalogProvenance {
+            host_id: host_id.into(),
+            registry_id: catalog.registry_id,
+            generation: catalog.generation,
+            provider_id: harness,
+            account_id: execution.as_ref().map(|a| a.account_id.clone()),
+            auth_instance_id: execution.map_or_else(|| "device".into(), |a| a.auth_instance_id),
+            executable: provider.model_catalog_source(),
+        })
     }
 
     pub(crate) async fn list(
@@ -281,7 +297,7 @@ impl ModelCache {
         let claude_execution = (harness == HarnessId::ClaudeCode)
             .then(|| {
                 self.accounts
-                    .resolve_execution(HarnessId::ClaudeCode, None)
+                    .resolve_execution(HarnessId::ClaudeCode, account_id)
                     .ok()
             })
             .flatten();
@@ -310,6 +326,12 @@ impl ModelCache {
             .registry
             .resolve(harness)
             .map_err(|error| error.to_string())?;
+        let source = provider.model_catalog_source();
+        let generation = self.registry.catalog("").generation;
+        let execution = codex_execution
+            .as_ref()
+            .or(claude_execution.as_ref())
+            .cloned();
         let home = codex_execution
             .as_ref()
             .and_then(|execution| execution.codex_home.as_deref());
@@ -320,25 +342,42 @@ impl ModelCache {
             .models_for_execution(home, force_file_auth)
             .await
             .map_err(|error| error.to_string());
+        if source != provider.model_catalog_source()
+            || generation != self.registry.catalog("").generation
+            || execution.as_ref().is_some_and(|old| {
+                self.accounts
+                    .resolve_execution(harness, Some(&old.account_id))
+                    .ok()
+                    .as_ref()
+                    != Some(old)
+            })
+        {
+            return Err(
+                "Provider, execution account or registry changed during model discovery; retry"
+                    .into(),
+            );
+        }
         match fetched {
             Ok(models) if harness == HarnessId::Codex && models.is_empty() => {
                 // An authoritative empty `model/list` must replace an older
                 // runnable catalog for this account and CLI.
-                self.save(harness, identity, &models)
+                self.save(harness, identity, &models, &source)
             }
             // The saved rows carry their first-seen stamps; answer with those.
-            Ok(models) if !models.is_empty() => match self.save(harness, identity, &models) {
-                Ok(stamped) => Ok(stamped),
-                Err(error) => {
-                    tracing::warn!(?harness, %error, "model catalog could not be cached");
-                    if refresh {
-                        return Err(format!(
-                            "model catalog loaded but could not be saved: {error}"
-                        ));
+            Ok(models) if !models.is_empty() => {
+                match self.save(harness, identity, &models, &source) {
+                    Ok(stamped) => Ok(stamped),
+                    Err(error) => {
+                        tracing::warn!(?harness, %error, "model catalog could not be cached");
+                        if refresh {
+                            return Err(format!(
+                                "model catalog loaded but could not be saved: {error}"
+                            ));
+                        }
+                        Ok(models)
                     }
-                    Ok(models)
                 }
-            },
+            }
             Ok(_) if !refresh && harness == HarnessId::ClaudeCode => {
                 Ok(luna_harness::claude::catalog::static_models())
             }

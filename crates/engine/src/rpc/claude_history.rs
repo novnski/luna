@@ -61,18 +61,18 @@ fn other(message: impl Into<String>) -> crate::EngineError {
 
 /// The provider's name in same-session rewind copy.
 fn provider_label(provider: HarnessId) -> &'static str {
-    match provider {
-        HarnessId::ClaudeCode => "Claude",
-        HarnessId::Opencode => "OpenCode",
+    match (provider).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
         _ => "The provider",
     }
 }
 
 /// "the same … session" in same-session rewind copy.
 fn session_label(provider: HarnessId) -> &'static str {
-    match provider {
-        HarnessId::ClaudeCode => "Claude Code session",
-        HarnessId::Opencode => "OpenCode session",
+    match (provider).kind() {
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code session",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode session",
         _ => "provider session",
     }
 }
@@ -657,8 +657,8 @@ impl EngineRpc {
                     let mut context = doc.context_control();
                     context.pending_rewind = None;
                     context.provider_summary = None;
-                    context.notice = Some(match (reverted, provider) {
-                        (true, HarnessId::ClaudeCode) => "Conversation rewound in the same Claude Code session. Files kept; Claude file checkpoints and Git checkpoints are separate.".into(),
+                    context.notice = Some(match (reverted, (provider).kind()) {
+                        (true, luna_proto::BuiltinHarnessId::ClaudeCode) => "Conversation rewound in the same Claude Code session. Files kept; Claude file checkpoints and Git checkpoints are separate.".into(),
                         (true, _) => format!("Conversation rewound in the same {session}. Files kept; Git checkpoints are separate."),
                         (false, _) => format!("Rewind readback verified the original {label} conversation. No history was removed; files kept."),
                     });
