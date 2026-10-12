@@ -1,0 +1,93 @@
+[
+ {
+  "id": "B5",
+  "contract": "disable (stop) closes every socket and the listener",
+  "files": [
+   "crates/remote/src/gateway.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway -- --test-threads=1",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "thread 'gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session' (51943939) panicked at crates/engine/tests/remote_access.rs:546:9:",
+   "thread 'gateway::remote_access_resumes_after_restart_with_the_same_pin' (51944595) panicked at crates/engine/tests/remote_access.rs:662:10:",
+   "thread 'gateway::revoke_closes_only_its_session_and_disable_closes_everything' (51945963) panicked at crates/engine/tests/remote_access.rs:603:9:"
+  ],
+  "restored": true,
+  "seconds": 94
+ },
+ {
+  "id": "B6",
+  "contract": "a revoked session's socket closes",
+  "files": [
+   "crates/remote/src/gateway.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway -- --test-threads=1",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test gateway::revoke_closes_only_its_session_and_disable_closes_everything ... FAILED",
+   "thread 'gateway::revoke_closes_only_its_session_and_disable_closes_everything' (51947241) panicked at crates/engine/tests/remote_access.rs:581:9:"
+  ],
+  "restored": true,
+  "seconds": 16
+ },
+ {
+  "id": "B7",
+  "contract": "a socket ticket opens one socket only",
+  "files": [
+   "crates/rpc/src/remote_auth.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway -- --test-threads=1",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session ... FAILED",
+   "thread 'gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session' (51948307) panicked at crates/engine/tests/remote_access.rs:540:9:"
+  ],
+  "restored": true,
+  "seconds": 5
+ },
+ {
+  "id": "B3",
+  "contract": "a browser origin is refused",
+  "files": [
+   "crates/remote/src/gateway.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway -- --test-threads=1",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session ... FAILED",
+   "thread 'gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session' (51949582) panicked at crates/engine/tests/remote_access.rs:511:9:"
+  ],
+  "restored": true,
+  "seconds": 5
+ },
+ {
+  "id": "RP19",
+  "contract": "enabled remote access resumes with the engine",
+  "files": [
+   "crates/engine/src/lib.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway -- --test-threads=1",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test gateway::remote_access_resumes_after_restart_with_the_same_pin ... FAILED",
+   "thread 'gateway::remote_access_resumes_after_restart_with_the_same_pin' (51950255) panicked at crates/engine/tests/remote_access.rs:662:10:"
+  ],
+  "restored": true,
+  "seconds": 15
+ }
+]

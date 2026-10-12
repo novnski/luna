@@ -1,0 +1,69 @@
+"""RM-01 milestone B mutation proofs for the gateway keepers.
+Run over loopback with LUNA_DEBUG_ALLOW_LOOPBACK and an uncommitted debug patch:
+the macOS firewall drops LAN connections to unapproved test binaries.
+Each file is restored byte-for-byte and verified afterwards."""
+import json, os, subprocess, sys, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+os.chdir(ROOT)
+ENV = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0", "LUNA_DEBUG_ALLOW_LOOPBACK": "1"}
+CMD = ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--test", "remote_access", "gateway", "--", "--test-threads=1"]
+CLOSE_FIND = "    pub(crate) fn close(&self) {\n        self.inner.lock().open = false;\n    }\n"
+CLOSE_REPL = "    pub(crate) fn close(&self) {}\n"
+LEASE_FIND = "        (lease.epoch.phase() != luna_sync::write_epoch::Phase::Retired)\n            .then_some(DeviceLease { _lease: lease })\n"
+LEASE_REPL = "        Some(DeviceLease { _lease: lease })\n"
+MUTATIONS = [
+    {"id": "B5", "expect_caught": True,
+     "contract": "disable (stop) closes every socket and the listener",
+     "edits": [("crates/remote/src/gateway.rs", "        self.shared.open.store(false, Ordering::SeqCst);\n        self.shared.shutdown.cancel();\n        self.shared.connections.close();\n", "        self.shared.open.store(false, Ordering::SeqCst);\n        self.shared.connections.close();\n"),
+               ("crates/remote/src/gateway.rs", "    fn drop(&mut self) {\n        self.shared.open.store(false, Ordering::SeqCst);\n        self.shared.shutdown.cancel();\n", "    fn drop(&mut self) {\n        self.shared.open.store(false, Ordering::SeqCst);\n")]},
+    {"id": "B6", "expect_caught": True,
+     "contract": "a revoked session's socket closes",
+     "edits": [("crates/remote/src/gateway.rs", "                        if changed.is_err() || auth.validate_session(&session).is_err() {\n", "                        if changed.is_err() {\n")]},
+    {"id": "B7", "expect_caught": True,
+     "contract": "a socket ticket opens one socket only",
+     "edits": [("crates/rpc/src/remote_auth.rs", "            .remove(&hash_secret(ticket))\n", "            .get(&hash_secret(ticket)).cloned()\n")]},
+    {"id": "B3", "expect_caught": True,
+     "contract": "a browser origin is refused",
+     "edits": [("crates/remote/src/gateway.rs", "    if request.headers().contains_key(ORIGIN) {\n", "    if false && request.headers().contains_key(ORIGIN) {\n")]},
+    {"id": "RP19", "expect_caught": True,
+     "contract": "enabled remote access resumes with the engine",
+     "edits": [("crates/engine/src/lib.rs", "            scope.spawn(async move { access.resume().await });\n", "            let _ = access;\n")]},
+]
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+results = []
+for m in MUTATIONS:
+    originals = {f: Path(f).read_bytes() for f, _, _ in m["edits"]}
+    before = {f: sha(f) for f in originals}
+    ok = True
+    for f, find, repl in m["edits"]:
+        text = Path(f).read_text()
+        if text.count(find) != 1:
+            ok = False
+            results.append({"id": m["id"], "outcome": "anchor-not-unique", "file": f, "count": text.count(find)})
+            break
+        Path(f).write_text(text.replace(find, repl, 1))
+    if not ok:
+        for f, b in originals.items():
+            Path(f).write_bytes(b)
+        continue
+    log = ROOT / f"target/qa/rm-01/mutation-{m['id']}.log"
+    started = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(CMD, env=ENV, stdout=out, stderr=subprocess.STDOUT).returncode
+    for f, b in originals.items():
+        Path(f).write_bytes(b)
+    lines = log.read_text().splitlines()
+    failed = [l for l in lines if (l.startswith("test ") and l.endswith("FAILED")) or " panicked at " in l]
+    caught = code != 0 and bool(failed)
+    results.append({"id": m["id"], "contract": m["contract"], "files": list(originals), "command": " ".join(CMD),
+                    "exit": code, "caught": caught, "expectCaught": m["expect_caught"],
+                    "asExpected": caught == m["expect_caught"], "failedTests": failed,
+                    "restored": all(sha(f) == before[f] for f in originals), "seconds": round(time.time() - started)})
+    print(m["id"], "exit", code, "caught" if caught else "not caught", "(expected)" if caught == m["expect_caught"] else "(UNEXPECTED)", flush=True)
+Path("target/qa/rm-01/mutations-b.json").write_text(json.dumps(results, indent=1) + "\n")
+sys.exit(0 if all(r.get("asExpected") and r.get("restored") for r in results) else 1)

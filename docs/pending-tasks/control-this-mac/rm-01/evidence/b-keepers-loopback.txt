@@ -1,0 +1,4 @@
+test gateway::remote_access_is_off_until_enabled_then_admits_only_its_paired_session ... ok
+test gateway::remote_access_resumes_after_restart_with_the_same_pin ... ok
+test gateway::revoke_closes_only_its_session_and_disable_closes_everything ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.33s
