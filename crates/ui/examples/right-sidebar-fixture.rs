@@ -1,8 +1,8 @@
 //! Headless GPUI E2E for the right sidebar redesign, Option B
 //! (docs/design/right-sidebar-redesign-2026-10-11): every place has a fixed
-//! spot on a rail at the window's right edge. Clicking a place opens the
-//! sidebar there, clicking the active one closes it, and the rail with its
-//! badges stays while the sidebar is closed. A workspace place lists its
+//! spot on a rail along the sidebar's right edge. The rail is part of the
+//! sidebar (a closed sidebar shows nothing); clicking a place shows it and
+//! clicking the active one closes the sidebar. A workspace place lists its
 //! open instances in its own tab row. Nothing navigates back.
 //!
 //! Drives the production `Shell` in a hidden window with real pointer and
@@ -15,12 +15,12 @@
 //! 1. Opening the sidebar on a chat shows anything other than the Overview
 //!    place, or the rail is missing.
 //! 2. The rail misses a place or orders them wrongly (Overview, Agents,
-//!    Related, Automations | Files, Changes, Terminal, Browser), or is not at
-//!    the window's right edge with the sidebar ending where it starts.
-//! 3. Clicking a place does not open it; clicking the active place does not
-//!    close the sidebar; the rail disappears with the sidebar closed.
-//! 4. With the sidebar closed, a running subagent does not badge Agents or a
-//!    related chat waiting for approval does not badge Related.
+//!    Related, Automations | Files, Changes, Terminal, Browser), or is not
+//!    along the sidebar's right edge with the page ending where it starts.
+//! 3. The rail shows while the sidebar is closed; clicking a place does not
+//!    open it; clicking the active place does not close the sidebar.
+//! 4. A running subagent does not badge Agents, or a related chat waiting
+//!    for approval does not badge Related.
 //! 5. A Back state exists: a state visited is neither a place's own page nor
 //!    a tab of the place the rail shows.
 //! 6. Changes does not open a working-tree diff on its first visit with Git,
@@ -442,25 +442,32 @@ async fn run(
     });
     frames(window, cx, 400).await?;
 
-    // 2, 3, 4. With the sidebar closed the rail is there, in order, at the
-    // window's right edge, with its badges.
+    // 3. With the sidebar closed nothing of it shows, the rail included.
     let closed = readback(window, cx).await?;
-    capture(window, cx, output.join("01-rail-sidebar-closed.png"))?;
+    capture(window, cx, output.join("01-sidebar-closed.png"))?;
     anyhow::ensure!(
-        closed["railShown"] == true && closed["rightPaneOpen"] == false,
-        "case 3: the rail must show with the sidebar closed: {closed}"
+        closed["rightPaneOpen"] == false && rail_order(&closed).is_empty(),
+        "case 3: the rail must not show with the sidebar closed: {closed}"
     );
-    let order = rail_order(&closed);
+    visited.push(closed.clone());
+
+    // 1, 2, 4. The toggle opens the Overview place with the rail inside the
+    // sidebar: in order, along the window's right edge, the page ending
+    // where it starts, and badges for the running subagent and the related
+    // chat waiting for approval.
+    press(window, cx, toggle_key()).await?;
+    frames(window, cx, 500).await?;
+    let open = readback(window, cx).await?;
+    capture(window, cx, output.join("02-overview.png"))?;
+    anyhow::ensure!(
+        open["rightPaneOpen"] == true && open["rightActive"] == "Home(Overview)",
+        "case 1: the sidebar must open on the Overview: {open}"
+    );
+    let order = rail_order(&open);
     let keys: Vec<&str> = order.iter().map(|(key, _)| key.as_str()).collect();
     anyhow::ensure!(
         keys == [
-            "overview",
-            "agents",
-            "related",
-            "automations",
-            "files",
-            "changes",
-            "terminal",
+            "overview", "agents", "related", "automations", "files", "changes", "terminal",
             "browser"
         ],
         "case 2: rail order: {keys:?}"
@@ -470,37 +477,23 @@ async fn run(
         gap(3) > gap(2) + 6.0,
         "case 2: a line must part the chat's places from the workspace tools: {order:?}"
     );
-    let rail_x = order[0].1[0];
+    let rail_left = WIDTH - shell::RIGHT_RAIL_WIDTH;
     anyhow::ensure!(
-        order.iter().all(
-            |(_, r)| (r[0] + r[2] / 2.0 - (WIDTH - shell::RIGHT_RAIL_WIDTH / 2.0)).abs() < 1.0
-        ),
-        "case 2: the rail must sit at the window's right edge: {order:?}"
+        order
+            .iter()
+            .all(|(_, r)| (r[0] + r[2] / 2.0 - (rail_left + shell::RIGHT_RAIL_WIDTH / 2.0)).abs() < 1.0),
+        "case 2: the rail must run along the sidebar's right edge: {order:?}"
     );
-    let badges = marks(&closed, "rail-badges");
+    let page = need(&open, "home-viewport")?;
+    anyhow::ensure!(
+        (page[0] + page[2] - rail_left).abs() < 1.5,
+        "case 2: the page must end where the rail starts: page {page:?}, rail {rail_left}"
+    );
+    let badges = marks(&open, "rail-badges");
     anyhow::ensure!(
         badges.contains(&"agents:1:running".to_string())
             && badges.contains(&"related:1:needs-you".to_string()),
-        "case 4: badges with the sidebar closed: {badges:?}"
-    );
-    record.insert("closed".into(), closed.clone());
-    visited.push(closed.clone());
-
-    // 1, 2. The toggle opens the Overview place; the sidebar ends where the
-    // rail starts.
-    press(window, cx, toggle_key()).await?;
-    frames(window, cx, 500).await?;
-    let open = readback(window, cx).await?;
-    capture(window, cx, output.join("02-overview.png"))?;
-    anyhow::ensure!(
-        open["rightPaneOpen"] == true && open["rightActive"] == "Home(Overview)",
-        "case 1: the sidebar must open on the Overview: {open}"
-    );
-    let page = need(&open, "home-viewport")?;
-    let rail_left = WIDTH - shell::RIGHT_RAIL_WIDTH;
-    anyhow::ensure!(
-        (page[0] + page[2] - rail_left).abs() < 1.5 && rail_x > rail_left,
-        "case 2: the sidebar must end where the rail starts: page {page:?}, rail {rail_left}"
+        "case 4: badges: {badges:?}"
     );
     record.insert("overview".into(), open.clone());
     visited.push(open.clone());
@@ -515,18 +508,24 @@ async fn run(
     );
     visited.push(related.clone());
 
-    // 3. Clicking the active place closes the sidebar; the rail and its
-    // badges stay; another place opens it again.
+    // 3. Clicking the active place closes the sidebar, rail and all; the
+    // toggle brings it back on that place, and another place opens there.
     click(window, cx, center(need(&related, "rail:related")?)).await?;
     let hidden = readback(window, cx).await?;
     anyhow::ensure!(
         hidden["rightPaneOpen"] == false
-            && rect(&hidden, "rail:related").is_some()
-            && rect(&hidden, "home-viewport").is_none()
-            && marks(&hidden, "rail-badges").contains(&"related:1:needs-you".to_string()),
-        "case 3: the active place closes the sidebar, the rail stays: {hidden}"
+            && rail_order(&hidden).is_empty()
+            && rect(&hidden, "home-viewport").is_none(),
+        "case 3: the active place closes the sidebar with its rail: {hidden}"
     );
-    click(window, cx, center(need(&hidden, "rail:agents")?)).await?;
+    visited.push(hidden.clone());
+    press(window, cx, toggle_key()).await?;
+    let reopened = readback(window, cx).await?;
+    anyhow::ensure!(
+        reopened["rightActive"] == "Home(Related)",
+        "the toggle reopens the place last shown: {reopened}"
+    );
+    click(window, cx, center(need(&reopened, "rail:agents")?)).await?;
     let agents = readback(window, cx).await?;
     capture(window, cx, output.join("04-agents.png"))?;
     anyhow::ensure!(
@@ -658,6 +657,8 @@ async fn run(
     // 6. Without Git, Changes keeps its place and says why.
     select(cx, &state, PLAIN);
     frames(window, cx, 600).await?;
+    // Each chat keeps its own sidebar state: this one starts closed.
+    press(window, cx, toggle_key()).await?;
     let plain = readback(window, cx).await?;
     click(window, cx, center(need(&plain, "rail:changes")?)).await?;
     let no_git = readback(window, cx).await?;
@@ -803,7 +804,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("right-sidebar.pass"),
-                                "PASS: headless production Shell with real pointer and keyboard input (dark): the rail shows at the window's right edge with the sidebar closed, its eight places in order with a line before the workspace tools, and badges for a running subagent and a related chat waiting for approval; the toggle opens the Overview place and the sidebar ends where the rail starts; an Overview row opens Related; clicking the active place closes the sidebar while the rail and badges stay, and another place opens it; Changes opens a working-tree diff and History as a second Changes tab, Terminal's row lists none of them, and returning to Changes shows its last tab; a tab menu closes the others and the last ✕ leaves Changes' empty state; the related, Agents and Automations entry points open their places without tabs; a related row opens its chat as the main view; without Git, Changes says why; every state visited was a place page or a tab of the place shown\n",
+                                "PASS: headless production Shell with real pointer and keyboard input (dark): with the sidebar closed nothing of it shows, the rail included; the toggle opens the Overview place with the rail inside the sidebar along its right edge, its eight places in order with a line before the workspace tools, the page ending where the rail starts, and badges for a running subagent and a related chat waiting for approval; an Overview row opens Related; clicking the active place closes the sidebar with its rail and the toggle reopens that place; Changes opens a working-tree diff and History as a second Changes tab, Terminal's row lists none of them, and returning to Changes shows its last tab; a tab menu closes the others and the last ✕ leaves Changes' empty state; the related, Agents and Automations entry points open their places without tabs; a related row opens its chat as the main view; without Git, Changes says why; every state visited was a place page or a tab of the place shown\n",
                             )
                         });
                         if let Err(error) = written {

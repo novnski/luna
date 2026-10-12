@@ -14154,28 +14154,40 @@ impl Shell {
         // its highlight on hover. Content that needs an opaque field (the
         // editor, terminal, browser) paints its own.
         let _ = bg;
+        // The rail is part of the sidebar: it sits at its right edge and
+        // slides in and out with it, so nothing shows while it is closed.
+        let rail = (!self.active_chat.is_empty()
+            && (self.right_pane_open(cx) || self.tween_active(self.right_tween)))
+        .then(|| self.render_right_rail(cx));
         let panel = div()
             .size_full()
             .flex()
-            .flex_col()
-            // Without the rail, the panel's right edge IS the window's right
-            // edge: it carries the CSD window's rounded corners directly
-            // (gpui cannot clip children rounded — each full-bleed layer
-            // rounds itself; see [`Self::window_corner_radius`]).
-            .when(
-                Self::window_corner_radius(window) > 0.0 && !self.rail_shown(),
-                |el| {
-                    let corner = Self::window_corner_radius(window);
-                    el.rounded_tr(px(corner)).rounded_br(px(corner))
-                },
-            )
+            .flex_row()
+            // The panel's right edge IS the window's right edge: it carries
+            // the CSD window's rounded corners directly (gpui cannot clip
+            // children rounded — each full-bleed layer rounds itself; see
+            // [`Self::window_corner_radius`]).
+            .when(Self::window_corner_radius(window) > 0.0, |el| {
+                let corner = Self::window_corner_radius(window);
+                el.rounded_tr(px(corner)).rounded_br(px(corner))
+            })
             .overflow_hidden()
-            // The titlebar is a glass overlay over the full-height content
-            // row; the panel's own chrome starts below it, on the same line
-            // as the canvas tab strip (titlebar + the canvas's 6 pt viewport
-            // inset), so both header rows share one centre (audit SS-06).
-            .pt(px(Theme::TITLEBAR_HEIGHT + RIGHT_PANE_STRIP_INSET))
-            .child(content);
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    // The titlebar is a glass overlay over the full-height
+                    // content row; the panel's own chrome starts below it, on
+                    // the same line as the canvas tab strip (titlebar + the
+                    // canvas's 6 pt viewport inset), so both header rows
+                    // share one centre (audit SS-06).
+                    .pt(px(Theme::TITLEBAR_HEIGHT + RIGHT_PANE_STRIP_INSET))
+                    .child(content),
+            )
+            .children(rail);
         let target = self.right_target(cx);
         let edge_offset = self.eval_resize_edge_bounce(
             self.right_edge_bounce,
@@ -15674,13 +15686,7 @@ impl Render for Shell {
             });
         }
         crate::transcript::record_view_frame("shell");
-        // Layout width: the window less the right rail, when it shows.
-        self.viewport_width = f32::from(window.viewport_size().width)
-            - if self.rail_shown() {
-                right_rail::RAIL_WIDTH
-            } else {
-                0.0
-            };
+        self.viewport_width = f32::from(window.viewport_size().width);
         // Appearance actions persist independently of the shell. Mirror the
         // globals before any later debounced settings save can overwrite them.
         self.settings.appearance = crate::appearance::mode(cx);
@@ -16093,14 +16099,7 @@ impl Render for Shell {
                         .update(cx, |c, cx| c.debug_open_model_menu(window, cx));
                 }
                 // MessageRail width gate: hide below 48rem of main-panel width.
-                // The right rail keeps its width at the window's right edge
-                // whenever it shows; everything else lays out in the rest.
-                let rail_width = if self.rail_shown() {
-                    right_rail::RAIL_WIDTH
-                } else {
-                    0.0
-                };
-                let viewport = f32::from(window.viewport_size().width) - rail_width;
+                let viewport = f32::from(window.viewport_size().width);
                 self.viewport_height = f32::from(window.viewport_size().height);
                 // Stamped for `right_target` — the expanded changes panel
                 // sizes itself to the viewport.
@@ -16281,7 +16280,6 @@ impl Render for Shell {
                     Empty.into_any_element()
                 };
                 let title_bar = self.render_title_bar(cx);
-                let rail = (rail_width > 0.0).then(|| self.render_right_rail(window, cx));
                 // Sidebar tone: a slightly lighter column behind the sidebar,
                 // spanning the FULL window height (under the traffic lights,
                 // through the titlebar, down to the bottom edge). Its width
@@ -16343,8 +16341,7 @@ impl Render for Shell {
                                     .relative()
                                     .child(right)
                                     .child(right_seam),
-                            )
-                            .children(rail),
+                            ),
                     )
                     .child(div().absolute().top_0().left_0().right_0().child(title_bar))
                     .child(self.render_titlebar_cluster(cx))

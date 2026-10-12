@@ -410,15 +410,7 @@ impl Shell {
                 // sidebar control. Only the tabs + expand section reveals to
                 // its left; including the toggle in this animated width
                 // compressed both icons into the same clipped box at open.
-                // With the rail at the window's edge the pane ends where the
-                // rail starts, while this band still ends at the toggle over
-                // the rail: widen it by the rail so it starts on the pane.
-                let rail = if self.rail_shown() {
-                    super::right_rail::RAIL_WIDTH
-                } else {
-                    0.0
-                };
-                let animated_width = ((right_now + rail - pr).min(avail + rail) - 28.0).max(0.0);
+                let animated_width = ((right_now - pr).min(avail) - 28.0).max(0.0);
                 controls = controls.child(
                     div()
                         .w(px(animated_width))

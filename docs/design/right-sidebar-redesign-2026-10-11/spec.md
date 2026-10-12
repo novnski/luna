@@ -9,14 +9,16 @@ was replaced before landing.) The research behind the options (BB
 
 **Every place has a fixed spot, and nothing navigates back.**
 
-- A thin **rail** (44 pt) sits at the window's right edge whenever a chat is
-  selected: the chat's own places (**Overview, Agents, Related,
-  Automations**) above a line, workspace tools (**Files, Changes, Terminal,
-  Browser**) below it.
-- Clicking a place opens the sidebar there; clicking the active place closes
-  it. The rail stays when the sidebar is closed, with its **badges**: running
-  subagents on Agents, related chats that need you on Related, a dot on
-  Terminal while terminals are open.
+- A thin **rail** (44 pt) runs along the sidebar's right edge: the chat's
+  own places (**Overview, Agents, Related, Automations**) above a line,
+  workspace tools (**Files, Changes, Terminal, Browser**) below it.
+- **The rail is part of the sidebar.** It slides in and out with it; a
+  closed sidebar shows nothing but the titlebar toggle, as before. (The
+  first version kept the rail on screen with the sidebar closed; the user
+  asked for it to appear only with the sidebar, 2026-10-12.)
+- Clicking a place shows it; clicking the active place closes the sidebar.
+  **Badges** mark running subagents on Agents, related chats that need you
+  on Related, and a dot on Terminal while terminals are open.
 - A workspace place lists its open instances in **its own tab row** (close,
   drag, middle-click, right-click menu with Close others / Close to the
   right). `+` opens another terminal, page or diff; Changes' header opens
@@ -41,7 +43,7 @@ was replaced before landing.) The research behind the options (BB
 | Automations tab | Automations place |
 | Diffs and History menu rows | Changes place: diff and History tabs |
 | Child chat drilled into the Related pane, with Back | Opens in the canvas, or as the main chat |
-| Sidebar toggle only | Toggle (kept, above the rail) and the rail |
+| Sidebar toggle | Unchanged; it reopens the place last shown |
 
 Anything that used to open the Agents, Related or Automations tab now opens
 that place.
@@ -59,12 +61,12 @@ The E2E fixture `crates/ui/examples/right-sidebar-fixture.rs` must catch:
 
 1. Opening the sidebar on a chat shows anything other than the Overview
    place, or the rail is missing.
-2. The rail misses a place or orders them wrongly, or is not at the window's
-   right edge with the sidebar ending where it starts.
-3. Clicking a place does not open it; clicking the active place does not
-   close the sidebar; the rail disappears with the sidebar closed.
-4. With the sidebar closed, a running subagent does not badge Agents or a
-   related chat waiting for approval does not badge Related.
+2. The rail misses a place or orders them wrongly, or is not along the
+   sidebar's right edge with the page ending where it starts.
+3. The rail shows while the sidebar is closed; clicking a place does not
+   open it; clicking the active place does not close the sidebar.
+4. A running subagent does not badge Agents, or a related chat waiting for
+   approval does not badge Related.
 5. A Back state exists: a state visited is neither a place's own page nor a
    tab of the place the rail shows.
 6. Changes does not open a working-tree diff on its first visit with Git,
@@ -82,6 +84,6 @@ The E2E fixture `crates/ui/examples/right-sidebar-fixture.rs` must catch:
 
 `right-sidebar-fixture` passed all eleven cases (`evidence/right-sidebar.pass`, `evidence/readback.json`):
 
-![Rail with the sidebar closed, badges showing](evidence/01-rail-sidebar-closed.png)
-![Overview place](evidence/02-overview.png)
+![Sidebar closed: nothing of it shows](evidence/01-sidebar-closed.png)
+![Overview place with the rail and its badges](evidence/02-overview.png)
 ![Changes place with its diff and History tabs](evidence/06-changes-history.png)

@@ -1,19 +1,19 @@
 //! The right sidebar's rail and its places
 //! (docs/design/right-sidebar-redesign-2026-10-11).
 //!
-//! Every place has a fixed spot on a thin rail at the window's right edge:
-//! the chat's own places (Overview, Agents, Related, Automations) above the
-//! line, workspace tools (Files, Changes, Terminal, Browser) below it.
-//! Clicking a place opens the sidebar there and clicking the active one
-//! closes it; the rail stays, so its badges (running agents, related chats
-//! that need you, open terminals) show with the sidebar closed. A workspace
-//! place lists its open instances in its own tab row. Nothing navigates
-//! back.
+//! Every place has a fixed spot on a thin rail along the sidebar's right
+//! edge: the chat's own places (Overview, Agents, Related, Automations)
+//! above the line, workspace tools (Files, Changes, Terminal, Browser) below
+//! it. The rail is part of the sidebar and slides in and out with it, so a
+//! closed sidebar shows nothing. Clicking a place shows it; clicking the
+//! active one closes the sidebar. Badges mark running agents, related chats
+//! that need you and open terminals. A workspace place lists its open
+//! instances in its own tab row. Nothing navigates back.
 
 use super::*;
 use crate::button::{ButtonKind, ControlSize};
 
-/// The rail's width, taken from the window whenever the rail shows.
+/// The rail's width, inside the sidebar's own width.
 pub const RAIL_WIDTH: f32 = 44.0;
 
 /// What the right-sidebar QA fixture reads back: painted bounds by label and
@@ -43,12 +43,6 @@ enum RailTone {
 }
 
 impl Shell {
-    /// The rail shows with a selected chat on the chat route, like the
-    /// sidebar it opens (the new-thread canvas and pages have neither).
-    pub(super) fn rail_shown(&self) -> bool {
-        matches!(self.route, Route::Chat) && !self.active_chat.is_empty()
-    }
-
     /// A rail click: open the sidebar on `place`, or close it when `place`
     /// is already showing. A workspace place with nothing open opens its
     /// first instance (Files browses, Changes diffs the working tree when
@@ -115,11 +109,7 @@ impl Shell {
 
     /// The rail: one button per place, a line between the chat's places
     /// and the workspace tools, each with its badge.
-    pub(super) fn render_right_rail(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn render_right_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let open = self.right_pane_open(cx);
         let current = self.right_place(cx);
@@ -136,11 +126,7 @@ impl Shell {
             .items_center()
             .gap(px(2.0))
             .pt(px(Theme::TITLEBAR_HEIGHT + 6.0))
-            .pb(px(10.0))
-            .when(Self::window_corner_radius(window) > 0.0, |el| {
-                let corner = Self::window_corner_radius(window);
-                el.rounded_tr(px(corner)).rounded_br(px(corner))
-            });
+            .pb(px(10.0));
         for place in RightPlace::ALL {
             if place == RightPlace::Files {
                 column = column.child(
@@ -966,7 +952,6 @@ impl Shell {
             .unwrap_or(serde_json::Value::Null);
         serde_json::json!({
             "activeChat": self.active_chat,
-            "railShown": self.rail_shown(),
             "rightPaneOpen": self.right_pane_open(cx),
             "rightActive": format!("{:?}", self.resolved_right_active(cx)),
             "place": self.right_place(cx).key(),
