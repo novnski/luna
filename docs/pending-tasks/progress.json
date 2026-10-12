@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791819526.913729,
+  "created_at": 1791819643.939758,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 14,
+      "done": 15,
       "in_progress": 0,
       "paused": 0,
       "ready": 65,
-      "review": 1
+      "review": 0
     },
     "groups": [
       {
@@ -215,11 +215,11 @@
         },
         "title": "One direct paired-Mac product",
         "tasks": 11,
-        "done": 1,
-        "remaining": 10,
-        "accepted_units": 6,
+        "done": 2,
+        "remaining": 9,
+        "accepted_units": 7,
         "total_units": 40,
-        "acceptance_percent": 15.0,
+        "acceptance_percent": 17.5,
         "milestone_status": {
           "M0": {
             "done": true,
@@ -373,19 +373,22 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 9,
-      "remaining": 67,
-      "accepted_units": 38,
+      "done": 10,
+      "remaining": 66,
+      "accepted_units": 39,
       "total_units": 296,
-      "acceptance_percent": 12.8
+      "acceptance_percent": 13.2
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
+      "RM-02",
+      "CORE-04",
+      "CORE-05",
       "IC-0",
       "ZI-01",
+      "CORE-06",
       "ZI-03",
-      "ZI-04",
-      "ZI-05"
+      "ZI-04"
     ]
   },
   "tasks": [
@@ -2324,6 +2327,15 @@
           ],
           "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
         },
+        "handoff": {
+          "at": 1791819643.717489,
+          "evidence": [
+            {
+              "ref": "commit:1aef968f7983480b61d7d9127c12ac627cc95bae"
+            }
+          ],
+          "note": "Published complete RM-01 C implementation and reviewed hashed evidence in 1aef968f7983480b61d7d9127c12ac627cc95bae; SSH origin/main matched. LUNA Dev build 81s, PID28646, loopback IPC59777 and strict signature verified; signed native campaign passed, QA sessions revoked and remote access disabled. 79 tests passed with one existing ignored, configured compilation/lint/format checks passed."
+        },
         "verification": {
           "at": 1791819526.7359428,
           "evidence": [
@@ -2335,6 +2347,11 @@
           "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "commit:1aef968f7983480b61d7d9127c12ac627cc95bae"
+        }
+      ],
       "id": "RM-01",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
@@ -2342,12 +2359,11 @@
         "expires_at": 1791822486.666517,
         "heartbeat_at": 1791818886.666517,
         "owner": "codex",
-        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
-        "expired": false
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
       },
-      "note": "Final patch reviewed against test authoring gate; accepted host evidence and app handoff ready. Final delivery criterion will be checked after SSH origin/main readback.",
-      "status": "paused",
-      "updated_at": 1791819526.8250701
+      "note": "Completed milestones A/B/C with scoped host authority, profile-owned direct TLS gateway and signed single-use socket capabilities. RP host campaign and headed readback passed; direct phone/Keychain and outside-network acceptance remain with later owners. Verified feature delivery on origin/main; primary LUNA Dev ready with remote access disabled.",
+      "status": "done",
+      "updated_at": 1791819643.842158
     }
   ],
   "events": [
@@ -8956,6 +8972,135 @@
           "checkout": "/Users/iulian/workspace/code/personal/luna",
           "claimed_at": 1791817197.3612869,
           "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 243,
+      "task": "RM-01",
+      "at": 1791819643.729672,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          },
+          "gateway": {
+            "at": 1791819526.6434612,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+          },
+          "handoff": {
+            "at": 1791819643.717489,
+            "evidence": [
+              {
+                "ref": "commit:1aef968f7983480b61d7d9127c12ac627cc95bae"
+              }
+            ],
+            "note": "Published complete RM-01 C implementation and reviewed hashed evidence in 1aef968f7983480b61d7d9127c12ac627cc95bae; SSH origin/main matched. LUNA Dev build 81s, PID28646, loopback IPC59777 and strict signature verified; signed native campaign passed, QA sessions revoked and remote access disabled. 79 tests passed with one existing ignored, configured compilation/lint/format checks passed."
+          },
+          "verification": {
+            "at": 1791819526.7359428,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Published complete RM-01 C implementation and reviewed hashed evidence in 1aef968f7983480b61d7d9127c12ac627cc95bae; SSH origin/main matched. LUNA Dev build 81s, PID28646, loopback IPC59777 and strict signature verified; signed native campaign passed, QA sessions revoked and remote access disabled. 79 tests passed with one existing ignored, configured compilation/lint/format checks passed.",
+        "status": "review",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
+          "expired": false,
+          "expires_at": 1791822486.666517,
+          "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 244,
+      "task": "RM-01",
+      "at": 1791819643.842405,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "authority": {
+            "at": 1791819526.5491772,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Reviewed existing scoped guard and v2 authority lifecycle; current migration, corrupt/reset, valid-command denial with no receipt/admission, exact target and session scope integration owners passed."
+          },
+          "gateway": {
+            "at": 1791819526.6434612,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "Real Wi-Fi gateway and headed LUNA Dev prove profile-owned TLS, off/enable/disable, two sessions, revoke isolation and local IPC continuity. Repaired selected signed-capability policy with HMAC-SHA256 verified before one-use consumption."
+          },
+          "handoff": {
+            "at": 1791819643.717489,
+            "evidence": [
+              {
+                "ref": "commit:1aef968f7983480b61d7d9127c12ac627cc95bae"
+              }
+            ],
+            "note": "Published complete RM-01 C implementation and reviewed hashed evidence in 1aef968f7983480b61d7d9127c12ac627cc95bae; SSH origin/main matched. LUNA Dev build 81s, PID28646, loopback IPC59777 and strict signature verified; signed native campaign passed, QA sessions revoked and remote access disabled. 79 tests passed with one existing ignored, configured compilation/lint/format checks passed."
+          },
+          "verification": {
+            "at": 1791819526.7359428,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-01/evidence/c-manifest.json",
+                "sha256": "a6125d5dcfc7ed9da7336add31694c134c177a69a00721529afb9d680557b66f"
+              }
+            ],
+            "note": "RP-02/03/05/06/19 host campaign passed at actual pinned TLS/WebSocket and restore boundaries: 42 engine integration tests, zero gateway skips; 37 RPC/contract tests (one existing ignored). Signed-ticket regression red before repair; native signed readback and exact bundle/IPC/signature passed."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:1aef968f7983480b61d7d9127c12ac627cc95bae"
+          }
+        ],
+        "note": "Completed milestones A/B/C with scoped host authority, profile-owned direct TLS gateway and signed single-use socket capabilities. RP host campaign and headed readback passed; direct phone/Keychain and outside-network acceptance remain with later owners. Verified feature delivery on origin/main; primary LUNA Dev ready with remote access disabled.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791817197.3612869,
           "expires_at": 1791822486.666517,
           "heartbeat_at": 1791818886.666517,
           "owner": "codex",

@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-12T18:38:46+03:00.
+Generated 2026-10-12T18:40:43+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **12.8% accepted**, **9/76 Done**.
+Active scope: **13.2% accepted**, **10/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: IC-0, ZI-01, ZI-03, ZI-04, ZI-05
+Next eligible: RM-02, CORE-04, CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -134,7 +134,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-09 — Expose guarded phone Git and broader thread lifecycle](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-11 — Add scoped phone operations and administration views](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | done | 100.0% | claude-code-opus-5.5 |
-| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | review | 75.0% | codex |
+| [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | done | 100.0% | codex |
 
 ## Native iOS parity and release
 
