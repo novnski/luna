@@ -1001,3 +1001,57 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
     }
     core.shutdown().await;
 }
+
+/// CORE-03 R1: once the sessions engine has swept its runs for shutdown, a
+/// late dispatch (for example from a command still running past the engine's
+/// command drain) must not start a provider run that nothing will interrupt.
+#[tokio::test]
+async fn no_provider_run_starts_after_the_shutdown_sweep() {
+    let tmp = tempfile::tempdir().unwrap();
+    let requests: RequestLog = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        &tmp.path().join("data"),
+        RecordingHarness {
+            requests: requests.clone(),
+            session_id: "session-late".into(),
+            fail_starts: Default::default(),
+        },
+    );
+    pre_title(&core);
+    core.sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            run_request("before shutdown", "/tmp"),
+            Some("msg-before".into()),
+        )
+        .await
+        .expect("an open engine starts the run");
+    wait_for(
+        || complete_assistant_count(&core) == 1,
+        "the run before shutdown to complete",
+    )
+    .await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+
+    assert!(core.sessions.shutdown().await);
+    let late = core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            run_request("after the sweep", "/tmp"),
+            Some("msg-late".into()),
+        )
+        .await;
+    assert!(
+        late.is_err(),
+        "a run was admitted after the shutdown sweep: {late:?}"
+    );
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "the provider was started after shutdown"
+    );
+    core.shutdown().await;
+}

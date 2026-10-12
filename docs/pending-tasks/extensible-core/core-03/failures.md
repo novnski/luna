@@ -70,6 +70,31 @@ and only the cleanup worker was joined at shutdown.
 A timing test that proves a task is *absent* after shutdown would need a sleep
 standing in for an event, so S3 and S4 are proven by construction instead.
 
+## Milestone 3: run coordination
+
+Written before the M3 code, on `99494ffe`. `SessionsEngine` keeps its live
+runs, in-flight dispatch count and per-chat transition gates as loose fields.
+About 80 sites lock the run map directly. Shutdown interrupts every live run
+and waits for dispatches already in flight. Nothing, though, refuses a
+dispatch that *starts* after the final sweep. One example is a command still
+running when M1's 5-second drain expires, which then queues and dispatches its
+run.
+
+| ID | Failure | Required behaviour | Owner proof |
+| --- | --- | --- | --- |
+| R1 | A dispatch that arrives after the sessions shutdown sweep starts a provider run that nothing interrupts. The run keeps its journal ticket, and so the InstanceLock, past `EngineCore::shutdown`. | Shutdown closes run admission *before* it sweeps. A later dispatch is refused before it reaches the provider. A dispatch already in flight is still waited for and interrupted. | `restart_resume` E2E: a dispatch before shutdown runs (control). After `sessions.shutdown()`, a dispatch is refused and the provider sees no request. |
+| R2 | The split leaves two owners of "may a run start": a second map, or a dispatch path that bypasses the in-flight count. | One `RunTable` owns the live-run map, the in-flight count, the transition gates and the closed state. Every dispatch enters through it. | Construction and review; the full engine suite stays green. |
+
+| R3 | Shutdown's queue freeze (`pause_all_queues`) pauses only the documents open at that moment. A chat whose document opens later, for example reopened by a run's final events after LRU eviction, can release queued work during teardown. With R1, that dispatch would now be refused, and the drain would hand the row back "for review" instead of leaving it queued. | `DocHost::freeze_queues` pauses every open queue and every queue opened afterwards. The flag is read under the same lock the freeze pauses through. A refused-at-shutdown dispatch is classed as preflight, so a claimed row is released for review, never marked as an unknown delivery. | Construction and review. Proving that no drain happened would need a sleep standing in for an event, so the existing queue suites are the regression check. |
+
+**What the R1 keeper catches:** shutdown never closing run admission, and a
+dispatch path that skips the table's closed check.
+
+**What it can't catch:** closing *after* the sweep instead of before it. That
+only opens a window inside shutdown, which the keeper can't reach without a
+sleep standing in for an event, so the order is enforced by the code and
+review.
+
 ## Remaining CORE-03 failure focus (later milestones)
 
 - **Run coordination:** a split moves globals but leaves competing writers, for

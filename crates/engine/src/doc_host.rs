@@ -242,6 +242,9 @@ struct DocHostInner {
     /// network work even while something still pins the graph.
     shutdown: CancellationToken,
     edge_disconnected: AtomicBool,
+    /// Set by [`DocHost::freeze_queues`] when the engine shuts down: every
+    /// queue stays paused, including one whose document opens afterwards.
+    queues_frozen: AtomicBool,
     /// Tracks every spawned worker so `shutdown_workers` can await them.
     tasks: TaskTracker,
     handles: Mutex<HashMap<String, Arc<ChatDocHandle>>>,
@@ -1083,6 +1086,7 @@ impl DocHost {
                 project_commands: OnceLock::new(),
                 shutdown: CancellationToken::new(),
                 edge_disconnected: AtomicBool::new(false),
+                queues_frozen: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
                 handles: Mutex::new(HashMap::new()),
                 eviction_started: AtomicBool::new(false),
@@ -1986,6 +1990,14 @@ impl DocHost {
     /// Interrupting a run publishes Idle, which normally wakes the turn-end
     /// queue drainer; without this barrier quitting the host could promote a
     /// queued row in the narrow window before workers are retired.
+    /// Shutdown's freeze: pause every open queue, and every queue whose
+    /// document opens later, so quitting never starts queued work. Explicit
+    /// sends still work, as for any paused queue.
+    pub fn freeze_queues(&self) {
+        self.inner.queues_frozen.store(true, Ordering::SeqCst);
+        self.pause_all_queues();
+    }
+
     pub fn pause_all_queues(&self) {
         let handles: Vec<_> = lock(&self.inner.handles).values().cloned().collect();
         for handle in handles {
@@ -2704,7 +2716,15 @@ impl DocHost {
             }
         }
         // Publish only after the durable subscription and bootstrap are installed.
-        lock(&self.inner.handles).insert(chat_id.to_string(), handle.clone());
+        {
+            let mut handles = lock(&self.inner.handles);
+            // Under the same lock `freeze_queues` pauses through: a document
+            // opened during shutdown never releases queued work.
+            if self.inner.queues_frozen.load(Ordering::SeqCst) {
+                handle.queue_paused.store(true, Ordering::Release);
+            }
+            handles.insert(chat_id.to_string(), handle.clone());
+        }
         drop(opening);
         self.spawn_worker(chat_task(self.clone(), Arc::downgrade(&handle), changed_rx));
         self.start_eviction_watcher();

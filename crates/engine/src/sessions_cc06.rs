@@ -104,7 +104,7 @@ impl SessionsEngine {
         rows: &mut Vec<luna_proto::LiveSessionUsage>,
     ) {
         use luna_proto::UsageProvider;
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         rows.retain(|row| {
             let Some(run) = runs.get(&row.task_id) else {
                 return false;
@@ -155,7 +155,7 @@ impl SessionsEngine {
         }
         let next = RuntimeConfig::from_request(harness_id, request);
         let from = {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             let Some(handle) = runs.get(chat_id).filter(|handle| {
                 handle.run_id == run_id
                     && handle.steerable
@@ -181,7 +181,7 @@ impl SessionsEngine {
         }
         let execution_defaults = self.execution_defaults(chat_id);
         {
-            let mut runs = lock(&self.inner.runs);
+            let mut runs = self.inner.runs.lock();
             let Some(handle) = runs
                 .get_mut(chat_id)
                 .filter(|handle| handle.run_id == run_id)

@@ -8,7 +8,7 @@ use luna_proto::{
     TaskExecutionSummary,
 };
 
-use super::{EngineError, RunHandle, RuntimeConfig, SessionsEngine, lock};
+use super::{EngineError, RunHandle, RuntimeConfig, SessionsEngine};
 use luna_proto::{HarnessId, PermissionMode, SandboxLevel};
 
 #[derive(Default)]
@@ -262,7 +262,10 @@ impl SessionsEngine {
         let Some(chat) = workspace.chat(chat_id)? else {
             return Ok(false);
         };
-        Ok(lock(&self.inner.runs)
+        Ok(self
+            .inner
+            .runs
+            .lock()
             .get(chat_id)
             .is_some_and(|run| !self.pending_execution_fields(&chat, run).is_empty()))
     }
@@ -295,7 +298,7 @@ impl SessionsEngine {
             .and_then(|view| view.current_binding);
         let active = self.turn_in_flight(chat_id);
         let observed = {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             runs.get(chat_id)
                 .filter(|run| {
                     !run.interrupt_token.is_cancelled()

@@ -1213,17 +1213,8 @@ struct Inner {
     /// doc-host reference each other through Arcs, so this back-edge must be
     /// severable for a replaced engine graph to drop.
     doc_host: Mutex<Option<DocHost>>,
-    /// chat_id → live run.
-    runs: Mutex<HashMap<String, RunHandle>>,
-    /// Dispatches between run-ticket admission and run registration. Shutdown
-    /// waits for them so a run registered after its first sweep (for example
-    /// a queue drain already in flight) is still interrupted instead of
-    /// outliving the engine with its device-write ticket and InstanceLock.
-    dispatches_in_flight: std::sync::atomic::AtomicUsize,
-    /// Serializes runtime replacement/start with permission-mode mutation for
-    /// one chat. Without this, an async idle retirement can cancel a fresh run
-    /// that started after the mutation returned.
-    transition_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Live runs, in-flight dispatches, transition gates and run admission.
+    runs: runs::RunTable,
     /// chat_id → broadcast hub (retained across runs so subscribers survive turns).
     hubs: Mutex<HashMap<String, broadcast::Sender<JournaledEvent>>>,
     statuses: Mutex<HashMap<String, Session>>,
@@ -1284,25 +1275,11 @@ pub(crate) type SideChatAdmission = Arc<
 mod cc06;
 #[path = "sessions_execution.rs"]
 mod execution;
+#[path = "sessions_runs.rs"]
+mod runs;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Counts one `dispatch_inner` call until it returns or is dropped.
-struct DispatchInFlight<'a>(&'a Inner);
-
-impl<'a> DispatchInFlight<'a> {
-    fn enter(inner: &'a Inner) -> Self {
-        inner.dispatches_in_flight.fetch_add(1, Ordering::AcqRel);
-        Self(inner)
-    }
-}
-
-impl Drop for DispatchInFlight<'_> {
-    fn drop(&mut self) {
-        self.0.dispatches_in_flight.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 #[derive(Clone)]
@@ -1325,13 +1302,11 @@ impl SessionsEngine {
                 recovery: Arc::new(RecoveryStore::new(store)),
                 registry,
                 doc_host: Mutex::new(None),
-                runs: Mutex::new(HashMap::new()),
-                transition_gates: Mutex::new(HashMap::new()),
+                runs: runs::RunTable::new(),
                 hubs: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
                 sessions_tx,
                 recovery_tasks: Mutex::new(HashMap::new()),
-                dispatches_in_flight: std::sync::atomic::AtomicUsize::new(0),
                 recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
                 live_usage: Default::default(),
@@ -1514,14 +1489,16 @@ impl SessionsEngine {
     }
 
     pub fn has_live_run(&self, chat_id: &str) -> bool {
-        lock(&self.inner.runs).contains_key(chat_id)
+        self.inner.runs.lock().contains_key(chat_id)
     }
 
     /// A root turn can be idle while its provider-owned children or tasks
     /// are still running. Destructive idle-only operations must check this
     /// separately from the foreground turn fence.
     pub(crate) fn has_live_background_work(&self, chat_id: &str) -> bool {
-        lock(&self.inner.runs)
+        self.inner
+            .runs
+            .lock()
             .get(chat_id)
             .is_some_and(|run| !run.work_observations.is_empty())
     }
@@ -1531,7 +1508,7 @@ impl SessionsEngine {
     /// turn and must not block history forks or other idle-only commands.
     pub fn active_turn_id(&self, chat_id: &str) -> Option<String> {
         let (run_id, pending_steer, provider_turn) = {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             let run = runs.get(chat_id)?;
             (
                 run.run_id.clone(),
@@ -1589,7 +1566,7 @@ impl SessionsEngine {
             return None;
         }
         let (mut readiness, mut cancel, interrupt) = {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             let run = runs.get(chat_id).filter(|run| run.run_id == run_id)?;
             (
                 run.provider_turn_readiness.subscribe(),
@@ -1639,7 +1616,7 @@ impl SessionsEngine {
     ) -> Option<ClaimedProviderCall> {
         let binding = self.inner.current_codex_binding_key(chat_id)?;
         let mut source_provider = None;
-        let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+        let claimed = self.inner.runs.lock().get_mut(chat_id).is_some_and(|run| {
             source_provider = Some(run.runtime_config.harness_id);
             run.claim_codex_invocation(
                 chat_id,
@@ -1670,7 +1647,7 @@ impl SessionsEngine {
         claim: &ClaimedProviderCall,
     ) -> Option<(CancellationToken, watch::Receiver<bool>)> {
         let binding = self.inner.current_codex_binding_key(&claim.source_task_id);
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let run = runs.get(&claim.source_task_id)?;
         claim
             .matches_live(run, binding.as_ref())
@@ -1994,7 +1971,10 @@ impl SessionsEngine {
         // App coordination is already inside the user's LUNA task. Keep the
         // provider invocation and target fences, without a second permission UI.
         // An explicit increase above the parent's access still needs a grant.
-        let effective_mode = lock(&self.inner.runs)
+        let effective_mode = self
+            .inner
+            .runs
+            .lock()
             .get(chat_id)
             .and_then(|run| {
                 run.runtime_config
@@ -2018,7 +1998,7 @@ impl SessionsEngine {
             let (grant_tx, grant_rx) = oneshot::channel();
             let binding = self.inner.current_codex_binding_key(chat_id);
             let (pending, engine_tx) = {
-                let runs = lock(&self.inner.runs);
+                let runs = self.inner.runs.lock();
                 let run = runs
                     .get(chat_id)
                     .filter(|run| proposal.claim.matches_live(run, binding.as_ref()))
@@ -2124,7 +2104,7 @@ impl SessionsEngine {
         }
         let binding = self.inner.current_codex_binding_key(&fence.source_task_id);
         let target_active_turn = self.active_turn_id(&fence.request.task_id);
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let valid = runs.get(&fence.source_task_id).is_some_and(|run| {
             run.run_id == fence.source_run_id
                 && provider_turn_fence(run.runtime_config.harness_id)
@@ -2560,10 +2540,7 @@ impl SessionsEngine {
     }
 
     fn transition_gate(&self, chat_id: &str) -> Arc<AsyncMutex<()>> {
-        lock(&self.inner.transition_gates)
-            .entry(chat_id.to_string())
-            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-            .clone()
+        self.inner.runs.transition_gate(chat_id)
     }
 
     /// CC-14: hold the dispatch transition gate with no runtime for this
@@ -2700,7 +2677,7 @@ impl SessionsEngine {
             )));
         }
         let closing = {
-            let mut runs = lock(&self.inner.runs);
+            let mut runs = self.inner.runs.lock();
             runs.get_mut(chat_id).map(|run| {
                 // Codex's existing idle mailbox-EOF path shuts down its child
                 // before closing the event stream. Do not interrupt: its Done
@@ -2832,7 +2809,7 @@ impl SessionsEngine {
         // dispatch is excluded by `_transition`, so a new run cannot slip in
         // and be cancelled by a delayed retirement task.
         self.interrupt(chat_id).await?;
-        if lock(&self.inner.runs).contains_key(chat_id) {
+        if self.inner.runs.lock().contains_key(chat_id) {
             return Err(EngineError::Other(
                 "permission runtime did not retire before the deadline".into(),
             ));
@@ -2898,7 +2875,10 @@ impl SessionsEngine {
         harness: HarnessId,
     ) -> Result<OwnedMutexGuard<()>, EngineError> {
         let guard = self.inner.account_transition.clone().lock_owned().await;
-        let chats = lock(&self.inner.runs)
+        let chats = self
+            .inner
+            .runs
+            .lock()
             .iter()
             .filter(|(_, run)| run.runtime_config.harness_id == harness)
             .map(|(chat_id, _)| chat_id.clone())
@@ -2912,7 +2892,10 @@ impl SessionsEngine {
         for chat_id in &chats {
             self.interrupt(chat_id).await?;
         }
-        if lock(&self.inner.runs)
+        if self
+            .inner
+            .runs
+            .lock()
             .values()
             .any(|run| run.runtime_config.harness_id == harness)
         {
@@ -2990,7 +2973,7 @@ impl SessionsEngine {
             ));
         }
         self.interrupt(chat_id).await?;
-        if lock(&self.inner.runs).contains_key(chat_id) {
+        if self.inner.runs.lock().contains_key(chat_id) {
             return Err(EngineError::Other(
                 "The warm runtime did not retire before the account-change deadline.".into(),
             ));
@@ -3096,7 +3079,7 @@ impl SessionsEngine {
         lock(&self.inner.last_requests).remove(chat_id);
         lock(&self.inner.harness_sessions).remove(chat_id);
         lock(&self.inner.hubs).remove(chat_id);
-        lock(&self.inner.transition_gates).remove(chat_id);
+        self.inner.runs.forget_transition_gate(chat_id);
         if let Some(task) = lock(&self.inner.recovery_tasks).remove(chat_id) {
             task.abort();
         }
@@ -3304,7 +3287,7 @@ impl SessionsEngine {
         ))
         .await?;
         let mut ready = {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             let run = runs
                 .get(chat_id)
                 .filter(|run| run.run_id == run_id)
@@ -3315,7 +3298,10 @@ impl SessionsEngine {
             loop {
                 match *ready.borrow() {
                     ProviderTurnReadiness::Ready => {
-                        if lock(&self.inner.runs)
+                        if self
+                            .inner
+                            .runs
+                            .lock()
                             .get(chat_id)
                             .is_none_or(|run| run.run_id != run_id)
                         {
@@ -3503,7 +3489,7 @@ impl SessionsEngine {
         workspace_repair_revision: u64,
         attach_existing_goal: bool,
     ) -> Result<String, EngineError> {
-        let _in_flight = DispatchInFlight::enter(&self.inner);
+        let _in_flight = self.inner.runs.enter_dispatch()?;
         request
             .model_options
             .remove(luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION);
@@ -3830,7 +3816,7 @@ impl SessionsEngine {
                 serde_json::to_value(&compiled.contract)?,
             );
         }
-        let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
+        let routed = self.inner.runs.lock().get(chat_id).map(|h| {
             (
                 h.run_id.clone(),
                 h.steerable,
@@ -3858,7 +3844,7 @@ impl SessionsEngine {
             ));
         }
         let goal_runtime = request.goal.is_some()
-            && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
+            && self.inner.runs.lock().get(chat_id).is_some_and(|h| {
                 !h.started_for_goal_attachment
                     && h.workspace_repair_revision == workspace_repair_revision
                     && h.runtime_config.can_route_goal(harness_id, &request)
@@ -3946,7 +3932,7 @@ impl SessionsEngine {
                     false
                 };
             if accepted {
-                if let Some(run) = lock(&self.inner.runs).get_mut(chat_id) {
+                if let Some(run) = self.inner.runs.lock().get_mut(chat_id) {
                     run.work_message_id = user_id.clone();
                 }
                 let handle = self.doc_handle(chat_id)?;
@@ -3996,7 +3982,7 @@ impl SessionsEngine {
             // the routed run died with the message reclaimed, or configuration
             // changed beyond what the text-only mailbox can carry: replace it.
             self.interrupt(chat_id).await?;
-            if lock(&self.inner.runs).contains_key(chat_id) {
+            if self.inner.runs.lock().contains_key(chat_id) {
                 return Err(EngineError::Other(
                     "previous runtime did not retire before replacement startup".into(),
                 ));
@@ -4262,7 +4248,7 @@ impl SessionsEngine {
         if let Some(checkpoints) = self.git_checkpoints() {
             checkpoints.start(chat_id, &run_id, &request.cwd).await;
         }
-        lock(&self.inner.runs).insert(
+        self.inner.runs.lock().insert(
             chat_id.to_string(),
             RunHandle {
                 workspace_repair_revision,
@@ -4432,7 +4418,10 @@ impl SessionsEngine {
         if self.pending_execution_change(chat_id)? {
             return Ok(SteerOutcome::ConfigurationChanged);
         }
-        let target = lock(&self.inner.runs)
+        let target = self
+            .inner
+            .runs
+            .lock()
             .get(chat_id)
             .filter(|h| {
                 h.steerable
@@ -4469,7 +4458,7 @@ impl SessionsEngine {
         let frozen_steer_request = self
             .last_request(chat_id)
             .filter(|request| {
-                lock(&self.inner.runs).get(chat_id).is_some_and(|run| {
+                self.inner.runs.lock().get(chat_id).is_some_and(|run| {
                     run.run_id == run_id
                         && run.runtime_config == RuntimeConfig::from_request(harness_id, request)
                 })
@@ -4515,7 +4504,7 @@ impl SessionsEngine {
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             });
         }
-        if let Some(run) = lock(&self.inner.runs).get_mut(chat_id) {
+        if let Some(run) = self.inner.runs.lock().get_mut(chat_id) {
             run.work_message_id = user_id.clone();
         }
         let acceptance =
@@ -4552,7 +4541,7 @@ impl SessionsEngine {
         chat_id: &str,
         hold_recovery: bool,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs).get_mut(chat_id).map(|h| {
+        let target = self.inner.runs.lock().get_mut(chat_id).map(|h| {
             h.provider_turn = None;
             h.set_provider_turn_readiness(ProviderTurnReadiness::Ended);
             (
@@ -4604,7 +4593,7 @@ impl SessionsEngine {
         answers: Vec<UserInputAnswer>,
     ) -> SecretInputOutcome {
         {
-            let runs = lock(&self.inner.runs);
+            let runs = self.inner.runs.lock();
             if let Some(handle) = runs.get(chat_id) {
                 let live = lock(&handle.pending_inputs)
                     .get(request_id)
@@ -4674,7 +4663,7 @@ impl SessionsEngine {
     ) -> Result<bool, EngineError> {
         // Hold the run map through delivery so a replacement run cannot
         // receive responses belonging to the old provider binding.
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let Some(handle) = runs.get(chat_id) else {
             return Ok(false);
         };
@@ -4749,7 +4738,7 @@ impl SessionsEngine {
             format!("luna-ask-{short}")
         };
         let ended = || EngineError::Other("the LUNA run that asked has ended".into());
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let run = runs
             .get(chat_id)
             .filter(|run| run.run_id == run_id)
@@ -4773,7 +4762,7 @@ impl SessionsEngine {
     /// unattended answer. Returns `false` when none was pending (already
     /// sent, answered, or the question never had a recommendation).
     pub fn hold_input(&self, chat_id: &str, request_id: &str) -> bool {
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let Some(handle) = runs.get(chat_id) else {
             return false;
         };
@@ -4791,7 +4780,7 @@ impl SessionsEngine {
         chat_id: &str,
         request_id: &str,
     ) -> Result<String, EngineError> {
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let handle = runs
             .get(chat_id)
             .ok_or_else(|| EngineError::Other("MCP request is no longer pending".into()))?;
@@ -4826,7 +4815,10 @@ impl SessionsEngine {
     /// action/source hint. Used to keep generic command and recovery paths
     /// from consuming a future LUNA approval.
     pub(crate) fn is_luna_pending_approval(&self, chat_id: &str, request_id: &str) -> bool {
-        let pending = lock(&self.inner.runs)
+        let pending = self
+            .inner
+            .runs
+            .lock()
             .get(chat_id)
             .map(|handle| handle.pending_inputs.clone());
         pending.as_ref().is_some_and(|pending| {
@@ -4844,7 +4836,7 @@ impl SessionsEngine {
         request_id: &str,
         decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
-        let is_send = lock(&self.inner.runs).get(chat_id).is_some_and(|run| {
+        let is_send = self.inner.runs.lock().get(chat_id).is_some_and(|run| {
             lock(&run.pending_inputs)
                 .get(request_id)
                 .is_some_and(|item| matches!(item.kind, PendingInputKind::LunaSend { .. }))
@@ -4864,7 +4856,7 @@ impl SessionsEngine {
         decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
         let binding = self.inner.current_codex_binding_key(chat_id);
-        let runs = lock(&self.inner.runs);
+        let runs = self.inner.runs.lock();
         let Some(run) = runs.get(chat_id) else {
             return LunaApprovalOutcome::Stale;
         };
@@ -4943,7 +4935,7 @@ impl SessionsEngine {
         request_id: &str,
         decision: luna_proto::ApprovalDecision,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs).get(chat_id).map(|handle| {
+        let target = self.inner.runs.lock().get(chat_id).map(|handle| {
             (
                 handle.pending_inputs.clone(),
                 handle.engine_tx.clone(),
@@ -5743,7 +5735,7 @@ impl SessionsEngine {
             }
         }
         for chat_id in stale {
-            if lock(&self.inner.runs).contains_key(&chat_id) {
+            if self.inner.runs.lock().contains_key(&chat_id) {
                 continue; // a live run owns this journal
             }
             let handle = self.doc_handle(&chat_id)?;
@@ -5882,7 +5874,7 @@ impl SessionsEngine {
                     continue;
                 }
                 if chat.device_id != self.inner.device_id
-                    || lock(&self.inner.runs).contains_key(&chat.id)
+                    || self.inner.runs.lock().contains_key(&chat.id)
                 {
                     continue;
                 }
@@ -6074,6 +6066,9 @@ impl SessionsEngine {
 
     /// Graceful shutdown: interrupt every live run so streaming entries settle.
     pub async fn shutdown(&self) -> bool {
+        // No run is admitted from here on, so none can register after the
+        // final sweep below and outlive the engine.
+        self.inner.runs.close();
         let mut clean = true;
         for (_, timer) in lock(&self.inner.recovery_tasks).drain() {
             timer.abort();
@@ -6084,7 +6079,10 @@ impl SessionsEngine {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut interrupted: HashSet<String> = HashSet::new();
         loop {
-            let runs: Vec<(String, String)> = lock(&self.inner.runs)
+            let runs: Vec<(String, String)> = self
+                .inner
+                .runs
+                .lock()
                 .iter()
                 .map(|(chat, handle)| (chat.clone(), handle.run_id.clone()))
                 .collect();
@@ -6099,7 +6097,7 @@ impl SessionsEngine {
                     clean = false;
                 }
             }
-            let idle = self.inner.dispatches_in_flight.load(Ordering::Acquire) == 0;
+            let idle = self.inner.runs.dispatches_in_flight() == 0;
             if idle && !swept {
                 break;
             }
@@ -6116,7 +6114,9 @@ impl SessionsEngine {
     }
 
     fn is_live(&self, chat_id: &str, run_id: &str) -> bool {
-        lock(&self.inner.runs)
+        self.inner
+            .runs
+            .lock()
             .get(chat_id)
             .is_some_and(|h| h.run_id == run_id)
     }
@@ -6347,7 +6347,8 @@ impl Inner {
     }
 
     fn has_pending_steers(&self, chat_id: &str, run_id: &str) -> bool {
-        lock(&self.runs)
+        self.runs
+            .lock()
             .get(chat_id)
             .filter(|h| h.run_id == run_id)
             .is_some_and(|h| !lock(&h.routed_steers).is_empty())
@@ -6356,7 +6357,9 @@ impl Inner {
     /// The waiting status the run's still-open requests imply: approval wins
     /// over a plain question; `None` when nothing waits on the user.
     fn pending_input_status(&self, chat_id: &str) -> Option<SessionStatus> {
-        let pending = lock(&self.runs)
+        let pending = self
+            .runs
+            .lock()
             .get(chat_id)
             .map(|handle| handle.pending_inputs.clone())?;
         let pending = lock(&pending);
@@ -6376,7 +6379,9 @@ impl Inner {
     /// (OCF-51), so a turn-end drain does not answer them. Engine-owned LUNA
     /// cards stay behind and are drained with their turn.
     fn take_provider_inputs(&self, chat_id: &str, run_id: &str) -> Vec<(String, PendingInput)> {
-        let pending = lock(&self.runs)
+        let pending = self
+            .runs
+            .lock()
             .get(chat_id)
             .filter(|run| run.run_id == run_id)
             .map(|run| run.pending_inputs.clone());
@@ -6405,7 +6410,9 @@ impl Inner {
         run_id: &str,
         input: PendingInput,
     ) -> Option<AgentEvent> {
-        let (pending, engine_tx, signals) = lock(&self.runs)
+        let (pending, engine_tx, signals) = self
+            .runs
+            .lock()
             .get(chat_id)
             .filter(|run| run.run_id == run_id)
             .map(|run| {
@@ -6464,7 +6471,7 @@ impl Inner {
     /// terminal provider boundary. Ordinary warm routes stay in FIFO order
     /// for their legacy follow-up-turn fallback.
     fn take_terminal_explicit_steers(&self, chat_id: &str, run_id: &str) -> Vec<RoutedSteer> {
-        let runs = lock(&self.runs);
+        let runs = self.runs.lock();
         let Some(handle) = runs.get(chat_id).filter(|handle| handle.run_id == run_id) else {
             return Vec::new();
         };
@@ -6702,7 +6709,7 @@ impl Inner {
     }
 
     fn remove_run(&self, chat_id: &str, run_id: &str) {
-        let mut runs = lock(&self.runs);
+        let mut runs = self.runs.lock();
         if runs.get(chat_id).is_some_and(|h| h.run_id == run_id) {
             runs.remove(chat_id);
             self.sessions_tx.send_modify(|_| {});
@@ -6738,7 +6745,7 @@ impl Inner {
         provider_turn_id: &str,
     ) -> bool {
         let binding = self.current_codex_binding_key(chat_id);
-        lock(&self.runs).get_mut(chat_id).is_some_and(|run| {
+        self.runs.lock().get_mut(chat_id).is_some_and(|run| {
             run.observe_codex_checkpoint(
                 chat_id,
                 run_id,
@@ -6751,13 +6758,15 @@ impl Inner {
 
     fn observe_codex_binding(&self, chat_id: &str, run_id: &str, provider_thread_id: &str) -> bool {
         let binding = self.current_codex_binding_key(chat_id);
-        lock(&self.runs).get_mut(chat_id).is_some_and(|run| {
+        self.runs.lock().get_mut(chat_id).is_some_and(|run| {
             run.observe_codex_binding(chat_id, run_id, provider_thread_id, binding.as_ref())
         })
     }
 
     fn reset_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
-        if let Some(run) = lock(&self.runs)
+        if let Some(run) = self
+            .runs
+            .lock()
             .get_mut(chat_id)
             .filter(|run| run.run_id == run_id)
         {
@@ -6775,7 +6784,9 @@ impl Inner {
         provider_thread_id: Option<&str>,
     ) {
         let binding = self.current_codex_binding_key(chat_id);
-        if let Some(run) = lock(&self.runs)
+        if let Some(run) = self
+            .runs
+            .lock()
             .get_mut(chat_id)
             .filter(|run| run.run_id == run_id)
             && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ended
@@ -6785,7 +6796,9 @@ impl Inner {
     }
 
     fn clear_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
-        if let Some(run) = lock(&self.runs)
+        if let Some(run) = self
+            .runs
+            .lock()
             .get_mut(chat_id)
             .filter(|run| run.run_id == run_id)
         {
@@ -6795,7 +6808,9 @@ impl Inner {
     }
 
     fn fail_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
-        if let Some(run) = lock(&self.runs)
+        if let Some(run) = self
+            .runs
+            .lock()
             .get_mut(chat_id)
             .filter(|run| run.run_id == run_id)
         {
@@ -7365,7 +7380,7 @@ fn stop_after_journal_failure(
 ) {
     tracing::error!(chat = %chat_id, run = %run_id, %error, "run journal write outcome uncertain; stopping provider");
     let target = {
-        let mut runs = lock(&inner.runs);
+        let mut runs = inner.runs.lock();
         runs.get_mut(chat_id)
             .filter(|handle| handle.run_id == run_id)
             .map(|handle| {
@@ -7784,7 +7799,9 @@ async fn drive_run(
     // turn's Done, each shown in its own finished entry and still waiting on
     // the user. They hold the idle reaper like an active turn's question.
     let mut parked_asks: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let signals = lock(&inner.runs)
+    let signals = inner
+        .runs
+        .lock()
         .get(&chat_id)
         .filter(|handle| handle.run_id == run_id)
         .map(|handle| handle.signals.clone())
@@ -7842,7 +7859,7 @@ async fn drive_run(
                         .unwrap_or_else(tokio::time::Instant::now)
                 ), if idle_since.is_some() && parked_asks.is_empty() => {
                     tracing::info!(chat = %chat_id, "reaping idle persistent session");
-                    if let Some(token) = lock(&inner.runs)
+                    if let Some(token) = inner.runs.lock()
                         .get(&chat_id)
                         .filter(|h| h.run_id == run_id)
                         .map(|h| h.interrupt_token.clone())
@@ -7878,7 +7895,7 @@ async fn drive_run(
                     // was already finalized). Persistent adapters keep the
                     // stream open and never hit this.
                     None if idle_since.is_some() => {
-                        if let Some(run) = lock(&inner.runs)
+                        if let Some(run) = inner.runs.lock()
                             .get(&chat_id)
                             .filter(|run| run.run_id == run_id)
                         {
@@ -8088,7 +8105,7 @@ async fn drive_run(
             inner.live_usage.record(&chat_id, report);
             if let luna_proto::ProviderAccountingReport::Runtime(readback) = report.as_ref()
                 && readback.matches
-                && let Some(run) = lock(&inner.runs).get_mut(&chat_id).filter(|run| {
+                && let Some(run) = inner.runs.lock().get_mut(&chat_id).filter(|run| {
                     run.run_id == run_id
                         && readback.native_session_id.is_some()
                         && readback.native_session_id == run.observed_provider_session_id
@@ -8398,7 +8415,9 @@ async fn drive_run(
         // it un-park the session and then dropping it would disarm the idle
         // reaper with no turn running (a leaked child no reap ever ends).
         if let AgentEvent::InputRequested { request_id, .. } = &event {
-            let pending = lock(&inner.runs)
+            let pending = inner
+                .runs
+                .lock()
                 .get(&chat_id)
                 .map(|h| h.pending_inputs.clone());
             let known = pending.is_some_and(|p| lock(&p).contains_key(request_id));
@@ -8856,7 +8875,9 @@ async fn drive_run(
                     // idle reaper with no Done ever coming — stranded status,
                     // leaked warm child.
                     AgentEvent::InputRequested { request_id, .. } => {
-                        let resolver = lock(&inner.runs)
+                        let resolver = inner
+                            .runs
+                            .lock()
                             .get(&chat_id)
                             .and_then(|h| lock(&h.pending_inputs).remove(request_id));
                         if let Some(pending) = resolver {
@@ -9016,7 +9037,9 @@ async fn drive_run(
         {
             // Identity-bearing boundaries match the exact ledger entry. A late
             // native record can recover a durable unknown claim after Done/restart.
-            let confirmed_steer = lock(&inner.runs)
+            let confirmed_steer = inner
+                .runs
+                .lock()
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
                 .and_then(|h| {
@@ -9177,7 +9200,9 @@ async fn drive_run(
                         && host
                             .queued_message(&chat_id, &steer.message_id)
                             .is_ok_and(|row| row.is_none())
-                        && let Some(handle) = lock(&inner.runs)
+                        && let Some(handle) = inner
+                            .runs
+                            .lock()
                             .get(&chat_id)
                             .filter(|h| h.run_id == run_id)
                     {
@@ -9365,7 +9390,9 @@ async fn drive_run(
                     inner.observe_codex_binding(&chat_id, &run_id, session_id);
                 }
                 if !session_id.is_empty()
-                    && let Some(run) = lock(&inner.runs)
+                    && let Some(run) = inner
+                        .runs
+                        .lock()
                         .get_mut(&chat_id)
                         .filter(|run| run.run_id == run_id)
                 {
@@ -9633,7 +9660,9 @@ async fn drive_run(
                     tracing::warn!(chat = %chat_id, request = %request_id, %error, "carried ask card close failed");
                 }
             }
-            let pending = lock(&inner.runs)
+            let pending = inner
+                .runs
+                .lock()
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
                 .map(|h| h.pending_inputs.clone());
@@ -9770,7 +9799,9 @@ async fn drive_run(
             // their legacy continuation/fallback semantics.
             let mut terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
             if harness_id == HarnessId::Codex
-                && let Some(handle) = lock(&inner.runs)
+                && let Some(handle) = inner
+                    .runs
+                    .lock()
                     .get(&chat_id)
                     .filter(|h| h.run_id == run_id)
             {
@@ -9935,7 +9966,9 @@ async fn drive_run(
     // Claim any accepted-but-unconfirmed steers BEFORE the handle goes away:
     // a routed send that raced this exit either finds its entry gone (we own
     // it — re-dispatched below) or reclaims it and starts a fresh run itself.
-    let orphans: Vec<RoutedSteer> = lock(&inner.runs)
+    let orphans: Vec<RoutedSteer> = inner
+        .runs
+        .lock()
         .get(&chat_id)
         .filter(|h| h.run_id == run_id)
         .map(|h| std::mem::take(&mut *lock(&h.routed_steers)).into())
@@ -11175,7 +11208,7 @@ mod tests {
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
         let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
         let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
-        lock(&sessions.inner.runs).insert(
+        sessions.inner.runs.lock().insert(
             "chat-a".into(),
             RunHandle {
                 started_for_goal_attachment: false,
@@ -11289,7 +11322,7 @@ mod tests {
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
         let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
         let (engine_tx, engine_rx) = tokio::sync::mpsc::unbounded_channel();
-        lock(&sessions.inner.runs).insert(
+        sessions.inner.runs.lock().insert(
             "chat-a".into(),
             RunHandle {
                 started_for_goal_attachment: false,
@@ -11433,7 +11466,7 @@ mod tests {
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
         let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
         let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
-        lock(&core.sessions.inner.runs).insert(
+        core.sessions.inner.runs.lock().insert(
             task_id.clone(),
             RunHandle {
                 started_for_goal_attachment: false,
@@ -11921,7 +11954,10 @@ mod tests {
         assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
         assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
         assert!(
-            lock(&core.sessions.inner.runs)
+            core.sessions
+                .inner
+                .runs
+                .lock()
                 .get(&source_task_id)
                 .unwrap()
                 .pending_inputs
@@ -12030,10 +12066,13 @@ mod tests {
                     "turn-b",
                 )),
                 "run-drop" => {
-                    lock(&core.sessions.inner.runs).remove(&source_task_id);
+                    core.sessions.inner.runs.lock().remove(&source_task_id);
                 }
                 "cancel" => {
-                    lock(&core.sessions.inner.runs)
+                    core.sessions
+                        .inner
+                        .runs
+                        .lock()
                         .get(&source_task_id)
                         .unwrap()
                         .cancel
@@ -12068,7 +12107,7 @@ mod tests {
             Some("provider-thread-a"),
             "turn-a",
         )); // No authoritative task binding is installed in this fixture.
-        let mut runs = lock(&sessions.inner.runs);
+        let mut runs = sessions.inner.runs.lock();
         let run = runs.get_mut("chat-a").unwrap();
         assert!(!run.claim_codex_invocation(
             "chat-a",
@@ -12196,7 +12235,7 @@ mod tests {
     fn provider_turn_fence_rejects_rebinding_replacement_cancel_and_completion() {
         let (_root, sessions, _pending, _events) = local_luna_test_run();
         let binding = synthetic_provider_binding();
-        let mut runs = lock(&sessions.inner.runs);
+        let mut runs = sessions.inner.runs.lock();
         let run = runs.get_mut("chat-a").unwrap();
         assert!(run.observe_codex_binding("chat-a", "run-a", "provider-thread-a", Some(&binding),));
         assert!(run.observe_codex_checkpoint(
@@ -12248,7 +12287,7 @@ mod tests {
         ));
         drop(runs);
         sessions.inner.clear_codex_checkpoint("chat-a", "run-a");
-        let mut runs = lock(&sessions.inner.runs);
+        let mut runs = sessions.inner.runs.lock();
         let run = runs.get_mut("chat-a").unwrap();
         assert!(run.claim_codex_invocation(
             "chat-a",
@@ -12281,7 +12320,10 @@ mod tests {
         // Done clears the same fence through this run-scoped helper.
         sessions.inner.clear_codex_checkpoint("chat-a", "run-b");
         assert!(
-            lock(&sessions.inner.runs)
+            sessions
+                .inner
+                .runs
+                .lock()
                 .get("chat-a")
                 .unwrap()
                 .provider_turn
@@ -12443,13 +12485,20 @@ mod tests {
             });
             tokio::task::yield_now().await;
             match end {
-                "interrupt" => lock(&core.sessions.inner.runs)
+                "interrupt" => core
+                    .sessions
+                    .inner
+                    .runs
+                    .lock()
                     .get(&task_id)
                     .unwrap()
                     .interrupt_token
                     .cancel(),
                 "engine-cancel" => {
-                    lock(&core.sessions.inner.runs)
+                    core.sessions
+                        .inner
+                        .runs
+                        .lock()
                         .get(&task_id)
                         .unwrap()
                         .cancel
@@ -12460,7 +12509,7 @@ mod tests {
                     .inner
                     .clear_codex_checkpoint(&task_id, "run-a"),
                 "replacement" => {
-                    lock(&core.sessions.inner.runs).remove(&task_id);
+                    core.sessions.inner.runs.lock().remove(&task_id);
                 }
                 _ => unreachable!(),
             }
@@ -12620,7 +12669,10 @@ mod tests {
     fn failed_journal_append_has_no_seq_zero_fanout_and_visible_uncertainty() {
         let (_root, sessions, pending, _engine_rx) = local_luna_test_run();
         let (_, mut live) = sessions.subscribe("chat-a", 0).unwrap();
-        let token = lock(&sessions.inner.runs)
+        let token = sessions
+            .inner
+            .runs
+            .lock()
             .get("chat-a")
             .unwrap()
             .interrupt_token
@@ -12921,7 +12973,7 @@ mod tests {
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
         let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
         let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
-        lock(&sessions.inner.runs).insert(
+        sessions.inner.runs.lock().insert(
             "chat-active".into(),
             RunHandle {
                 started_for_goal_attachment: false,
@@ -12969,7 +13021,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Stop it"));
-        assert!(lock(&sessions.inner.runs).contains_key("chat-active"));
+        assert!(sessions.inner.runs.lock().contains_key("chat-active"));
     }
 
     #[test]

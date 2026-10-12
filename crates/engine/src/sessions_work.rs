@@ -10,12 +10,14 @@ pub(crate) struct WorkRuntime {
 }
 impl SessionsEngine {
     pub(crate) fn work_observed(&self, chat: &str, kind: &str, id: &str) -> bool {
-        lock(&self.inner.runs)
+        self.inner
+            .runs
+            .lock()
             .get(chat)
             .is_some_and(|run| run.work_observations.contains(&format!("{kind}:{id}")))
     }
     pub(crate) fn work_runtime(&self, chat: &str) -> Option<WorkRuntime> {
-        lock(&self.inner.runs).get(chat).map(|run| WorkRuntime {
+        self.inner.runs.lock().get(chat).map(|run| WorkRuntime {
             run_id: run.run_id.clone(),
             message_id: run.work_message_id.clone(),
             provider: run.runtime_config.harness_id,
@@ -50,7 +52,7 @@ impl SessionsEngine {
         // Dispatch and warm steering use this same lane. A later message cannot
         // sneak into a reused native process between the fence and interruption.
         let _transition = self.transition_gate(chat).lock_owned().await;
-        let matches = lock(&self.inner.runs).get(chat).is_some_and(|run| {
+        let matches = self.inner.runs.lock().get(chat).is_some_and(|run| {
             run.run_id == expected.run_id && run.work_message_id == expected.message_id
         });
         let matches = matches && self.task_binding_generation(chat) == expected.binding_generation;
@@ -106,7 +108,8 @@ impl Inner {
     /// (subagent chip) or an active native task. After the root turn's Done
     /// this is background work, whose own requests are real.
     pub(super) fn has_live_native_work(&self, chat: &str, run_id: &str) -> bool {
-        lock(&self.runs)
+        self.runs
+            .lock()
             .get(chat)
             .filter(|run| run.run_id == run_id)
             .is_some_and(|run| !run.work_observations.is_empty())
@@ -120,7 +123,9 @@ impl Inner {
         id: &str,
         active: bool,
     ) {
-        if let Some(run) = lock(&self.runs)
+        if let Some(run) = self
+            .runs
+            .lock()
             .get_mut(chat)
             .filter(|run| run.run_id == run_id)
         {

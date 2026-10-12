@@ -1,7 +1,7 @@
 # CORE-03 engine services and supervised lifetimes
 
-Source before milestone 1: `d81a9d4d`; before milestone 2: `431662b0` (both
-12 October 2026). Live status belongs to `pending_tasks.py`.
+Sources before each milestone: `d81a9d4d` (M1), `431662b0` (M2) and
+`99494ffe` (M3), all 12 October 2026. Live status belongs to `pending_tasks.py`.
 - The failure cases were written first: [failures.md](failures.md).
 - The service, ownership, ordering, cancellation, backpressure and stale-epoch
   rules are in [contract.md](contract.md), with the milestone plan.
@@ -127,6 +127,53 @@ Other effects of the same per-copy composition (failure cases S2–S6):
 | Clippy (`luna-engine`, all targets), rustfmt, `git diff --check` | Exit 0; no finding on a changed line |
 | LUNA Dev refresh | 103 s, PID 30561, IPC 59777, signature verified, `EngineInfo` answered |
 
+## Milestone 3: one run-coordination owner and a host-wide queue freeze
+
+**Defect reproduced on `99494ffe`.** `SessionsEngine::shutdown` interrupted
+every live run and waited for dispatches already in flight, but nothing
+refused a dispatch that *started* after its final sweep. On the baseline, a
+dispatch after `sessions.shutdown()` was admitted and started the provider.
+In the app, this happens when a command is still running after M1's 5-second
+drain and then dispatches its run. That run is never interrupted, and it keeps
+its journal ticket, and so the InstanceLock, past shutdown.
+
+**Change** (`crates/engine`):
+- **New `sessions_runs.rs`:** `RunTable` now owns what were loose
+  `SessionsEngine` fields: the live-run map, the in-flight dispatch count, the
+  per-chat transition gates, and a new closed state.
+  - Every dispatch enters through `enter_dispatch()`. Once the table is
+    closed, a dispatch is refused before any provider I/O.
+  - The count is raised before `closed` is read, and shutdown sets `closed`
+    before reading the count. So either shutdown waits for a dispatch, or the
+    dispatch sees the table closed.
+  - The refusal is a preflight refusal: a claimed queue row is released for
+    review, never marked as an unknown delivery.
+- **`SessionsEngine::shutdown` closes the table first,** then sweeps. About 80
+  lock sites now go through the table.
+- **`DocHost::freeze_queues`** replaces shutdown's `pause_all_queues`. It
+  pauses every open queue, and a document opened afterwards starts paused (the
+  flag is read under the same lock the freeze pauses through).
+  `pause_all_queues` keeps its meaning for the tests that use it as a
+  temporary pause.
+- **Not extracted:** a separate `ProjectionHost` port. Its ordering contracts
+  already have one owner and the CORE-02 keepers; its lifecycle gap was the
+  freeze. See the [contract](contract.md#3-service-ports).
+
+## Milestone 3 evidence
+
+| Check | Result |
+| --- | --- |
+| Keeper `restart_resume::no_provider_run_starts_after_the_shutdown_sweep` (a dispatch before shutdown runs as the control; one after `sessions.shutdown()` must be refused and reach no provider) | Failed on `99494ffe` (the late dispatch was admitted, [log](evidence/m3-keeper-before.txt)); passes after |
+| Mutation M3-R1a: shutdown never closes the table | Keeper red |
+| Mutation M3-R1c: a dispatch skips the closed check | Keeper red |
+| Mutation M3-R1b: close after the sweep | Keeper green, as expected: the window is inside shutdown, so it is enforced by order and review ([mutations](evidence/mutations-m3.json)) |
+| Queue, restart, task-command, recovery, workspace-repair, remote-doc, turn-quiesce, local-profile and task-identity owners | 143 passed, 1 ignored |
+| `luna-engine`, full | 967 passed, 0 failed, 12 ignored (102 binaries) |
+| `luna-ui` lib, run as CI runs it | 1,095 passed |
+| `luna` app tests / `luna-headless` | 31 passed (1 ignored) / 3 passed |
+| Clippy (`luna-engine`, all targets), rustfmt, `git diff --check` | Exit 0; no new finding on a changed line (the one nearby, `too_many_arguments` on `dispatch_inner`, predates this change) |
+| LUNA Dev refresh | 96 s, PID 72271, IPC 59777, signature verified, `EngineInfo` answered |
+
 ## Limitations and next milestones
 
 - **Not proven by a test:** admission closing at the *start* of shutdown (L3)
@@ -143,6 +190,10 @@ Other effects of the same per-copy composition (failure cases S2–S6):
   that a task is *absent* after shutdown would need a sleep.
 - **The five public `assemble_*` entry points remain.** Merging them is API
   churn with no behaviour change; see the contract.
-- **Still to come:**
-  - M3: run coordinator and projection host.
-  - Close-out work in the [contract](contract.md#8-milestones).
+- **M3 by construction:** the queue freeze (R3), and closing the table
+  before the sweep rather than after. Both are inside-shutdown windows that
+  only a sleep could reach.
+- **Handed to other owners** ([contract](contract.md#8-milestones)):
+  - CORE-20: watch cancellation on close, and a bound on provider events.
+  - The future restore-gates owner: `DocsStore` writers behind admitted
+    write-epoch APIs.

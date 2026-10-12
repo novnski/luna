@@ -363,6 +363,14 @@ against the recorded numerical budgets, including accepted trade-offs.
 No “optimized” claim follows solely from fewer files, less Rust code or moving
 memory into another process.
 
+**Inherited from CORE-03** ([contract](core-03/contract.md#8-milestones)):
+- Watch streams of a stopped engine keep serving its last state until the
+  client drops them. Cancelling them on close needs a UI retry/backoff review
+  first.
+- Provider events into the engine are unbounded per run.
+
+Both need measured limits before a bound is chosen.
+
 ## CORE-21 — Verify host, platform and client compatibility
 
 **P1; CORE-05, CORE-08, CORE-12, CORE-14, CORE-19. Owners:** headless/client/RPC,

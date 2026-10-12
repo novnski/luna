@@ -1,0 +1,51 @@
+[
+ {
+  "id": "M3-R1a",
+  "contract": "sessions shutdown closes run admission (removing the close admits a late dispatch)",
+  "files": [
+   "crates/engine/src/sessions.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test restart_resume no_provider_run_starts_after_the_shutdown_sweep",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test no_provider_run_starts_after_the_shutdown_sweep ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 43
+ },
+ {
+  "id": "M3-R1b",
+  "contract": "closing after the sweep only opens an in-shutdown window the keeper cannot reach without timing (enforced by order and review)",
+  "files": [
+   "crates/engine/src/sessions.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test restart_resume no_provider_run_starts_after_the_shutdown_sweep",
+  "exit": 0,
+  "caught": false,
+  "expectCaught": false,
+  "asExpected": true,
+  "failedTests": [],
+  "restored": true,
+  "seconds": 41
+ },
+ {
+  "id": "M3-R1c",
+  "contract": "every dispatch enters through the table's closed check",
+  "files": [
+   "crates/engine/src/sessions_runs.rs"
+  ],
+  "command": "scripts/cargo.sh test --locked -p luna-engine --test restart_resume no_provider_run_starts_after_the_shutdown_sweep",
+  "exit": 101,
+  "caught": true,
+  "expectCaught": true,
+  "asExpected": true,
+  "failedTests": [
+   "test no_provider_run_starts_after_the_shutdown_sweep ... FAILED"
+  ],
+  "restored": true,
+  "seconds": 41
+ }
+]

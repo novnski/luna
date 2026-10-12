@@ -94,8 +94,9 @@ Every writer must keep this order: `InstanceLock` (lifetime), then
 | `CommandAdmission` | `admit() -> AdmittedCommand`, held for the handler and any streamed reply | **Delivered (M1)**, applied in `EngineRpc`'s `RpcService::handle` |
 | Engine-owned services (composition) | `rpc_service()` (local) and the remote transports' one restricted service | **Delivered (M2).** The five public `assemble_*` entry points stay. They differ only in where the lock comes from and in hermetic test seams, and merging them is API churn across about 100 call sites with no behaviour change. Revisit with the CORE-05 SDK. |
 | `Maintenance` (supervisor) | `claim_start() -> WorkerScope` once per engine; `stop(timeout)` cancels and waits; `cancel()` on drop. Workers spawn through `WorkerScope` into one `TaskTracker`. | **Delivered (M2).** Supervises cleanup, child-thread, automation (two producers), Board review, Board lifecycle (plus its runtime watch), the session-history indexer and the copy-isolated backup schedule. |
-| `RunCoordinator` | Run admission, live-run table, interrupt/settle, provider subprocess ownership (extracted from `SessionsEngine`) | M3 |
-| `ProjectionHost` | Queue projection install, command drain, replay cursor and transcript import (extracted from `DocHost`) | M3 |
+| `RunTable` (run coordination) | `enter_dispatch() -> DispatchInFlight` (refused once closed), `lock()` for the live-run map, `close()`, `dispatches_in_flight()`, per-chat transition gates | **Delivered (M3)** in `sessions_runs.rs`. It owns the live-run map, the in-flight count, the transition gates and the closed state that were loose `SessionsEngine` fields. Interrupt and settle stay `SessionsEngine` operations that act through the table. |
+| Queue freeze (projection lifecycle) | `DocHost::freeze_queues()` | **Delivered (M3).** Every queue stays paused from shutdown on, including one whose document opens later. |
+| `ProjectionHost` as a separate port | — | **Not extracted.** The queue projection's ordering contracts (install, replay cursor, transcript import) already have one owner in `DocHost`, with the keepers CORE-02 re-homed. Its lifecycle gap was the freeze above. Moving about 3,000 lines into a new type would add churn without a new contract; the source audit warns that splitting files alone does not remove coupling. |
 
 Each port is an in-process Rust handle; no network hop is added. A domain
 service must be constructible headless from `EngineCore` without the UI.
@@ -114,8 +115,11 @@ stopped engine.
 2. Stop the usage and model caches. Cancel every supervised maintenance task
    and wait up to `MAINTENANCE_STOP` (10 s), logging any still running. Then
    shut previews.
-3. Pause every queue, so settling a run never releases queued work.
-4. Shut down side chats and sessions: interrupt runs, stamp `aborted`.
+3. Freeze every queue (`freeze_queues`), so settling a run never releases
+   queued work, even in a document that opens later.
+4. Shut down side chats, then sessions. Sessions first close run admission
+   (`RunTable::close`), then interrupt every run and wait for in-flight
+   dispatches, stamping `aborted`.
 5. Stop Board discussions, terminals (killing PTYs), agent accounts and change
    requests.
 6. Abort and join the updater wake, then shut down the updater, diff sync,
@@ -133,6 +137,8 @@ epoch, without waiting.
 | Resource | Cancelled by |
 | --- | --- |
 | New RPC commands | `EngineLifetime::close` (M1) |
+| New provider runs | `RunTable::close`, before the sessions sweep (M3). A refused dispatch is a preflight refusal: a claimed queue row is released for review, never marked unknown. |
+| Queued work | `DocHost::freeze_queues` (M3) |
 | Maintenance, the session-history indexer and the backup schedule | `Maintenance::stop`: one token cancels all of them, then a bounded wait on the tracker (M2) |
 | Provider runs and subprocesses | `SessionsEngine::shutdown` interrupt and settle |
 | PTYs | `Terminals::shutdown` |
@@ -168,11 +174,18 @@ command.
 
 1. **M1 (`431662b0`):** lifetime and admission owner; L1/L2 keeper in
    `task_commands`.
-2. **M2 (this change):** two engine-owned services and the maintenance
+2. **M2 (`71f441c8`):** two engine-owned services and the maintenance
    supervisor; engine-scoped registrations; `EngineRpc::new` without side
    effects; S1 keeper in `pane_chat_mcp`.
-3. **M3:** run coordinator and projection host extracted behind the ports
-   above, with E05 restart, identity and race keepers re-run before old paths
-   are deleted.
-4. **Close-out:** watch cancellation on close, the bounded provider event
-   queue, and `DocsStore` writers behind admitted APIs.
+3. **M3 (this change):** the `RunTable` run-coordination owner, with
+   admission closed before the shutdown sweep (R1 keeper in `restart_resume`),
+   and the host-wide queue freeze (R3). The E05 restart, identity, queue and
+   race owners were re-run before the loose fields were deleted.
+4. **Handed to other owners** (not CORE-03 delivery):
+   - **CORE-20** (bounded resource lifetime): cancelling watch streams when an
+     engine closes, which needs the UI retry/backoff review first, and a bound
+     on per-run provider events into the engine. Both need measured limits.
+   - **The future restore-gates owner** (the CORE-02 backup decision):
+     `DocsStore` writers behind admitted write-epoch APIs. The epoch exists
+     for a coordinated backup snapshot, and closing admission plus draining
+     covers shutdown today.

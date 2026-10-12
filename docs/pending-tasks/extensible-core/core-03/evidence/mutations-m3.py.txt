@@ -1,0 +1,62 @@
+"""CORE-03 M3 mutation proofs for the run-table keeper.
+Each file is restored byte-for-byte and verified afterwards."""
+import json, os, subprocess, sys, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+os.chdir(ROOT)
+ENV = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0"}
+CMD = ["scripts/cargo.sh", "test", "--locked", "-p", "luna-engine", "--test", "restart_resume",
+       "no_provider_run_starts_after_the_shutdown_sweep"]
+CLOSE_FIND = "    pub(crate) fn close(&self) {\n        self.inner.lock().open = false;\n    }\n"
+CLOSE_REPL = "    pub(crate) fn close(&self) {}\n"
+LEASE_FIND = "        (lease.epoch.phase() != luna_sync::write_epoch::Phase::Retired)\n            .then_some(DeviceLease { _lease: lease })\n"
+LEASE_REPL = "        Some(DeviceLease { _lease: lease })\n"
+MUTATIONS = [
+    {"id": "M3-R1a", "expect_caught": True,
+     "contract": "sessions shutdown closes run admission (removing the close admits a late dispatch)",
+     "edits": [("crates/engine/src/sessions.rs", '        // No run is admitted from here on, so none can register after the\n        // final sweep below and outlive the engine.\n        self.inner.runs.close();\n        let mut clean = true;\n', "        let mut clean = true;\n")]},
+    {"id": "M3-R1b", "expect_caught": False,
+     "contract": "closing after the sweep only opens an in-shutdown window the keeper cannot reach without timing (enforced by order and review)",
+     "edits": [("crates/engine/src/sessions.rs", '        // No run is admitted from here on, so none can register after the\n        // final sweep below and outlive the engine.\n        self.inner.runs.close();\n        let mut clean = true;\n', "        let mut clean = true;\n"),
+               ("crates/engine/src/sessions.rs", "            }\n        }\n        clean\n    }\n\n    fn is_live(", "            }\n        }\n        self.inner.runs.close();\n        clean\n    }\n\n    fn is_live(")]},
+    {"id": "M3-R1c", "expect_caught": True,
+     "contract": "every dispatch enters through the table's closed check",
+     "edits": [("crates/engine/src/sessions_runs.rs", "        if self.closed.load(Ordering::SeqCst) {\n", "        if false && self.closed.load(Ordering::SeqCst) {\n")]},
+]
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+results = []
+for m in MUTATIONS:
+    originals = {f: Path(f).read_bytes() for f, _, _ in m["edits"]}
+    before = {f: sha(f) for f in originals}
+    ok = True
+    for f, find, repl in m["edits"]:
+        text = Path(f).read_text()
+        if text.count(find) != 1:
+            ok = False
+            results.append({"id": m["id"], "outcome": "anchor-not-unique", "file": f, "count": text.count(find)})
+            break
+        Path(f).write_text(text.replace(find, repl, 1))
+    if not ok:
+        for f, b in originals.items():
+            Path(f).write_bytes(b)
+        continue
+    log = ROOT / f"target/qa/core-03/mutation-{m['id']}.log"
+    started = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(CMD, env=ENV, stdout=out, stderr=subprocess.STDOUT).returncode
+    for f, b in originals.items():
+        Path(f).write_bytes(b)
+    lines = log.read_text().splitlines()
+    failed = [l for l in lines if l.startswith("test ") and l.endswith("FAILED")]
+    caught = code != 0 and bool(failed)
+    results.append({"id": m["id"], "contract": m["contract"], "files": list(originals), "command": " ".join(CMD),
+                    "exit": code, "caught": caught, "expectCaught": m["expect_caught"],
+                    "asExpected": caught == m["expect_caught"], "failedTests": failed,
+                    "restored": all(sha(f) == before[f] for f in originals), "seconds": round(time.time() - started)})
+    print(m["id"], "exit", code, "caught" if caught else "not caught", "(expected)" if caught == m["expect_caught"] else "(UNEXPECTED)", flush=True)
+Path("target/qa/core-03/mutations-m3.json").write_text(json.dumps(results, indent=1) + "\n")
+sys.exit(0 if all(r.get("asExpected") and r.get("restored") for r in results) else 1)

@@ -1,0 +1,4 @@
+test no_provider_run_starts_after_the_shutdown_sweep ... FAILED
+thread 'no_provider_run_starts_after_the_shutdown_sweep' (51402996) panicked at crates/engine/tests/restart_resume.rs:1047:5:
+a run was admitted after the shutdown sweep: Ok("af4c3ae4-7ef1-4371-a02c-ed9fb0aeb138")
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.13s

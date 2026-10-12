@@ -162,5 +162,68 @@
   "exit_code": 0,
   "seconds": 103,
   "note": "PID 30561, IPC 59777 listening, codesign ok, EngineInfo answered"
+ },
+ {
+  "name": "m3-keeper-before",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test restart_resume no_provider_run_starts (on 99494ffe plus the new test)",
+  "exit_code": 101,
+  "log": "target/qa/core-03/m3-before.log"
+ },
+ {
+  "name": "m3-restart-resume-after",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test restart_resume",
+  "exit_code": 0,
+  "result": "8 passed, 1 ignored",
+  "log": "target/qa/core-03/m3-after.log"
+ },
+ {
+  "name": "m3-focused",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --test message_queue --test restart_resume --test task_commands --test recovery --test workspace_repair_authority --test remote_doc_authority --test turn_quiesce --test local_profiles --test task_identity --no-fail-fast",
+  "exit_code": 0,
+  "result": "143 passed, 1 ignored",
+  "log": "target/qa/core-03/m3-focused.log"
+ },
+ {
+  "name": "m3-engine-full",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-engine --no-fail-fast",
+  "exit_code": 0,
+  "result": "967 passed, 0 failed, 12 ignored (102 binaries)",
+  "log": "target/qa/core-03/m3-engine-full.log"
+ },
+ {
+  "name": "m3-mutations",
+  "command": "python3 target/qa/core-03/mutations-m3.py",
+  "exit_code": 0,
+  "result": "R1a caught, R1b not caught (expected), R1c caught; files restored"
+ },
+ {
+  "name": "m3-clippy",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine --all-targets",
+  "exit_code": 0
+ },
+ {
+  "name": "m3-luna-app",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna --tests",
+  "exit_code": 0,
+  "result": "31 passed, 1 ignored"
+ },
+ {
+  "name": "m3-headless",
+  "command": "CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 scripts/cargo.sh test --locked -p luna-headless",
+  "exit_code": 0,
+  "result": "3 passed"
+ },
+ {
+  "name": "m3-ui-lib",
+  "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib -- --test-threads=1",
+  "exit_code": 0,
+  "result": "1095 passed"
+ },
+ {
+  "name": "m3-refresh-luna-dev",
+  "command": "scripts/run-macos-dev.sh --refresh",
+  "exit_code": 0,
+  "seconds": 96,
+  "note": "PID 72271, IPC 59777 listening, codesign ok, EngineInfo answered"
  }
 ]
