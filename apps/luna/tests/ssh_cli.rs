@@ -1,5 +1,8 @@
 //! Actual LUNA CLI over fake system SSH and a copy-isolated guarded RPC engine.
 
+// The fake SSH and remote artifacts are POSIX shell scripts.
+#![cfg(unix)]
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
