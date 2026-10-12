@@ -54,6 +54,7 @@ luna-remote.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
+luna-mobile = { path = "../mobile" }
 tokio-tungstenite.workspace = true
 # secret_input.rs captures the whole run at TRACE to prove no log carries a secret.
 tracing-subscriber.workspace = true

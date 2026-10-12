@@ -19,6 +19,7 @@ pub mod appearance;
 pub mod archived;
 pub mod backup;
 pub mod composer;
+pub mod connections;
 pub mod devices;
 pub mod files;
 pub mod general;
@@ -754,6 +755,8 @@ pub struct UiSettings {
     /// Hold a macOS idle-sleep assertion while any local task is working.
     /// Per-task keep-awake choices remain available when this is disabled.
     pub keep_awake_while_running: bool,
+    /// Separate opt-in for a ready direct host on external power.
+    pub keep_awake_while_hosting: bool,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -972,6 +975,7 @@ impl Default for UiSettings {
             unattended_answer_seconds: DEFAULT_UNATTENDED_ANSWER_SECONDS,
             show_context_usage: true,
             keep_awake_while_running: false,
+            keep_awake_while_hosting: false,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             appshot_destination: crate::appshots::AppshotDestination::Automatic,

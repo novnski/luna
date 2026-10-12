@@ -2,9 +2,10 @@
 
 The current-source comparison and pending migration live in
 [Native iOS parity](../../docs/pending-tasks/ios-parity/README.md). The guide
-below describes the existing edge-backed client. Direct paired-Mac control,
-current host admission and the Rust/native migration have separate pending
-acceptance; a synced command row alone does not certify provider execution.
+below describes the existing edge-backed client and direct paired-Mac setup.
+Paired Macs verifies identity, enrolls and reconnects read-only access. Remote
+task controls and streaming remain later migration work; pairing alone does
+not certify provider execution.
 
 A native SwiftUI viewport onto the luna mesh. The phone is a **peer
 device**: it joins the same Loro CRDT rooms as every other device (workspace
@@ -15,6 +16,10 @@ engine runs on the phone.
 ## Build & run
 
 Requires Xcode 26+ (iOS 26 SDK — Liquid Glass APIs).
+Install Rust and the `aarch64-apple-ios` target for physical devices, or
+`aarch64-apple-ios-sim` (`x86_64-apple-ios` on Intel) for simulators. The Xcode
+build phase runs the repository Cargo wrapper with `--locked`, links the
+shared native core and regenerates its Swift bindings.
 
 ```sh
 cd apps/ios
@@ -45,6 +50,17 @@ The workflow requires an App Store Connect app registered as
 `AC_API_ISSUER_ID` repository secrets.
 
 ### Connecting
+
+- **Paired Mac**: no cloud sign-in is required. Open **Connect to a Mac** from
+  sign-in or **Paired Macs** from the account menu. On the Mac, enable
+  **Settings → Connections → Control this Mac**, choose its LAN address, and
+  select **Add**. Scan or paste the one-use code, review the Mac and read scopes,
+  then confirm. The phone pins the Mac's certificate and verifies its exact
+  profile before spending the code. A saved connection reauthenticates on
+  foreground; the Mac must be awake and reachable on that route.
+  Tokens use app-owned, device-only iOS secure storage without biometric or
+  password prompts. Preferences contain only host metadata. **Forget** removes
+  this phone's saved connection; **Revoke access** on the Mac ends the grant.
 
 - **WorkOS**: configure the owned edge URL and client ID in the bundle, then
   sign in (`/auth/exchange` and `/auth/refresh` use that edge).

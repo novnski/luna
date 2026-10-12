@@ -117,9 +117,9 @@ pub trait ProbeListener: Send + Sync {
     fn on_state(&self, state: ProbeState);
 }
 
-struct Endpoint {
-    url: String,
-    host: String,
+pub(crate) struct Endpoint {
+    pub(crate) url: String,
+    pub(crate) host: String,
 }
 
 struct Inner {
@@ -282,59 +282,19 @@ impl DirectHostProbe {
         body: &[u8],
         route: RouteObservation,
     ) -> ProbeState {
-        let reject = |reason, detail: String| ProbeState::Rejected {
-            reason,
-            detail,
-            route: Some(route.clone()),
-        };
-        if status != 200 {
-            return reject(RejectReason::HttpStatus, format!("HTTP status {status}"));
-        }
-        if body.len() > MAX_DESCRIPTOR_BYTES as usize {
-            return reject(
-                RejectReason::Body,
-                format!("descriptor is larger than {MAX_DESCRIPTOR_BYTES} bytes"),
-            );
-        }
-        let descriptor = match serde_json::from_slice::<RemoteDescriptor>(body) {
-            Ok(descriptor) => descriptor,
-            Err(error) => return reject(RejectReason::Body, format!("descriptor: {error}")),
-        };
-        if descriptor.protocol != REMOTE_DIRECT_V1
-            || !SUPPORTED_CATALOG_VERSIONS.contains(&descriptor.catalog_version)
-        {
-            return reject(
-                RejectReason::UnsupportedVersion,
-                format!(
-                    "protocol {} catalog {}",
-                    descriptor.protocol, descriptor.catalog_version
-                ),
-            );
-        }
-        if descriptor.spki_sha256 != self.ticket.spki_sha256 {
-            return reject(
-                RejectReason::PinMismatch,
-                "descriptor names a different key than the one checked".into(),
-            );
-        }
-        if descriptor.target != self.ticket.target {
-            return reject(
-                RejectReason::TargetMismatch,
-                format!(
-                    "expected device {} environment {}, host is device {} environment {}",
-                    self.ticket.target.device_id,
-                    self.ticket.target.environment_id,
-                    descriptor.target.device_id,
-                    descriptor.target.environment_id
-                ),
-            );
-        }
-        ProbeState::Verified {
-            device_id: descriptor.target.device_id,
-            environment_id: descriptor.target.environment_id,
-            catalog_version: descriptor.catalog_version,
-            url,
-            route,
+        match verify_descriptor(&self.ticket, status, body) {
+            Ok(descriptor) => ProbeState::Verified {
+                device_id: descriptor.target.device_id,
+                environment_id: descriptor.target.environment_id,
+                catalog_version: descriptor.catalog_version,
+                url,
+                route,
+            },
+            Err((reason, detail)) => ProbeState::Rejected {
+                reason,
+                detail,
+                route: Some(route),
+            },
         }
     }
 
@@ -350,7 +310,7 @@ impl DirectHostProbe {
     }
 }
 
-fn parse_ticket(json: &str) -> Result<(HostTicket, Vec<Endpoint>), ProbeError> {
+pub(crate) fn parse_ticket(json: &str) -> Result<(HostTicket, Vec<Endpoint>), ProbeError> {
     let ticket_error = |detail: String| ProbeError::Ticket { detail };
     if json.len() > MAX_TICKET_BYTES {
         return Err(ticket_error(format!(
@@ -408,4 +368,59 @@ fn parse_endpoint(text: &str) -> Result<Endpoint, ProbeError> {
         url: format!("{}{DESCRIPTOR_PATH}", url.origin().ascii_serialization()),
         host,
     })
+}
+
+/// Shared by the harmless M0 probe and the production enrollment preflight.
+pub(crate) fn verify_descriptor(
+    ticket: &HostTicket,
+    status: u16,
+    body: &[u8],
+) -> Result<RemoteDescriptor, (RejectReason, String)> {
+    let reject = |reason, detail| (reason, detail);
+    if status != 200 {
+        return Err(reject(
+            RejectReason::HttpStatus,
+            format!("HTTP status {status}"),
+        ));
+    }
+    if body.len() > MAX_DESCRIPTOR_BYTES as usize {
+        return Err(reject(
+            RejectReason::Body,
+            format!("descriptor is larger than {MAX_DESCRIPTOR_BYTES} bytes"),
+        ));
+    }
+    let descriptor = match serde_json::from_slice::<RemoteDescriptor>(body) {
+        Ok(descriptor) => descriptor,
+        Err(error) => return Err(reject(RejectReason::Body, format!("descriptor: {error}"))),
+    };
+    if descriptor.protocol != REMOTE_DIRECT_V1
+        || !SUPPORTED_CATALOG_VERSIONS.contains(&descriptor.catalog_version)
+    {
+        return Err(reject(
+            RejectReason::UnsupportedVersion,
+            format!(
+                "protocol {} catalog {}",
+                descriptor.protocol, descriptor.catalog_version
+            ),
+        ));
+    }
+    if descriptor.spki_sha256 != ticket.spki_sha256 {
+        return Err(reject(
+            RejectReason::PinMismatch,
+            "descriptor names a different key than the one checked".into(),
+        ));
+    }
+    if descriptor.target != ticket.target {
+        return Err(reject(
+            RejectReason::TargetMismatch,
+            format!(
+                "expected device {} environment {}, host is device {} environment {}",
+                ticket.target.device_id,
+                ticket.target.environment_id,
+                descriptor.target.device_id,
+                descriptor.target.environment_id
+            ),
+        ));
+    }
+    Ok(descriptor)
 }

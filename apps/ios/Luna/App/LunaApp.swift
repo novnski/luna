@@ -22,6 +22,7 @@ struct LunaApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background {
                         model.flushDocs()
+                        model.pairedMacs.backgrounded()
                     } else if phase == .active {
                         // Suspension kills sockets without running any
                         // failure path — without this kick the workspace
@@ -29,6 +30,7 @@ struct LunaApp: App {
                         // views reconnect on open (frozen sidebar/Working
                         // indicators against live transcripts, 2026-08-04).
                         model.foregrounded()
+                        model.pairedMacs.foregrounded()
                     }
                 }
         }
@@ -39,6 +41,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var binding = model
         Group {
             switch model.phase {
             case .signedOut:
@@ -50,5 +53,11 @@ struct RootView: View {
             }
         }
         .task { model.restore() }
+        .sheet(isPresented: $binding.showPairedMacs) { PairedMacsView(model: model.pairedMacs) }
+        .onOpenURL { url in
+            guard url.scheme == "luna", url.host == "pair" else { return }
+            model.pairedMacs.incomingCode = url.absoluteString
+            model.showPairedMacs = true
+        }
     }
 }

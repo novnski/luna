@@ -100,6 +100,10 @@ pub struct AuthenticateRemote {
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
     pub id: String,
+    /// Host-created bootstrap that issued this grant. Optional for old stores;
+    /// labels are never used to correlate authority with the enrollment UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_id: Option<String>,
     pub client_label: String,
     pub scopes: Vec<RemoteScope>,
     pub expires_at_ms: u64,
@@ -345,6 +349,14 @@ impl RemoteAuthStore {
         })
     }
 
+    /// Host disable discards pending bootstrap authority but keeps sessions.
+    pub fn revoke_all_pairings(&self) -> Result<(), RpcError> {
+        self.mutate(|state| {
+            state.pairings.clear();
+            Ok(())
+        })
+    }
+
     pub fn redeem(&self, request: RedeemPairing) -> Result<IssuedSession, RpcError> {
         self.check_target(&request.target)?;
         if request.client_label.trim().is_empty() || request.client_label.len() > 100 {
@@ -368,6 +380,7 @@ impl RemoteAuthStore {
             let pairing = state.pairings.remove(index);
             let view = SessionView {
                 id: uuid::Uuid::new_v4().to_string(),
+                pairing_id: Some(pairing.view.id),
                 client_label: request.client_label,
                 scopes: pairing.view.scopes,
                 expires_at_ms: now.saturating_add(pairing.session_ttl_secs * 1000),

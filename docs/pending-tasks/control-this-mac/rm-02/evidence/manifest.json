@@ -1,0 +1,73 @@
+{
+  "platform": "iOS Simulator; physical QR/preview only",
+  "files": {
+    "mac-power-host-disabled.txt": {
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "bytes": 1
+    },
+    "mac-host-disabled.txt": {
+      "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1",
+      "bytes": 108
+    },
+    "disable-pending-before-fix.log": {
+      "sha256": "0aaa04fc1d874d568051b16fe0687f6760fa3a1796a87cd7de69e962c7c04c87",
+      "bytes": 4787
+    },
+    "clippy-final.log": {
+      "sha256": "2b419c4247a01250e2e266dea0735f273052a350282fadf8d88e3582e7a330a7",
+      "bytes": 73
+    },
+    "native-simulator-final.json": {
+      "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f",
+      "bytes": 883
+    },
+    "mac-qa-refresh-reviewed.log": {
+      "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8",
+      "bytes": 504
+    },
+    "clippy-delivery.txt": {
+      "sha256": "5c32aa1fb08c5f21761cf8b22f6fce61db98a559a3a58a50179334855951b105",
+      "bytes": 81
+    },
+    "contract-isolated-final.log": {
+      "sha256": "dbad515b0bb79851bf07925a19b8175da0147c7416482ef6cdcfb9072be07873",
+      "bytes": 168
+    },
+    "rustfmt-final.log": {
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "bytes": 1
+    },
+    "mac-pairing-cancel-verified.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "native-xctest-result.json": {
+      "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2",
+      "bytes": 1133
+    },
+    "native-simulator-first-pass.json": {
+      "sha256": "76b9035166b23c8745c8d3d1de27f90b5b5775cdb7aaf9d29714da5bde1675d0",
+      "bytes": 632
+    },
+    "mac-power-enabled.txt": {
+      "sha256": "85ab8169975128d68a3db4aa8d6f86493ceb1da0b4d954e05ac971bcf8721ac1",
+      "bytes": 115
+    },
+    "mac-pairing-before-cancel.txt": {
+      "sha256": "afb9f9efc19043c4a439ed3d4434c10e617ae749dae7e28727766f3e88d4b2a2",
+      "bytes": 97
+    },
+    "queue-validation.json": {
+      "sha256": "2c554df6fb8bd43541268945b62c7637d5488f41caf91110de3941afb99df04a",
+      "bytes": 153
+    },
+    "engine-remote-e2e-final.log": {
+      "sha256": "91a36a608933799baa6ab19c47429831fd09a1b99395af4d99b61957c544d78c",
+      "bytes": 4739
+    },
+    "final-rust-checks.log": {
+      "sha256": "5fd6c479c16b54fc8993ac1fedabfa18e9d7e491d1c1557bf4c1b55357d68e03",
+      "bytes": 722
+    }
+  }
+}

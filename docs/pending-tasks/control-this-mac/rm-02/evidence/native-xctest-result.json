@@ -1,0 +1,36 @@
+{
+  "schema": "xcodebuildmcp.output.test-result",
+  "schemaVersion": "3",
+  "didError": false,
+  "error": null,
+  "data": {
+    "summary": {
+      "status": "SUCCEEDED",
+      "durationMs": 114824,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "target": "simulator"
+    },
+    "artifacts": {
+      "buildLogPath": "~/Library/Developer/XcodeBuildMCP/workspaces/luna-4b288a70181f/logs/test_sim_2026-10-12T19-15-32-482Z_pid26491_db092d3e.log",
+      "xcresultPath": "~/Library/Developer/XcodeBuildMCP/workspaces/luna-4b288a70181f/result-bundles/test_sim_2026-10-12T19-15-32-482Z_pid26491_b49c3e2b.xcresult",
+      "testProductsPath": "~/Library/Developer/XcodeBuildMCP/workspaces/luna-4b288a70181f/test-products/build_sim_2026-10-12T19-13-33-061Z_pid26491_cccc2f68.xctestproducts"
+    },
+    "diagnostics": {
+      "warnings": [],
+      "errors": [],
+      "testFailures": []
+    },
+    "testCases": [
+      {
+        "suite": "RemotePairingUITests",
+        "test": "testManualPairingRestartAndLocalForget",
+        "status": "passed",
+        "durationMs": 111507
+      }
+    ]
+  }
+}

@@ -110,6 +110,8 @@ struct HomeView: View {
                         if model.demo != nil {
                             Text("Demo mode")
                         }
+                        Button("Paired Macs") { model.showPairedMacs = true }
+                            .accessibilityIdentifier("remote.open")
                         Button("Sign out", role: .destructive) { model.signOut() }
                     } label: {
                         Image(systemName: "person.circle")

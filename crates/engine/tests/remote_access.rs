@@ -832,6 +832,17 @@ mod gateway {
             .await
             .expect("revoke leaves local work available");
 
+        // RM-02 D2: disabling invalidates unspent bootstraps, while an
+        // already paired, unrevoked session remains eligible after re-enable.
+        let pending: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label":"pending", "scopes":["environment-read"],
+                "pairingTtlSecs":300,"sessionTtlSecs":3600}),
+            )
+            .await
+            .unwrap();
+
         let status = local
             .call("SetRemoteAccess", json!({"enabled": false}))
             .await
@@ -857,6 +868,9 @@ mod gateway {
         );
 
         let again = enable(&local, &bind).await;
+        let (refused, _) = post(&http, &bind, "/remote/v1/pair", None,
+            &json!({"target":pending.target,"credential":pending.credential,"clientLabel":"pending"})).await;
+        assert_eq!(refused, 403, "disable invalidates pending pairing codes");
         assert_eq!(
             again["spkiSha256"], pin,
             "the identity, and so the pin, is stable"
@@ -937,5 +951,435 @@ mod gateway {
             assert_eq!(code, expected, "{}", session.session.client_label);
         }
         reopened.shutdown().await;
+    }
+
+    /// RM-02 P1–P4/P7: the portable enrollment owner drives the real pinned
+    /// gateway, waits for platform persistence, then authenticates. This is
+    /// transport/core proof; physical Keychain and UI have their own campaign.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enrollment_preflights_identity_before_spending_a_code_and_commits_only_after_storage()
+    {
+        use luna_mobile::pairing::{Enrollment, EnrollmentAction};
+        use luna_proto::remote_control::{HostTicket, PairingTicket};
+
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble(root.path());
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let status = enable(&local, &bind).await;
+        if firewalled(&bind).await {
+            shutdown(core).await;
+            return;
+        }
+        let pin = status["spkiSha256"].as_str().unwrap();
+        let http = http(pin);
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": "enrollment", "scopes": ["environment-read", "tasks-read"],
+                "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let ticket = PairingTicket {
+            version: 1,
+            host_name: Some("Verification Mac".into()),
+            host: HostTicket {
+                version: 1,
+                target: issued.target.clone(),
+                endpoints: vec![format!("https://{bind}")],
+                spki_sha256: pin.into(),
+            },
+            pairing_id: issued.pairing.id.clone(),
+            credential: issued.credential.clone(),
+            expires_at_ms: issued.pairing.expires_at_ms,
+            scopes: vec!["environment-read".into(), "tasks-read".into()],
+        };
+        let route = luna_mobile::probe::RouteObservation {
+            remote_address: Some(bind.clone()),
+            local_address: None,
+            interface: "other".into(),
+            proxied: false,
+            tls_version: Some("TLSv1.3".into()),
+        };
+        let enrollment = Enrollment::new(ticket.encode().unwrap()).unwrap();
+        let EnrollmentAction::Request { request: first } = enrollment.start(0, "phone".into())
+        else {
+            panic!("a confirmation starts descriptor preflight")
+        };
+        assert_eq!(first.method, "GET");
+        assert!(
+            first.body.is_empty() && first.authorization.is_none(),
+            "the descriptor carries no credential"
+        );
+        let descriptor = http
+            .get(&first.url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let mut wrong: Value = serde_json::from_slice(&descriptor).unwrap();
+        wrong["target"]["environmentId"] = json!("foreign-profile");
+        assert!(matches!(
+            enrollment.complete(
+                first.request_id,
+                200,
+                serde_json::to_vec(&wrong).unwrap(),
+                route.clone()
+            ),
+            EnrollmentAction::Rejected { .. }
+        ));
+        let pending: Vec<luna_rpc::remote_auth::PairingView> = local
+            .call_as(methods::LIST_REMOTE_PAIRINGS, json!({}))
+            .await
+            .unwrap();
+        assert!(
+            pending.iter().any(|row| row.id == issued.pairing.id),
+            "wrong-target preflight never spends the code"
+        );
+
+        let EnrollmentAction::Request { request: first } = enrollment.start(0, "phone".into())
+        else {
+            panic!("a new confirmed preflight may recover before redemption")
+        };
+        let EnrollmentAction::Request { request: redeem } =
+            enrollment.complete(first.request_id, 200, descriptor.to_vec(), route.clone())
+        else {
+            panic!("exact pinned descriptor permits redemption")
+        };
+        assert_eq!(redeem.method, "POST");
+        assert!(
+            !redeem.url.contains(&issued.credential),
+            "secrets are never in HTTP URLs"
+        );
+        let response = http
+            .post(&redeem.url)
+            .body(redeem.body.clone())
+            .header("content-type", "application/json")
+            .send()
+            .await
+            .unwrap();
+        let EnrollmentAction::Save { request_id, mac } = enrollment.complete(
+            redeem.request_id,
+            response.status().as_u16(),
+            response.bytes().await.unwrap().to_vec(),
+            route.clone(),
+        ) else {
+            panic!("the issued session must be saved before authentication")
+        };
+        assert!(
+            matches!(
+                enrollment.persisted(request_id + 1, true),
+                EnrollmentAction::Ignore
+            ),
+            "a stale persistence callback cannot commit this session"
+        );
+        let restored = Enrollment::restore(mac.clone()).unwrap();
+        let EnrollmentAction::Request { request: check } = enrollment.persisted(request_id, true)
+        else {
+            panic!("only successful platform storage permits authenticated readback")
+        };
+        let response = http
+            .post(&check.url)
+            .body(check.body)
+            .header("content-type", "application/json")
+            .header("authorization", check.authorization.unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert!(matches!(
+            enrollment.complete(
+                check.request_id,
+                response.status().as_u16(),
+                response.bytes().await.unwrap().to_vec(),
+                route.clone()
+            ),
+            EnrollmentAction::Connected { .. }
+        ));
+        assert!(
+            matches!(
+                enrollment.complete(redeem.request_id, 200, vec![], route.clone()),
+                EnrollmentAction::Ignore
+            ),
+            "a late redemption cannot change connected state"
+        );
+        local
+            .call(
+                methods::REVOKE_REMOTE_SESSION,
+                json!({"id": mac.session_id}),
+            )
+            .await
+            .unwrap();
+        let EnrollmentAction::Request { request: preflight } = restored.start(0, "phone".into())
+        else {
+            panic!("restart validates the same pinned host before reconnecting")
+        };
+        let EnrollmentAction::Request { request: check } = restored.complete(
+            preflight.request_id,
+            200,
+            descriptor.to_vec(),
+            route.clone(),
+        ) else {
+            panic!("restart authenticates the saved session")
+        };
+        let response = http
+            .post(&check.url)
+            .body(check.body)
+            .header("content-type", "application/json")
+            .header("authorization", check.authorization.unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert!(matches!(
+            restored.complete(
+                check.request_id,
+                response.status().as_u16(),
+                response.bytes().await.unwrap().to_vec(),
+                route.clone()
+            ),
+            EnrollmentAction::RePair { .. }
+        ));
+        // P4: each fault follows a real successful, one-use host redemption.
+        // These are controlled platform callbacks, not physical OS refusal.
+        for fault in [
+            "lost-reply",
+            "oversized-reply",
+            "storage-refusal",
+            "cancel-save",
+        ] {
+            let issued: IssuedPairing = local
+                .call_as(
+                    methods::CREATE_REMOTE_PAIRING,
+                    json!({"label":fault,"scopes":["environment-read","tasks-read"],
+                    "pairingTtlSecs":300,"sessionTtlSecs":3600}),
+                )
+                .await
+                .unwrap();
+            let ticket = PairingTicket {
+                pairing_id: issued.pairing.id,
+                credential: issued.credential,
+                expires_at_ms: issued.pairing.expires_at_ms,
+                ..ticket.clone()
+            };
+            let owner = Enrollment::new(ticket.encode().unwrap()).unwrap();
+            let EnrollmentAction::Request { request: preflight } = owner.start(0, fault.into())
+            else {
+                panic!("confirmed preflight")
+            };
+            let body = http
+                .get(preflight.url)
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let EnrollmentAction::Request { request: redeem } =
+                owner.complete(preflight.request_id, 200, body.to_vec(), route.clone())
+            else {
+                panic!("verified redemption")
+            };
+            let response = http
+                .post(redeem.url)
+                .header("content-type", "application/json")
+                .body(redeem.body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let body = response.bytes().await.unwrap().to_vec();
+            let session: Value = serde_json::from_slice(&body).unwrap();
+            match fault {
+                "lost-reply" => assert!(matches!(
+                    owner.fail(
+                        redeem.request_id,
+                        luna_mobile::probe::TransportFailure::Network {
+                            detail: "controlled lost response".into()
+                        }
+                    ),
+                    EnrollmentAction::Uncertain { .. }
+                )),
+                "oversized-reply" => assert!(matches!(
+                    owner.complete(
+                        redeem.request_id,
+                        200,
+                        vec![b'x'; 16 * 1024 + 1],
+                        route.clone()
+                    ),
+                    EnrollmentAction::Uncertain { .. }
+                )),
+                _ => {
+                    let EnrollmentAction::Save { request_id, .. } =
+                        owner.complete(redeem.request_id, 200, body, route.clone())
+                    else {
+                        panic!("storage is required")
+                    };
+                    if fault == "cancel-save" {
+                        owner.cancel();
+                        assert!(matches!(
+                            owner.persisted(request_id, true),
+                            EnrollmentAction::Ignore
+                        ));
+                    } else {
+                        assert!(matches!(
+                            owner.persisted(request_id, false),
+                            EnrollmentAction::RePair { .. }
+                        ));
+                    }
+                }
+            }
+            assert!(
+                !owner.retry_available(),
+                "a spent code cannot silently retry: {fault}"
+            );
+            let sessions: Vec<SessionView> = local
+                .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+                .await
+                .unwrap();
+            let row = sessions
+                .iter()
+                .find(|row| row.id == session["id"].as_str().unwrap())
+                .unwrap();
+            assert!(
+                row.last_used_at_ms.is_none(),
+                "failed enrollment never authenticates: {fault}"
+            );
+            local
+                .call(methods::REVOKE_REMOTE_SESSION, json!({"id":row.id}))
+                .await
+                .unwrap();
+        }
+        // Optional native extension of this same real gateway owner. A
+        // prebuilt XCTest runner consumes private fixtures and writes public
+        // observations. No app launch argument or production QA seam is used.
+        if let Some(path) = std::env::var_os("LUNA_NATIVE_PAIRING_FIXTURE") {
+            use std::os::unix::fs::PermissionsExt;
+            let fixture = PathBuf::from(path);
+            assert_eq!(fixture.file_name().unwrap(), "rm02-pairing.json");
+            assert!(!fixture.exists(), "refuse a stale native fixture");
+            let native: IssuedPairing = local
+                .call_as(
+                    methods::CREATE_REMOTE_PAIRING,
+                    json!({"label":"native UI","scopes":["environment-read","tasks-read"],
+                    "pairingTtlSecs":300,"sessionTtlSecs":3600}),
+                )
+                .await
+                .unwrap();
+            let native_id = native.pairing.id.clone();
+            let first = PairingTicket {
+                host_name: Some("RM02 QA first Mac".into()),
+                pairing_id: native.pairing.id,
+                credential: native.credential,
+                expires_at_ms: native.pairing.expires_at_ms,
+                ..ticket.clone()
+            };
+            let second_root = tempfile::tempdir().unwrap();
+            let second_core = assemble(second_root.path());
+            let second_local = luna_rpc::memory_client(second_core.rpc_service());
+            let second_bind = free_bind();
+            let second_status = enable(&second_local, &second_bind).await;
+            let native: IssuedPairing = second_local
+                .call_as(
+                    methods::CREATE_REMOTE_PAIRING,
+                    json!({"label":"native UI","scopes":["environment-read","tasks-read"],
+                    "pairingTtlSecs":300,"sessionTtlSecs":3600}),
+                )
+                .await
+                .unwrap();
+            let second_id = native.pairing.id.clone();
+            let second = PairingTicket {
+                host_name: Some("RM02 QA second Mac".into()),
+                host: HostTicket {
+                    target: native.target,
+                    endpoints: vec![format!("https://{second_bind}")],
+                    spki_sha256: second_status["spkiSha256"].as_str().unwrap().into(),
+                    version: 1,
+                },
+                pairing_id: native.pairing.id,
+                credential: native.credential,
+                expires_at_ms: native.pairing.expires_at_ms,
+                scopes: first.scopes.clone(),
+                version: 1,
+            };
+            let mut wrong_pin = first.clone();
+            wrong_pin.host.spki_sha256 = second.host.spki_sha256.clone();
+            let mut wrong_profile = first.clone();
+            wrong_profile.host.endpoints = second.host.endpoints.clone();
+            wrong_profile.host.spki_sha256 = second.host.spki_sha256.clone();
+            std::fs::write(&fixture, serde_json::to_vec(&json!({"code":first.encode().unwrap(),
+                    "name":first.host_name, "secondCode":second.encode().unwrap(), "secondName":second.host_name,
+                    "wrongPinCode":wrong_pin.encode().unwrap(),"wrongProfileCode":wrong_profile.encode().unwrap()})).unwrap()).unwrap();
+            std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let directory = fixture.parent().unwrap();
+            wait_native_file(&directory.join("rm02-revoke-ready.json")).await;
+            let a: Vec<SessionView> = local
+                .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+                .await
+                .unwrap();
+            let first_session = a
+                .iter()
+                .find(|row| row.pairing_id.as_deref() == Some(&native_id))
+                .unwrap();
+            assert!(
+                !first_session.revoked && first_session.last_used_at_ms.is_some(),
+                "native Forget preserved server authority"
+            );
+            let b: Vec<SessionView> = second_local
+                .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+                .await
+                .unwrap();
+            let second_session = b
+                .iter()
+                .find(|row| row.pairing_id.as_deref() == Some(&second_id))
+                .unwrap();
+            assert!(
+                second_session.last_used_at_ms.is_some(),
+                "the other native host remains authenticated"
+            );
+            second_local
+                .call(
+                    methods::REVOKE_REMOTE_SESSION,
+                    json!({"id":second_session.id}),
+                )
+                .await
+                .unwrap();
+            std::fs::write(directory.join("rm02-revoked.json"), b"{}").unwrap();
+            let result = directory.join("rm02-native-result.json");
+            wait_native_file(&result).await;
+            let result: Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+            for field in [
+                "paired",
+                "restored",
+                "forgotten",
+                "cameraFallback",
+                "forgetPreservedOtherHost",
+                "revokedDenied",
+                "wrongPinRejected",
+                "wrongProfileRejected",
+            ] {
+                assert_eq!(result[field], true, "native observation missing: {field}");
+            }
+            local
+                .call(
+                    methods::REVOKE_REMOTE_SESSION,
+                    json!({"id":first_session.id}),
+                )
+                .await
+                .unwrap();
+            shutdown(second_core).await;
+        }
+        shutdown(core).await;
+    }
+
+    async fn wait_native_file(path: &Path) {
+        tokio::time::timeout(Duration::from_secs(360), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("native UI did not deliver its observation; inspect the XCTest artifact");
     }
 }

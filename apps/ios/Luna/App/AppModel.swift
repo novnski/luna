@@ -17,6 +17,8 @@ final class AppModel {
         case ready
     }
 
+    let pairedMacs = PairedMacsModel()
+    var showPairedMacs = false
     var phase: Phase = .signedOut
     var workspace: WorkspaceStore?
     var demo: DemoDataset?

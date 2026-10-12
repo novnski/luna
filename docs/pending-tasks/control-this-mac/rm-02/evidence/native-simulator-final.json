@@ -1,0 +1,42 @@
+{
+  "platform": "iOS Simulator",
+  "simulator": "73E59BF6-8AAF-4436-8628-A9A4BE4FFEB6",
+  "hostExitCode": 0,
+  "durationSeconds": 172.17,
+  "nativeObservations": {
+    "name": "RM02 QA first Mac",
+    "paired": true,
+    "wrongProfileRejected": true,
+    "restored": true,
+    "forgetPreservedOtherHost": true,
+    "cameraFallback": true,
+    "wrongPinRejected": true,
+    "forgotten": true,
+    "revokedDenied": true
+  },
+  "preferences": [
+    {
+      "savedHosts": [],
+      "secretFieldsInPreferences": []
+    },
+    {
+      "savedHosts": [
+        "RM02 QA first Mac"
+      ],
+      "secretFieldsInPreferences": []
+    },
+    {
+      "savedHosts": [
+        "RM02 QA first Mac",
+        "RM02 QA second Mac"
+      ],
+      "secretFieldsInPreferences": []
+    },
+    {
+      "savedHosts": [
+        "RM02 QA second Mac"
+      ],
+      "secretFieldsInPreferences": []
+    }
+  ]
+}

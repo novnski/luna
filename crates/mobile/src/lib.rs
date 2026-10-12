@@ -7,4 +7,5 @@
 
 uniffi::setup_scaffolding!("luna_core");
 
+pub mod pairing;
 pub mod probe;
