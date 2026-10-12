@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791794076.6419032,
+  "created_at": 1791805123.11032,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 13,
+      "done": 14,
       "in_progress": 0,
-      "paused": 1,
+      "paused": 0,
       "ready": 66,
       "review": 0
     },
@@ -58,11 +58,11 @@
         },
         "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 3,
-        "remaining": 21,
-        "accepted_units": 13,
+        "done": 4,
+        "remaining": 20,
+        "accepted_units": 16,
         "total_units": 96,
-        "acceptance_percent": 13.5,
+        "acceptance_percent": 16.7,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -373,16 +373,20 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 8,
-      "remaining": 68,
-      "accepted_units": 32,
+      "done": 9,
+      "remaining": 67,
+      "accepted_units": 35,
       "total_units": 296,
-      "acceptance_percent": 10.8
+      "acceptance_percent": 11.8
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-03",
+      "RM-01",
+      "CORE-04",
+      "CORE-05",
       "IC-0",
+      "ZI-01",
+      "CORE-06",
       "ZI-03",
       "ZI-04"
     ]
@@ -2212,7 +2216,7 @@
       "updated_at": 1791760996.506337
     },
     {
-      "attempts": 2,
+      "attempts": 3,
       "blocker": null,
       "checks": {
         "contract": {
@@ -2232,26 +2236,82 @@
             }
           ],
           "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+        },
+        "delivery": {
+          "at": 1791805122.733442,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+              "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+              "sha256": "805f0770569c04a866acf330079ef7c4e3d6ba5d928e73d9ab12bbdef5ce4b4f"
+            }
+          ],
+          "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3."
+        },
+        "handoff": {
+          "at": 1791805122.92918,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/evidence/sha256.json",
+              "sha256": "06a4494b319dc6f72d56c77d96d66886d1cafb0fe30a4c71fe1466fba02608be"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+              "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+            }
+          ],
+          "note": "Focused and full builds/E2E, Clippy, rustfmt and diff checks done per milestone; 65 hashed artifacts and limitations retained; LUNA Dev refreshed and verified after each runtime change (M3: PID 72271, IPC 59777, codesign ok); origin/main at 3d751030 includes all three milestones. Watch cancellation and provider-event bounds handed to CORE-20; DocsStore admitted writers to the restore-gates owner."
+        },
+        "verification": {
+          "at": 1791805122.832635,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/evidence/commands.json",
+              "sha256": "caab144d12ace8e45b947bd4b9eb9a6260301800638934ea7b23dda4f0818c62"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations.json",
+              "sha256": "b7fdec9f8e39d805c03ecd7ce33a0f45d289918d9fd0985bc84cc3688d13a219"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m2.json",
+              "sha256": "b38d63794408606d94e836066c4395ec5245bf06de9e7f13f475b426dabb4b4e"
+            },
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m3.json",
+              "sha256": "97c521e1e7bad27e392820b5b01f900c29eab10dc99c4eaf9221a6b0f66d666d"
+            }
+          ],
+          "note": "E05 owners pass through the public boundary before the old paths were removed: task_commands, chat_workbench, local_profiles, restart_resume, recovery, message_queue, task_identity, workspace_repair_authority, remote_doc_authority, turn_quiesce, pane_chat_mcp; full luna-engine 967 passed/0 failed. Keepers L1/L2 (stopped-engine ledger), S1 (agent tools vs build order) and R1 (run after shutdown sweep) each failed on the baseline and are guarded by mutation proofs; the reopen keeper reads back the store and the InstanceLock."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+          "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+        }
+      ],
       "id": "CORE-03",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791794069.026239,
-        "expires_at": 1791801269.026239,
-        "heartbeat_at": 1791794069.026239,
+        "claimed_at": 1791803291.099927,
+        "expires_at": 1791808722.633325,
+        "heartbeat_at": 1791805122.633325,
         "owner": "claude-code-opus-5.5",
         "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
       },
-      "note": "M1 (431662b0: engine lifetime/command admission; stale-engine ledger loss fixed) and M2 (71f441c8: one local + one restricted remote EngineRpc per engine, maintenance supervisor; agent workspace tools no longer lost when a remote service is built later) are delivered with evidence in docs/pending-tasks/extensible-core/core-03/. Contract criterion checked. Next: M3 per contract.md sections 3 and 8 - extract RunCoordinator from SessionsEngine and ProjectionHost from DocHost behind in-process ports, re-run the E05 owners (task_commands, task_identity, local_profiles, restart_resume, recovery, device_routing) before deleting old paths; then the close-out items (watch cancellation on close, bounded provider event queue, DocsStore writers behind admitted APIs). Resume by reading README.md, contract.md and failures.md there.",
+      "note": "CORE-03 delivered in three milestones (431662b0, 71f441c8, e11f1117) with verified origin/main; remaining resource-lifetime items handed to CORE-20",
       "recovery_evidence": [
         {
           "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
           "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791794076.549945
+      "status": "done",
+      "updated_at": 1791805123.020137
     }
   ],
   "events": [
@@ -8039,6 +8099,437 @@
           "claimed_at": 1791794069.026239,
           "expires_at": 1791801269.026239,
           "heartbeat_at": 1791794069.026239,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 224,
+      "task": "CORE-03",
+      "at": 1791803291.100044,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "M1 (431662b0: engine lifetime/command admission; stale-engine ledger loss fixed) and M2 (71f441c8: one local + one restricted remote EngineRpc per engine, maintenance supervisor; agent workspace tools no longer lost when a remote service is built later) are delivered with evidence in docs/pending-tasks/extensible-core/core-03/. Contract criterion checked. Next: M3 per contract.md sections 3 and 8 - extract RunCoordinator from SessionsEngine and ProjectionHost from DocHost behind in-process ports, re-run the E05 owners (task_commands, task_identity, local_profiles, restart_resume, recovery, device_routing) before deleting old paths; then the close-out items (watch cancellation on close, bounded provider event queue, DocsStore writers behind admitted APIs). Resume by reading README.md, contract.md and failures.md there.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expired": false,
+          "expires_at": 1791810491.099927,
+          "heartbeat_at": 1791803291.099927,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 225,
+      "task": "CORE-03",
+      "at": 1791805122.633434,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "M1 (431662b0: engine lifetime/command admission; stale-engine ledger loss fixed) and M2 (71f441c8: one local + one restricted remote EngineRpc per engine, maintenance supervisor; agent workspace tools no longer lost when a remote service is built later) are delivered with evidence in docs/pending-tasks/extensible-core/core-03/. Contract criterion checked. Next: M3 per contract.md sections 3 and 8 - extract RunCoordinator from SessionsEngine and ProjectionHost from DocHost behind in-process ports, re-run the E05 owners (task_commands, task_identity, local_profiles, restart_resume, recovery, device_routing) before deleting old paths; then the close-out items (watch cancellation on close, bounded provider event queue, DocsStore writers behind admitted APIs). Resume by reading README.md, contract.md and failures.md there.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expired": false,
+          "expires_at": 1791808722.633325,
+          "heartbeat_at": 1791805122.633325,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 226,
+      "task": "CORE-03",
+      "at": 1791805122.733696,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          },
+          "delivery": {
+            "at": 1791805122.733442,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "805f0770569c04a866acf330079ef7c4e3d6ba5d928e73d9ab12bbdef5ce4b4f"
+              }
+            ],
+            "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expired": false,
+          "expires_at": 1791808722.633325,
+          "heartbeat_at": 1791805122.633325,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 227,
+      "task": "CORE-03",
+      "at": 1791805122.832992,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          },
+          "delivery": {
+            "at": 1791805122.733442,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "805f0770569c04a866acf330079ef7c4e3d6ba5d928e73d9ab12bbdef5ce4b4f"
+              }
+            ],
+            "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3."
+          },
+          "verification": {
+            "at": 1791805122.832635,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/commands.json",
+                "sha256": "caab144d12ace8e45b947bd4b9eb9a6260301800638934ea7b23dda4f0818c62"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations.json",
+                "sha256": "b7fdec9f8e39d805c03ecd7ce33a0f45d289918d9fd0985bc84cc3688d13a219"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m2.json",
+                "sha256": "b38d63794408606d94e836066c4395ec5245bf06de9e7f13f475b426dabb4b4e"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m3.json",
+                "sha256": "97c521e1e7bad27e392820b5b01f900c29eab10dc99c4eaf9221a6b0f66d666d"
+              }
+            ],
+            "note": "E05 owners pass through the public boundary before the old paths were removed: task_commands, chat_workbench, local_profiles, restart_resume, recovery, message_queue, task_identity, workspace_repair_authority, remote_doc_authority, turn_quiesce, pane_chat_mcp; full luna-engine 967 passed/0 failed. Keepers L1/L2 (stopped-engine ledger), S1 (agent tools vs build order) and R1 (run after shutdown sweep) each failed on the baseline and are guarded by mutation proofs; the reopen keeper reads back the store and the InstanceLock."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "E05 owners pass through the public boundary before the old paths were removed: task_commands, chat_workbench, local_profiles, restart_resume, recovery, message_queue, task_identity, workspace_repair_authority, remote_doc_authority, turn_quiesce, pane_chat_mcp; full luna-engine 967 passed/0 failed. Keepers L1/L2 (stopped-engine ledger), S1 (agent tools vs build order) and R1 (run after shutdown sweep) each failed on the baseline and are guarded by mutation proofs; the reopen keeper reads back the store and the InstanceLock.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expired": false,
+          "expires_at": 1791808722.633325,
+          "heartbeat_at": 1791805122.633325,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 228,
+      "task": "CORE-03",
+      "at": 1791805122.929386,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          },
+          "delivery": {
+            "at": 1791805122.733442,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "805f0770569c04a866acf330079ef7c4e3d6ba5d928e73d9ab12bbdef5ce4b4f"
+              }
+            ],
+            "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3."
+          },
+          "handoff": {
+            "at": 1791805122.92918,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/sha256.json",
+                "sha256": "06a4494b319dc6f72d56c77d96d66886d1cafb0fe30a4c71fe1466fba02608be"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              }
+            ],
+            "note": "Focused and full builds/E2E, Clippy, rustfmt and diff checks done per milestone; 65 hashed artifacts and limitations retained; LUNA Dev refreshed and verified after each runtime change (M3: PID 72271, IPC 59777, codesign ok); origin/main at 3d751030 includes all three milestones. Watch cancellation and provider-event bounds handed to CORE-20; DocsStore admitted writers to the restore-gates owner."
+          },
+          "verification": {
+            "at": 1791805122.832635,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/commands.json",
+                "sha256": "caab144d12ace8e45b947bd4b9eb9a6260301800638934ea7b23dda4f0818c62"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations.json",
+                "sha256": "b7fdec9f8e39d805c03ecd7ce33a0f45d289918d9fd0985bc84cc3688d13a219"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m2.json",
+                "sha256": "b38d63794408606d94e836066c4395ec5245bf06de9e7f13f475b426dabb4b4e"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m3.json",
+                "sha256": "97c521e1e7bad27e392820b5b01f900c29eab10dc99c4eaf9221a6b0f66d666d"
+              }
+            ],
+            "note": "E05 owners pass through the public boundary before the old paths were removed: task_commands, chat_workbench, local_profiles, restart_resume, recovery, message_queue, task_identity, workspace_repair_authority, remote_doc_authority, turn_quiesce, pane_chat_mcp; full luna-engine 967 passed/0 failed. Keepers L1/L2 (stopped-engine ledger), S1 (agent tools vs build order) and R1 (run after shutdown sweep) each failed on the baseline and are guarded by mutation proofs; the reopen keeper reads back the store and the InstanceLock."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "c4e5bb696da824d25047e447bd74ea1dd9c2224a78a381514c574c805f167ab7"
+          }
+        ],
+        "note": "Focused and full builds/E2E, Clippy, rustfmt and diff checks done per milestone; 65 hashed artifacts and limitations retained; LUNA Dev refreshed and verified after each runtime change (M3: PID 72271, IPC 59777, codesign ok); origin/main at 3d751030 includes all three milestones. Watch cancellation and provider-event bounds handed to CORE-20; DocsStore admitted writers to the restore-gates owner.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expired": false,
+          "expires_at": 1791808722.633325,
+          "heartbeat_at": 1791805122.633325,
+          "owner": "claude-code-opus-5.5",
+          "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
+        }
+      }
+    },
+    {
+      "seq": 229,
+      "task": "CORE-03",
+      "at": 1791805123.0202172,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791767767.294622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "b7ec5c362d13dba705b4906f393d4a7b7ae2e932cf8f41b39e261ee0d43450c6"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/failures.md",
+                "sha256": "1ef50054c61f2ef7c6be9dfbf7ce42efd1046d2120b8cfd36a1754b9ff96d816"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "106288a0f448579967a5004a88bbba053cea15eaa069027547edb88b3e999c1c"
+              }
+            ],
+            "note": "Contract written before extraction: current composition, write/instance ownership, service ports (M1 delivered, M2/M3 specified), start/stop order, cancellation, backpressure and stale-epoch behaviour; failure cases first (L1-L7). Milestone 1 delivered in 431662b0"
+          },
+          "delivery": {
+            "at": 1791805122.733442,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/contract.md",
+                "sha256": "805f0770569c04a866acf330079ef7c4e3d6ba5d928e73d9ab12bbdef5ce4b4f"
+              }
+            ],
+            "note": "Bounded owners extracted: EngineLifetime/CommandAdmission (EngineCore+RPC, M1 431662b0); one local and one restricted remote EngineRpc per engine plus the Maintenance supervisor (M2 71f441c8); RunTable owning live runs, in-flight dispatches, transition gates and run admission, and the host-wide DocHost queue freeze (M3 e11f1117). Receipts, native identity, journaling and in-process paths unchanged (full suites green). ProjectionHost not split: recorded decision in contract section 3."
+          },
+          "handoff": {
+            "at": 1791805122.92918,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/sha256.json",
+                "sha256": "06a4494b319dc6f72d56c77d96d66886d1cafb0fe30a4c71fe1466fba02608be"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+                "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+              }
+            ],
+            "note": "Focused and full builds/E2E, Clippy, rustfmt and diff checks done per milestone; 65 hashed artifacts and limitations retained; LUNA Dev refreshed and verified after each runtime change (M3: PID 72271, IPC 59777, codesign ok); origin/main at 3d751030 includes all three milestones. Watch cancellation and provider-event bounds handed to CORE-20; DocsStore admitted writers to the restore-gates owner."
+          },
+          "verification": {
+            "at": 1791805122.832635,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/commands.json",
+                "sha256": "caab144d12ace8e45b947bd4b9eb9a6260301800638934ea7b23dda4f0818c62"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations.json",
+                "sha256": "b7fdec9f8e39d805c03ecd7ce33a0f45d289918d9fd0985bc84cc3688d13a219"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m2.json",
+                "sha256": "b38d63794408606d94e836066c4395ec5245bf06de9e7f13f475b426dabb4b4e"
+              },
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-03/evidence/mutations-m3.json",
+                "sha256": "97c521e1e7bad27e392820b5b01f900c29eab10dc99c4eaf9221a6b0f66d666d"
+              }
+            ],
+            "note": "E05 owners pass through the public boundary before the old paths were removed: task_commands, chat_workbench, local_profiles, restart_resume, recovery, message_queue, task_identity, workspace_repair_authority, remote_doc_authority, turn_quiesce, pane_chat_mcp; full luna-engine 967 passed/0 failed. Keepers L1/L2 (stopped-engine ledger), S1 (agent tools vs build order) and R1 (run after shutdown sweep) each failed on the baseline and are guarded by mutation proofs; the reopen keeper reads back the store and the InstanceLock."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/extensible-core/core-03/README.md",
+            "sha256": "ac8c99ce0501fd619c851eea8093846c67d89755e01071c59aba99ab44e6dd83"
+          }
+        ],
+        "note": "CORE-03 delivered in three milestones (431662b0, 71f441c8, e11f1117) with verified origin/main; remaining resource-lifetime items handed to CORE-20",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791803291.099927,
+          "expires_at": 1791808722.633325,
+          "heartbeat_at": 1791805122.633325,
           "owner": "claude-code-opus-5.5",
           "session": "claude-code:99dc980e-bbe8-4652-9af9-da0c5caaa99b"
         }
