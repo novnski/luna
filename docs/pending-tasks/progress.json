@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791819643.939758,
+  "created_at": 1791833458.041416,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 15,
+      "done": 16,
       "in_progress": 0,
       "paused": 0,
-      "ready": 65,
+      "ready": 64,
       "review": 0
     },
     "groups": [
@@ -215,11 +215,11 @@
         },
         "title": "One direct paired-Mac product",
         "tasks": 11,
-        "done": 2,
-        "remaining": 9,
-        "accepted_units": 7,
+        "done": 3,
+        "remaining": 8,
+        "accepted_units": 11,
         "total_units": 40,
-        "acceptance_percent": 17.5,
+        "acceptance_percent": 27.5,
         "milestone_status": {
           "M0": {
             "done": true,
@@ -228,7 +228,7 @@
             ]
           },
           "M1": {
-            "done": false,
+            "done": true,
             "members": [
               "RM-01",
               "RM-02"
@@ -373,22 +373,22 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 10,
-      "remaining": 66,
-      "accepted_units": 39,
+      "done": 11,
+      "remaining": 65,
+      "accepted_units": 43,
       "total_units": 296,
-      "acceptance_percent": 13.2
+      "acceptance_percent": 14.5
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "RM-02",
       "CORE-04",
       "CORE-05",
       "IC-0",
       "ZI-01",
       "CORE-06",
       "ZI-03",
-      "ZI-04"
+      "ZI-04",
+      "ZI-05"
     ]
   },
   "tasks": [
@@ -1291,16 +1291,6 @@
       "note": "Read the IOS-14 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
       "status": "ready",
       "updated_at": 1791679478.911985
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-02",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958873
     },
     {
       "attempts": 0,
@@ -2364,6 +2354,85 @@
       "note": "Completed milestones A/B/C with scoped host authority, profile-owned direct TLS gateway and signed single-use socket capabilities. RP host campaign and headed readback passed; direct phone/Keychain and outside-network acceptance remain with later owners. Verified feature delivery on origin/main; primary LUNA Dev ready with remote access disabled.",
       "status": "done",
       "updated_at": 1791819643.842158
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "desktop": {
+          "at": 1791833221.021645,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+              "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+              "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+            }
+          ],
+          "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+        },
+        "handoff": {
+          "at": 1791833457.846143,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/main-handoff.json",
+              "sha256": "c97916dcffb5eddef3bdbcf32db0de9b2207b373601ec023c82f97c240951d2f"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+              "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+            }
+          ],
+          "note": "Feature ef5cfe97 merged as 16be9f7b and pushed with exact origin/main readback. LUNA Dev refreshed in 107s; exact process 19546, IPC 59777 and strict signature verified. Native Simulator actual gateway/storage/lifecycle E2E passed with zero skips; six engine tests and isolated three contract checks passed; Clippy/format clean on changed code. Preserved concurrent UI work and removed only the stopped QA bundle."
+        },
+        "phone": {
+          "at": 1791833221.145836,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+              "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+            }
+          ],
+          "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter."
+        },
+        "verification": {
+          "at": 1791833221.2618601,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+              "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+            },
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+              "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+            }
+          ],
+          "note": "User explicitly substituted Simulator QA for physical-phone QA on 2026-10-12. Native pin/profile refusal, actual OS storage refusal, secure save/restart, camera fallback, Forget vs revoke passed. Lost/oversized reply and storage/cancel callbacks followed real host redemption. Physical LAN pairing/restart remains explicitly uncertified."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:16be9f7bcf7401c89920c2383fb75372c47ac48a"
+        },
+        {
+          "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/main-handoff.json",
+          "sha256": "c97916dcffb5eddef3bdbcf32db0de9b2207b373601ec023c82f97c240951d2f"
+        }
+      ],
+      "id": "RM-02",
+      "last_worker": {
+        "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+        "claimed_at": 1791822356.161988,
+        "expires_at": 1791836013.0470011,
+        "heartbeat_at": 1791832413.0470011,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+      },
+      "note": "Connections and native pairing delivered on verified main and refreshed LUNA Dev. User-directed Simulator acceptance passed actual pin/profile validation, OS secure storage/relaunch, camera fallback and per-host Forget/revoke. Physical camera capture/preview was observed, but physical LAN pairing/restart remains uncertified and is explicitly documented; no firewall rules changed.",
+      "status": "done",
+      "updated_at": 1791833457.949117
     }
   ],
   "events": [
@@ -9103,6 +9172,680 @@
           "claimed_at": 1791817197.3612869,
           "expires_at": 1791822486.666517,
           "heartbeat_at": 1791818886.666517,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 245,
+      "task": "RM-02",
+      "at": 1791820411.552097,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791820411.551971,
+          "expired": false,
+          "expires_at": 1791824011.551971,
+          "heartbeat_at": 1791820411.551971,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 246,
+      "task": "RM-02",
+      "at": 1791821522.280849,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791820411.551971,
+          "expired": false,
+          "expires_at": 1791825122.280745,
+          "heartbeat_at": 1791821522.2807438,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 247,
+      "task": "RM-02",
+      "at": 1791822356.061607,
+      "action": "pause",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791820411.551971,
+          "expires_at": 1791825122.280745,
+          "heartbeat_at": 1791821522.2807438,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 248,
+      "task": "RM-02",
+      "at": 1791822356.162113,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791825956.161988,
+          "heartbeat_at": 1791822356.161988,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 249,
+      "task": "RM-02",
+      "at": 1791823446.404619,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791827046.404535,
+          "heartbeat_at": 1791823446.404535,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 250,
+      "task": "RM-02",
+      "at": 1791824572.8581839,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791828172.858081,
+          "heartbeat_at": 1791824572.858081,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 251,
+      "task": "RM-02",
+      "at": 1791824795.716414,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791828395.7163079,
+          "heartbeat_at": 1791824795.7163079,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 252,
+      "task": "RM-02",
+      "at": 1791825440.514771,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791829040.514652,
+          "heartbeat_at": 1791825440.514652,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 253,
+      "task": "RM-02",
+      "at": 1791825758.7100768,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791829358.709915,
+          "heartbeat_at": 1791825758.709915,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 254,
+      "task": "RM-02",
+      "at": 1791825925.723069,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791829525.7229598,
+          "heartbeat_at": 1791825925.7229598,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 255,
+      "task": "RM-02",
+      "at": 1791826647.6172879,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791830247.617186,
+          "heartbeat_at": 1791826647.617186,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 256,
+      "task": "RM-02",
+      "at": 1791827224.296225,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791830824.296127,
+          "heartbeat_at": 1791827224.296127,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 257,
+      "task": "RM-02",
+      "at": 1791828159.450211,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791831759.450071,
+          "heartbeat_at": 1791828159.450071,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 258,
+      "task": "RM-02",
+      "at": 1791830375.093179,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791833975.0930471,
+          "heartbeat_at": 1791830375.0930471,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 259,
+      "task": "RM-02",
+      "at": 1791832201.929982,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791835801.929834,
+          "heartbeat_at": 1791832201.929834,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 260,
+      "task": "RM-02",
+      "at": 1791832413.0470872,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Move active implementation to isolated worktree /Users/iulian/.codex/worktrees/rm02-native-pairing/luna, branch codex/rm02-native-pairing; owned scaffold/docs transferred, core compile passed, E2E not yet run. Preserve concurrent right-sidebar changes in main. Continue with the same actual chat session.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 261,
+      "task": "RM-02",
+      "at": 1791833221.0219169,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "desktop": {
+            "at": 1791833221.021645,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+                "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+                "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+              }
+            ],
+            "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+          }
+        },
+        "criterion": "desktop",
+        "evidence": null,
+        "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 262,
+      "task": "RM-02",
+      "at": 1791833221.1460721,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "desktop": {
+            "at": 1791833221.021645,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+                "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+                "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+              }
+            ],
+            "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+          },
+          "phone": {
+            "at": 1791833221.145836,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter."
+          }
+        },
+        "criterion": "phone",
+        "evidence": null,
+        "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 263,
+      "task": "RM-02",
+      "at": 1791833221.262093,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "desktop": {
+            "at": 1791833221.021645,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+                "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+                "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+              }
+            ],
+            "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+          },
+          "phone": {
+            "at": 1791833221.145836,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter."
+          },
+          "verification": {
+            "at": 1791833221.2618601,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+                "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "User explicitly substituted Simulator QA for physical-phone QA on 2026-10-12. Native pin/profile refusal, actual OS storage refusal, secure save/restart, camera fallback, Forget vs revoke passed. Lost/oversized reply and storage/cancel callbacks followed real host redemption. Physical LAN pairing/restart remains explicitly uncertified."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "User explicitly substituted Simulator QA for physical-phone QA on 2026-10-12. Native pin/profile refusal, actual OS storage refusal, secure save/restart, camera fallback, Forget vs revoke passed. Lost/oversized reply and storage/cancel callbacks followed real host redemption. Physical LAN pairing/restart remains explicitly uncertified.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 264,
+      "task": "RM-02",
+      "at": 1791833457.846486,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "desktop": {
+            "at": 1791833221.021645,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+                "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+                "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+              }
+            ],
+            "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+          },
+          "handoff": {
+            "at": 1791833457.846143,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/main-handoff.json",
+                "sha256": "c97916dcffb5eddef3bdbcf32db0de9b2207b373601ec023c82f97c240951d2f"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+                "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+              }
+            ],
+            "note": "Feature ef5cfe97 merged as 16be9f7b and pushed with exact origin/main readback. LUNA Dev refreshed in 107s; exact process 19546, IPC 59777 and strict signature verified. Native Simulator actual gateway/storage/lifecycle E2E passed with zero skips; six engine tests and isolated three contract checks passed; Clippy/format clean on changed code. Preserved concurrent UI work and removed only the stopped QA bundle."
+          },
+          "phone": {
+            "at": 1791833221.145836,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter."
+          },
+          "verification": {
+            "at": 1791833221.2618601,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+                "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "User explicitly substituted Simulator QA for physical-phone QA on 2026-10-12. Native pin/profile refusal, actual OS storage refusal, secure save/restart, camera fallback, Forget vs revoke passed. Lost/oversized reply and storage/cancel callbacks followed real host redemption. Physical LAN pairing/restart remains explicitly uncertified."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Feature ef5cfe97 merged as 16be9f7b and pushed with exact origin/main readback. LUNA Dev refreshed in 107s; exact process 19546, IPC 59777 and strict signature verified. Native Simulator actual gateway/storage/lifecycle E2E passed with zero skips; six engine tests and isolated three contract checks passed; Clippy/format clean on changed code. Preserved concurrent UI work and removed only the stopped QA bundle.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expired": false,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 265,
+      "task": "RM-02",
+      "at": 1791833457.9492888,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "desktop": {
+            "at": 1791833221.021645,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-qa-refresh-reviewed.log",
+                "sha256": "34fd44c5ac03be8b0e18b2bbcb074f476f780b0d30521e1c28cbabb8ea55b7e8"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/mac-host-disabled.txt",
+                "sha256": "d15e57d8eb43e09ea9d64fd971dc01959672b68c242285b2d71e309f4940e0d1"
+              }
+            ],
+            "note": "Actual Mac UI enabled hosting, created/cancelled a grant with authority readback, and acquired/released the existing power assertion. Registry and host/phone/route semantics remain separate."
+          },
+          "handoff": {
+            "at": 1791833457.846143,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/main-handoff.json",
+                "sha256": "c97916dcffb5eddef3bdbcf32db0de9b2207b373601ec023c82f97c240951d2f"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+                "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+              }
+            ],
+            "note": "Feature ef5cfe97 merged as 16be9f7b and pushed with exact origin/main readback. LUNA Dev refreshed in 107s; exact process 19546, IPC 59777 and strict signature verified. Native Simulator actual gateway/storage/lifecycle E2E passed with zero skips; six engine tests and isolated three contract checks passed; Clippy/format clean on changed code. Preserved concurrent UI work and removed only the stopped QA bundle."
+          },
+          "phone": {
+            "at": 1791833221.145836,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "Native camera/manual validation, real pinned descriptor/profile checks, actual secure save/relaunch, per-host Forget and re-pair on host revoke passed in Simulator. Physical camera capture/preview was observed; user chose Simulator thereafter."
+          },
+          "verification": {
+            "at": 1791833221.2618601,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-xctest-result.json",
+                "sha256": "ea52daf648a9a0052dab60af78fe1947449a53a6e9b55106de4836e06035cec2"
+              },
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/native-simulator-final.json",
+                "sha256": "7d25b1af5ecc02388ec78ea24c5a424a78178930d3fc05fbd5ff7a6fb2168e5f"
+              }
+            ],
+            "note": "User explicitly substituted Simulator QA for physical-phone QA on 2026-10-12. Native pin/profile refusal, actual OS storage refusal, secure save/restart, camera fallback, Forget vs revoke passed. Lost/oversized reply and storage/cancel callbacks followed real host redemption. Physical LAN pairing/restart remains explicitly uncertified."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:16be9f7bcf7401c89920c2383fb75372c47ac48a"
+          },
+          {
+            "ref": "docs/pending-tasks/control-this-mac/rm-02/evidence/main-handoff.json",
+            "sha256": "c97916dcffb5eddef3bdbcf32db0de9b2207b373601ec023c82f97c240951d2f"
+          }
+        ],
+        "note": "Connections and native pairing delivered on verified main and refreshed LUNA Dev. User-directed Simulator acceptance passed actual pin/profile validation, OS secure storage/relaunch, camera fallback and per-host Forget/revoke. Physical camera capture/preview was observed, but physical LAN pairing/restart remains uncertified and is explicitly documented; no firewall rules changed.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna",
+          "claimed_at": 1791822356.161988,
+          "expires_at": 1791836013.0470011,
+          "heartbeat_at": 1791832413.0470011,
           "owner": "codex",
           "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }

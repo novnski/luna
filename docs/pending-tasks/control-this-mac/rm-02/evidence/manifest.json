@@ -1,6 +1,10 @@
 {
   "platform": "iOS Simulator; physical QR/preview only",
   "files": {
+    "qa-bundle-cleanup.json": {
+      "sha256": "dd15924fc0c2d2800e2ab793815d09f0af38c5a55d99390b06c7469eb9194ef3",
+      "bytes": 224
+    },
     "mac-power-host-disabled.txt": {
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "bytes": 1
@@ -68,6 +72,10 @@
     "final-rust-checks.log": {
       "sha256": "5fd6c479c16b54fc8993ac1fedabfa18e9d7e491d1c1557bf4c1b55357d68e03",
       "bytes": 722
+    },
+    "main-handoff.json": {
+      "sha256": "8d64ddf3f1551e1f7613524ee4fdcf5431f467a42e262f7daa94aae08d470872",
+      "bytes": 575
     }
   }
 }

@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-12T18:40:43+03:00.
+Generated 2026-10-12T22:30:58+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **13.2% accepted**, **10/76 Done**.
+Active scope: **14.5% accepted**, **11/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: RM-02, CORE-04, CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04
+Next eligible: CORE-04, CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -121,7 +121,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-16 — Decide optional voice, paired phone and offline requirements](luna-only-workflows/README.md) | deferred | 0.0% | — |
-| [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-05 — Expose actual provider policy, questions and approvals on phone](control-this-mac/README.md) | ready | 0.0% | — |
@@ -135,6 +134,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-11 — Add scoped phone operations and administration views](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | done | 100.0% | codex |
+| [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | done | 100.0% | codex |
 
 ## Native iOS parity and release
 

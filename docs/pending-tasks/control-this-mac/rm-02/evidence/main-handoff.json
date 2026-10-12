@@ -1,0 +1,14 @@
+{
+  "mainCommit": "16be9f7bcf7401c89920c2383fb75372c47ac48a",
+  "remoteMain": "16be9f7bcf7401c89920c2383fb75372c47ac48a",
+  "buildSeconds": 107,
+  "processId": 19546,
+  "ipcPort": 59777,
+  "exactBundleProcessVerified": true,
+  "ipcListenerVerified": true,
+  "strictSignatureVerified": true,
+  "executableSha256": "2dd7cbabf339b3a16e4000ca1c2347bd7fc4801dbc0ca13ccc00e29c4a7d5ff2",
+  "simulatorNativeE2E": "passed, zero skips",
+  "physicalPhone": "QR and preview observed; user chose Simulator; LAN pairing/restart uncertified",
+  "primaryConnectionsControlsReadBack": true
+}

@@ -154,3 +154,22 @@ Repeat on an owned disposable Simulator:
    public `summary.json` and retained `.xcresult`, then hash the evidence. The
    coordinator removes its private bootstrap files. Raw XCTest logs remain
    private because XCTest records typed text. Publish sanitized summaries only.
+
+## Delivered checks and handoff
+
+- Final native XCTest: **1 passed, 0 failed, 0 skipped**, 114.8 seconds. The
+  real host campaign also exited zero, including wrong native pin/profile
+  refusal, secure save/relaunch, other-host preservation and host-revoke denial.
+- Engine remote-access suite: **6 passed**. The pending-code disable regression
+  demonstrably failed before the repair and passed afterward.
+- RPC published-contract check: **3 passed** in its isolated CI-equivalent
+  invocation. Combining it with the engine suite unified serde features and
+  changed JSON property ordering; no schema content change was needed.
+- Changed Rust files passed rustfmt and Clippy; the iOS app/test products built
+  with normal Simulator signing and no diagnostics. Retained evidence includes
+  sanitized commands/results, public native observations and SHA-256 hashes.
+- Feature `ef5cfe97` merged as `16be9f7b`; `origin/main` was verified. Primary
+  LUNA Dev refreshed in **107 seconds**, exact PID **19546**, IPC **59777** and
+  strict signature verified. The delivered Connections controls were read back
+  in the refreshed primary app. The stopped QA app alone was unregistered and
+  removed; its data and build caches remain. Physical phone control is stopped.
