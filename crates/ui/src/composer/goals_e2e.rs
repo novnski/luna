@@ -107,6 +107,7 @@ impl RpcService for FixtureEngine {
                 // goal command shadows it, so `/goal` is offered once.
                 SlashCommand {
                     name: "goal".into(),
+                    selection: None,
                     description: "Set a goal \u{2014} keep working until the condition is met"
                         .into(),
                     input_hint: None,
@@ -114,12 +115,14 @@ impl RpcService for FixtureEngine {
                 },
                 SlashCommand {
                     name: "review".into(),
+                    selection: None,
                     description: "Review the current changes".into(),
                     input_hint: None,
                     kind: SlashCommandKind::Command,
                 },
                 SlashCommand {
                     name: "plan".into(),
+                    selection: None,
                     description: "Plan before editing".into(),
                     input_hint: Some("task".into()),
                     kind: SlashCommandKind::Command,
@@ -127,6 +130,7 @@ impl RpcService for FixtureEngine {
                 // A skill: offered under `$`, never under `/`.
                 SlashCommand {
                     name: "release-notes".into(),
+                    selection: None,
                     description: "Draft release notes".into(),
                     input_hint: None,
                     kind: SlashCommandKind::Skill,

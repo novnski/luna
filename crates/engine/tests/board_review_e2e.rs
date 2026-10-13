@@ -1137,9 +1137,9 @@ async fn main_ticket_codex_reviewed_by_claude_repairs_seeded_defect_then_cleans_
     let reviewer = run0["reviewerTaskId"].as_str().unwrap().to_owned();
     rig.evidence.step(
         "reviewer harness/model/access",
-        json!({"harness": "ClaudeCode", "model": REVIEWER_MODEL, "sandbox": "ReadOnly", "permission": "Ask", "resume": null}),
+        json!({"harness": "claude-code", "model": REVIEWER_MODEL, "sandbox": "ReadOnly", "permission": "Ask", "resume": null}),
         json!({
-            "harness": format!("{:?}", review_turn.harness),
+            "harness": review_turn.harness.as_str(),
             "model": review_turn.model,
             "sandbox": format!("{:?}", review_turn.sandbox),
             "permission": format!("{:?}", review_turn.permission_mode),
@@ -1159,11 +1159,11 @@ async fn main_ticket_codex_reviewed_by_claude_repairs_seeded_defect_then_cleans_
     let reviewer_chat = rig.chat(&reviewer);
     rig.evidence.step(
         "reviewer placement: one side chat directly under the main ticket",
-        json!({"sideParent": worker, "title": format!("Review · {key} · Add numbers"), "harness": "ClaudeCode", "placement": "underTicket"}),
+        json!({"sideParent": worker, "title": format!("Review · {key} · Add numbers"), "harness": "claude-code", "placement": "underTicket"}),
         json!({
             "sideParent": rig.parent_of(&reviewer),
             "title": reviewer_chat.title,
-            "harness": format!("{:?}", reviewer_chat.config.as_ref().unwrap().harness),
+            "harness": reviewer_chat.config.as_ref().unwrap().harness.as_str(),
             "placement": run0["placement"],
         }),
         None,
@@ -1298,11 +1298,11 @@ async fn main_ticket_codex_reviewed_by_claude_repairs_seeded_defect_then_cleans_
     );
     rig.evidence.step(
         "reviewer archived; primary unchanged and active",
-        json!({"reviewerArchived": true, "primaryArchived": false, "primaryHarness": primary_harness.map(|h| format!("{h:?}"))}),
+        json!({"reviewerArchived": true, "primaryArchived": false, "primaryHarness": primary_harness.map(|h| h.to_string())}),
         json!({
             "reviewerArchived": rig.chat(&reviewer).archived,
             "primaryArchived": rig.chat(&worker).archived,
-            "primaryHarness": rig.chat(&worker).config.map(|config| format!("{:?}", config.harness)),
+            "primaryHarness": rig.chat(&worker).config.map(|config| config.harness.to_string()),
         }),
         None,
     );
@@ -2233,8 +2233,8 @@ async fn converted_main_chat_keeps_identity_with_fallback_reviewer() {
     let reviewer = turn_owner(&run);
     rig.evidence.step(
         "fallback reviewer: implementation model, separate side chat under the converted chat",
-        json!({"fallback": true, "harness": "Codex", "model": IMPLEMENTER_MODEL, "parent": chat, "separate": true}),
-        json!({"fallback": run["profile"]["implementationFallback"], "harness": format!("{:?}", review.harness),
+        json!({"fallback": true, "harness": "codex", "model": IMPLEMENTER_MODEL, "parent": chat, "separate": true}),
+        json!({"fallback": run["profile"]["implementationFallback"], "harness": review.harness.as_str(),
             "model": review.model, "parent": rig.parent_of(&reviewer), "separate": reviewer != chat}),
         Some(&run),
     );
