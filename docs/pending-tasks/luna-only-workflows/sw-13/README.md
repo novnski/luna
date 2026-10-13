@@ -49,6 +49,7 @@ runner checks observed behaviour against them; it does not redefine them.
 | F14 | A saved schedule is not execution | A saved, paused or never-run schedule counted as a run | The runner counts only run rows with transcript and sentinel proof; no rows exist while the host is down |
 | F15 | Refusal at the task-command fence | Pause, edit, delete or a busy target found under the task gate after Dispatching is recorded **Unknown**, which blocks later work until a manual Resolve | `automations_e2e` (see G1) |
 | F16 | An occurrence routed to a parked warm runtime | The provider turn completes but the run stays Accepted, so every later slot is Skipped as busy; or a later turn's Done settles an earlier occurrence | `automations_e2e` (see G2); live runner phases `lifecycle`/`restart` |
+| F17 | A Run still starting after the 5 s acceptance grace | A Run queued in, or being started by, the session-doc executor with no turn yet is recorded Unknown ("ended without confirming provider acceptance"), raising a false Needs attention | `automations_e2e` (see G3); live runner phase `runs` |
 
 ## Demonstrated gap and fix
 
@@ -109,6 +110,34 @@ A steerable peer parks after each turn and confirms routed messages with
 and the slot after it, must each reach Completed without a Skipped slot. The
 peer must record them as routed follow-ups, not fresh runs. On the pre-fix
 code the revised occurrence stays Accepted and the wait times out.
+
+**G3 (F17), found live.** Rerun `sw13-live-20261014-010916` failed on the
+first `codex-full-existing` occurrence, in a chat with no prior turn. It was
+claimed at 22:10:36.534Z. Its Run command was queued at 22:10:42.891Z (the
+user entry carries the queue time). It was recorded Unknown 20 ms later, at
+22:10:42.911Z. The provider then accepted and completed the turn. Every
+provider event came after the Unknown, so G2's turn-owner change could not
+cause it. The reconcile sweep calls a Pending Run receipt "ended without
+confirming provider acceptance" after 5 s, counted from `accepted_at_ms`, which
+is the scheduler's claim tick, unless a turn is live (or, on main, the host
+line still counts the start as just admitted). This dispatch spent 6.4 s
+before queueing. The very next sweep saw a 6.4 s-old receipt and no turn, and
+the executor had held the command for 20 ms. The same window exists whenever
+the executor's preparation (project setup wait, source capture, account or
+startup gates) outlasts the grace.
+
+Fix (`crates/engine/src/rpc/automations.rs`): while the session-doc executor
+still owns the exact Run command, the receipt stays Pending and the
+occurrence stays Dispatching, however long startup takes. The doc entry is
+Pending until `execute` has registered the turn or refused it. After that,
+the 5 s grace applies unchanged. A turn that dies before acceptance is still
+Unknown, and restart reconciliation is unchanged.
+
+Regression: `automations_e2e::a_scheduled_run_still_starting_after_the_grace_is_not_unknown`.
+A real account change holds provider startup (`prepare_provider_account_change`,
+the lock every dispatch takes) for 6 s after the Run was queued. The
+occurrence must still be Dispatching with no Needs attention, then complete
+once the change ends. On the pre-fix code that reconcile records Unknown.
 
 ## Criteria mapping
 

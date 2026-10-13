@@ -2591,3 +2591,71 @@ async fn revised_existing_chat_occurrences_complete_on_a_parked_runtime() {
     );
     e.shutdown().await;
 }
+
+/// SW-13 G3: a scheduled Run can wait in the session-doc executor before any
+/// provider turn exists (here behind a real account change; live, behind a
+/// slow admission). Past the 5 s grace it is still provably unstarted, so the
+/// occurrence stays Dispatching with no Needs attention, then completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scheduled_run_still_starting_after_the_grace_is_not_unknown() {
+    let root = tempfile::tempdir().unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let e = core(root.path(), seen.clone());
+    let c = luna_rpc::memory_client(e.rpc_service());
+    create(&c, &e).await;
+    mutate(
+        &c,
+        save(
+            &e,
+            "slow-start",
+            "slow start",
+            json!({"kind":"once","atMs":NOW+1000}),
+        ),
+    )
+    .await;
+    // Every dispatch takes this lock before it starts a provider.
+    let account = e
+        .sessions
+        .prepare_provider_account_change(HarnessId::Mock)
+        .await
+        .unwrap();
+    e.rpc_service()
+        .automation_tick_at(NOW + 1000)
+        .await
+        .unwrap();
+    let queued = runs(&c, "slow-start").await;
+    let receipt = call(
+        &c,
+        "GetTaskCommandReceipt",
+        json!({"commandId":queued["items"][0]["commandId"]}),
+    )
+    .await;
+    assert_eq!(receipt["status"], "pending", "{receipt}");
+    // The acceptance grace is wall-clock time; outlast it while held.
+    tokio::time::sleep(Duration::from_millis(6_000)).await;
+    e.rpc_service()
+        .automation_tick_at(NOW + 1001)
+        .await
+        .unwrap();
+    let held = runs(&c, "slow-start").await;
+    assert_eq!(held["items"][0]["state"], "dispatching", "{held}");
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!e.sessions.turn_in_flight(CHAT));
+    let attention = call(&c, "GetAttention", json!({"targetDeviceId":e.device_id})).await;
+    assert!(
+        !attention["needsAttention"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["target"]["automationId"] == "slow-start"),
+        "{attention}"
+    );
+    drop(account);
+    let done = settle(&e, &c, "slow-start").await;
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    evidence(
+        "slow-start-not-unknown",
+        json!({"queued":queued,"held":held,"done":done,"attention":attention}),
+    );
+    e.shutdown().await;
+}
