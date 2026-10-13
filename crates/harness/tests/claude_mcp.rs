@@ -148,6 +148,7 @@ async fn control(
 ) -> Result<McpControlReply, luna_harness::HarnessError> {
     harness()
         .mcp_control(McpControlRequest {
+            settings_source: None,
             cwd: fixture.project.clone(),
             op,
         })
@@ -311,6 +312,7 @@ async fn toggle_is_provider_owned_persistent_and_per_project() {
     point(&other, &fixture.state, &fixture.log);
     let McpControlReply::Status(other_readbacks) = harness()
         .mcp_control(McpControlRequest {
+            settings_source: None,
             cwd: other.clone(),
             op: McpControlOp::Status {
                 modes: vec![PermissionMode::Full],

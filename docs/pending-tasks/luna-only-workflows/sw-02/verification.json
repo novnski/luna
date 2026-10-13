@@ -1,0 +1,212 @@
+{
+  "base": "bb3cf3ed",
+  "branch": "codex/sw02-scoped-mcp",
+  "cli": "Claude 2.1.293 / Codex 0.160.0",
+  "liveMatrix": [
+    {
+      "index": 0,
+      "provider": "codex",
+      "requestedMode": "ask",
+      "effectiveMode": "ask",
+      "nonceMatched": true,
+      "artifact": "case-0-read-result.json"
+    },
+    {
+      "index": 2,
+      "provider": "claude-code",
+      "requestedMode": "ask",
+      "effectiveMode": "ask",
+      "nonceMatched": true,
+      "artifact": "case-2-read-result.json"
+    },
+    {
+      "index": 4,
+      "provider": "claude-code",
+      "requestedMode": "auto",
+      "effectiveMode": "auto",
+      "nonceMatched": true,
+      "artifact": "case-4-read-result.json"
+    }
+  ],
+  "claudeFullReadPassed": true,
+  "serviceEffectCounts": {
+    "LUNA_2_DENY": 0,
+    "LUNA_2_ALLOW": 1,
+    "LUNA_2_MISLABELED": 0,
+    "LUNA_2_STALE": 0,
+    "LUNA_2_UNCERTAIN": 1,
+    "LUNA_4_ALLOW": 1
+  },
+  "staleApprovalRejectedAfterAllowOnce": true,
+  "wrongBindingRejected": true,
+  "restartDidNotReplayUncertainWrite": true,
+  "nativeAutoEligibleModel": "claude-opus-5-5",
+  "haikuAutoFailsClosed": true,
+  "liveInfrastructureRead": {
+    "tool": "infra_monitor_mcp.org.default.infra_get_usecase_lag",
+    "targetId": 13,
+    "providers": [
+      "codex Ask",
+      "claude Ask",
+      "claude Auto"
+    ],
+    "readOnly": true,
+    "storedSnapshotCautionPreserved": true
+  },
+  "credentialsAbsentFromArgv": true,
+  "qaProjectExecutorRestored": true,
+  "checks": [
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh check --locked -p luna-engine -p luna-harness",
+      "exitCode": 0,
+      "log": "check.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_permissions --test claude_mcp_inventory --test claude_luna_tools",
+      "exitCode": 0,
+      "passed": 4,
+      "log": "engine-tests.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --test claude_mcp --test mcp_startup_isolation --test permission_modes",
+      "exitCode": 0,
+      "passed": 9,
+      "log": "harness-tests.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-harness --test mcp_startup_isolation",
+      "exitCode": 0,
+      "passed": 1,
+      "log": "isolation-final.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine -p luna-harness --all-targets",
+      "exitCode": 0,
+      "log": "clippy-final.log"
+    },
+    {
+      "command": "scripts/cargo.sh fmt --all --check",
+      "exitCode": 0,
+      "log": "format-final.log"
+    },
+    {
+      "command": "bash -n scripts/run-macos-dev.sh",
+      "exitCode": 0
+    }
+  ],
+  "qaApp": {
+    "name": "LUNA QA Scoped MCP",
+    "pid": 39669,
+    "ipcPort": 59846,
+    "buildSeconds": [
+      96,
+      109
+    ],
+    "signatureVerified": true,
+    "ambientIsolation": true,
+    "explicitSavedServers": [
+      "executor"
+    ]
+  },
+  "limits": [
+    "Scoped restricted delivery supports saved HTTP/SSE connections; stdio servers are not added by this lane.",
+    "Auto follows its eligible native reviewer; human callbacks are only escalations, not every Auto grant.",
+    "The live service proof is read-only; no customer message or production mutation was performed."
+  ],
+  "evidenceRoots": {
+    "worktree": "/Users/iulian/.codex/worktrees/rm02-native-pairing/luna/target/qa/luna-only-workflows/sw02-20261013",
+    "baselineAndOracle": "/Users/iulian/workspace/code/personal/luna/target/qa/luna-only-workflows/sw02-20261013"
+  },
+  "artifactHashes": {
+    "ask-progress.log": "2546f913bfa1cea08eef2fa140d8ab4dec5b7b6aa3667faa1613634a380cb221",
+    "ask-read-approved.json": "4b21e1fcd35a25c76132f46b28a6a524cb1c3e683d036e3c1df5cf4e7af4d2f9",
+    "ask-read-proof.json": "20a6ebddd684df11137e9f533b5bf2e8820206cb4af2578bc05c4bced5db320e",
+    "ask-read-request.json": "bc72ec782818942dcb5d5606e40bc0e78a574c0622aa15183e972600af5b3a04",
+    "ask-read-request.log": "6b4759e6257d6a7b88f410da245790c303bbc5c2499c5afadd7a1125a6298f61",
+    "ask-read-result.log": "5ac0d85ad1afb9e4c1d4ca60e017ba59fadf168262003efbdaa56442fb4259ad",
+    "case-0-infra-request.json": "4a0d6c79180ec0973c4c0d95f6058618cd8ccd66d1ba7db91a324b95f1dcb284",
+    "case-0-infra-result.json": "282dcbf056fc4f6c146d14d492f376e513443e82be74d191e54e267a95f47ef8",
+    "case-0-read-request.json": "52eb89fca375c6766772ff3474b24b6d5a96cd7836091b58bbd334cf75254c28",
+    "case-0-read-result.json": "3f3f92e010389d387a84958b062631e6635c3c6b52941504ed58a820f0416ed1",
+    "case-2-allow-approval.json": "7b4775739b182236a8c0bea48e56055d40959e518c2a22b3303f1cb3098cb69c",
+    "case-2-allow-request.json": "041bfdae3b337763596e67ae5672c92ae2a8c6663c3091e6e49459e69a039f56",
+    "case-2-allow-result.json": "6a927aca79b4bf8f5bdd1423dff740a8efcb32dae94dcc95dc868dad6b44a3a9",
+    "case-2-deny-approval.json": "22e22ec8070dae109509c2aaa67ac356fe95dd3e5fffcf5088b82a9528d5b44d",
+    "case-2-deny-request.json": "1c34ccdae18454bd4fa57ca255a84ec05aa8b3358cd16b15ccadbf2f062c0c39",
+    "case-2-deny-result.json": "cea0f44c4b8add14789c381beeaebc2f91a5c86c95bc1a315f44142d6cd466d5",
+    "case-2-infra-approval.json": "e78368577e770cfca99dee81ada2ded165c9573784edad5bbf75e03c8e3b8563",
+    "case-2-infra-request.json": "9f3d65a42b33cf066b4419bed206b429889a70cb09bf5e0bd7419406dc4798db",
+    "case-2-infra-result.json": "da731b11f8353a71190dacbd3481070f9addfad7effe5a2a8707ae647816ad0c",
+    "case-2-mislabeled-approval.json": "ee97ac570c4bbe0ce045aa1e453389102d05ac1e730d4503b76a12a9898433e3",
+    "case-2-mislabeled-request.json": "5c0bda8a517fcf515e6393062056488bed252c080db75520dde3df7039486af9",
+    "case-2-mislabeled-result.json": "0433eba5cafbe87a3a7abfbb561b65a1d2fd3becf447a2f747d5b2b67f695645",
+    "case-2-read-approval.json": "f6120e5a83b78bb22d091eb9e994afcd658480fb662f98c685c9d713f3e1a8ab",
+    "case-2-read-request.json": "9cd909dbc6d23de0db9a07ecdf16e59be6b6e1ecfe258d49bd94c6dd2af48ba4",
+    "case-2-read-result.json": "5c4293ecb62774a5ad559ad14e6d5f038204492ffbfc1755623f2d8ea051712c",
+    "case-2-stale-approval.json": "a4e6b2a7227a44553ad64f128595c845c65fafceedf6e0c6796756106086feb0",
+    "case-2-stale-request.json": "a7c5e2e387cce1309ebe6d824423d823d4e4b5cee14c1440ff60aac3e1c0f0cc",
+    "case-2-stale-result.json": "0792dfa08907bd727be05ee77e91458fd5f00ec54381f8fe02d59e7ef345916a",
+    "case-2-uncertain-approval.json": "6b662efa3e1fdc28cf4cbe40abaf5fc6cf6754d52d5f158a2a3ed13ed1047da5",
+    "case-2-uncertain-request.json": "20f9911b275ac5f841a1d9d7f843f0d5c45a87a9a3e1083fbe54acbac9f654c0",
+    "case-2-uncertain-result.json": "4c4aff8717a04e25a53272fbc5b86ab22e0aa5e013c3b5da49f9d63ac2759cd8",
+    "case-3-read-request.json": "4b8a6675bbe0541924ba62f35307031e5bc09b8bd2b5a36b9687e4e66e9e05fb",
+    "case-3-read-result.json": "f04743480a5160a25509dd0f0df5558317ae15271a2a018c295c8414433fbbd2",
+    "case-4-allow-request.json": "af057e55b0a964fc7fdf733afe9a51c925b61c98caff692840b6f02300870a76",
+    "case-4-allow-result.json": "a34ecdcd8d6ae852b48c5b3922007bd7ce16cfb5daf2adda03cdde7e0b018604",
+    "case-4-infra-request.json": "9998a1d9da1d87a1e27098417d5308940c31d2559f654e9a462395c6ed810ab1",
+    "case-4-infra-result.json": "e0f669d74d94f0997f6880aaec7188531343d1a1e9fcd99a59576f12b8027a0b",
+    "case-4-read-request.json": "a2a9d075e348d69582c6a28deed2b4d21cb1edd2cb6b31f99106c64e7c073a50",
+    "case-4-read-result.json": "01be7610f7668975d4ad0c081bf719b23285760d22173270b87b4a9274edbb21",
+    "check.log": "f410863fced0f833da61b463dc17e163c9c8344099ce1d4c638d68412a1ca9a2",
+    "claude-models.json": "d8520ca8f699d77e9ee4a531ed21dd6227a3ab065d761ccdf09d67d8721e5020",
+    "clippy-final.log": "51a8fc065e5144a678ad7707c7c93ea2aef785f9d1e9dfc7cea6eb66b9e45f9b",
+    "clippy.log": "4452998f8436661a4c0012a6b97fbb124d9aa8fbec0be3f553ce06ff0d33be32",
+    "engine-tests.log": "3a6ae4f3a73db9a4edacaaf6a5dc600f5818882b28f9d70e210b9d63c4a960af",
+    "format-edit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "format-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "haiku-auto-blocked.json": "f04743480a5160a25509dd0f0df5558317ae15271a2a018c295c8414433fbbd2",
+    "harness-tests.log": "087717d1fe3261e0dbb9c37538fd8af3c7b8db7be994b9ef68f6608b0648ff07",
+    "isolation-final.log": "bf1317f8be5e5a385b3976c76e61992531e9d1866f784153459d7761c532d6e0",
+    "manifest.json": "5424ee5c5a1006219949671d8948c5c13d13d40bffa38d0bbaca9c72694653ff",
+    "native-2-snapshot.json": "17ac425208f1ed9ffdcea8b46b8153a8a2a5ff3adff5b904f86acb25900f0f2b",
+    "native_cases.py": "d0153d0da8821fbc71fe32f340d2c902567b2766367d38438bf5c3449f12a807",
+    "native_inventory.py": "9033e3a0e5f7a2f40f85e79698ee7c0899db27b516ec229ca17156182207c3a8",
+    "qa-final-refresh.log": "0abf38b7248ba4ff044fc7789785b3d061680de5be70527264397cd9bb18d103",
+    "qa-final-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "qa-project-restored.json": "f83607cb18d7591ce28d8d9147fa013c8e84179e28892161b4468ea070016051",
+    "qa-project-toggle-false.json": "d2fa879c9f42063843a5fc73777082bb52117b2da8f398762dc4fea1adb6a8af",
+    "qa-project-toggle-true.json": "a9017b7d4bbbd6a190d49b065137491e2ee8102596a388abfbd8880d50ad00c0",
+    "qa-refresh.log": "0f031b41524427dc114e0dc4b81525985563108745e5bea0acbe44776feba17b",
+    "qa-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "qa_rpc.py": "1f225de8a7c0abf8c74877e90e234f39a2a976ebf803d6f623697f2e1f706851",
+    "seed.log": "d9820836c195e47396ab134b6928bbe7ceacca99e7f124da2432bf7b8ec491f7",
+    "toggle-disable.log": "07898aff7a9931632cfe4a2ce2349884f3013da679c040e95702e5b31e4d4b6a",
+    "toggle-enable.log": "b08431449c6e637a1dc31e98c8d8804596247521f3dc6fdb47290bb0023d7e1a",
+    "toggle_qa_project.py": "adbc3ed4d501bec8e09af15dbdd4f71abfcc0b2ee8ff0143887771e6a3043e15",
+    "wrong-binding-denial.json": "2c88e51c07f4990b9017185276c555538c628da50afafa6a8b7d33894e0d1733"
+  },
+  "baselineHashes": {
+    "baseline-ask.json": "204a45d7a4bda70b1aeddb912e3460c77c298e59e86d74a0ec82837ab6019f8a",
+    "baseline-bundle.sha256": "e62a742d9d82bba1385cce5ada4074b92b73787680ee4d2b1924716687522ca9",
+    "build-budget-start.json": "2af1c3ad043052f29ca0abedf3922599c7c9fc1688c7b1af7a092f4d68966734",
+    "isolation.json": "675a1be6096fe4473c618d8947b68f0db0e2ffbc96734b3a328f4f08e65d81ca",
+    "manifest.json": "814ef572ef2b1fa8374657354128f8b0592f90efb3c546c74aa7d5400c90ce3d",
+    "native-2-snapshot.json": "7d0db17b34db422d8d095875a7cb9d97c7f6b07fed080cf859bfd4a0fd4bc081",
+    "native-auto-probe.json": "ce93da29a8d8c2580ba6454a00452ca1dc030283aa3ae8f4833e4769e0ec5de2",
+    "native-auto-wire.json": "6900e5a7bbe69f9d34869be948d6cc8cf72ca15430dd9a2ecb3be6aeb0d3fd9e",
+    "native-control-probe.json": "38f8162ef0c94e68dccfa27ec3bf871e258c6fa87efb29ced9472211d79b3b65",
+    "native-permissions-probe.json": "41350d8db6755d15521d9c2cfc3b630bcb3c8d3d89f2e4b5cb2cf9920364347d",
+    "native-permissions-wire.json": "9b61fb76d46308041a8710d6ef5ea9eba01571a8b13959e99d35283011c65c13",
+    "native_auto_probe.py": "47dc34d41908e35432e8c71654148da688fa05912abb99715689bf6970dd8d08",
+    "native_control_probe.py": "ceebba1e082cd048320c676d0e7e015c9cb38ac320b555e577de8646a2ae7c39",
+    "native_inventory.py": "b2ae838fc43e605ab5f2b5140875112d64d25ee9bc57814b1fbd2d2f54835504",
+    "native_permissions_probe.py": "2a77034a6778fd1eced9d28728ece72d920b3dd20c80d8be78f8e3c2713de443",
+    "qa_rpc.py": "52c873a124f6b57953ec5a3b0ce4525c363472ac8919f795bc3502189c689bac",
+    "service.py": "bee77e92ddcbd53a24b0ae23fa2dfe6ea7c20aa67a8fa822d796752cfbb1499e"
+  },
+  "oracleHashes": {
+    "effects.jsonl": "23dd8ae05cf5da92f9db25cea43b5261ec097af68e71a3fa1e16a93741bd0b38",
+    "requests.jsonl": "1cd1fec2b35f23f17017b87dea5cf43db07fc31f7c765bc78728981f8842287f",
+    "service.json": "77e8d5ece0014f1cea17f464f2d717fc88f2f826fc9124cf521c5c6c2d4337fd"
+  }
+}

@@ -32,6 +32,8 @@ use luna_proto::{
 /// changed native authentication identity retire an otherwise-compatible warm
 /// runtime.
 pub const LUNA_PROVIDER_AUTH_INSTANCE_OPTION: &str = "lunaProviderAuthInstance";
+/// Engine-owned Claude MCP source path and opaque revision; never credentials.
+pub const LUNA_CLAUDE_MCP_SOURCE_OPTION: &str = "lunaClaudeMcpSource";
 
 /// Engine-only run option (`true`) for a run that must never change files,
 /// such as a Board ticket discussion: an adapter that can remove its

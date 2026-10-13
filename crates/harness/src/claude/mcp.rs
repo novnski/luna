@@ -489,6 +489,7 @@ impl AdminProcess {
             "--verbose",
         ]);
         cmd.args(policy_args);
+        cmd.args(["--settings", "{\"disableAllHooks\":true}"]);
         if crate::mcp_isolation::qa_enabled() {
             crate::mcp_isolation::claude_strict_empty(&mut cmd);
         }
@@ -656,7 +657,14 @@ pub(crate) async fn control(
 ) -> Result<McpControlReply, HarnessError> {
     match request.op {
         McpControlOp::Status { modes } => {
-            status_readbacks(&exe, &request.cwd, kill_grace, modes).await
+            status_readbacks(
+                &exe,
+                &request.cwd,
+                kill_grace,
+                modes,
+                request.settings_source.as_deref(),
+            )
+            .await
         }
         McpControlOp::SetEnabled { server, enabled } => {
             set_enabled(&exe, &request.cwd, kill_grace, &server, enabled).await
@@ -673,10 +681,22 @@ async fn one_readback(
     kill_grace: Duration,
     args: Vec<&'static str>,
     modes: Vec<PermissionMode>,
+    settings_source: Option<&Path>,
 ) -> Result<McpLaunchReadback, HarnessError> {
     let mut process = AdminProcess::spawn(exe, cwd, &args, kill_grace).await?;
     let result = async {
         process.initialize().await?;
+        if (args.contains(&"--restricted") || crate::mcp_isolation::qa_enabled())
+            && let Some(source) = settings_source {
+            let servers = super::scoped_mcp::selected(source, cwd)?;
+            if !servers.is_empty() {
+                let reply = process.request(json!({"subtype":"mcp_set_servers", "servers":servers}), REQUEST_TIMEOUT).await
+                    .map_err(|error| error.into_error("scoped MCP attachment"))?;
+                if !matches!(reply, Answer::Success(ref result) if result.get("errors").and_then(Value::as_object).is_none_or(|errors| errors.is_empty())) {
+                    return Err(HarnessError::Protocol("Saved MCP connections could not be inspected in restricted mode.".into()));
+                }
+            }
+        }
         let (servers, settled) = process.status_until(none_pending).await?;
         let declares_apps = servers.iter().any(|server| {
             server
@@ -707,6 +727,7 @@ async fn status_readbacks(
     cwd: &Path,
     kill_grace: Duration,
     modes: Vec<PermissionMode>,
+    settings_source: Option<&Path>,
 ) -> Result<McpControlReply, HarnessError> {
     // Group modes whose admin flags are identical: one provider process each.
     let mut groups: Vec<(Vec<&'static str>, Vec<PermissionMode>)> = Vec::new();
@@ -724,7 +745,7 @@ async fn status_readbacks(
     let readbacks = futures::future::join_all(
         groups
             .into_iter()
-            .map(|(args, modes)| one_readback(exe, cwd, kill_grace, args, modes)),
+            .map(|(args, modes)| one_readback(exe, cwd, kill_grace, args, modes, settings_source)),
     )
     .await;
     let mut out = Vec::with_capacity(readbacks.len());

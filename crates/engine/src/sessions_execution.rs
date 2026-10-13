@@ -110,6 +110,9 @@ impl SessionsEngine {
         request: &mut luna_proto::RunRequest,
     ) -> Result<(), EngineError> {
         let mut prepare = || -> Result<(), EngineError> {
+            request
+                .model_options
+                .remove(luna_harness::LUNA_CLAUDE_MCP_SOURCE_OPTION);
             crate::provider_inputs::admit(
                 harness_id,
                 request.model.as_deref(),
@@ -146,7 +149,21 @@ impl SessionsEngine {
                     );
                 }
             }
-            self.apply_execution_policy(chat_id, harness_id, request)
+            self.apply_execution_policy(chat_id, harness_id, request)?;
+            if harness_id == HarnessId::ClaudeCode
+                && let Some(accounts) = self.inner.agent_accounts.get()
+            {
+                let mode = request
+                    .permission_policy
+                    .as_ref()
+                    .map(|p| p.effective_mode)
+                    .unwrap_or(luna_proto::PermissionMode::Ask);
+                request.model_options.insert(luna_harness::LUNA_CLAUDE_MCP_SOURCE_OPTION.into(), serde_json::json!({
+                    "file": accounts.claude_settings_source(),
+                    "revision": self.integration_source_stamp(harness_id, request.provider_account_id.as_deref(), &request.cwd, mode),
+                }));
+            }
+            Ok(())
         };
         prepare().map_err(|error| EngineError::DispatchPreflight(error.to_string()))
     }

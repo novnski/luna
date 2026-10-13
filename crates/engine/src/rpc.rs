@@ -10061,6 +10061,7 @@ impl EngineRpc {
                         project_root,
                         session,
                         p.probe_provider,
+                        self.agent_accounts.claude_settings_source(),
                     )
                     .await;
                     view

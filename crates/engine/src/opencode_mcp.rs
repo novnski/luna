@@ -245,6 +245,7 @@ pub(crate) async fn augment_inventory(
             ),
             Some(root) => {
                 let request = McpControlRequest {
+                    settings_source: None,
                     cwd: root.to_path_buf(),
                     op: McpControlOp::Status {
                         modes: vec![

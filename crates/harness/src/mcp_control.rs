@@ -55,6 +55,8 @@ pub enum McpControlOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpControlRequest {
+    /// Host-selected provider configuration, never a client credential payload.
+    pub settings_source: Option<PathBuf>,
     /// Absolute working directory (the selected project) for the provider.
     pub cwd: PathBuf,
     pub op: McpControlOp,

@@ -16,6 +16,14 @@ pub(crate) fn qa_enabled() -> bool {
     std::env::var_os(QA_ENV).as_deref() == Some(OsStr::new("1"))
 }
 
+/// A signed QA bundle can opt in to exact saved HTTP/SSE server names.
+/// Ambient configuration remains suppressed; an empty list permits none.
+pub(crate) fn scoped_server_allowed(name: &str) -> bool {
+    !qa_enabled()
+        || std::env::var("LUNA_QA_SCOPED_MCP_SERVERS")
+            .is_ok_and(|names| names.split(',').any(|selected| selected == name))
+}
+
 /// Metadata-only Claude processes have no reason to start saved MCP servers.
 pub(crate) fn claude_strict_empty(command: &mut Command) {
     command.args(["--strict-mcp-config", "--mcp-config", EMPTY_CLAUDE_MCP]);
@@ -35,6 +43,9 @@ pub(crate) fn codex_disable_args(
 ) -> Result<Vec<String>, HarnessError> {
     let mut args = Vec::with_capacity(servers.len() * 2);
     for server in servers {
+        if qa_enabled() && scoped_server_allowed(&server.name) {
+            continue;
+        }
         if !server
             .name
             .chars()

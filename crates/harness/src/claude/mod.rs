@@ -57,6 +57,7 @@ pub mod profile;
 mod runtime_controls;
 mod saved_output;
 mod schedules;
+mod scoped_mcp;
 mod tool_results;
 mod transport;
 mod turns;
@@ -793,7 +794,7 @@ impl ClaudeHarness {
             }
         })?;
 
-        let stdin = child
+        let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| HarnessError::Protocol("claude child has no stdin".into()))?;
@@ -811,6 +812,37 @@ impl ClaudeHarness {
                     tail.push(&line);
                 }
             });
+        }
+
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let source = request
+            .model_options
+            .remove(crate::LUNA_CLAUDE_MCP_SOURCE_OPTION);
+        let mut mcp_guard = None;
+        if !title_only
+            && tools == ToolSelection::ModeDefault
+            && (ClaudeLaunchProfile::for_request(&request, self.config_home.clone()).restricted()
+                || crate::mcp_isolation::qa_enabled())
+            && let Some(file) = source
+                .as_ref()
+                .and_then(|s| s.get("file"))
+                .and_then(Value::as_str)
+        {
+            let source = PathBuf::from(file);
+            if !source.is_absolute() {
+                return Err(HarnessError::Protocol(
+                    "MCP source must belong to the execution host.".into(),
+                ));
+            }
+            let servers = scoped_mcp::selected(&source, std::path::Path::new(&request.cwd))?;
+            if !servers.is_empty() {
+                mcp_guard = Some(scoped_mcp::Guard::new(
+                    source,
+                    request.cwd.clone().into(),
+                    &servers,
+                ));
+                scoped_mcp::attach(&mut stdin, &mut stdout_lines, servers).await?;
+            }
         }
 
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<StdinMsg>();
@@ -873,8 +905,9 @@ impl ClaudeHarness {
             norm,
             title_only,
             child,
-            stdout_lines: BufReader::new(stdout).lines(),
+            stdout_lines,
             stdin_tx,
+            mcp_guard,
             event_tx,
             controls,
             reasoning: request.reasoning,
@@ -958,6 +991,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
 }
 
 struct Session {
+    mcp_guard: Option<scoped_mcp::Guard>,
     norm: Normalizer,
     title_only: bool,
     child: Child,
@@ -998,6 +1032,7 @@ struct Cc06Session {
 /// mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mcp_guard,
         mut norm,
         title_only,
         mut child,
@@ -1034,7 +1069,8 @@ async fn run_session(session: Session) {
         permission_policy,
         Arc::new(request_input),
         stdin_tx.clone(),
-    );
+    )
+    .with_mcp_guard(mcp_guard);
     // Stop, or LUNA failing closed on a weaker native permission mode.
     let stop = interrupt.child_token();
 

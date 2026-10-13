@@ -55,6 +55,7 @@ pub(super) struct Controls {
 }
 
 struct Inner {
+    mcp_guard: Option<super::scoped_mcp::Guard>,
     title_only: bool,
     mode: PermissionMode,
     policy: PermissionPolicy,
@@ -113,6 +114,7 @@ impl Controls {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                mcp_guard: None,
                 title_only,
                 mode,
                 policy,
@@ -128,6 +130,13 @@ impl Controls {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(super) fn with_mcp_guard(mut self, guard: Option<super::scoped_mcp::Guard>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("new controls are uniquely owned")
+            .mcp_guard = guard;
+        self
     }
 
     /// Admit a new request id; `None` for a replay or an id already settled.
@@ -293,6 +302,15 @@ impl Controls {
         let input = request.get("input").cloned().unwrap_or_else(|| json!({}));
         let tool_use_id = text(request, "tool_use_id", 256);
         let deny = |message: &str| deny_response(message, tool_use_id.as_deref(), false);
+        let mcp_guard = self
+            .inner
+            .mcp_guard
+            .clone()
+            .filter(|guard| guard.owns(&tool));
+        if mcp_guard.as_ref().is_some_and(|guard| !guard.current()) {
+            self.answer(id, deny("MCP connection configuration changed; resume at a safe boundary before approving this call."));
+            return;
+        }
         if self.inner.title_only {
             self.answer(id, deny("Tools are disabled for title generation"));
             return;
@@ -341,7 +359,13 @@ impl Controls {
         let card = approval_card(id, &tool, request, &input, &self.inner.policy, &context);
         let choices = card.choices;
         let fallback = deny("Denied in LUNA: the request was not approved.");
+        let stale = deny(
+            "MCP connection configuration changed while approval was pending; resume at a safe boundary.",
+        );
         self.park(id, vec![card.question], token, move |question, answers| {
+            if mcp_guard.as_ref().is_some_and(|guard| !guard.current()) {
+                return stale.clone();
+            }
             exact_label(question, &answers)
                 .and_then(|label| choices.iter().find(|choice| choice.display.label == label))
                 .map(|choice| choice.response.clone())

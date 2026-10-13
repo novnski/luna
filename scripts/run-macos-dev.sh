@@ -45,6 +45,9 @@ if target.is_symlink() or dev.resolve() != dev:
     reject('target and bundle directory must not redirect through symlinks')
 data = pathlib.Path(data).resolve()
 custom = name != 'LUNA Dev' or bundle != 'com.novnski.luna.dev'
+scoped_mcp = os.environ.get('LUNA_DEV_QA_MCP_SERVERS', '')
+if scoped_mcp and (not custom or not re.fullmatch(r'[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+){0,15}', scoped_mcp)):
+    reject('scoped MCP server names require a QA identity and a bounded comma-separated list')
 if custom:
     if not re.fullmatch(r'LUNA QA [A-Za-z0-9][A-Za-z0-9 -]{0,48}', name) or name.endswith(' '):
         reject('custom app name must be LUNA QA followed by a safe, nonempty label')
@@ -251,11 +254,13 @@ if [[ -n "$WORKTREES_DIR" ]]; then
   # QA provider processes keep LUNA's own per-session MCP endpoint but do not
   # inherit the user's unrelated MCP connections during native acceptance.
   plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 1 "$staged_contents/Info.plist"
+  plutil -replace LSEnvironment.LUNA_QA_SCOPED_MCP_SERVERS -string "${LUNA_DEV_QA_MCP_SERVERS-}" "$staged_contents/Info.plist"
   [[ -z "$OPENCODE_QA_EXECUTABLE" ]] || plutil -replace LSEnvironment.OPENCODE_EXECUTABLE -string "$OPENCODE_QA_EXECUTABLE" "$staged_contents/Info.plist"
   [[ -z "$OPENCODE_QA_WIRE_LOG" ]] || plutil -replace LSEnvironment.LUNA_OPENCODE_WIRE_LOG -string "$OPENCODE_QA_WIRE_LOG" "$staged_contents/Info.plist"
 else
   # An inherited shell value must never turn isolation on for primary LUNA Dev.
   plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 0 "$staged_contents/Info.plist"
+  plutil -replace LSEnvironment.LUNA_QA_SCOPED_MCP_SERVERS -string '' "$staged_contents/Info.plist"
 fi
 plutil -replace CFBundleDisplayName -string "$APP_NAME" "$staged_contents/Info.plist"
 plutil -replace CFBundleName -string "$APP_NAME" "$staged_contents/Info.plist"

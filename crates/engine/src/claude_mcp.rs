@@ -317,6 +317,7 @@ pub(crate) async fn augment_inventory(
     project_root: Option<&Path>,
     session: Option<SessionMcpObservation>,
     probe: bool,
+    settings_source: &Path,
 ) {
     let mut readbacks = Vec::new();
     if probe {
@@ -327,6 +328,7 @@ pub(crate) async fn augment_inventory(
             ),
             Some(root) => {
                 let request = McpControlRequest {
+                    settings_source: Some(settings_source.to_path_buf()),
                     cwd: root.to_path_buf(),
                     op: McpControlOp::Status {
                         modes: vec![
@@ -395,6 +397,7 @@ pub(crate) async fn set_enabled(
     }
     let _guard = ACTION_LOCK.lock().await;
     let request = McpControlRequest {
+        settings_source: None,
         cwd: root.to_path_buf(),
         op: McpControlOp::SetEnabled {
             server: server.to_owned(),
@@ -498,6 +501,7 @@ pub(crate) async fn read_app_resource(
         return Err("Only MCP Apps ui:// resources can be inspected.".into());
     }
     let request = McpControlRequest {
+        settings_source: None,
         cwd: root.to_path_buf(),
         op: McpControlOp::ReadAppResource {
             server: server.to_owned(),
