@@ -80,13 +80,7 @@ fn mcp_button(
 
 impl HarnessesPage {
     fn mcp_scope(&self, cx: &Context<Self>) -> (HarnessId, Option<String>) {
-        (
-            self.integration_provider,
-            self.state
-                .read(cx)
-                .selected_space_row()
-                .map(|space| space.id.clone()),
-        )
+        (self.integration_provider, self.inventory_project_id(cx))
     }
 
     /// Drop results that belong to another provider or project.

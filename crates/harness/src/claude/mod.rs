@@ -574,6 +574,9 @@ impl Harness for ClaudeHarness {
     ) -> Option<crate::mcp_control::SessionMcpObservation> {
         self.mcp_sessions.get(provider_session_id)
     }
+    fn session_skill_names(&self, provider_session_id: &str, cwd: &str) -> Option<Vec<String>> {
+        self.mcp_sessions.skill_names(provider_session_id, cwd)
+    }
 
     /// CC-10: Claude forks follow the Agent SDK `forkSession` contract.
     fn fork_capability(&self) -> luna_proto::ProviderForkCapability {
@@ -1194,8 +1197,11 @@ async fn run_session(session: Session) {
                     saved_output.observe(&frame);
                     let saved_admission = saved_output.admission(&frame);
                     let luna_turn = luna.as_mut().and_then(|luna| luna.observe(&frame));
-                    for mut ev in norm
-                        .normalize_native(frame, interrupted)
+                    let normalized = norm.normalize_native(frame, interrupted);
+                    if let (Some(receipt), Some(registry)) = (norm.take_init_integration_receipt(), &mcp_sessions) {
+                        registry.observe_integrations(receipt);
+                    }
+                    for mut ev in normalized
                         .into_iter()
                         .chain(luna_turn)
                     {

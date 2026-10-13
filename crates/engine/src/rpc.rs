@@ -9966,13 +9966,28 @@ impl EngineRpc {
                     p.target_device_id.as_deref(),
                     &self.engine_info.device_id,
                 )?;
-                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let chat = p.task_id.as_deref().map(|id| self.workspace.chat(id))
+                    .transpose().map_err(|e| RpcError::Failed(e.to_string()))?.flatten();
+                if p.task_id.is_some() && chat.as_ref().is_none_or(|chat|
+                    chat.device_id != self.engine_info.device_id || chat.space_id != p.project_id
+                    || chat.config.as_ref().is_none_or(|config| config.harness != p.provider)) {
+                    return Err(RpcError::BadParams("Inventory task, provider, project and owning host must match".into()));
+                }
+                let config = chat.as_ref().and_then(|chat| chat.config.as_ref());
+                let requested_account = config.and_then(|config| config.provider_account_id.as_deref());
+                let requested_mode = config.map_or(luna_proto::PermissionMode::Ask, |config| config.permission_mode);
+                let execution = self.agent_accounts.resolve_execution(p.provider, requested_account).ok();
+                let mut roots = self.skill_roots(p.project_id.as_deref())?;
+                if p.provider == HarnessId::Codex { roots.codex_home = execution.as_ref().and_then(|a| a.codex_home.clone()); }
+                if let Some(cwd) = chat.as_ref().and_then(|chat| chat.cwd.as_ref()) { roots.project_root = Some(cwd.into()); }
+                let cwd = roots.project_root.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                let observation = p.task_id.as_deref().and_then(|id| self.sessions.integration_observation(id));
+                let effective_mode = observation.as_ref().map(|o| o.mode);
+                let source_stamp = self.sessions.integration_source_stamp(p.provider, requested_account, &cwd, effective_mode.unwrap_or(requested_mode));
                 let project_root = roots.project_root.as_deref();
-                let view = if p.provider == HarnessId::Codex {
-                    let (home, force_file_auth) = self
-                        .agent_accounts
-                        .codex_usage_target()
-                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let mut view = if p.provider == HarnessId::Codex {
+                    let account = self.agent_accounts.resolve_execution(p.provider, requested_account).map_err(|e| RpcError::Failed(e.to_string()))?;
+                    let home = account.codex_home.clone().ok_or_else(|| RpcError::Failed("Codex home unavailable".into()))?;
                     let mut view = crate::integration_settings::skill_inventory(p.provider, &roots);
                     let workspace = project_root.unwrap_or(&home);
                     // The ordinary Settings read is filesystem-only. A native
@@ -9995,8 +10010,7 @@ impl EngineRpc {
                         );
                         // A selection change while the provider responds must
                         // not be published under the previous account's home.
-                        if self.agent_accounts.codex_usage_target().ok()
-                            != Some((home.clone(), force_file_auth))
+                        if self.agent_accounts.resolve_execution(p.provider, requested_account).ok().as_ref() != Some(&account)
                         {
                             return Err(RpcError::Failed(
                                 "Codex account selection changed during inventory refresh".into(),
@@ -10078,6 +10092,67 @@ impl EngineRpc {
                 } else {
                     crate::integration_settings::skill_inventory(p.provider, &roots)
                 };
+                let current_chat = p.task_id.as_deref().map(|id| self.workspace.chat(id))
+                    .transpose().map_err(|e| RpcError::Failed(e.to_string()))?.flatten();
+                if chat.as_ref().map(|c| (&c.config, &c.cwd, &c.space_id, &c.device_id))
+                    != current_chat.as_ref().map(|c| (&c.config, &c.cwd, &c.space_id, &c.device_id))
+                    || source_stamp != self.sessions.integration_source_stamp(p.provider, requested_account, &cwd, effective_mode.unwrap_or(requested_mode)) {
+                    return Err(RpcError::Failed("Inventory ownership or configuration changed during discovery; retry".into()));
+                }
+                let session_id = self.provider_session_for_inventory(p.provider, p.task_id.as_deref(), p.project_id.as_deref());
+                let stale = observation.as_ref().is_some_and(|observation|
+                    observation.provider != p.provider || observation.stamp != source_stamp
+                    || observation.requested_mode != requested_mode || observation.session_id != session_id);
+                let scope_reason = if stale { Some("Session evidence is stale after a mode, account or configuration change. Resume at a safe boundary and refresh.".into()) }
+                    else if observation.as_ref().is_none_or(|o| o.session_id.is_none()) { Some("No current session observation. Start or resume this chat, then refresh; configuration is not call evidence.".into()) }
+                    else { None };
+                let native_skills = session_id.as_deref().and_then(|id| self.registry.resolve(p.provider).ok().and_then(|h| h.session_skill_names(id, &cwd)));
+                // Actual session calls may reveal a server absent from a disk-only catalog.
+                if let Some(observation) = &observation {
+                    for server in observation.calls.keys() {
+                        if !view.items.iter().any(|item| item.kind == luna_proto::IntegrationKind::McpServer && item.name == *server) {
+                            view.items.push(luna_proto::IntegrationInventoryItem {
+                                identity: Some(format!("session-mcp:{server}")), name: server.clone(), kind: luna_proto::IntegrationKind::McpServer,
+                                source: "provider session".into(), scope: "session".into(), configured: false, available: None,
+                                attached: None, reason: None, owner: luna_proto::IntegrationOwner::ProviderNative,
+                                actions: Default::default(), help_route: Default::default(), mcp: None, effective: None,
+                            });
+                        }
+                    }
+                }
+                for item in &mut view.items {
+                    let last_call = observation.as_ref().and_then(|o| o.calls.get(&item.name)).cloned();
+                    let reported = observation.as_ref().filter(|o| o.session_id.is_some()).map(|o| {
+                        if item.kind == luna_proto::IntegrationKind::McpServer {
+                            let prefix = format!("mcp__{}__", item.name);
+                            o.tools.iter().any(|tool| tool.starts_with(&prefix))
+                        } else { native_skills.as_ref().is_some_and(|names| names.contains(&item.name)) }
+                    });
+                    let attached = if stale { None } else if last_call.is_some() { Some(true) }
+                        else if item.kind == luna_proto::IntegrationKind::Skill { native_skills.as_ref().and_then(|names| if names.contains(&item.name) { None } else { Some(false) }) }
+                        else { item.attached };
+                    item.attached = attached;
+                    let callable = if stale { None } else if observation.as_ref().is_some_and(|o| o.successful_servers.contains(&item.name)) { Some(true) }
+                        else if p.provider == HarnessId::ClaudeCode && item.kind == luna_proto::IntegrationKind::McpServer { reported } else { None };
+                    item.effective = Some(luna_proto::IntegrationItemEvidence {
+                        delivery: if item.kind == luna_proto::IntegrationKind::Skill && p.provider == HarnessId::ClaudeCode && requested_mode != luna_proto::PermissionMode::Full {
+                            "guidanceOnly".into()
+                        } else { "native".into() },
+                        callable, verified: if stale { None } else { last_call.as_ref().map(|call| call.succeeded) }, stale,
+                        reason: scope_reason.clone().or_else(|| {
+                            if callable == Some(false) { Some("This session did not advertise the server's tools in this mode. Change mode only if needed, then resume and refresh.".into()) }
+                            else if item.kind == luna_proto::IntegrationKind::Skill && attached != Some(true) { Some("Native skill attachment is unverified; instruction guidance does not grant hooks or executable commands.".into()) }
+                            else { None }
+                        }), last_call,
+                    });
+                }
+                let generation = crate::repos::hex(&sha2::Sha256::digest(format!("{source_stamp}:{session_id:?}:{:?}", observation.as_ref().map(|o| &o.run_id)).as_bytes()));
+                view.effective_scope = Some(luna_proto::IntegrationInventoryScope {
+                    task_id: p.task_id.clone(), project_id: p.project_id.clone(),
+                    provider_account_id: execution.as_ref().map(|a| a.account_id.clone()), requested_mode, effective_mode,
+                    provider_session_id: session_id, run_id: observation.as_ref().map(|o| o.run_id.clone()),
+                    generation, discovered_at_ms: chrono::Utc::now().timestamp_millis(), stale, reason: scope_reason,
+                });
                 RpcReply::value(&view)
             }
             methods::SET_PROVIDER_MCP_SERVER_ENABLED | methods::READ_PROVIDER_MCP_APP_RESOURCE => {

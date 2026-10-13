@@ -72,6 +72,94 @@ pub struct SkillRoots {
     pub machine_id: String,
 }
 
+/// Opaque revision of settings and skill sources. Bounded, no symlink traversal;
+/// neither source contents nor private paths enter the inventory response.
+pub(crate) fn source_revision(provider: HarnessId, roots: &SkillRoots) -> String {
+    let mut hash = Sha256::new();
+    let mut pending = Vec::new();
+    let mut file = |path: PathBuf| {
+        hash.update(path.as_os_str().as_encoded_bytes());
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta)
+                if meta.is_file()
+                    && !meta.file_type().is_symlink()
+                    && meta.len() <= 1024 * 1024 =>
+            {
+                if let Ok(bytes) = std::fs::read(path) {
+                    hash.update(bytes);
+                }
+            }
+            _ => hash.update(b"unavailable"),
+        }
+    };
+    let home = match provider.kind() {
+        luna_proto::BuiltinHarnessId::Codex => roots.codex_home.as_ref(),
+        luna_proto::BuiltinHarnessId::ClaudeCode => Some(&roots.claude_home),
+        luna_proto::BuiltinHarnessId::Opencode => Some(&roots.opencode_home),
+        _ => None,
+    };
+    if let Some(home) = home.filter(|home| !home.as_os_str().is_empty()) {
+        file(home.join(if provider == HarnessId::Codex {
+            "config.toml"
+        } else {
+            "settings.json"
+        }));
+        pending.push(home.join("skills"));
+    }
+    if let Some(root) = &roots.project_root {
+        let names: &[&str] = match provider.kind() {
+            luna_proto::BuiltinHarnessId::Codex => &[".codex/config.toml"],
+            luna_proto::BuiltinHarnessId::ClaudeCode => &[
+                ".mcp.json",
+                ".claude/settings.json",
+                ".claude/settings.local.json",
+            ],
+            luna_proto::BuiltinHarnessId::Opencode => &["opencode.json", "opencode.jsonc"],
+            _ => &[],
+        };
+        for name in names {
+            file(root.join(name));
+        }
+        let skills = if provider == HarnessId::Codex {
+            ".agents/skills"
+        } else if provider == HarnessId::ClaudeCode {
+            ".claude/skills"
+        } else {
+            ".opencode/skills"
+        };
+        pending.push(root.join(skills));
+    }
+    let mut visited = 0;
+    while let Some(path) = pending.pop() {
+        visited += 1;
+        if visited > 1024 {
+            file(PathBuf::from("inventory-source-limit"));
+            break;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let mut children: Vec<_> = entries
+                    .take(1025)
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect();
+                children.sort();
+                children.reverse();
+                pending.extend(children);
+            }
+        } else {
+            file(path);
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
 struct SkillLocation {
     base: PathBuf,
     root: PathBuf,
@@ -224,6 +312,7 @@ pub fn skill_inventory(provider: HarnessId, roots: &SkillRoots) -> IntegrationIn
                 continue;
             }
             view.items.push(IntegrationInventoryItem {
+                effective: None,
                 identity: Some(provider_identity(
                     provider,
                     &roots.machine_id,
@@ -431,6 +520,7 @@ pub fn codex_inventory(
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             items.push(IntegrationInventoryItem {
+                effective: None,
                 identity: Some(inventory_identity(machine_id, source_id, &root, &name)),
                 name,
                 kind: IntegrationKind::Skill,
@@ -461,6 +551,7 @@ pub fn codex_inventory(
                             .and_then(toml::Value::as_bool)
                             .unwrap_or(true);
                         items.push(IntegrationInventoryItem {
+                effective: None,
                             identity: Some(inventory_identity(
                                 machine_id,
                                 "codex-mcp-config",
@@ -503,6 +594,7 @@ pub fn codex_inventory(
         (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
     });
     IntegrationInventoryView {
+        effective_scope: None,
         provider: HarnessId::Codex,
         machine_id: machine_id.into(),
         items,
@@ -573,6 +665,7 @@ pub fn apply_codex_skill_catalog(
             continue;
         }
         view.items.push(IntegrationInventoryItem {
+            effective: None,
             identity: Some(identity),
             name: skill.name.clone(),
             kind: IntegrationKind::Skill,
@@ -634,6 +727,7 @@ pub fn apply_codex_mcp_config(
             continue;
         }
         view.items.push(IntegrationInventoryItem {
+            effective: None,
             identity: Some(identity),
             name: server.name.clone(),
             kind: IntegrationKind::McpServer,
@@ -679,6 +773,7 @@ pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> Integrati
         _ => "This provider is no longer supported by LUNA.",
     };
     IntegrationInventoryView {
+        effective_scope: None,
         provider,
         machine_id: machine_id.into(),
         items: Vec::new(),

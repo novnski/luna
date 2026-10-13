@@ -18,6 +18,9 @@
 //! Every dying path must instead carry its own visible error (child crash with stderr,
 //! spawn failure, stream error, engine-restart recovery).
 
+#[path = "sessions/integration_runtime.rs"]
+mod integration_runtime;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -1209,6 +1212,7 @@ struct RoutedSteer {
 }
 
 struct Inner {
+    integration_evidence: integration_runtime::RuntimeInventory,
     device_id: String,
     journal: Arc<RunJournal>,
     recovery: Arc<RecoveryStore>,
@@ -1320,6 +1324,7 @@ impl SessionsEngine {
                 cross_task_backends: Mutex::new(Vec::new()),
                 agent_accounts: OnceLock::new(),
                 integration_settings: OnceLock::new(),
+                integration_evidence: Default::default(),
                 account_transition: Arc::new(AsyncMutex::new(())),
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
@@ -4268,6 +4273,12 @@ impl SessionsEngine {
         if let Some(checkpoints) = self.git_checkpoints() {
             checkpoints.start(chat_id, &run_id, &request.cwd).await;
         }
+        self.inner.integration_evidence.start(
+            &self.inner,
+            chat_id,
+            &run_id,
+            &RuntimeConfig::from_request(harness_id, &request),
+        );
         self.inner.runs.lock().insert(
             chat_id.to_string(),
             RunHandle {
@@ -6325,6 +6336,7 @@ impl Inner {
         permit: Option<&DeviceWritePermit>,
     ) -> Result<u64, EngineError> {
         let seq = self.journal.append_with_permit(chat_id, event, permit)?;
+        self.integration_evidence.observe(chat_id, event);
         if let Some(hub) = lock(&self.hubs).get(chat_id) {
             let _ = hub.send(JournaledEvent {
                 seq,

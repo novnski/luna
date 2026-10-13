@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-13T00:40:47+03:00.
+Generated 2026-10-13T03:35:32+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **15.9% accepted**, **12/76 Done**.
+Active scope: **16.9% accepted**, **12/76 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: SW-01, CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04, ZI-05
+Next eligible: CORE-05, IC-0, ZI-01, CORE-06, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -45,8 +45,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | --- | --- | --- | --- |
 | [SW-02 — Deliver scoped Claude MCP access in Ask/Auto](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-03 — Deliver approved skills in intended permission modes](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-00 — Rebase shared capability, ownership and acceptance baseline](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
+| [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | in_progress | 75.0% | codex |
 
 ## Transcript trust, recovery and current checklist
 

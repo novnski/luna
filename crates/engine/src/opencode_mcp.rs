@@ -168,6 +168,7 @@ pub(crate) fn merge_inventory(
             .or_else(|| session_state.as_ref().map(|state| state.status))
             .unwrap_or_default();
         view.items.push(IntegrationInventoryItem {
+            effective: None,
             identity: Some(server_identity(&view.machine_id, project_root, &name)),
             reason: Some(reason_text(&name, row, readback.is_some(), session_row)),
             source: if row.is_some() {

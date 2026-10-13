@@ -1,0 +1,203 @@
+{
+  "matrix": [
+    {
+      "index": 0,
+      "provider": "codex",
+      "mode": "ask",
+      "nonceMatched": true,
+      "currentCallVerified": true,
+      "account": "codex-native",
+      "generation": "bdde41844dcdb0f1c2899294a3c3885961fbf8b7a55f7d2071e9b863d2af0aaf"
+    },
+    {
+      "index": 1,
+      "provider": "codex",
+      "mode": "full",
+      "nonceMatched": true,
+      "currentCallVerified": true,
+      "account": "codex-native",
+      "generation": "773b8d6dd1cee3c1f1a315ecad4350d87ee09cac691efe878d0344dfb5172688"
+    },
+    {
+      "index": 2,
+      "provider": "claude-code",
+      "mode": "ask",
+      "nonceMatched": true,
+      "currentCallVerified": true,
+      "account": "claude-native",
+      "generation": "d35bc98a5e8e6f592e74aa1da7534a41f955ce8134150eda7097ffadd7799cd5"
+    },
+    {
+      "index": 3,
+      "provider": "claude-code",
+      "mode": "full",
+      "nonceMatched": true,
+      "currentCallVerified": true,
+      "account": "claude-native",
+      "generation": "e3830534fca1b35e0b33bbccc3eb8a924395d5536235edddc8a75c2beb7cb7a1"
+    }
+  ],
+  "denials": [
+    {
+      "index": 0,
+      "deniedToolResults": 1,
+      "denialExplained": true
+    },
+    {
+      "index": 1,
+      "deniedToolResults": 1,
+      "denialExplained": true
+    },
+    {
+      "index": 2,
+      "deniedToolResults": 1,
+      "denialExplained": true
+    },
+    {
+      "index": 3,
+      "deniedToolResults": 1,
+      "denialExplained": true
+    }
+  ],
+  "restartClearedCurrentProof": true,
+  "safeBoundaryModeChangeRevalidated": true,
+  "nativeUiVerifiedRowObserved": true,
+  "draftAndModelPreservedOnRejection": true,
+  "scopedQaPid": 54221,
+  "ipcPort": 59844,
+  "buildSeconds": [
+    105,
+    90,
+    98
+  ],
+  "limits": [
+    "Selected primary modes: Codex Ask/Full and Claude Ask/Full. Claude Auto is secondary and not certified live here.",
+    "Native skill names alone do not prove scoped skill content or executable hook delivery; SW-03 owns that workflow.",
+    "Model-visible LUNA MCP calls were verified. This does not certify every configured external connector."
+  ],
+  "checks": [
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_mcp_inventory --test claude_permissions --test usage_account_selection -- --nocapture",
+      "exitCode": 0,
+      "passed": 4,
+      "log": "engine-final.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-rpc --test contract",
+      "exitCode": 0,
+      "passed": 3,
+      "log": "contract-final.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine -p luna-harness -p luna-ui --all-targets",
+      "exitCode": 0,
+      "log": "clippy-final.log"
+    },
+    {
+      "command": "scripts/cargo.sh fmt --all --check",
+      "exitCode": 0,
+      "log": "format-final.log"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh check --locked -p luna-ui --features appshots-fixture --examples",
+      "exitCode": 0,
+      "log": "fixture-compile.log"
+    },
+    {
+      "command": "agent-python target/qa/luna-only-workflows/sw01-20261013/native_inventory.py {start,snapshot,deny,mode-change} --index N",
+      "exitCode": 0,
+      "boundary": "signed isolated GUI + real provider CLI + LUNA MCP",
+      "evidence": "native-proof.json and hashed snapshots",
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "evidenceRoot": "target/qa/luna-only-workflows/sw01-20261013",
+  "evidenceHashes": {
+    "allowed-resumed-0.json": "9c5c86c9c7eca0edd4edac6c4db4466485f2a718697901f54f90871ccfbb2933",
+    "allowed-resumed-1.json": "ad37d030d8e4b2af988bfc4716b55f5a8548d86f5e840b6a5abdaff3c401a370",
+    "allowed-resumed-2.json": "06fc6d47366a7e9550253ab3b1f4f088e2b8a10fa8b69ce4b8eab16fe651025a",
+    "allowed-resumed-3.json": "429f449c6bf7f7a0f0ace087d8116ec696481c0221cc5ade0ebe67192fe18334",
+    "denial-proof.json": "fb97b8e53b845245baf725cd94524dcd94e8127faa7a576855995d5b0e7ac9bb",
+    "disposable-fixture-hashes.json": "2f209e440b20db7c30b6e5606b50bb3a8a0c22d5a3bc1e668b77c4a87103959b",
+    "final-claude-summary.json": "471a528a5d0b11aebe9946b5b8deb56daed3370072c49cb5476519db3e676bdb",
+    "final-codex-summary.json": "72364a3362e86b2e78e675c2ba7513fcf4dfc96d7b977ad4d1a8a143bf615a88",
+    "final-native-config-revalidation.json": "1a4e555806bb3c63f7c669baa57e349e9c36678ce2fa5453e9a1448fd9c91f94",
+    "manifest.json": "0ede4ce0b8a8a3b7ab65b2cdcdf9e7cf9fbd546c11030f0d77bb2ef8cf3a501e",
+    "mode-change-2.json": "d69eab921257c1f882eb591ae16816205a7e03c6956511557e6fb664759d079a",
+    "mode-transition-native.json": "cb22e59481a292a7ee63e0e49c79e07d5b82af824710b7980f49aa8f9cec409c",
+    "mode-transition-summary.json": "63f01dd7919c47006ee718a6c478899a10f511a7cedc39e8a3f837e8a60951a1",
+    "native-0-snapshot.json": "17173e264ea90d91f487683354ac8e1f7456707fa8883c3c2bc159cfb1ea52ac",
+    "native-1-snapshot.json": "b82bfd25af35ad0f7cbb5ca40193a39587e9e9e0757ef57a234e0c85e4059fff",
+    "native-2-snapshot.json": "cb22e59481a292a7ee63e0e49c79e07d5b82af824710b7980f49aa8f9cec409c",
+    "native-3-snapshot.json": "2a4a5af2e4231cecc6e7260b4b40e616ac9777a5fd4d6ac2494b6131c0b1c725",
+    "native-draft-after-rejection.png": "b4151c15d5bfb4d1b45b47dd48fb5431e9a532d91d6d21c145b95432d5c51af1",
+    "native-final-config-revalidation.png": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6",
+    "native-owner-rejection.json": "b7dc740216227d29e5aaf418d1a9b852e29e5129aadb4e412006ac106cbf6d2c",
+    "native-scope-and-skills.png": "c7751a8583c9f39d9c6e653451fa4bb575ffdd24648d3ce9f5586ae1c50b147d",
+    "native-verified-row.ax.txt": "0b0a61aec09b4988ee4368e67c3d89d439af52f4dac7518247fbcc21632ff381",
+    "native-verified-row.png": "da70ee8320e54a3f78f525302a5b4ea23a6d1cb170bdb14f7bdb5e47ee62302a",
+    "native_inventory.py": "dae5ad3d6245786560b31f824553cef072570ad6607888358b7ef62f2116f113",
+    "pre-fix.json": "a57ddbf2ad086d63007fec51a4fbd3a0e82c74e14667d5d2fa6b6bb80231e099",
+    "qa-bundle.sha256": "877e964a9a7a90b2e5f6e0b8039d8c20141bb1aed368cf755801e9c6dd50a761",
+    "qa-cleanup.json": "4915465489680431eb58100ddf123b3ab6aba694c0bcbee3916e4faf343e646d",
+    "qa-final-bundle.sha256": "2fa82aae1fa1641fc885cd64cf1b7f0dd890da4811676f6a0ac5c94bb058d6f8",
+    "request-0-1dc6aa25-1c09-4225-b63e-ef3ff4ea8c99.json": "a273d5a571975ae3b7a6de922cf732bf2699b35c1967e7864c9246249b3b576d",
+    "request-0-56e125b4-ea80-4d55-81f4-90033822449b.json": "852ee0428e6027742b13f066eeb6ad8537920009f5e18c23c31cc43262896c00",
+    "request-0-7c899f55-0b0f-482a-9446-61904e25e50d.json": "2a58ab1922a40cba16f7ef596ae691ee040152338bc34f18e90b4fb26ab0c63b",
+    "request-1-55ba7699-ff19-49a7-9a6c-850ab5abe046.json": "def3e32ae02a986225838e72e52a2992018eb5e952c25601d3885b9b66774dca",
+    "request-1-6818e000-d556-4fff-b026-d42c519ad81b.json": "613e9d5e113bc15f3ca84e115d491fd64ef2e80fe12e17d32904cb9234280dd8",
+    "request-1-993f093b-fcf8-4ece-9523-9298562b9725.json": "cedead9e022ed920fc2424ff9148a61c29ca9f304e7dbee249988e3f2952ba0b",
+    "request-1-bd281fe7-2b8d-4a4c-b214-bb5c0df75248.json": "b14fab788ace8bd9fe2e45872b9ea0b30fbb84693c0fca048ddce0772cd53d2d",
+    "request-1-cbe5b232-33d8-4759-87e7-349fd5989bc3.json": "adbc90dd110d0052ed32c1c3ea1cf97dc93304cbfd4dc21af3b48991790c0c58",
+    "request-2-7ca9b64d-fba3-4088-8071-6f3dfa8cce87.json": "ba478289023dedc2204d5d0fa7f4c9f62340d3247ebe98282d76752d955fca0b",
+    "request-2-a8cae990-f4ca-4488-bfa2-1fc86dd7b1f5.json": "2de261b4794d39c72ead099657da707c7ac93e5c41e9ef9016010cb0eeee09cf",
+    "request-2-db0d9b31-c9eb-4375-addc-6bfe0555517a.json": "ceec03317befd3b63e735b91ee7e0ed494b83b547abe8e67f47b7f4ad6d1e7b3",
+    "request-2-e72c6a6b-05ac-4a80-b6c2-b684fd258242.json": "a9362b7795ca705fb48b6a02bad0630a568ff61e368277d90a3d0aef465b2d56",
+    "request-3-0db3b8bf-975b-427a-9350-f11193b19b7c.json": "f5e2264b0cf3c8dd648b5d1f24db92aa6f4852a6d8de1cdbf5e86f10fbcbd5d3",
+    "request-3-d0fce7c3-8ec2-4070-a43f-52da480b579c.json": "23ce69f1343de4ca697e4705b558b094f6398eae0c124fd1729802972e2cee84",
+    "request-3-ec35de6b-9d72-41f3-a3a4-0cfbd7928346.json": "3132a03019b394a5fff56c73cf8f03b0e6c0f1c319c3b81d9a0773fb3bfe5721",
+    "request-3-ffc3e570-4e8f-492e-9559-75499d1e03a1.json": "0a8ae60fbfe670907ba4318ddf08a10b6dab046988ddee7936a2994a1e13eb58",
+    "restart-unknown-summary.json": "de84664b5805a58b646323ac4e724836f4e934f7af41d055d91142a442ae7ea2",
+    "restart-unknown.json": "315b07ac3727cfb1195c5ebc2cfe91ed1977eb5adbe641368651b5808facd73e"
+  },
+  "checkLogHashes": {
+    "engine-final.log": "3b35565e099331374e14defb495cc21b098e3c33959d64d9c468dd89b5c65fd2",
+    "contract-final.log": "e44d9e70129b2401d114403d4e984420775160df6e3b3c1cec3ea3622f286ea3",
+    "clippy-final.log": "eba6809a7e4fcc67ec0a16acc64a9dd833c3a95333b962ee48807e06a0f3e5f8",
+    "format-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fixture-compile.log": "e25b033cb99b0e1b2d4b95abd6354a6995e2f5a58cfaadbbbedaf146317047c2"
+  },
+  "finalBinary": {
+    "qaPid": 59756,
+    "buildSeconds": 100,
+    "signatureVerified": true,
+    "actualCallVerified": true,
+    "sameChatConfigStalesEvidence": true,
+    "openNativePageAutomaticallyRevalidated": true
+  },
+  "handoff": {
+    "app": "LUNA Dev",
+    "pid": 63526,
+    "ipcPort": 59777,
+    "buildSeconds": 5,
+    "signatureExitCode": 0,
+    "exactBundleProcessAndPortVerified": true,
+    "qaBundleRemoved": true,
+    "qaDataAndBuildCachePreserved": true
+  },
+  "handoffLogHashes": {
+    "qa-final-refresh.log": "3097edc35ece30b71a10f39db59160d117d6dc756f13ea8fb3a05f85556e3bf2",
+    "qa-final-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dev-refresh.log": "1b0f80974cfa5e1ecb2f1dc7f7f2c3eba05852abb7be6ca3c5e0371e5cdfa418",
+    "dev-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

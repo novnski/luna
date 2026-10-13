@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791841247.531508,
+  "created_at": 1791851732.56791,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
       "done": 17,
-      "in_progress": 0,
+      "in_progress": 1,
       "paused": 0,
-      "ready": 63,
+      "ready": 62,
       "review": 0
     },
     "groups": [
@@ -131,9 +131,9 @@
         "tasks": 4,
         "done": 1,
         "remaining": 3,
-        "accepted_units": 4,
+        "accepted_units": 7,
         "total_units": 16,
-        "acceptance_percent": 25.0,
+        "acceptance_percent": 43.8,
         "milestone_status": {}
       },
       {
@@ -375,13 +375,12 @@
       "tasks": 76,
       "done": 12,
       "remaining": 64,
-      "accepted_units": 47,
+      "accepted_units": 50,
       "total_units": 296,
-      "acceptance_percent": 15.9
+      "acceptance_percent": 16.9
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-01",
       "CORE-05",
       "IC-0",
       "ZI-01",
@@ -961,16 +960,6 @@
       "note": "Read the CORE-23 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
       "status": "ready",
       "updated_at": 1791676598.6723762
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-01",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958406
     },
     {
       "attempts": 0,
@@ -2497,6 +2486,69 @@
       "note": "CORE-04 delivered on verified origin/main 8b1b1bff. Opaque provider IDs, collision-safe registry, host capability/model provenance and live picker are functional. 10 focused engine + 3 contract cases pass; native unavailable-provider/restart/external-toggle proof retained. Primary Dev ready. External installed provider execution remains CORE-08; no iOS changes or physical-phone use.",
       "status": "done",
       "updated_at": 1791841247.441602
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791851732.242553,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+              "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+            }
+          ],
+          "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+        },
+        "delivery": {
+          "at": 1791851732.351682,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+              "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+            },
+            {
+              "ref": "target/qa/luna-only-workflows/sw01-20261013/native-final-config-revalidation.png",
+              "sha256": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6"
+            }
+          ],
+          "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
+        },
+        "verification": {
+          "at": 1791851732.459837,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+              "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+            },
+            {
+              "ref": "target/qa/luna-only-workflows/sw01-20261013/engine-final.log",
+              "sha256": "3b35565e099331374e14defb495cc21b098e3c33959d64d9c468dd89b5c65fd2"
+            }
+          ],
+          "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile."
+        }
+      },
+      "id": "SW-01",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791850914.398589,
+        "expires_at": 1791858439.5568051,
+        "heartbeat_at": 1791851239.5568051,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
+        "expired": false
+      },
+      "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile.",
+      "recovery_evidence": [
+        {
+          "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+          "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791851732.460856
     }
   ],
   "events": [
@@ -10322,6 +10374,501 @@
           "claimed_at": 1791836068.768116,
           "expires_at": 1791843475.6275861,
           "heartbeat_at": 1791839875.6275861,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 276,
+      "task": "SW-01",
+      "at": 1791841610.9682791,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791845210.968174,
+          "heartbeat_at": 1791841610.968174,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 277,
+      "task": "SW-01",
+      "at": 1791842654.6763499,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791846254.676208,
+          "heartbeat_at": 1791842654.676208,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 278,
+      "task": "SW-01",
+      "at": 1791843194.435185,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791846794.43505,
+          "heartbeat_at": 1791843194.43505,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 279,
+      "task": "SW-01",
+      "at": 1791843408.752597,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791847008.7523048,
+          "heartbeat_at": 1791843408.7523048,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 280,
+      "task": "SW-01",
+      "at": 1791843915.234111,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791847515.234001,
+          "heartbeat_at": 1791843915.234001,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 281,
+      "task": "SW-01",
+      "at": 1791844829.928204,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791848429.928093,
+          "heartbeat_at": 1791844829.928093,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 282,
+      "task": "SW-01",
+      "at": 1791845106.8280802,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791848706.827987,
+          "heartbeat_at": 1791845106.827987,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 283,
+      "task": "SW-01",
+      "at": 1791845425.271632,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791849025.271551,
+          "heartbeat_at": 1791845425.271551,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 284,
+      "task": "SW-01",
+      "at": 1791845698.29825,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791849298.298156,
+          "heartbeat_at": 1791845698.298155,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 285,
+      "task": "SW-01",
+      "at": 1791846283.9967349,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791849883.996626,
+          "heartbeat_at": 1791846283.996626,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 286,
+      "task": "SW-01",
+      "at": 1791846498.9505951,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expired": false,
+          "expires_at": 1791850098.9504662,
+          "heartbeat_at": 1791846498.9504662,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 287,
+      "task": "SW-01",
+      "at": 1791850914.279645,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Same owner and actual chat continuing after context rollover; all previous build tools finished, no other source writer. Main and feature changes preserved; live QA evidence retained. Next: final evidence, scoped QA cleanup, primary refresh and main delivery.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791841610.968174,
+          "expires_at": 1791850098.9504662,
+          "heartbeat_at": 1791846498.9504662,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 288,
+      "task": "SW-01",
+      "at": 1791850914.398804,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Same owner and actual chat continuing after context rollover; all previous build tools finished, no other source writer. Main and feature changes preserved; live QA evidence retained. Next: final evidence, scoped QA cleanup, primary refresh and main delivery.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858114.398589,
+          "heartbeat_at": 1791850914.398589,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 289,
+      "task": "SW-01",
+      "at": 1791851239.558441,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Same owner and actual chat continuing after context rollover; all previous build tools finished, no other source writer. Main and feature changes preserved; live QA evidence retained. Next: final evidence, scoped QA cleanup, primary refresh and main delivery.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 290,
+      "task": "SW-01",
+      "at": 1791851732.2428238,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791851732.242553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              }
+            ],
+            "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+          }
+        },
+        "criterion": "contract",
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 291,
+      "task": "SW-01",
+      "at": 1791851732.352194,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791851732.242553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              }
+            ],
+            "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+          },
+          "delivery": {
+            "at": 1791851732.351682,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/native-final-config-revalidation.png",
+                "sha256": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6"
+              }
+            ],
+            "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 292,
+      "task": "SW-01",
+      "at": 1791851732.461003,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791851732.242553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              }
+            ],
+            "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+          },
+          "delivery": {
+            "at": 1791851732.351682,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/native-final-config-revalidation.png",
+                "sha256": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6"
+              }
+            ],
+            "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
+          },
+          "verification": {
+            "at": 1791851732.459837,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/engine-final.log",
+                "sha256": "3b35565e099331374e14defb495cc21b098e3c33959d64d9c468dd89b5c65fd2"
+              }
+            ],
+            "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
           "owner": "codex",
           "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }

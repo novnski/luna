@@ -171,6 +171,7 @@ pub struct HarnessesPage {
     model_refresh_result: Option<(bool, String)>,
     instructions: Loadable<InstructionSettingsView>,
     inventory: Loadable<IntegrationInventoryView>,
+    inventory_focus_config: Option<luna_proto::ChatConfig>,
     integration_provider: HarnessId,
     instruction_project_id: Option<String>,
     global_input: Entity<ComposerInput>,
@@ -227,17 +228,15 @@ impl HarnessesPage {
             // attachment below follows that same chat.
             let task_id = page.state.read(cx).execution_focus_chat();
             let generation = page.state.read(cx).engine_generation();
-            if task_id != page.runtime_task_id || generation != page.runtime_generation {
+            let focus_config = page.inventory_chat_config(cx);
+            if task_id != page.runtime_task_id
+                || generation != page.runtime_generation
+                || focus_config != page.inventory_focus_config
+            {
                 page.load_runtime_contract(cx);
                 // Claude and OpenCode MCP attachment is per selected chat
                 // session.
-                if matches!(
-                    (page.integration_provider).kind(),
-                    luna_proto::BuiltinHarnessId::ClaudeCode
-                        | luna_proto::BuiltinHarnessId::Opencode
-                ) {
-                    page.load_inventory(false, cx);
-                }
+                page.load_inventory(false, cx);
                 cx.notify();
             }
             let project_id = page
@@ -271,6 +270,7 @@ impl HarnessesPage {
             model_refresh_result: None,
             instructions: Loadable::Idle,
             inventory: Loadable::Idle,
+            inventory_focus_config: None,
             integration_provider: HarnessId::Codex,
             instruction_project_id: None,
             global_input,
@@ -586,17 +586,56 @@ impl HarnessesPage {
         cx.notify();
     }
 
+    fn inventory_chat_config(&self, cx: &Context<Self>) -> Option<luna_proto::ChatConfig> {
+        let state = self.state.read(cx);
+        let id = state.execution_focus_chat()?;
+        state
+            .chats
+            .iter()
+            .find(|chat| chat.id == id)
+            .and_then(|chat| chat.config.clone())
+    }
+
+    fn inventory_project_id(&self, cx: &Context<Self>) -> Option<String> {
+        let state = self.state.read(cx);
+        if let Some(chat) = state.execution_focus_chat().as_deref().and_then(|id| {
+            state.chats.iter().find(|chat| {
+                chat.id == id
+                    && chat
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| config.harness == self.integration_provider)
+            })
+        }) {
+            return chat.space_id.clone();
+        }
+        state.selected_space_row().map(|space| space.id.clone())
+    }
+
     fn load_inventory(&mut self, probe_provider: bool, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
         let provider = self.integration_provider;
-        let project_id = self
-            .state
-            .read(cx)
-            .selected_space_row()
-            .map(|space| space.id.clone());
-        let task_id = self.state.read(cx).selected_chat.clone();
+        let focus_id = self.state.read(cx).execution_focus_chat();
+        let focus_config = self.inventory_chat_config(cx);
+        self.inventory_focus_config = focus_config.clone();
+        let task_id = focus_id.as_deref().and_then(|id| {
+            self.state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| {
+                    chat.id == id
+                        && chat
+                            .config
+                            .as_ref()
+                            .is_some_and(|config| config.harness == provider)
+                })
+                .map(|chat| chat.id.clone())
+        });
+        let project_id = self.inventory_project_id(cx);
+        let engine_generation = self.state.read(cx).engine_generation();
         self.mcp_sync_scope(cx);
         self.inventory = Loadable::Loading;
         self.inventory_task = Some(cx.spawn(async move |this, cx| {
@@ -613,14 +652,12 @@ impl HarnessesPage {
                         .map_err(|e| e.to_string())
                 });
             this.update(cx, |page, cx| {
-                if page.target_device.is_some()
+                if page.state.read(cx).engine_generation() != engine_generation
+                    || page.state.read(cx).execution_focus_chat() != focus_id
+                    || page.inventory_chat_config(cx) != focus_config
+                    || page.target_device.is_some()
                     || page.integration_provider != provider
-                    || page
-                        .state
-                        .read(cx)
-                        .selected_space_row()
-                        .map(|space| space.id.clone())
-                        != project_id
+                    || page.inventory_project_id(cx) != project_id
                 {
                     return;
                 }
@@ -1485,12 +1522,29 @@ impl HarnessesPage {
         let context: SharedString = match &self.inventory {
             Loadable::Ready(view) => {
                 let mut context = format!("Device: {}.", view.machine_id);
-                if let Some(task_id) = self.state.read(cx).selected_chat.as_deref() {
+                if let Some(task_id) = view
+                    .effective_scope
+                    .as_ref()
+                    .and_then(|scope| scope.task_id.as_deref())
+                {
                     context.push_str(&format!(
                         " Selected chat: {}. Skill attachment reflects only exact provider \
                          session evidence; unknown means no verified readback.",
                         self.chat_title(task_id, cx)
                     ));
+                }
+                if let Some(scope) = &view.effective_scope {
+                    let age = (chrono::Utc::now().timestamp_millis() - scope.discovered_at_ms)
+                        .max(0)
+                        / 1000;
+                    context.push_str(&format!(" Account: {}. Selected access: {:?}; session access: {}. Checked {age}s ago{}.",
+                        scope.provider_account_id.as_deref().unwrap_or("unverified"), scope.requested_mode,
+                        scope.effective_mode.map(|mode| format!("{mode:?}")).unwrap_or_else(|| "unverified".into()),
+                        if scope.stale { "; stale session evidence" } else { "" }));
+                    if let Some(reason) = &scope.reason {
+                        context.push(' ');
+                        context.push_str(reason);
+                    }
                 }
                 context.into()
             }
@@ -1662,33 +1716,52 @@ impl HarnessesPage {
         } else {
             "MCP"
         };
-        let available = match item.available {
-            Some(true) => "available",
-            Some(false) => "unavailable",
-            None => "availability unknown",
-        };
         let attached = match item.attached {
             Some(true) => "attached",
             Some(false) => "not attached",
             None => "attachment unknown",
         };
+        let evidence = item.effective.as_ref();
+        let status = if item.kind == IntegrationKind::Skill {
+            if evidence.is_some_and(|e| e.stale) {
+                "stale session evidence"
+            } else if item.attached == Some(true) {
+                "native skill attached"
+            } else {
+                "native attachment unverified"
+            }
+        } else if evidence.is_some_and(|e| e.stale) {
+            "stale call evidence"
+        } else if evidence.is_some_and(|e| e.verified == Some(true)) {
+            "successful call verified"
+        } else if evidence.is_some_and(|e| e.verified == Some(false)) {
+            "last call denied or failed"
+        } else if evidence.is_some_and(|e| e.callable == Some(false)) {
+            "not callable in this session"
+        } else {
+            attached
+        };
+        let delivery = if evidence.is_some_and(|e| e.delivery == "guidanceOnly") {
+            " · guidance only"
+        } else {
+            ""
+        };
         let text = widgets::row_text(
             theme,
             item.name.clone(),
-            Some(
-                format!(
-                    "{kind} · {} · {} · configured · {available} · {attached}",
-                    item.source, item.scope
-                )
-                .into(),
-            ),
+            Some(format!("{kind} · {} · {status}{delivery}", item.scope).into()),
         )
-        .when_some(item.reason.clone(), |el, reason| {
-            el.child(widgets::row_description(theme, reason))
-        })
-        .when_some(item.actions.reason.clone(), |el, reason| {
-            el.child(widgets::row_description(theme, reason))
-        });
+        .when_some(
+            evidence
+                .filter(|e| e.stale || e.callable == Some(false) || item.available == Some(false))
+                .and_then(|e| e.reason.clone())
+                .or_else(|| {
+                    (item.available == Some(false))
+                        .then(|| item.reason.clone())
+                        .flatten()
+                }),
+            |el, reason| el.child(widgets::row_description(theme, reason)),
+        );
         let (facts, mut actions) = match item.mcp.as_ref() {
             Some(details) => self.mcp_row_parts(theme, item, details, cx),
             None => (Vec::new(), Vec::new()),

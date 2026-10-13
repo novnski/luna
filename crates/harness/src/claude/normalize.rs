@@ -14,11 +14,10 @@ const MAX_OBSERVED_CWD_BYTES: usize = 2_048;
 /// status words are not inventory attachment, health, callability or grants.
 // Owned by SW-01 (effective per-chat tool/skill inventory), which wires a
 // read-only consumer or retires this with its tests (CORE-02 decision).
-#[allow(dead_code)]
-struct SessionIntegrationReceipt {
-    session_id: String,
-    cwd: String,
-    observed: InitIntegrationObservation,
+pub(super) struct SessionIntegrationReceipt {
+    pub(super) session_id: String,
+    pub(super) cwd: String,
+    pub(super) observed: InitIntegrationObservation,
 }
 
 fn bounded_observation_identity(session_id: &str, cwd: &str) -> bool {
@@ -281,8 +280,7 @@ impl Normalizer {
 
     /// Internal readback only. Taking it removes the observation from this
     /// per-run normalizer; no event, journal entry or UI surface is created.
-    #[allow(dead_code)] // SW-01 consumer; see SessionIntegrationReceipt.
-    fn take_init_integration_receipt(&mut self) -> Option<SessionIntegrationReceipt> {
+    pub(super) fn take_init_integration_receipt(&mut self) -> Option<SessionIntegrationReceipt> {
         self.init_integration_receipt.take()
     }
 

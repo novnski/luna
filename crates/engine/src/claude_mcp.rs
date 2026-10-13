@@ -257,6 +257,7 @@ pub(crate) fn merge_inventory(
                 .and_then(|row| row.source.clone())
         });
         view.items.push(IntegrationInventoryItem {
+            effective: None,
             identity: Some(server_identity(&view.machine_id, project_root, &name)),
             name: name.clone(),
             kind: IntegrationKind::McpServer,

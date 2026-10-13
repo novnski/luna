@@ -212,6 +212,8 @@ def run_mode(state, first):
     init.setdefault("subtype", "init")
     init.setdefault("cwd", os.getcwd())
     emit(init)
+    for event in state.get("runEvents", []):
+        emit(event)
     session = init.get("session_id", "sess-fake-mcp")
     emit({"type": "assistant", "message": {"id": "msg-1", "role": "assistant", "content": [{"type": "text", "text": "ok"}]}, "session_id": session})
     emit({"type": "result", "subtype": "success", "result": "ok", "errors": [], "usage": {"input_tokens": 1, "output_tokens": 1}, "session_id": session})

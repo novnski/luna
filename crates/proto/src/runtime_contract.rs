@@ -371,6 +371,43 @@ pub struct IntegrationInventoryItem {
     /// sources that only read configuration files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<crate::IntegrationMcpDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<IntegrationItemEvidence>,
+}
+
+/// Read-only evidence, never an execution grant. Request and result bodies
+/// are deliberately absent, including from unsuccessful calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationCallEvidence {
+    pub tool: String,
+    pub succeeded: bool,
+    pub observed_at_ms: i64,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationItemEvidence {
+    pub delivery: String,
+    pub callable: Option<bool>,
+    pub verified: Option<bool>,
+    pub stale: bool,
+    pub reason: Option<String>,
+    pub last_call: Option<IntegrationCallEvidence>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationInventoryScope {
+    pub task_id: Option<String>,
+    pub project_id: Option<String>,
+    pub provider_account_id: Option<String>,
+    pub requested_mode: crate::PermissionMode,
+    pub effective_mode: Option<crate::PermissionMode>,
+    pub provider_session_id: Option<String>,
+    pub run_id: Option<String>,
+    pub generation: String,
+    pub discovered_at_ms: i64,
+    pub stale: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +418,8 @@ pub struct IntegrationInventoryView {
     pub items: Vec<IntegrationInventoryItem>,
     pub unavailable_reason: Option<String>,
     pub help: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_scope: Option<IntegrationInventoryScope>,
 }
 
 /// A provider-owned SKILL.md read through the managed library. The identity

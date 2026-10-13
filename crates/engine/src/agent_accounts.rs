@@ -480,6 +480,11 @@ impl AgentAccounts {
     /// profile wrapper sets it. When that wrapper cannot be evaluated the
     /// root is empty, which the skill library refuses as not absolute rather
     /// than falling back to the user's config.
+    /// Exact provider-owned MCP/account settings source for inventory freshness.
+    pub(crate) fn claude_settings_source(&self) -> &Path {
+        &self.inner.config.claude_config_file
+    }
+
     pub fn skill_config_dirs(&self) -> (PathBuf, PathBuf) {
         let storage = luna_harness::opencode::OpencodeStorage::current();
         let opencode = match storage.config_dir() {

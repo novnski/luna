@@ -423,6 +423,11 @@ pub trait Harness: Send + Sync {
     ) -> Option<mcp_control::SessionMcpObservation> {
         None
     }
+    /// Names observed in this provider session's own start frame; not a catalog
+    /// process and not evidence that a tool call succeeded.
+    fn session_skill_names(&self, _provider_session_id: &str, _cwd: &str) -> Option<Vec<String>> {
+        None
+    }
 
     /// Effective native extension configuration (settings sources, output
     /// style, hooks, commands and skills) for a launch in `cwd` under `mode`,

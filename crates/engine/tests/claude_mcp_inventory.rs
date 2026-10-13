@@ -173,6 +173,18 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
     );
     assert!(quiet.help.contains("Check provider"), "{}", quiet.help);
 
+    let before_calls = std::fs::read(world.dir.path().join("log.jsonl")).unwrap_or_default();
+    let unknown = client.call(methods::GET_INTEGRATION_INVENTORY,
+        json!({"provider":"claude-code", "projectId":"cc11-project", "taskId":"sw01-missing-owner", "probeProvider":true})).await.unwrap_err();
+    assert!(
+        unknown.to_string().contains("must match"),
+        "wrong ownership rejection: {unknown}"
+    );
+    assert_eq!(
+        std::fs::read(world.dir.path().join("log.jsonl")).unwrap_or_default(),
+        before_calls,
+        "an invalid ownership request reached provider discovery"
+    );
     // No project selected: provider readback refuses truthfully.
     let no_project = inventory(
         client,
@@ -369,6 +381,14 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
         assert!(refused.is_err(), "{why} resource must be refused");
     }
 
+    let state_path = world.dir.path().join("state.json");
+    let mut fixture: Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    fixture["sessionInit"]["tools"] = json!(["Bash", "mcp__userdemo__echo"]);
+    fixture["runEvents"] = json!([
+        {"type":"assistant", "session_id":"sess-cc11-engine", "message":{"id":"inventory-call-message", "role":"assistant", "content":[{"type":"tool_use", "id":"inventory-call", "name":"mcp__userdemo__echo", "input":{"secret":"INVENTORY_INPUT_MUST_NOT_LEAK"}}]}},
+        {"type":"user", "session_id":"sess-cc11-engine", "message":{"role":"user", "content":[{"type":"tool_result", "tool_use_id":"inventory-call", "content":"INVENTORY_RESULT_MUST_NOT_LEAK", "is_error":false}]}}
+    ]);
+    std::fs::write(&state_path, serde_json::to_vec(&fixture).unwrap()).unwrap();
     // Session evidence from a real Claude run in this project.
     let config = ChatConfig {
         harness: HarnessId::ClaudeCode,
@@ -415,7 +435,11 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
             json!({"provider": "claude-code", "projectId": "cc11-project", "taskId": TASK}),
         )
         .await;
-        if view.items.iter().any(|item| item.attached.is_some()) {
+        if view.items.iter().any(|item| {
+            item.effective
+                .as_ref()
+                .is_some_and(|e| e.verified == Some(true))
+        }) {
             break view;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -447,6 +471,20 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
             .status,
         ProviderMcpStatus::Connected
     );
+    let scope = attached.effective_scope.as_ref().unwrap();
+    assert_eq!(scope.task_id.as_deref(), Some(TASK));
+    assert_eq!(scope.requested_mode, PermissionMode::Ask);
+    assert_eq!(
+        session_demo.effective.as_ref().unwrap().verified,
+        Some(true)
+    );
+    assert_eq!(
+        session_demo.effective.as_ref().unwrap().callable,
+        Some(true)
+    );
+    let serialized = serde_json::to_string(&attached).unwrap();
+    assert!(!serialized.contains("INVENTORY_INPUT_MUST_NOT_LEAK"));
+    assert!(!serialized.contains("INVENTORY_RESULT_MUST_NOT_LEAK"));
     let session_auth = mcp(&attached, "userauth");
     assert_eq!(session_auth.attached, Some(false));
     assert_eq!(
@@ -454,12 +492,14 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
         ProviderMcpStatus::NeedsAuth
     );
     // Evidence is never borrowed by a chat from another project.
-    let other = inventory(
-        client,
-        json!({"provider": "claude-code", "projectId": null, "taskId": TASK}),
-    )
-    .await;
-    assert!(other.items.iter().all(|item| item.attached.is_none()));
+    let other = client
+        .call(
+            methods::GET_INTEGRATION_INVENTORY,
+            json!({"provider":"claude-code", "projectId":null, "taskId":TASK}),
+        )
+        .await
+        .unwrap_err();
+    assert!(other.to_string().contains("must match"));
     // With the provider readback, session-only absence is "not attached".
     let combined = inventory(
         client,
@@ -474,6 +514,34 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
             .as_deref()
             .unwrap()
             .contains("did not load it")
+    );
+    let mut config = world
+        .core
+        .workspace
+        .chat(TASK)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    config.permission_mode = PermissionMode::Full;
+    world.core.workspace.set_chat_config(TASK, &config).unwrap();
+    let changed = inventory(
+        client,
+        json!({"provider":"claude-code", "projectId":"cc11-project", "taskId":TASK}),
+    )
+    .await;
+    assert!(changed.effective_scope.as_ref().unwrap().stale);
+    let stale = mcp(&changed, "userdemo").effective.as_ref().unwrap();
+    assert_eq!(
+        stale.verified, None,
+        "old success was shown current after a mode change"
+    );
+    assert!(
+        stale.last_call.as_ref().unwrap().succeeded,
+        "bounded prior evidence was discarded"
+    );
+    println!(
+        "SW01_INVENTORY_PROOF={{\"ownershipRejected\":true,\"callVerified\":true,\"modeChangeStaledProof\":true,\"payloadsRedacted\":true}}"
     );
 }
 

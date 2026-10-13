@@ -288,6 +288,7 @@ pub(crate) fn decode_status(payload: &Value) -> Result<Vec<ProviderMcpServer>, H
 #[derive(Default)]
 pub(crate) struct SessionMcpRegistry {
     observations: Mutex<VecDeque<SessionMcpObservation>>,
+    skills: Mutex<VecDeque<(String, String, Vec<String>)>>,
 }
 
 fn now_ms() -> i64 {
@@ -353,6 +354,36 @@ fn session_observation(frame: &SystemFrame) -> Option<SessionMcpObservation> {
 }
 
 impl SessionMcpRegistry {
+    pub(super) fn observe_integrations(
+        &self,
+        receipt: super::normalize::SessionIntegrationReceipt,
+    ) {
+        let mut skills = self
+            .skills
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        skills.retain(|(session, _, _)| session != &receipt.session_id);
+        if skills.len() >= MAX_SESSIONS {
+            skills.pop_front();
+        }
+        skills.push_back((
+            receipt.session_id,
+            receipt.cwd,
+            receipt.observed.skill_names,
+        ));
+    }
+    pub(super) fn skill_names(&self, session: &str, cwd: &str) -> Option<Vec<String>> {
+        let cwd = std::path::Path::new(cwd).canonicalize().ok()?;
+        self.skills
+            .lock()
+            .ok()?
+            .iter()
+            .find(|(id, observed_cwd, _)| {
+                id == session
+                    && std::path::Path::new(observed_cwd).canonicalize().ok() == Some(cwd.clone())
+            })
+            .map(|(_, _, names)| names.clone())
+    }
     /// Record a run's init frame (the latest one per session wins).
     pub(crate) fn observe(&self, frame: &SystemFrame) {
         let Some(observation) = session_observation(frame) else {
