@@ -1,0 +1,17 @@
+{
+  "featureCommit": "57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85",
+  "verifiedOriginMain": "57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85",
+  "verifiedAt": "2026-10-13T00:36:58.456988+00:00",
+  "workingTreeCleanBeforeCheckpoint": true,
+  "primaryApp": {
+    "bundle": "target/luna-macos-dev/LUNA Dev.app",
+    "pid": 63526,
+    "ipcPort": 59777,
+    "buildSeconds": 5,
+    "signatureVerified": true,
+    "nativeExistingConversationPreserved": true
+  },
+  "qaCleanup": "qa-cleanup.json",
+  "verification": "verification.json",
+  "iOSChanged": false
+}

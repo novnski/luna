@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791851732.56791,
+  "created_at": 1791851818.847244,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 17,
-      "in_progress": 1,
+      "done": 18,
+      "in_progress": 0,
       "paused": 0,
       "ready": 62,
       "review": 0
@@ -129,11 +129,11 @@
         "id": "integration",
         "title": "Provider access, effective tools and skills",
         "tasks": 4,
-        "done": 1,
-        "remaining": 3,
-        "accepted_units": 7,
+        "done": 2,
+        "remaining": 2,
+        "accepted_units": 8,
         "total_units": 16,
-        "acceptance_percent": 43.8,
+        "acceptance_percent": 50.0,
         "milestone_status": {}
       },
       {
@@ -373,21 +373,22 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 12,
-      "remaining": 64,
-      "accepted_units": 50,
+      "done": 13,
+      "remaining": 63,
+      "accepted_units": 51,
       "total_units": 296,
-      "acceptance_percent": 16.9
+      "acceptance_percent": 17.2
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
+      "SW-02",
+      "SW-03",
       "CORE-05",
+      "SW-10",
       "IC-0",
       "ZI-01",
       "CORE-06",
-      "ZI-03",
-      "ZI-04",
-      "ZI-05"
+      "ZI-03"
     ]
   },
   "tasks": [
@@ -2515,6 +2516,19 @@
           ],
           "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
         },
+        "handoff": {
+          "at": 1791851818.596822,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-01/delivery.json",
+              "sha256": "0ae5a759b610a43275accdd1e0ef3fe8827eb7b7c9f0319dddb3c283c4457906"
+            },
+            {
+              "ref": "commit:57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85"
+            }
+          ],
+          "note": "Required builds, four engine E2Es, three RPC contract checks, all-target Clippy, format and UI fixture compile pass. Native proof and hashes retained; scoped QA bundle/fixtures removed with data/cache preserved. LUNA Dev refreshed in 5s, exact PID/IPC/signature/native conversation verified. Feature 57c361be matches origin/main; clean checkout before completion checkpoint."
+        },
         "verification": {
           "at": 1791851732.459837,
           "evidence": [
@@ -2530,6 +2544,15 @@
           "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "commit:57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85"
+        },
+        {
+          "ref": "docs/pending-tasks/luna-only-workflows/sw-01/delivery.json",
+          "sha256": "0ae5a759b610a43275accdd1e0ef3fe8827eb7b7c9f0319dddb3c283c4457906"
+        }
+      ],
       "id": "SW-01",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
@@ -2537,18 +2560,17 @@
         "expires_at": 1791858439.5568051,
         "heartbeat_at": 1791851239.5568051,
         "owner": "codex",
-        "session": "01a130a0-0d31-75d0-8616-0caf98915c99",
-        "expired": false
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
       },
-      "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile.",
+      "note": "Completed effective per-chat inventory and existing settings integration. Exact scope/account/mode, bounded read-only actual-call provenance, native versus guidance distinction, stale/config revalidation and draft preservation. Four real provider/mode allowed and denied cases, resume/restart/mode transition and final native revalidation retained. Main feature 57c361be verified; LUNA Dev ready PID 63526/59777/signature, 5s refresh. Limits: Claude Auto secondary not certified, skill content/hooks SW-03 and configured external connectors not live certified; local-only policy preserved.",
       "recovery_evidence": [
         {
           "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
           "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791851732.460856
+      "status": "done",
+      "updated_at": 1791851818.735708
     }
   ],
   "events": [
@@ -10867,6 +10889,168 @@
           "checkout": "/Users/iulian/workspace/code/personal/luna",
           "claimed_at": 1791850914.398589,
           "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 293,
+      "task": "SW-01",
+      "at": 1791851818.611396,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791851732.242553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              }
+            ],
+            "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+          },
+          "delivery": {
+            "at": 1791851732.351682,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/native-final-config-revalidation.png",
+                "sha256": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6"
+              }
+            ],
+            "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
+          },
+          "handoff": {
+            "at": 1791851818.596822,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/delivery.json",
+                "sha256": "0ae5a759b610a43275accdd1e0ef3fe8827eb7b7c9f0319dddb3c283c4457906"
+              },
+              {
+                "ref": "commit:57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85"
+              }
+            ],
+            "note": "Required builds, four engine E2Es, three RPC contract checks, all-target Clippy, format and UI fixture compile pass. Native proof and hashes retained; scoped QA bundle/fixtures removed with data/cache preserved. LUNA Dev refreshed in 5s, exact PID/IPC/signature/native conversation verified. Feature 57c361be matches origin/main; clean checkout before completion checkpoint."
+          },
+          "verification": {
+            "at": 1791851732.459837,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/engine-final.log",
+                "sha256": "3b35565e099331374e14defb495cc21b098e3c33959d64d9c468dd89b5c65fd2"
+              }
+            ],
+            "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "target/qa/luna-only-workflows/sw01-20261013/lease-continuation.json",
+            "sha256": "229f5a94936b9414e988615c8addbda4482a523e978e9f490fdabcd07c313edb"
+          }
+        ],
+        "note": "Required builds, four engine E2Es, three RPC contract checks, all-target Clippy, format and UI fixture compile pass. Native proof and hashes retained; scoped QA bundle/fixtures removed with data/cache preserved. LUNA Dev refreshed in 5s, exact PID/IPC/signature/native conversation verified. Feature 57c361be matches origin/main; clean checkout before completion checkpoint.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
+          "expired": false,
+          "expires_at": 1791858439.5568051,
+          "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 294,
+      "task": "SW-01",
+      "at": 1791851818.7359822,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791851732.242553,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              }
+            ],
+            "note": "Exact task/project/host/provider ownership and selected-account discovery; requested/effective mode, opaque source/run generation and bounded redacted call provenance. Claude native skill names remain unverified for scoped content; no grants or new auth storage."
+          },
+          "delivery": {
+            "at": 1791851732.351682,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/native-final-config-revalidation.png",
+                "sha256": "39a30f28ef8e28095e3ba33482ddc3ca18b40848d10083220c61d3647e69fcc6"
+              }
+            ],
+            "note": "Existing Skills/MCP panel follows execution focus and config changes, fences late responses and shows verified/stale/remediation states. Native screenshots prove automatic same-chat mode revalidation and preserved draft/model after rejected ownership."
+          },
+          "handoff": {
+            "at": 1791851818.596822,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/delivery.json",
+                "sha256": "0ae5a759b610a43275accdd1e0ef3fe8827eb7b7c9f0319dddb3c283c4457906"
+              },
+              {
+                "ref": "commit:57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85"
+              }
+            ],
+            "note": "Required builds, four engine E2Es, three RPC contract checks, all-target Clippy, format and UI fixture compile pass. Native proof and hashes retained; scoped QA bundle/fixtures removed with data/cache preserved. LUNA Dev refreshed in 5s, exact PID/IPC/signature/native conversation verified. Feature 57c361be matches origin/main; clean checkout before completion checkpoint."
+          },
+          "verification": {
+            "at": 1791851732.459837,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-01/verification.json",
+                "sha256": "a6e42999f4ba2a84b67c8e72621208ae58e5fd407b9a68c90cfc9c3df72b7cdf"
+              },
+              {
+                "ref": "target/qa/luna-only-workflows/sw01-20261013/engine-final.log",
+                "sha256": "3b35565e099331374e14defb495cc21b098e3c33959d64d9c468dd89b5c65fd2"
+              }
+            ],
+            "note": "Real Codex and Claude Ask/Full calls returned independently selected own-task nonce; all four cross-project reads denied. Fresh/resumed/restart/mode-change readbacks retained. Final signed binary confirmed real call and automatic config-stale UI. Four focused engine E2Es and three RPC contract checks pass; Clippy, format and UI fixtures compile."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:57c361be9f5a6fbd1a6c9ff37be5ccf092eeeb85"
+          },
+          {
+            "ref": "docs/pending-tasks/luna-only-workflows/sw-01/delivery.json",
+            "sha256": "0ae5a759b610a43275accdd1e0ef3fe8827eb7b7c9f0319dddb3c283c4457906"
+          }
+        ],
+        "note": "Completed effective per-chat inventory and existing settings integration. Exact scope/account/mode, bounded read-only actual-call provenance, native versus guidance distinction, stale/config revalidation and draft preservation. Four real provider/mode allowed and denied cases, resume/restart/mode transition and final native revalidation retained. Main feature 57c361be verified; LUNA Dev ready PID 63526/59777/signature, 5s refresh. Limits: Claude Auto secondary not certified, skill content/hooks SW-03 and configured external connectors not live certified; local-only policy preserved.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791850914.398589,
           "expires_at": 1791858439.5568051,
           "heartbeat_at": 1791851239.5568051,
           "owner": "codex",
