@@ -1,0 +1,77 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.05000,0.05000,0.07000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "Moon-Light.svg"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "Moon-Dark.svg"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "Moon-Dark.svg"
+            }
+          ],
+          "name" : "Moon"
+        }
+      ],
+      "name" : "Lunar mark",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.2
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "tinted",
+              "value" : true
+            }
+          ],
+          "image-name-specializations" : [
+            {
+              "value" : "Background-Light.svg"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "Background-Dark.svg"
+            }
+          ],
+          "name" : "Background"
+        }
+      ],
+      "name" : "Background",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "iOS"
+    ]
+  }
+}

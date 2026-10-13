@@ -51,6 +51,18 @@ provide `LUNA_EDGE_URL` and `LUNA_WORKOS_CLIENT_ID` in the app bundle's
 `Info.plist`. Without both values, sign-in explains that sync is unconfigured.
 Demo mode works without either value.
 
+The app icon is the Icon Composer document `Luna/AppIcon.icon`, which the
+target's `AppIcon` setting picks up from the synchronized `Luna` folder. Its
+SVG layers are byte-identical copies of the macOS sources in
+`dist/macos/icons/` ([app icons](../../docs/reference/app-icons.md)): Porcelain
+for light, Monolith for dark. Tinted and clear modes show the silver moon
+without the background. After changing the macOS SVGs, copy them into
+`Luna/AppIcon.icon/Assets/` (`0_Moon.svg` → `Moon-<Light|Dark>.svg`,
+`background.svg` → `Background-<Light|Dark>.svg`). Then open the document in
+Icon Composer, or preview a rendition with Icon Composer's `ictool`:
+`ictool Luna/AppIcon.icon --export-image --output-file out.png --platform iOS
+--rendition Dark --width 1024 --height 1024 --scale 1`.
+
 ## TestFlight release
 
 Run the **TestFlight** workflow from GitHub Actions on `main`. It compiles the
