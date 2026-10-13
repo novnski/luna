@@ -1,0 +1,22 @@
+{
+  "task": "SW-03",
+  "verifiedSourceCommit": "b5752b34c624638128afc96bdfac5672b53a2e0a",
+  "originMainVerified": true,
+  "app": {
+    "path": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA Dev.app",
+    "pid": 58580,
+    "ipcPort": 59777,
+    "signatureVerified": true,
+    "buildSeconds": 6,
+    "existingChat": "Key Management Request",
+    "openTabs": 3,
+    "backgroundWork": 0
+  },
+  "verificationReport": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+  "evidenceHashes": {
+    "main-committed-refresh.log": "73db8b8842d84c13c135f97580edbc6a259e4492d1ac77f662ee53a0bf090ad1",
+    "main-committed-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "main-final-ax.txt": "c4c4123fbc3874e43a0c7cecad04fa85d6a73915ff88130063b49de9b0a6b665",
+    "main-final-ui.png": "d837e8d5d3b76d054bd6ed1136a7f91074e4faa4d0d47f9211309effe4f119ed"
+  }
+}

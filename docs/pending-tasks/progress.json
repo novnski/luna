@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791892332.050545,
+  "created_at": 1791897127.429832,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 19,
+      "done": 20,
       "in_progress": 0,
       "paused": 0,
-      "ready": 61,
+      "ready": 60,
       "review": 0
     },
     "groups": [
@@ -129,11 +129,11 @@
         "id": "integration",
         "title": "Provider access, effective tools and skills",
         "tasks": 4,
-        "done": 3,
-        "remaining": 1,
-        "accepted_units": 12,
+        "done": 4,
+        "remaining": 0,
+        "accepted_units": 16,
         "total_units": 16,
-        "acceptance_percent": 75.0,
+        "acceptance_percent": 100.0,
         "milestone_status": {}
       },
       {
@@ -373,15 +373,15 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 14,
-      "remaining": 62,
-      "accepted_units": 55,
+      "done": 15,
+      "remaining": 61,
+      "accepted_units": 59,
       "total_units": 296,
-      "acceptance_percent": 18.6
+      "acceptance_percent": 19.9
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-03",
+      "SW-04",
       "CORE-05",
       "SW-10",
       "IC-0",
@@ -392,16 +392,6 @@
     ]
   },
   "tasks": [
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-03",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958459
-    },
     {
       "attempts": 0,
       "blocker": null,
@@ -2634,6 +2624,79 @@
       "note": "Scoped saved HTTP/SSE MCP delivery works in native Claude Ask and eligible Auto, keeps permission confinement and exact call identity, and adds no Keychain or auth store. Latest main rebuilt and handed off with passing native E2E/integration checks; temporary QA gateway/policy/service/bundles removed. Stdio remains outside this lane; Haiku Auto is explicitly ineligible.",
       "status": "done",
       "updated_at": 1791892331.944981
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791897126.895114,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+              "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+            },
+            {
+              "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+            }
+          ],
+          "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+        },
+        "delivery": {
+          "at": 1791897127.010452,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+              "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+            }
+          ],
+          "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved."
+        },
+        "handoff": {
+          "at": 1791897127.216316,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-03/delivery.json",
+              "sha256": "39723a04ec976ec079512c0d62dbddce5bc540cc3f1dda9934b4ca402332c264"
+            },
+            {
+              "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+            }
+          ],
+          "note": "Build, integration and schema contract checks, Clippy and fmt passed. Scoped QA resources archived/hashed/removed; data and cache retained. Primary Dev app refreshed and exact process/port/signature/UI verified; source pushed and origin/main read back."
+        },
+        "verification": {
+          "at": 1791897127.1138182,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+              "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+            }
+          ],
+          "note": "Two project workflows produced independent expected Read/Write files. Native picker pinned revision; actual composer send worked and stale send preserved exact draft. Original Ask/Auto native sessions resumed after app restart and used a newly edited token. Recorded and repaired the initial resume delivery failure."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "docs/pending-tasks/luna-only-workflows/sw-03/delivery.json",
+          "sha256": "39723a04ec976ec079512c0d62dbddce5bc540cc3f1dda9934b4ca402332c264"
+        },
+        {
+          "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+        }
+      ],
+      "id": "SW-03",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791892622.037318,
+        "expires_at": 1791902225.321982,
+        "heartbeat_at": 1791895025.321982,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+      },
+      "note": "Approved managed skills work as guidance in intended Claude Ask/Auto modes, including revised content after native resume. Exact scope/revision guards, native-only unavailability and retained draft verified. No new hooks, grants or credential store. Latest main built, tested and delivered with native evidence.",
+      "status": "done",
+      "updated_at": 1791897127.335228
     }
   ],
   "events": [
@@ -11611,6 +11674,340 @@
           "claimed_at": 1791880722.6104379,
           "expires_at": 1791899110.93244,
           "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 309,
+      "task": "SW-03",
+      "at": 1791892622.037408,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791899822.037318,
+          "heartbeat_at": 1791892622.037318,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 310,
+      "task": "SW-03",
+      "at": 1791895025.322089,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 311,
+      "task": "SW-03",
+      "at": 1791897126.9089391,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791897126.895114,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+                "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 312,
+      "task": "SW-03",
+      "at": 1791897127.0116942,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791897126.895114,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+                "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+          },
+          "delivery": {
+            "at": 1791897127.010452,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 313,
+      "task": "SW-03",
+      "at": 1791897127.114317,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791897126.895114,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+                "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+          },
+          "delivery": {
+            "at": 1791897127.010452,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved."
+          },
+          "verification": {
+            "at": 1791897127.1138182,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Two project workflows produced independent expected Read/Write files. Native picker pinned revision; actual composer send worked and stale send preserved exact draft. Original Ask/Auto native sessions resumed after app restart and used a newly edited token. Recorded and repaired the initial resume delivery failure."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "Two project workflows produced independent expected Read/Write files. Native picker pinned revision; actual composer send worked and stale send preserved exact draft. Original Ask/Auto native sessions resumed after app restart and used a newly edited token. Recorded and repaired the initial resume delivery failure.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 314,
+      "task": "SW-03",
+      "at": 1791897127.2270331,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791897126.895114,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+                "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+          },
+          "delivery": {
+            "at": 1791897127.010452,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved."
+          },
+          "handoff": {
+            "at": 1791897127.216316,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/delivery.json",
+                "sha256": "39723a04ec976ec079512c0d62dbddce5bc540cc3f1dda9934b4ca402332c264"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Build, integration and schema contract checks, Clippy and fmt passed. Scoped QA resources archived/hashed/removed; data and cache retained. Primary Dev app refreshed and exact process/port/signature/UI verified; source pushed and origin/main read back."
+          },
+          "verification": {
+            "at": 1791897127.1138182,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Two project workflows produced independent expected Read/Write files. Native picker pinned revision; actual composer send worked and stale send preserved exact draft. Original Ask/Auto native sessions resumed after app restart and used a newly edited token. Recorded and repaired the initial resume delivery failure."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Build, integration and schema contract checks, Clippy and fmt passed. Scoped QA resources archived/hashed/removed; data and cache retained. Primary Dev app refreshed and exact process/port/signature/UI verified; source pushed and origin/main read back.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expired": false,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 315,
+      "task": "SW-03",
+      "at": 1791897127.3354518,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791897126.895114,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/README.md",
+                "sha256": "92e170cff6543576e88cd0a2641649576ecbbf5965ece1a2a66773af6ea6e43f"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Reused managed library, atomic save/install, exact host path and tree revision, project precedence and root instruction compiler. Optional metadata preserves existing native envelopes."
+          },
+          "delivery": {
+            "at": 1791897127.010452,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Native Ask and eligible Auto deliver reviewed instructions per selected turn without loading custom settings/hooks or adding grants. Changed and foreign selections reject through real engine commands; native-only command stays unavailable. Existing settings and execution selections preserved."
+          },
+          "handoff": {
+            "at": 1791897127.216316,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/delivery.json",
+                "sha256": "39723a04ec976ec079512c0d62dbddce5bc540cc3f1dda9934b4ca402332c264"
+              },
+              {
+                "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+              }
+            ],
+            "note": "Build, integration and schema contract checks, Clippy and fmt passed. Scoped QA resources archived/hashed/removed; data and cache retained. Primary Dev app refreshed and exact process/port/signature/UI verified; source pushed and origin/main read back."
+          },
+          "verification": {
+            "at": 1791897127.1138182,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-03/verification.json",
+                "sha256": "ce605e607503abe6fe3650b4752d1a85baf508601daaff3ced58acca5edbd03e"
+              }
+            ],
+            "note": "Two project workflows produced independent expected Read/Write files. Native picker pinned revision; actual composer send worked and stale send preserved exact draft. Original Ask/Auto native sessions resumed after app restart and used a newly edited token. Recorded and repaired the initial resume delivery failure."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/luna-only-workflows/sw-03/delivery.json",
+            "sha256": "39723a04ec976ec079512c0d62dbddce5bc540cc3f1dda9934b4ca402332c264"
+          },
+          {
+            "ref": "commit:b5752b34c624638128afc96bdfac5672b53a2e0a"
+          }
+        ],
+        "note": "Approved managed skills work as guidance in intended Claude Ask/Auto modes, including revised content after native resume. Exact scope/revision guards, native-only unavailability and retained draft verified. No new hooks, grants or credential store. Latest main built, tested and delivered with native evidence.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791892622.037318,
+          "expires_at": 1791902225.321982,
+          "heartbeat_at": 1791895025.321982,
           "owner": "codex",
           "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }
