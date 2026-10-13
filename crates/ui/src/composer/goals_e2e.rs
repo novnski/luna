@@ -41,9 +41,11 @@ struct FixtureEngine {
     gate: tokio::sync::Semaphore,
 }
 
-fn snapshot() -> TaskCommandSnapshot {
+/// The fixture answers for the task it was asked about: the SDK refuses a
+/// snapshot or receipt for another task (CORE-05).
+fn snapshot(task_id: &str) -> TaskCommandSnapshot {
     TaskCommandSnapshot {
-        task_id: CHAT.into(),
+        task_id: task_id.into(),
         task_revision: 3,
         task_sequence: 4,
         binding_id: Some("fixture-binding".into()),
@@ -61,7 +63,7 @@ impl RpcService for FixtureEngine {
             .push((method.to_owned(), params.clone()));
         match method {
             methods::GET_TASK_COMMAND_SNAPSHOT => RpcReply::value(&TaskCommandRead {
-                snapshot: snapshot(),
+                snapshot: snapshot(params["taskId"].as_str().unwrap_or(CHAT)),
                 events: Vec::new(),
                 reload_required: false,
                 next_task_sequence: None,
@@ -75,11 +77,11 @@ impl RpcService for FixtureEngine {
                     .forget();
                 RpcReply::value(&CommandReceipt {
                     command_id: params["commandId"].as_str().unwrap_or_default().into(),
-                    task_id: CHAT.into(),
+                    task_id: params["taskId"].as_str().unwrap_or(CHAT).into(),
                     intent: params["intent"]["kind"].as_str().unwrap_or("goal").into(),
                     payload_hash: "fixture".into(),
                     status: CommandReceiptStatus::Applied,
-                    snapshot: snapshot(),
+                    snapshot: snapshot(params["taskId"].as_str().unwrap_or(CHAT)),
                     event_sequence: Some(5),
                     actor_id: "local".into(),
                     client_id: "local".into(),

@@ -240,6 +240,7 @@ luna-doc.workspace = true
 luna-engine.workspace = true
 luna-harness.workspace = true
 luna-rpc.workspace = true
+luna-sdk.workspace = true
 luna-update.workspace = true
 luna-syntax.workspace = true
 luna-theme.workspace = true

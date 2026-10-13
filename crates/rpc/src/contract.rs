@@ -56,6 +56,10 @@ pub fn files() -> Vec<(&'static str, String)> {
             "schemas/task-command-read.json",
             schema::<luna_proto::TaskCommandRead>(),
         ),
+        (
+            "schemas/api-description.json",
+            schema::<crate::operations::ApiDescription>(),
+        ),
         ("schemas/namespaced-id.json", schema::<NamespacedId>()),
         ("schemas/provider-ref.json", schema::<ProviderRef>()),
         ("schemas/extension-id.json", schema::<ExtensionId>()),

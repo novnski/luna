@@ -1,17 +1,21 @@
 //! Read-only CLI adapter for the running local engine. All data comes through
 //! the same typed RPC service as the UI; this module never opens the data store.
+//! The `api`, `receipt` and `watch-commands` reads use the public SDK
+//! (CORE-05); `task_cli` shares this module's connection, targets and errors.
 
 use std::time::Duration;
 
 use clap::{Args, Subcommand};
 use luna_proto::{Chat, Device, EngineInfo, Space, TaskCommandRead, TaskIdentityView};
 use luna_rpc::{RpcClient, RpcError, methods};
+use luna_sdk::{SdkError, TaskCommandUpdate};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_PORT: u16 = luna_engine::DEFAULT_LUNA_IPC_PORT;
 const MAX_LIMIT: u16 = 100;
+const MAX_WATCH_MS: u64 = 10 * 60 * 1000;
 
 #[derive(Debug, Args)]
 pub struct InspectArgs {
@@ -73,62 +77,114 @@ enum InspectCommand {
         #[arg(long)]
         after_task_sequence: Option<u64>,
     },
+    /// Show the SDK and API versions and the operations the engine serves.
+    Api {
+        #[arg(long)]
+        machine: Option<String>,
+    },
+    /// Read one command's durable receipt by its command id.
+    Receipt {
+        #[arg(long)]
+        machine: Option<String>,
+        #[arg(long)]
+        command_id: String,
+    },
+    /// Watch one task's command receipts for a bounded number of updates.
+    WatchCommands {
+        #[command(flatten)]
+        target: TaskTarget,
+        /// Start after this task sequence instead of the current snapshot.
+        #[arg(long)]
+        after_task_sequence: Option<u64>,
+        /// Stop after this many updates; the starting snapshot is the first.
+        #[arg(long, default_value_t = 1)]
+        count: u16,
+        /// Stop waiting after this many milliseconds.
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+    },
 }
 
 #[derive(Debug, Args)]
-struct EnvironmentTarget {
+pub(crate) struct EnvironmentTarget {
     #[arg(long)]
-    machine: String,
+    pub(crate) machine: String,
     #[arg(long)]
-    environment: String,
+    pub(crate) environment: String,
 }
 
 #[derive(Debug, Args)]
-struct ProjectTarget {
+pub(crate) struct ProjectTarget {
     #[command(flatten)]
-    environment: EnvironmentTarget,
+    pub(crate) environment: EnvironmentTarget,
     #[arg(long)]
-    project: String,
+    pub(crate) project: String,
 }
 
 #[derive(Debug, Args)]
-struct TaskTarget {
+pub(crate) struct TaskTarget {
     #[command(flatten)]
-    project: ProjectTarget,
+    pub(crate) project: ProjectTarget,
     #[arg(long)]
-    task: String,
+    pub(crate) task: String,
 }
 
+/// Exit codes: 2 invalidArgument, 3 offline, 4 targetMismatch, 5 notFound,
+/// 6 unavailable, 7 malformedResponse, 8 engineError, 9 unknownOutcome,
+/// 12 incompatible. `luna task` adds 10 commandRefused and 11 commandPending.
 #[derive(Debug)]
-struct CliError {
-    kind: &'static str,
-    code: i32,
-    message: String,
+pub(crate) struct CliError {
+    pub(crate) kind: &'static str,
+    pub(crate) code: i32,
+    pub(crate) message: String,
+    /// What a script needs to continue, such as an unknown command's id.
+    pub(crate) data: Option<Value>,
 }
 
 impl CliError {
-    fn new(kind: &'static str, code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: &'static str, code: i32, message: impl Into<String>) -> Self {
         Self {
             kind,
             code,
             message: message.into(),
+            data: None,
         }
     }
 
-    fn offline(message: impl Into<String>) -> Self {
+    pub(crate) fn offline(message: impl Into<String>) -> Self {
         Self::new("offline", 3, message)
     }
 
-    fn mismatch(message: impl Into<String>) -> Self {
+    pub(crate) fn mismatch(message: impl Into<String>) -> Self {
         Self::new("targetMismatch", 4, message)
     }
 
-    fn missing(message: impl Into<String>) -> Self {
+    pub(crate) fn missing(message: impl Into<String>) -> Self {
         Self::new("notFound", 5, message)
     }
 
-    fn protocol(message: impl Into<String>) -> Self {
+    pub(crate) fn protocol(message: impl Into<String>) -> Self {
         Self::new("malformedResponse", 7, message)
+    }
+}
+
+impl From<SdkError> for CliError {
+    fn from(error: SdkError) -> Self {
+        let message = error.to_string();
+        match error {
+            SdkError::Offline(_) | SdkError::Timeout { .. } => Self::offline(message),
+            SdkError::Unsupported { .. } => Self::new("unavailable", 6, message),
+            SdkError::Incompatible { .. } => Self::new("incompatible", 12, message),
+            SdkError::InvalidRequest { .. } | SdkError::InvalidResponse { .. } => {
+                Self::protocol(message)
+            }
+            SdkError::Engine(_) => Self::new("engineError", 8, message),
+            SdkError::UnknownOutcome { command_id, .. } => {
+                let mut error = Self::new("unknownOutcome", 9, message);
+                error.data = Some(json!({ "commandId": command_id }));
+                error
+            }
+        }
     }
 }
 
@@ -200,15 +256,11 @@ pub async fn run(args: InspectArgs) -> i32 {
     }
 }
 
-async fn execute(args: InspectArgs) -> Result<Output, CliError> {
-    // Validate bounds before dialing, including while the engine is offline.
-    let limit = match &args.command {
-        InspectCommand::Projects { limit, .. }
-        | InspectCommand::Tasks { limit, .. }
-        | InspectCommand::Read { limit, .. } => Some(checked_limit(*limit)?),
-        _ => None,
-    };
-    let port = args.port.unwrap_or_else(|| {
+/// Dial the local engine and require a compatible owner. Without an explicit
+/// port the listener must also prove it owns this CLI's data root.
+pub(crate) async fn connect(port: Option<u16>) -> Result<(RpcClient, EngineInfo), CliError> {
+    let explicit = port.is_some();
+    let port = port.unwrap_or_else(|| {
         std::env::var("LUNA_IPC_PORT")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -227,11 +279,35 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
             "local listener is not a compatible LUNA engine",
         ));
     }
-    if args.port.is_none() {
+    if !explicit {
         crate::paths::verify_local_owner(&client, &crate::paths::data_dir())
             .await
             .map_err(|error| CliError::protocol(error.to_string()))?;
     }
+    Ok((client, info))
+}
+
+async fn execute(args: InspectArgs) -> Result<Output, CliError> {
+    // Validate bounds before dialing, including while the engine is offline.
+    let limit = match &args.command {
+        InspectCommand::Projects { limit, .. }
+        | InspectCommand::Tasks { limit, .. }
+        | InspectCommand::Read { limit, .. } => Some(checked_limit(*limit)?),
+        InspectCommand::WatchCommands {
+            count, timeout_ms, ..
+        } => {
+            if *timeout_ms > MAX_WATCH_MS {
+                return Err(CliError::new(
+                    "invalidArgument",
+                    2,
+                    format!("--timeout-ms must be at most {MAX_WATCH_MS}"),
+                ));
+            }
+            Some(checked_count(*count)?)
+        }
+        _ => None,
+    };
+    let (client, info) = connect(args.port).await?;
     match args.command {
         InspectCommand::Status { machine } => {
             require_machine(&info, machine.as_deref())?;
@@ -416,20 +492,7 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
         } => {
             require_environment(&info, &target.project.environment)?;
             project(&client, &target.project).await?;
-            let chats: Vec<Chat> = first_snapshot(&client, methods::WATCH_CHATS).await?;
-            let chat = chats
-                .into_iter()
-                .find(|chat| {
-                    chat.id == target.task
-                        && chat.device_id == target.project.environment.machine
-                        && chat.space_id.as_deref() == Some(&target.project.project)
-                })
-                .ok_or_else(|| {
-                    CliError::missing(format!(
-                        "task {} was not found in project {}",
-                        target.task, target.project.project
-                    ))
-                })?;
+            let chat = find_task(&client, &target).await?;
             let identity: Option<TaskIdentityView> = call(
                 &client,
                 methods::GET_TASK_IDENTITY,
@@ -507,7 +570,211 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
                 human,
             })
         }
+        InspectCommand::Api { machine } => {
+            require_machine(&info, machine.as_deref())?;
+            let mut sdk = luna_sdk::Client::new(&client).with_deadline(TIMEOUT);
+            let engine = sdk.negotiate().await?.cloned();
+            let operations: Vec<Value> = luna_sdk::ops::OPERATIONS
+                .iter()
+                .map(|(name, method)| {
+                    let spec = luna_rpc::operations::spec(method);
+                    // Unknown without a description: an engine older than DescribeApi.
+                    let served = engine.as_ref().zip(spec).map(|(api, spec)| {
+                        api.operation(spec.id)
+                            .is_some_and(|served| served.version == spec.version)
+                    });
+                    json!({
+                        "name": name,
+                        "method": method,
+                        "id": spec.map(|spec| spec.id),
+                        "version": spec.map(|spec| spec.version),
+                        "served": served,
+                    })
+                })
+                .collect();
+            let served = operations
+                .iter()
+                .filter(|op| op["served"] == json!(true))
+                .count();
+            let human = format!(
+                "SDK {} speaks API {}\nEngine: {}\nSDK operations served: {}",
+                luna_sdk::SDK_VERSION,
+                luna_sdk::API_VERSION,
+                engine.as_ref().map_or_else(
+                    || "predates API discovery".to_string(),
+                    |api| format!(
+                        "{} speaks API {} with {} operations",
+                        api.engine_version,
+                        api.api_version,
+                        api.operations.len()
+                    )
+                ),
+                if engine.is_some() {
+                    format!("{served}/{}", operations.len())
+                } else {
+                    "unknown".to_string()
+                },
+            );
+            Ok(Output {
+                command: "api",
+                data: json!({
+                    "machineId": info.device_id,
+                    "sdkVersion": luna_sdk::SDK_VERSION,
+                    "apiVersion": luna_sdk::API_VERSION,
+                    "engine": engine,
+                    "sdkOperations": operations,
+                }),
+                human,
+            })
+        }
+        InspectCommand::Receipt {
+            machine,
+            command_id,
+        } => {
+            require_machine(&info, machine.as_deref())?;
+            let sdk = luna_sdk::Client::new(&client).with_deadline(TIMEOUT);
+            let receipt = sdk
+                .task_command_receipt(&command_id, None)
+                .await?
+                .ok_or_else(|| {
+                    CliError::missing(format!(
+                        "command {command_id} has no receipt on machine {}",
+                        info.device_id
+                    ))
+                })?;
+            let human = format!(
+                "{}  {}  {}  task {}  revision {}{}",
+                receipt.command_id,
+                receipt.intent,
+                wire_name(&receipt.status),
+                receipt.task_id,
+                receipt.snapshot.task_revision,
+                receipt
+                    .reason
+                    .as_ref()
+                    .map(|reason| format!("\n{}: {}", wire_name(&reason.code), reason.message))
+                    .unwrap_or_default(),
+            );
+            Ok(Output {
+                command: "receipt",
+                data: json!({
+                    "machineId": info.device_id,
+                    "commandId": command_id,
+                    "receipt": receipt,
+                }),
+                human,
+            })
+        }
+        InspectCommand::WatchCommands {
+            target,
+            after_task_sequence,
+            timeout_ms,
+            ..
+        } => {
+            require_environment(&info, &target.project.environment)?;
+            project(&client, &target.project).await?;
+            find_task(&client, &target).await?;
+            let count = limit.expect("validated watch count");
+            let sdk = luna_sdk::Client::new(&client).with_deadline(TIMEOUT);
+            let mut watch = sdk
+                .watch_task_commands(&target.task, after_task_sequence, None)
+                .await?;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+            let mut updates: Vec<TaskCommandUpdate> = Vec::new();
+            while updates.len() < count {
+                match tokio::time::timeout_at(deadline, watch.next()).await {
+                    Ok(Some(update)) => updates.push(update?),
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            let cursor = watch.cursor();
+            // Ends the engine's stream before printing.
+            watch.close();
+            let human = updates
+                .iter()
+                .map(|update| match update {
+                    TaskCommandUpdate::Snapshot { read } => format!(
+                        "snapshot  revision {}  sequence {}  {} events",
+                        read.snapshot.task_revision,
+                        read.snapshot.task_sequence,
+                        read.events.len()
+                    ),
+                    TaskCommandUpdate::Event { receipt } => format!(
+                        "event  {}  {}  {}  sequence {}",
+                        receipt.command_id,
+                        receipt.intent,
+                        wire_name(&receipt.status),
+                        receipt.snapshot.task_sequence
+                    ),
+                    TaskCommandUpdate::Progress { receipt } => format!(
+                        "progress  {}  {}  {}",
+                        receipt.command_id,
+                        receipt.intent,
+                        wire_name(&receipt.status)
+                    ),
+                    TaskCommandUpdate::Reload { snapshot } => format!(
+                        "reload  revision {}  sequence {}",
+                        snapshot.task_revision, snapshot.task_sequence
+                    ),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Output {
+                command: "watch-commands",
+                data: json!({
+                    "machineId": target.project.environment.machine,
+                    "environmentId": target.project.environment.environment,
+                    "projectId": target.project.project,
+                    "taskId": target.task,
+                    "complete": updates.len() == count,
+                    "cursor": cursor,
+                    "updates": updates,
+                }),
+                human: if human.is_empty() {
+                    "No updates before the timeout.".into()
+                } else {
+                    human
+                },
+            })
+        }
     }
+}
+
+/// The exact task in the exact project and machine; never inferred.
+pub(crate) async fn find_task(client: &RpcClient, target: &TaskTarget) -> Result<Chat, CliError> {
+    let chats: Vec<Chat> = first_snapshot(client, methods::WATCH_CHATS).await?;
+    chats
+        .into_iter()
+        .find(|chat| {
+            chat.id == target.task
+                && chat.device_id == target.project.environment.machine
+                && chat.space_id.as_deref() == Some(&target.project.project)
+        })
+        .ok_or_else(|| {
+            CliError::missing(format!(
+                "task {} was not found in project {}",
+                target.task, target.project.project
+            ))
+        })
+}
+
+/// A contract enum's wire spelling, such as `staleTaskRevision`.
+pub(crate) fn wire_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn checked_count(count: u16) -> Result<usize, CliError> {
+    if !(1..=MAX_LIMIT).contains(&count) {
+        return Err(CliError::new(
+            "invalidArgument",
+            2,
+            format!("--count must be between 1 and {MAX_LIMIT}"),
+        ));
+    }
+    Ok(usize::from(count))
 }
 
 fn checked_limit(limit: u16) -> Result<usize, CliError> {
@@ -640,7 +907,10 @@ fn require_machine(info: &EngineInfo, expected: Option<&str>) -> Result<(), CliE
     Ok(())
 }
 
-fn require_environment(info: &EngineInfo, target: &EnvironmentTarget) -> Result<(), CliError> {
+pub(crate) fn require_environment(
+    info: &EngineInfo,
+    target: &EnvironmentTarget,
+) -> Result<(), CliError> {
     require_machine(info, Some(&target.machine))?;
     // Today the accepted local task environment is the owning device ID. L29
     // must supply authenticated remote environment selection before this grows.
@@ -653,7 +923,7 @@ fn require_environment(info: &EngineInfo, target: &EnvironmentTarget) -> Result<
     Ok(())
 }
 
-async fn project(client: &RpcClient, target: &ProjectTarget) -> Result<Space, CliError> {
+pub(crate) async fn project(client: &RpcClient, target: &ProjectTarget) -> Result<Space, CliError> {
     let spaces: Vec<Space> = first_snapshot(client, methods::WATCH_SPACES).await?;
     spaces
         .into_iter()

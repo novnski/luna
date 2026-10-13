@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::methods;
 use crate::remote_auth::RemoteScope;
@@ -1307,6 +1307,16 @@ pub const OPERATIONS: &[OperationSpec] = &[
         Remote(RemoteScope::EnvironmentRead),
         30,
     ),
+    // CORE-05: owner-only until a remote client (RM-03) needs discovery.
+    op(
+        methods::DESCRIBE_API,
+        "luna.core/describe-api",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
     op(
         methods::GET_TASK_IDENTITY,
         "luna.core/get-task-identity",
@@ -2459,4 +2469,81 @@ pub fn spec(method: &str) -> Option<&'static OperationSpec> {
         .get_or_init(|| OPERATIONS.iter().map(|op| (op.method, op)).collect())
         .get(method)
         .copied()
+}
+
+impl OperationKind {
+    /// The wire spelling, as in `operations.json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Command => "command",
+            Self::Watch => "watch",
+        }
+    }
+}
+
+impl OperationReply {
+    /// The wire spelling, as in `operations.json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unary => "unary",
+            Self::Stream => "stream",
+            Self::StreamAfterReady => "streamAfterReady",
+        }
+    }
+}
+
+/// One served operation, as `DescribeApi` reports it (CORE-05). `kind` and
+/// `reply` stay strings so an older reader keeps a newer engine's values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperationRef {
+    /// Stable namespaced operation id (`luna.core/<operation>`).
+    pub id: String,
+    pub version: u16,
+    /// Legacy wire method name.
+    pub method: String,
+    /// `query`, `command` or `watch`.
+    pub kind: String,
+    /// `unary`, `stream` or `streamAfterReady`.
+    pub reply: String,
+}
+
+/// The `DescribeApi` result: what the engine a client is connected to serves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ApiDescription {
+    /// The operation contract version ([`CATALOG_VERSION`]). A client refuses
+    /// an engine with a different API version instead of guessing.
+    pub api_version: u16,
+    /// The serving engine's build version.
+    pub engine_version: String,
+    pub operations: Vec<OperationRef>,
+}
+
+impl ApiDescription {
+    /// This build's catalog, served by an engine of `engine_version`.
+    pub fn current(engine_version: &str) -> Self {
+        Self {
+            api_version: CATALOG_VERSION,
+            engine_version: engine_version.to_owned(),
+            operations: OPERATIONS
+                .iter()
+                .map(|op| OperationRef {
+                    id: op.id.to_owned(),
+                    version: op.version,
+                    method: op.method.to_owned(),
+                    kind: op.kind.as_str().to_owned(),
+                    reply: op.reply.as_str().to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The served row for a stable operation id.
+    pub fn operation(&self, id: &str) -> Option<&OperationRef> {
+        self.operations.iter().find(|op| op.id == id)
+    }
 }

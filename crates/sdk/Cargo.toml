@@ -1,0 +1,31 @@
+[package]
+name = "luna-sdk"
+# The SDK is versioned on its own (CORE-05); `API_VERSION` names the operation
+# contract it speaks. The TypeScript package carries the same version.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Typed LUNA client over the public operation contract"
+
+[dependencies]
+luna-proto.workspace = true
+luna-rpc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# Generates the published SDK manifest and the TypeScript client types.
+schema = ["dep:schemars", "luna-proto/schema", "luna-rpc/schema"]
+
+[[example]]
+name = "generate"
+required-features = ["schema"]
+
+[[test]]
+name = "generated"
+required-features = ["schema"]

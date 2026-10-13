@@ -9435,6 +9435,10 @@ impl EngineRpc {
             methods::GET_TASK_WORK | methods::WATCH_TASK_WORK | methods::PREVIEW_STOP_TASK_WORK | methods::STOP_TASK_WORK => self.handle_task_work(method, params).await,
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            // CORE-05: the catalog this build serves, for SDK negotiation.
+            methods::DESCRIBE_API => RpcReply::value(
+                &luna_rpc::operations::ApiDescription::current(env!("CARGO_PKG_VERSION")),
+            ),
             methods::CREATE_REMOTE_PAIRING => {
                 let request: luna_rpc::remote_auth::CreatePairing = parse_params(params)?;
                 let store = self.remote_store()?;
@@ -10592,6 +10596,10 @@ impl EngineRpc {
             }
             methods::WATCH_TASK_COMMANDS => {
                 let p: TaskCommandSnapshotParams = parse_params(params)?;
+                // Subscribe before reading (CORE-05): a receipt committed in
+                // between then arrives twice, which a cursor drops, instead
+                // of never arriving.
+                let rx = self.doc_host.subscribe_task_receipts();
                 let mut read = match p.after_task_sequence {
                     Some(cursor) => {
                         self.doc_host
@@ -10604,7 +10612,6 @@ impl EngineRpc {
                 read.snapshot.binding_id = current.binding_id;
                 read.snapshot.binding_generation = current.binding_generation;
                 read.snapshot.active_turn_id = current.active_turn_id;
-                let rx = self.doc_host.subscribe_task_receipts();
                 let task_id = p.task_id;
                 Ok(RpcReply::Stream(
                     futures::stream::unfold((Some(read), rx), move |(initial, mut rx)| {

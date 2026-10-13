@@ -7,6 +7,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/**'
+      - 'sdk/**'
       - 'scripts/test-linux-browser.sh'
       - 'scripts/run-macos-browser-fixture.sh'
       - 'dist/macos/Info.plist'
@@ -19,6 +20,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/**'
+      - 'sdk/**'
       - 'scripts/test-linux-browser.sh'
       - 'scripts/run-macos-browser-fixture.sh'
       - 'dist/macos/Info.plist'
@@ -54,6 +56,9 @@ jobs:
       - name: Published contract matches the code (CORE-01)
         if: ${{ !cancelled() }}
         run: cargo test --locked -p luna-rpc --features schema --test contract
+      - name: TypeScript SDK matches the Rust SDK (CORE-05)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p luna-sdk --features schema --test generated
       - name: Direct host and mobile core compile (RM-00)
         if: ${{ !cancelled() }}
         run: cargo check --locked -p luna-remote -p luna-mobile --all-targets

@@ -55,6 +55,7 @@ pub mod capabilities {
 /// Authentication can change while a runtime is alive, but its workspace scope
 /// cannot. Switching scopes requires assembling a new runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceScope {
     Local,
@@ -64,6 +65,7 @@ pub enum WorkspaceScope {
 
 /// Stable information about the engine runtime reached by a client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct EngineInfo {
     pub device_id: String,

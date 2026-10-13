@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApiDescription",
+  "description": "The `DescribeApi` result: what the engine a client is connected to serves.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "description": "The operation contract version ([`CATALOG_VERSION`]). A client refuses\nan engine with a different API version instead of guessing.",
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "engineVersion": {
+      "description": "The serving engine's build version.",
+      "type": "string"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OperationRef"
+      }
+    }
+  },
+  "required": [
+    "apiVersion",
+    "engineVersion",
+    "operations"
+  ],
+  "$defs": {
+    "OperationRef": {
+      "description": "One served operation, as `DescribeApi` reports it (CORE-05). `kind` and\n`reply` stay strings so an older reader keeps a newer engine's values.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable namespaced operation id (`luna.core/<operation>`).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`query`, `command` or `watch`.",
+          "type": "string"
+        },
+        "method": {
+          "description": "Legacy wire method name.",
+          "type": "string"
+        },
+        "reply": {
+          "description": "`unary`, `stream` or `streamAfterReady`.",
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "method",
+        "kind",
+        "reply"
+      ]
+    }
+  }
+}

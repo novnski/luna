@@ -13,6 +13,7 @@ path = "src/main.rs"
 luna-engine.workspace = true
 luna-proto.workspace = true
 luna-rpc.workspace = true
+luna-sdk.workspace = true
 luna-ui.workspace = true
 luna-update.workspace = true
 tokio.workspace = true
@@ -36,6 +37,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 async-trait.workspace = true
+futures.workspace = true
 tempfile.workspace = true
 luna-sync.workspace = true
 

@@ -237,6 +237,9 @@ pub mod methods {
     /// Readiness barrier for the engine runtime. The call completes once stores
     /// and journals are assembled, or fails with the assembly error.
     pub const ENGINE_READY: &str = "EngineReady";
+    /// CORE-05 discovery: the API version, engine build and every operation
+    /// this engine serves (`operations::ApiDescription`). Owner IPC only.
+    pub const DESCRIBE_API: &str = "DescribeApi";
     /// Durable LUNA task identity and all preserved execution-binding generations.
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
     /// Local-only proof for a legacy workspace association; never starts a provider.
@@ -612,6 +615,7 @@ pub mod methods {
         ENGINE_INFO,
         LOCAL_OWNER_ROOT_CLAIM,
         ENGINE_READY,
+        DESCRIBE_API,
         GET_TASK_IDENTITY,
         PREVIEW_WORKSPACE_IDENTITY_REPAIR,
         GET_RUNTIME_CONTRACT,

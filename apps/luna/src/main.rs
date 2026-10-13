@@ -12,6 +12,7 @@ mod native_fixture;
 mod paths;
 mod remote_cli;
 mod ssh_cli;
+mod task_cli;
 mod update_cli;
 
 use clap::{Parser, Subcommand};
@@ -54,6 +55,8 @@ enum Command {
     Status,
     /// Inspect the running local engine through its typed RPC (read only).
     Inspect(inspect_cli::InspectArgs),
+    /// Run deliberate task commands on the running local engine (public SDK).
+    Task(task_cli::TaskArgs),
     /// Manage one-time remote pairing grants and device sessions on this engine.
     Remote(remote_cli::RemoteArgs),
     /// Connect to one owned environment through system SSH and authenticated RPC.
@@ -161,7 +164,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     attach_parent_console();
     let argv: Vec<_> = std::env::args_os().collect();
-    let inspect_json = argv.get(1).is_some_and(|arg| arg == "inspect")
+    let inspect_json = argv
+        .get(1)
+        .is_some_and(|arg| arg == "inspect" || arg == "task")
         && argv.iter().skip(2).any(|arg| arg == "--json");
     #[cfg(target_os = "macos")]
     let qa_root = native_fixture::qa_root_from_executable(&std::env::current_exe()?)?;
@@ -319,6 +324,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Inspect(args)) => {
             let runtime = tokio::runtime::Runtime::new()?;
             let code = runtime.block_on(inspect_cli::run(args));
+            std::process::exit(code);
+        }
+        Some(Command::Task(args)) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let code = runtime.block_on(task_cli::run(args));
             std::process::exit(code);
         }
         Some(Command::Remote(args)) => {

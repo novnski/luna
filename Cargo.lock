@@ -5101,10 +5101,12 @@ dependencies = [
  "async-trait",
  "clap",
  "embed-resource",
+ "futures",
  "libc",
  "luna-engine",
  "luna-proto",
  "luna-rpc",
+ "luna-sdk",
  "luna-sync",
  "luna-ui",
  "luna-update",
@@ -5354,6 +5356,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "luna-sdk"
+version = "0.1.0"
+dependencies = [
+ "luna-proto",
+ "luna-rpc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "luna-sync"
 version = "0.2.73"
 dependencies = [
@@ -5455,6 +5471,7 @@ dependencies = [
  "luna-harness",
  "luna-proto",
  "luna-rpc",
+ "luna-sdk",
  "luna-sync",
  "luna-syntax",
  "luna-theme",

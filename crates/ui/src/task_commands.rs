@@ -1,9 +1,13 @@
-//! Desktop client for the L07 authoritative task-command path.
+//! Desktop client for the L07 authoritative task-command path. Commands go
+//! through the public SDK's command boundary (CORE-05): the same envelope,
+//! fences, receipt validation and lost-reply readback as the CLI and SDK
+//! clients. The view code keeps its own retry and wording policy.
 
 use std::sync::OnceLock;
 
-use luna_proto::{CommandReasonCode, CommandReceipt, CommandReceiptStatus, TaskCommandRead};
-use luna_rpc::{RpcError, methods};
+use luna_proto::{CommandReasonCode, CommandReceipt, CommandReceiptStatus};
+use luna_rpc::RpcError;
+use serde::Serialize;
 
 use crate::state::EngineHandle;
 
@@ -165,7 +169,10 @@ pub async fn read_receipt(
     engine: &EngineHandle,
     command_id: &str,
 ) -> Result<Option<CommandReceipt>, RpcError> {
-    receipt(engine, None, command_id).await
+    luna_sdk::Client::new(engine.client())
+        .task_command_receipt(command_id, None)
+        .await
+        .map_err(luna_sdk::SdkError::into_rpc)
 }
 
 pub async fn execute(
@@ -265,6 +272,82 @@ pub async fn execute_receipt_on_with_id(
         .await
 }
 
+/// The app's task-command intents. Published SDK intents (rename) are sent as
+/// the SDK's typed value, so every client sends the same command; the rest
+/// are first-party intents outside the public contract.
+enum AppIntent {
+    Published(luna_sdk::TaskIntent),
+    FirstParty(serde_json::Value),
+}
+
+impl AppIntent {
+    fn new(intent: serde_json::Value) -> Self {
+        let published = intent
+            .as_object()
+            .filter(|fields| fields.len() == 2)
+            .and_then(|fields| {
+                if fields.get("kind")?.as_str()? != "rename" {
+                    return None;
+                }
+                let title = fields.get("title")?.as_str()?;
+                Some(luna_sdk::TaskIntent::Rename {
+                    title: title.to_owned(),
+                })
+            });
+        match published {
+            Some(intent) => Self::Published(intent),
+            None => Self::FirstParty(intent),
+        }
+    }
+}
+
+impl Serialize for AppIntent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Published(intent) => intent.serialize(serializer),
+            Self::FirstParty(intent) => intent.serialize(serializer),
+        }
+    }
+}
+
+impl luna_sdk::CommandIntent for AppIntent {
+    fn kind(&self) -> &str {
+        match self {
+            Self::Published(intent) => intent.kind(),
+            Self::FirstParty(intent) => intent
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+        }
+    }
+
+    fn fences(&self) -> luna_sdk::Fences {
+        let intent = match self {
+            Self::Published(intent) => return intent.fences(),
+            Self::FirstParty(intent) => intent,
+        };
+        let session_kind = intent.get("kind").and_then(serde_json::Value::as_str);
+        let control_kind = intent
+            .get("command")
+            .and_then(|command| command.get("kind"))
+            .and_then(serde_json::Value::as_str);
+        luna_sdk::Fences {
+            task_revision: revision_fenced_kind(session_kind)
+                || (session_kind == Some("session")
+                    && intent
+                        .pointer("/command/request/review")
+                        .is_some_and(|review| !review.is_null())),
+            binding_generation: binding_fenced_kind(session_kind),
+            turn: (session_kind == Some("session")
+                && matches!(control_kind, Some("steer" | "interrupt")))
+                || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow")),
+        }
+    }
+}
+
+/// Send through the SDK: fences come from the reviewed snapshot or the
+/// host's current one, and a lost reply is read back by the same command id
+/// before the exact same envelope is sent once more.
 async fn execute_receipt_on_with_snapshot(
     engine: &EngineHandle,
     task_id: &str,
@@ -273,81 +356,24 @@ async fn execute_receipt_on_with_snapshot(
     intent: serde_json::Value,
     reviewed_snapshot: Option<luna_proto::TaskCommandSnapshot>,
 ) -> Result<CommandReceipt, RpcError> {
-    let mut snapshot_params = serde_json::json!({ "taskId": task_id });
-    if let Some(target) = target_device_id {
-        snapshot_params["targetDeviceId"] = target.into();
-    }
-    let snapshot = match reviewed_snapshot {
-        Some(snapshot) => snapshot,
-        None => {
-            engine
-                .client()
-                .call_as::<TaskCommandRead>(methods::GET_TASK_COMMAND_SNAPSHOT, snapshot_params)
-                .await?
-                .snapshot
-        }
+    let device_id = &engine.engine_info().device_id;
+    let command = luna_sdk::TaskCommand {
+        command_id,
+        task_id: task_id.to_owned(),
+        target_device_id: target_device_id.map(str::to_owned),
+        actor: luna_sdk::Actor {
+            actor_id: device_id.clone(),
+            client_id: device_id.clone(),
+            client_session_id: client_session_id().to_owned(),
+        },
+        fencing: reviewed_snapshot.map_or(luna_sdk::Fencing::Current, luna_sdk::Fencing::Reviewed),
+        issued_at_ms: None,
+        intent: AppIntent::new(intent),
     };
-    let session_kind = intent.get("kind").and_then(serde_json::Value::as_str);
-    let control_kind = intent
-        .get("command")
-        .and_then(|command| command.get("kind"))
-        .and_then(serde_json::Value::as_str);
-    let turn_fenced = (session_kind == Some("session")
-        && matches!(control_kind, Some("steer" | "interrupt")))
-        || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow"));
-    let revision_fenced = revision_fenced_kind(session_kind)
-        || (session_kind == Some("session")
-            && intent
-                .pointer("/command/request/review")
-                .is_some_and(|review| !review.is_null()));
-    let binding_fenced = binding_fenced_kind(session_kind);
-    let mut params = serde_json::json!({
-        "commandId": command_id,
-        "actorId": engine.engine_info().device_id,
-        "clientId": engine.engine_info().device_id,
-        "clientSessionId": client_session_id(),
-        "taskId": task_id,
-        "intent": intent,
-    });
-    if revision_fenced {
-        params["expectedTaskRevision"] = snapshot.task_revision.into();
-    }
-    if binding_fenced && let Some(generation) = snapshot.binding_generation {
-        params["expectedBindingGeneration"] = generation.into();
-    }
-    if turn_fenced && let Some(turn_id) = snapshot.active_turn_id {
-        params["expectedTurnId"] = turn_id.into();
-    }
-    if let Some(target) = target_device_id {
-        params["targetDeviceId"] = target.into();
-    }
-
-    // One bounded retry uses the exact same serialized envelope. If the first
-    // reply was lost, readback returns its durable receipt and avoids replay.
-    let first = engine
-        .client()
-        .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, params.clone())
-        .await;
-    let receipt = match first {
-        Ok(receipt) => receipt,
-        Err(first_error) => {
-            if let Some(receipt) = receipt(engine, target_device_id, &command_id).await? {
-                receipt
-            } else {
-                match engine
-                    .client()
-                    .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, params)
-                    .await
-                {
-                    Ok(receipt) => receipt,
-                    Err(_) => receipt(engine, target_device_id, &command_id)
-                        .await?
-                        .ok_or(first_error)?,
-                }
-            }
-        }
-    };
-    Ok(receipt)
+    luna_sdk::Client::new(engine.client())
+        .execute(&command)
+        .await
+        .map_err(luna_sdk::SdkError::into_rpc)
 }
 
 #[cfg(test)]
@@ -377,19 +403,4 @@ mod tests {
             assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");
         }
     }
-}
-
-async fn receipt(
-    engine: &EngineHandle,
-    target_device_id: Option<&str>,
-    command_id: &str,
-) -> Result<Option<CommandReceipt>, RpcError> {
-    let mut params = serde_json::json!({ "commandId": command_id });
-    if let Some(target) = target_device_id {
-        params["targetDeviceId"] = target.into();
-    }
-    engine
-        .client()
-        .call_as(methods::GET_TASK_COMMAND_RECEIPT, params)
-        .await
 }

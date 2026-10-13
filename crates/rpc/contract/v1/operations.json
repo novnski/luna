@@ -1576,6 +1576,18 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "DescribeApi",
+      "id": "luna.core/describe-api",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "GetTaskIdentity",
       "id": "luna.core/get-task-identity",
       "version": 1,
