@@ -439,8 +439,18 @@ pub struct ModelOptionChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ComposerInput {
-    Mention { name: String, path: String },
-    Skill { name: String, path: String },
+    Mention {
+        name: String,
+        path: String,
+    },
+    Skill {
+        name: String,
+        path: String,
+        /// Reviewed managed-skill tree revision. Claude delivers this selection
+        /// as instruction guidance, with no native command or permission grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -753,6 +763,9 @@ pub struct TodoItem {
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommand {
     pub name: String,
+    /// Host-resolved selection for managed instruction guidance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ComposerInput>,
     #[serde(default)]
     pub description: String,
     /// Placeholder hint for the command's argument, when it takes one.

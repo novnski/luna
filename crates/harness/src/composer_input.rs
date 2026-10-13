@@ -143,7 +143,7 @@ pub fn validate_composer_inputs(
     }
     for selection in selections {
         let (name, path) = match selection {
-            ComposerInput::Mention { name, path } | ComposerInput::Skill { name, path } => {
+            ComposerInput::Mention { name, path } | ComposerInput::Skill { name, path, .. } => {
                 (name, path)
             }
         };
@@ -232,7 +232,7 @@ pub(crate) fn codex_input(
     for selection in selections {
         let (kind, name, path) = match selection {
             ComposerInput::Mention { name, path } => ("mention", name, path),
-            ComposerInput::Skill { name, path } => ("skill", name, path),
+            ComposerInput::Skill { name, path, .. } => ("skill", name, path),
         };
         if seen.insert((kind, path.as_str())) {
             input.push(json!({"type":kind, "name":name, "path":path}));

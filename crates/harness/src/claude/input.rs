@@ -458,7 +458,14 @@ fn skill_selections(selections: &[ComposerInput]) -> Result<Vec<(String, String)
                     "Plugin and app mentions ({path}) are Codex integrations; Claude Code cannot run them. Remove the mention or choose Codex; {KEPT}."
                 )));
             }
-            ComposerInput::Skill { name, path } => {
+            ComposerInput::Skill {
+                name,
+                path,
+                revision,
+            } => {
+                if revision.is_some() {
+                    continue;
+                }
                 let name = claude_skill(name, path)?;
                 if !skills.iter().any(|(_, known)| known == path) {
                     skills.push((name, path.clone()));

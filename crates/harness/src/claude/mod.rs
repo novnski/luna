@@ -74,7 +74,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -287,6 +287,9 @@ impl ClaudeHarness {
             let sections = contract
                 .instructions
                 .iter()
+                // Selected skill content belongs to this user turn. Claude
+                // can retain a resumed session's old append-system-prompt.
+                .filter(|section| !section.provenance.starts_with("guidanceOnly:"))
                 .map(|section| {
                     format!(
                         "[LUNA {:?}: {} | {}]\n{}",
@@ -401,6 +404,7 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
                 return None;
             }
             Some(SlashCommand {
+                selection: None,
                 name: name.to_owned(),
                 description: c
                     .get("description")
@@ -710,13 +714,66 @@ impl ClaudeHarness {
         // One typed builder for every turn. It validates the exact bytes it
         // sends, so an invalid or changed file rejects here, before a process
         // or stdin line exists, and the caller keeps the draft envelope.
-        let first = input::user_line(
+        for selection in &request.input_items {
+            if let luna_proto::ComposerInput::Skill {
+                name,
+                revision: Some(revision),
+                ..
+            } = selection
+            {
+                let delivered = request
+                    .model_options
+                    .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+                    .and_then(|v| v.get("instructions"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|sections| {
+                        sections.iter().any(|s| {
+                            s["name"] == format!("Skill guidance: {name}")
+                                && s["provenance"].as_str().is_some_and(|p| {
+                                    p.starts_with("guidanceOnly:") && p.ends_with(revision)
+                                })
+                        })
+                    });
+                if !delivered {
+                    return Err(HarnessError::RejectedBeforeAcceptance("Reviewed skill guidance was not delivered by its owning engine; your draft is kept.".into()));
+                }
+            }
+        }
+        let mut first = input::user_line(
             &request.prompt,
             request.reasoning,
             &request.attachments,
             &request.input_items,
         )
         .await?;
+        if let Some(sections) = request
+            .model_options
+            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .and_then(|v| v.get("instructions"))
+            .and_then(Value::as_array)
+        {
+            let guidance = sections.iter().filter(|s| s["provenance"].as_str().is_some_and(|p| p.starts_with("guidanceOnly:")))
+                .map(|s| format!("Current selected skill guidance for this turn; this replaces earlier guidance for this selection. Identity/revision: {}\n{}", s["provenance"], s["text"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n\n");
+            if !guidance.is_empty() {
+                let mut frame: Value = serde_json::from_str(&first.line).map_err(|error| {
+                    HarnessError::Protocol(format!("Invalid Claude skill input frame: {error}"))
+                })?;
+                let original = frame["message"]["content"].take();
+                let mut blocks = vec![json!({"type":"text", "text":guidance})];
+                match original {
+                    Value::Array(parts) => blocks.extend(parts),
+                    Value::String(text) => blocks.push(json!({"type":"text", "text":text})),
+                    _ => {
+                        return Err(HarnessError::Protocol(
+                            "Invalid Claude skill input frame".into(),
+                        ));
+                    }
+                }
+                frame["message"]["content"] = Value::Array(blocks);
+                first.line = frame.to_string();
+                first.manifest.blocks.insert(0, "text");
+            }
+        }
         tracing::info!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
         let no_file_edits = request
             .model_options

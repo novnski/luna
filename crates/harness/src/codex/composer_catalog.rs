@@ -291,6 +291,7 @@ fn plugins(
                 .or_else(|| text(plugin, "name", 256))
                 .unwrap_or_else(|| id.clone());
             entries.push(ComposerCatalogEntry {
+                reviewed_revision: None,
                 kind: Kind::Plugin,
                 path: format!("plugin://{id}"),
                 id,
@@ -336,6 +337,7 @@ async fn apps(
         let id = text(app, "id", 512)
             .ok_or_else(|| HarnessError::Protocol("app lacks identity".into()))?;
         eligible.push(ComposerCatalogEntry {
+            reviewed_revision: None,
             kind: Kind::App,
             path: format!("app://{id}"),
             name: text(app, if legacy { "name" } else { "runtimeName" }, 256)
@@ -400,6 +402,7 @@ fn skills(
             .filter(|path| Path::new(path).is_absolute())
             .ok_or_else(|| HarnessError::Protocol("skill lacks host path".into()))?;
         entries.push(ComposerCatalogEntry {
+            reviewed_revision: None,
             kind: Kind::Skill,
             id: path.clone(),
             path,

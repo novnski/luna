@@ -1251,6 +1251,9 @@ pub fn typed_skill(selections: &[ComposerInput]) -> Result<Option<String>, Harne
                     "Claude cannot receive plugin or app selections. Remove them or choose Codex; your draft is kept.".into(),
                 ));
             }
+            ComposerInput::Skill {
+                revision: Some(_), ..
+            } => {}
             ComposerInput::Skill { name, .. } => skills.push(name.trim().trim_start_matches('/')),
         }
     }
@@ -1259,6 +1262,9 @@ pub fn typed_skill(selections: &[ComposerInput]) -> Result<Option<String>, Harne
             "Claude runs one skill or command per message. Keep one selection; your draft is kept."
                 .into(),
         ));
+    }
+    if skills.is_empty() {
+        return Ok(None);
     }
     let name = skills[0];
     if !valid_command_name(name) {

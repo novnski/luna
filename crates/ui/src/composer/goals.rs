@@ -180,12 +180,14 @@ pub(super) enum GoalSend {
 pub(super) fn goal_slash_command(provider: GoalProvider) -> SlashCommand {
     match provider {
         GoalProvider::Codex => SlashCommand {
+            selection: None,
             name: GOAL_COMMAND.into(),
             description: "Send as a goal Codex keeps working on until it is done".into(),
             input_hint: Some("objective".into()),
             kind: SlashCommandKind::Command,
         },
         GoalProvider::Claude => SlashCommand {
+            selection: None,
             name: GOAL_COMMAND.into(),
             description:
                 "Send as a goal Claude keeps working on until its checker confirms the condition"

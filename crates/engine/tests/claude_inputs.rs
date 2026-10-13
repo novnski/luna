@@ -335,6 +335,7 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
                 message_id: Some("typed-skill".into()),
                 attachments: vec![image.clone()],
                 input_items: vec![ComposerInput::Skill {
+                    revision: None,
                     name: "fixture-skill".into(),
                     path: skill.to_string_lossy().into(),
                 }],

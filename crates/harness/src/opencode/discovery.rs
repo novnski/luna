@@ -354,6 +354,7 @@ pub(super) fn skills_from_wire(skills: &Value) -> Vec<SlashCommand> {
                 .filter_map(|skill| {
                     let id = skill.get("id").and_then(Value::as_str)?;
                     Some(SlashCommand {
+                        selection: None,
                         name: id.to_owned(),
                         description: skill
                             .get("description")

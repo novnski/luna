@@ -26,6 +26,8 @@ pub struct ComposerCatalogEntry {
     pub name: String,
     /// Exact native Mention URI or absolute host SKILL.md path. Never a label-derived ID.
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_revision: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -55,6 +57,10 @@ pub struct ComposerCatalog {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerCatalogRequest {
+    #[serde(default)]
+    pub provider: Option<crate::HarnessId>,
+    #[serde(default)]
+    pub permission_mode: Option<crate::PermissionMode>,
     #[serde(default)]
     pub chat_id: Option<String>,
     #[serde(default)]

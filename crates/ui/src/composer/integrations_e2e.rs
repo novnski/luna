@@ -57,6 +57,7 @@ impl Composer {
 
 fn catalog() -> ComposerCatalog {
     let entry = |kind, id: &str, name: &str, path: &str| ComposerCatalogEntry {
+        reviewed_revision: None,
         kind,
         id: id.into(),
         name: name.into(),
@@ -325,6 +326,7 @@ pub async fn run_integrations_picker_e2e(
         path: "plugin://opaque@qa".into(),
     };
     let skill = NativeInput::Skill {
+        revision: None,
         name: "Review (PR)".into(),
         path: "/Users/qa/.codex/skills/review/SKILL.md".into(),
     };

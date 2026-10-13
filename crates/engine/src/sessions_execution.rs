@@ -150,6 +150,39 @@ impl SessionsEngine {
                 }
             }
             self.apply_execution_policy(chat_id, harness_id, request)?;
+            request.model_options.remove("__luna_skill_guidance");
+            if harness_id == HarnessId::ClaudeCode
+                && request.input_items.iter().any(|s| {
+                    matches!(
+                        s,
+                        luna_proto::ComposerInput::Skill {
+                            revision: Some(_),
+                            ..
+                        }
+                    )
+                })
+            {
+                let context = self.runtime_context_for(chat_id, harness_id, request)?;
+                let accounts = self.inner.agent_accounts.get().ok_or_else(|| {
+                    EngineError::DispatchPreflight(
+                        "Skill execution host is unavailable; your draft is kept.".into(),
+                    )
+                })?;
+                let (claude_home, opencode_home) = accounts.skill_config_dirs();
+                let roots = crate::integration_settings::SkillRoots {
+                    codex_home: None,
+                    claude_home,
+                    opencode_home,
+                    project_root: Some(request.cwd.clone().into()),
+                    machine_id: context.machine_id,
+                };
+                let sections =
+                    crate::integration_settings::selected_guidance(&roots, &request.input_items)?;
+                request.model_options.insert(
+                    "__luna_skill_guidance".into(),
+                    serde_json::to_value(sections)?,
+                );
+            }
             if harness_id == HarnessId::ClaudeCode
                 && let Some(accounts) = self.inner.agent_accounts.get()
             {

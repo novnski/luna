@@ -61,6 +61,7 @@ async fn image_only_start_and_attached_steer_preserve_native_identity() {
             path: "app://native-app-id".into(),
         },
         ComposerInput::Skill {
+            revision: None,
             name: "fixture".into(),
             path: skill.to_string_lossy().into(),
         },

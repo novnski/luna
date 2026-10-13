@@ -69,6 +69,7 @@ async fn draft_restart_queue_edit_and_native_image_steer_preserve_inputs() {
             path: "app://native-app-id".into(),
         },
         ComposerInput::Skill {
+            revision: None,
             name: "fixture".into(),
             path: root.path().join("SKILL.md").to_string_lossy().into(),
         },

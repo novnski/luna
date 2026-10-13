@@ -9857,8 +9857,14 @@ impl Composer {
             return;
         };
         let sigil = self.slash_sigil();
+        let owner = self.native_editor_owner(cx);
         self.input.update(cx, |input, cx| {
-            input.replace_plain_token(token.range, &format!("{sigil}{}", command.name), cx)
+            if let Some(selection) = &command.selection {
+                input.bind_native_owner(owner);
+                input.replace_native_mention(token.range, selection, cx);
+            } else {
+                input.replace_plain_token(token.range, &format!("{sigil}{}", command.name), cx)
+            }
         });
         self.reset_slash(None, cx);
         cx.notify();

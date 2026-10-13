@@ -10740,6 +10740,20 @@ impl EngineRpc {
                 if p.chat_id.is_some() && chat.is_none() {
                     return Err(RpcError::BadParams("unknown catalog task".into()));
                 }
+                let provider = p.provider.or_else(|| chat.as_ref().and_then(|c| c.config.as_ref()).map(|c| c.harness)).unwrap_or(HarnessId::Codex);
+                if provider == HarnessId::ClaudeCode {
+                    let scope = crate::command_scope::resolve(&crate::command_scope::ListCommandsParams {
+                        harness: provider, chat_id: p.chat_id.clone(), space_id: p.space_id.clone(), path: p.path.clone(), permission_mode: p.permission_mode,
+                    }, &self.workspace, &self.workspace_files, self.doc_host.device_id(), &self.agent_accounts).await?;
+                    let mut roots = self.skill_roots(None)?;
+                    roots.project_root = scope.cwd;
+                    let entries = if scope.permission_mode != luna_proto::PermissionMode::Full { crate::integration_settings::guidance_catalog(&roots) } else { Vec::new() };
+                    return RpcReply::value(&luna_proto::ComposerCatalog {
+                        scope: format!("claude-guidance:{}:{:?}", crate::integration_settings::source_revision(provider, &roots), scope.permission_mode),
+                        fetched_at_ms: chrono::Utc::now().timestamp_millis(), ttl_ms: 0, stale: false,
+                        slices: vec![luna_proto::ComposerCatalogSlice { kind: luna_proto::ComposerCatalogKind::Skill, status: luna_proto::ComposerCatalogStatus::Ready, disabled_count: 0, detail: Some("Reviewed instruction guidance; no native commands or permission grants.".into()) }], entries,
+                    });
+                }
                 let requested_account = p.provider_account_id.as_deref().or_else(|| {
                     chat.as_ref()
                         .and_then(|chat| chat.config.as_ref())
@@ -10907,10 +10921,21 @@ impl EngineRpc {
                     &self.agent_accounts,
                 )
                 .await?;
-                let commands = harness
+                let mut commands = harness
                     .commands_in(&scope)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if p.harness == HarnessId::ClaudeCode && scope.permission_mode != luna_proto::PermissionMode::Full {
+                    let mut roots = self.skill_roots(None)?;
+                    roots.project_root = scope.cwd;
+                    for entry in crate::integration_settings::guidance_catalog(&roots) {
+                        commands.retain(|c| c.name != entry.name);
+                        commands.push(luna_proto::SlashCommand {
+                            selection: Some(luna_proto::ComposerInput::Skill { name: entry.name.clone(), path: entry.path, revision: entry.reviewed_revision }),
+                            name: entry.name, description: entry.description.unwrap_or_default(), input_hint: None, kind: luna_proto::SlashCommandKind::Skill,
+                        });
+                    }
+                }
                 RpcReply::value(&commands)
             }
             methods::RETRY_DELIVERY => {

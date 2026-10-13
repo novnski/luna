@@ -774,6 +774,7 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
     // A run-only settings layer (fast mode) must merge with the hook opt-out.
     req.model_options.insert("fastMode".into(), json!("on"));
     req.input_items = vec![ComposerInput::Skill {
+        revision: None,
         name: "cc12-project-only".into(),
         path: world
             .project
@@ -845,6 +846,7 @@ async fn typed_skill_outside_the_effective_catalog_is_rejected_before_any_user_m
     world.canned();
     let mut req = request("summarize", &world.project, PermissionMode::Ask);
     req.input_items = vec![ComposerInput::Skill {
+        revision: None,
         name: "cc12-project-only".into(),
         path: world
             .project
@@ -875,15 +877,18 @@ async fn typed_skill_outside_the_effective_catalog_is_rejected_before_any_user_m
         }],
         vec![
             ComposerInput::Skill {
+                revision: None,
                 name: "a".into(),
                 path: "/x/a.md".into(),
             },
             ComposerInput::Skill {
+                revision: None,
                 name: "b".into(),
                 path: "/x/b.md".into(),
             },
         ],
         vec![ComposerInput::Skill {
+            revision: None,
             name: "bad name".into(),
             path: "/x/a.md".into(),
         }],

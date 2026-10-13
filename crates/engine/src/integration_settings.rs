@@ -1054,6 +1054,95 @@ pub fn skill_document(
     })
 }
 
+/// Managed instruction content only. Discovery never loads custom commands,
+/// hooks or provider settings. Project skills override the same global name.
+pub(crate) fn guidance_catalog(roots: &SkillRoots) -> Vec<luna_proto::ComposerCatalogEntry> {
+    let mut entries = BTreeMap::new();
+    for scope in [
+        IntegrationSkillScope::Global,
+        IntegrationSkillScope::Project,
+    ] {
+        let Ok(location) = roots.location(HarnessId::ClaudeCode, scope) else {
+            continue;
+        };
+        let Ok(children) = std::fs::read_dir(&location.root) else {
+            continue;
+        };
+        for child in children.flatten().take(1024) {
+            let name = child.file_name().to_string_lossy().into_owned();
+            if !valid_skill_name(&name) {
+                continue;
+            }
+            if scope == IntegrationSkillScope::Project {
+                entries.remove(&name);
+            }
+            let identity = provider_identity(
+                HarnessId::ClaudeCode,
+                &roots.machine_id,
+                location.source_id,
+                &location.identity_root,
+                &name,
+            );
+            let Ok(document) = skill_document(HarnessId::ClaudeCode, roots, &identity) else {
+                continue;
+            };
+            if document.content.chars().count() > 16_000 {
+                continue;
+            }
+            entries.insert(
+                name.clone(),
+                luna_proto::ComposerCatalogEntry {
+                    kind: luna_proto::ComposerCatalogKind::Skill,
+                    id: identity,
+                    name,
+                    path: location
+                        .identity_root
+                        .join(&document.name)
+                        .join("SKILL.md")
+                        .to_string_lossy()
+                        .into_owned(),
+                    reviewed_revision: Some(document.revision),
+                    description: Some(format!(
+                        "Guidance only · {:?} skill; permissions stay unchanged",
+                        scope
+                    )),
+                },
+            );
+        }
+    }
+    entries.into_values().collect()
+}
+
+pub(crate) fn selected_guidance(
+    roots: &SkillRoots,
+    selections: &[luna_proto::ComposerInput],
+) -> Result<Vec<luna_proto::RuntimeInstructionSection>, EngineError> {
+    let mut sections = Vec::new();
+    for selection in selections {
+        let luna_proto::ComposerInput::Skill {
+            name,
+            path,
+            revision: Some(revision),
+        } = selection
+        else {
+            continue;
+        };
+        let entry = guidance_catalog(roots).into_iter().find(|entry| entry.path == *path && entry.name == *name)
+            .ok_or_else(|| EngineError::DispatchPreflight("Selected skill is unavailable in this project/provider scope; reselect it. Your draft is kept.".into()))?;
+        let document = skill_document(HarnessId::ClaudeCode, roots, &entry.id)?;
+        if document.revision != *revision {
+            return Err(EngineError::DispatchPreflight("Selected skill changed after review; reselect its current revision. Your draft is kept.".into()));
+        }
+        sections.push(luna_proto::RuntimeInstructionSection {
+            name: format!("Skill guidance: {}", document.name),
+            source: luna_proto::RuntimeInstructionSource::Context,
+            provenance: format!("guidanceOnly:{}:{:?}:{}", document.identity, document.scope, document.revision),
+            text: format!("Selected skill instruction guidance (not a native command or permission grant). Skill directory: {}. Resolve skill references against that directory; supporting files remain ordinary files under the current tool policy.\n{}", serde_json::to_string(&Path::new(path).parent())?, document.content),
+        });
+    }
+    Ok(sections)
+}
+
 pub fn save_skill_document(
     provider: HarnessId,
     roots: &SkillRoots,

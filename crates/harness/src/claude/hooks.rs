@@ -58,6 +58,7 @@ pub(crate) fn slash_commands(entries: &[Value]) -> Vec<SlashCommand> {
         .filter_map(|entry| {
             let name = entry.get("name").and_then(Value::as_str)?.trim();
             (!name.is_empty()).then(|| SlashCommand {
+                selection: None,
                 name: name.to_owned(),
                 description: entry
                     .get("description")

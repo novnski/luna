@@ -571,6 +571,7 @@ fn parse_skill_commands(result: &Value) -> Vec<SlashCommand> {
                 .or_else(|| skill.get("description").and_then(Value::as_str))
                 .unwrap_or_default();
             commands.push(SlashCommand {
+                selection: None,
                 name: name.to_owned(),
                 description: description.to_owned(),
                 input_hint: None,

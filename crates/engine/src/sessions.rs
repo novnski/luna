@@ -3681,7 +3681,7 @@ impl SessionsEngine {
                     .into(),
             ));
         }
-        let side_context_sections = self.admit_side_chat_run(chat_id, &mut request)?;
+        let mut side_context_sections = self.admit_side_chat_run(chat_id, &mut request)?;
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
                 .prompt
@@ -3757,6 +3757,11 @@ impl SessionsEngine {
             self.supersede_recovery(chat_id, "Superseded by newer user activity.")?;
         }
         self.prepare_execution_request(chat_id, harness_id, &mut request)?;
+        if let Some(guidance) = request.model_options.remove("__luna_skill_guidance") {
+            side_context_sections.extend(serde_json::from_value::<
+                Vec<luna_proto::RuntimeInstructionSection>,
+            >(guidance)?);
+        }
         if let Some(explicit_resume) = request.resume.as_deref()
             && let Some(task_identity) = self.inner.task_identity.get()
         {
@@ -4477,6 +4482,17 @@ impl SessionsEngine {
             return Ok(SteerOutcome::Rejected);
         }
         crate::provider_inputs::admit(harness_id, run_model.as_deref(), attachments, input_items)?;
+        if input_items.iter().any(|s| {
+            matches!(
+                s,
+                luna_proto::ComposerInput::Skill {
+                    revision: Some(_),
+                    ..
+                }
+            )
+        }) {
+            return Ok(SteerOutcome::ConfigurationChanged);
+        }
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery

@@ -489,6 +489,7 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
             "codex-skill",
             vec![],
             vec![ComposerInput::Skill {
+                revision: None,
                 name: "fixture-skill".into(),
                 path: codex_skill.to_string_lossy().into(),
             }],
@@ -498,6 +499,7 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
             "missing-skill",
             vec![],
             vec![ComposerInput::Skill {
+                revision: None,
                 name: "gone".into(),
                 path: path(".claude/skills/gone/SKILL.md"),
             }],
@@ -507,6 +509,7 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
             "skill-name-mismatch",
             vec![],
             vec![ComposerInput::Skill {
+                revision: None,
                 name: "other".into(),
                 path: claude_skill.to_string_lossy().into(),
             }],
@@ -516,6 +519,7 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
             "skill-bad-name",
             vec![],
             vec![ComposerInput::Skill {
+                revision: None,
                 name: "two words".into(),
                 path: claude_skill.to_string_lossy().into(),
             }],
@@ -684,6 +688,7 @@ async fn typed_skill_with_images_and_prose_expands_from_the_last_text_block() {
         .collect();
     let chip = format!("[@fixture-skill](skill://{encoded})");
     let selection = ComposerInput::Skill {
+        revision: None,
         name: "fixture-skill".into(),
         path: skill_path.clone(),
     };

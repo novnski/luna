@@ -379,6 +379,7 @@ pub(super) fn commands_from_wire(commands: &Value) -> Vec<SlashCommand> {
                 .filter_map(|c| {
                     let name = c.get("name").and_then(Value::as_str)?;
                     Some(SlashCommand {
+                        selection: None,
                         name: name.to_owned(),
                         description: c
                             .get("description")

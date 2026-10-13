@@ -273,7 +273,7 @@ pub(super) fn skill_selections(
                     "OpenCode cannot receive plugin or app selections. Remove them or choose Codex; your draft is kept.".into(),
                 ));
             }
-            ComposerInput::Skill { name, path } => {
+            ComposerInput::Skill { name, path, .. } => {
                 let name = name.trim().trim_start_matches(['/', '$']);
                 if name.is_empty() || name.chars().any(char::is_control) {
                     return Err(reject(

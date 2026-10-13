@@ -39,12 +39,14 @@ pub(super) struct NativeLink {
 }
 pub(super) fn identity(item: &NativeInput) -> (&str, &str) {
     match item {
-        NativeInput::Mention { name, path } | NativeInput::Skill { name, path } => (name, path),
+        NativeInput::Mention { name, path } | NativeInput::Skill { name, path, .. } => (name, path),
     }
 }
 pub(super) fn entry_input(entry: &ComposerCatalogEntry) -> NativeInput {
     match entry.kind {
         Kind::Skill => NativeInput::Skill {
+            revision: entry.reviewed_revision.clone(),
+
             name: entry.name.clone(),
             path: entry.path.clone(),
         },
@@ -126,7 +128,11 @@ pub(super) fn native_links(raw: &str) -> Vec<NativeLink> {
             continue;
         }
         let item = if scheme == "skill" {
-            NativeInput::Skill { name, path: value }
+            NativeInput::Skill {
+                revision: None,
+                name,
+                path: value,
+            }
         } else {
             NativeInput::Mention {
                 name,
@@ -311,8 +317,13 @@ impl ComposerInput {
             if spans.iter().any(|span| span.item == item) {
                 continue;
             }
-            if let Some(link) = links.iter().find(|link| link.item == item) {
-                spans.push(link.clone());
+            if let Some(link) = links
+                .iter()
+                .find(|link| identity(&link.item) == identity(&item))
+            {
+                let mut span = link.clone();
+                span.item = item;
+                spans.push(span);
             } else {
                 if !text.is_empty() && !text.ends_with(char::is_whitespace) {
                     text.push(' ');
@@ -393,11 +404,20 @@ impl Composer {
         cx: &App,
     ) -> Option<(String, serde_json::Value)> {
         let config = self.pickers.read(cx).resolved(cx);
-        if config.harness != Some(HarnessId::Codex) {
+        if config.harness != Some(HarnessId::Codex) && config.harness != Some(HarnessId::ClaudeCode)
+        {
             return None;
         }
         let state = self.state.read(cx);
         let mut params = serde_json::Map::new();
+        params.insert(
+            "provider".into(),
+            serde_json::to_value(config.harness).ok()?,
+        );
+        params.insert(
+            "permissionMode".into(),
+            serde_json::to_value(config.permission_mode).ok()?,
+        );
         if let Some(chat) = self.binding.chat_row(state) {
             params.insert("chatId".into(), chat.id.clone().into());
             params.insert("targetDeviceId".into(), chat.device_id.clone().into());
@@ -422,7 +442,7 @@ impl Composer {
 
     /// The actual draft owner: engine generation plus the real canvas UUID
     /// (never the shared empty canvas key) or the task's draft ID.
-    fn native_editor_owner(&self, cx: &App) -> NativeEditorOwner {
+    pub(super) fn native_editor_owner(&self, cx: &App) -> NativeEditorOwner {
         NativeEditorOwner {
             engine_generation: self.state.read(cx).engine_generation(),
             draft_id: self.draft_id_for(&self.current_key),
@@ -942,7 +962,10 @@ impl Composer {
                 let catalog = result.ok().and_then(|value| serde_json::from_value::<ComposerCatalog>(value).ok());
                 let valid = catalog.as_ref().is_some_and(|catalog| !catalog.stale && items.iter().all(|item| {
                     let (_, path) = identity(item);
-                    catalog.entries.iter().any(|entry| entry.path == path)
+                    catalog.entries.iter().any(|entry| entry.path == path && match item {
+                        NativeInput::Skill { revision, .. } => revision == &entry.reviewed_revision,
+                        _ => true,
+                    })
                 }));
                 if valid {
                     composer.integrations.generation = composer.integrations.generation.wrapping_add(1);
@@ -954,7 +977,7 @@ impl Composer {
                     composer.integrations.send_verified = true;
                     composer.send(submitted_text, behavior, cx);
                 } else {
-                    composer.failure = Some("A selected integration is unavailable in this account or thread. Remove it or retry after restoring access; your draft is preserved.".into());
+                    composer.failure = Some("A selected integration is unavailable or changed after review. Reselect it for this account and project; your draft is preserved.".into());
                     composer.failure_key = Some(key);
                     cx.notify();
                 }

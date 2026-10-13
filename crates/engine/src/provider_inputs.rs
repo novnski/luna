@@ -23,6 +23,19 @@ pub(crate) fn admit(
     attachments: &[String],
     input_items: &[ComposerInput],
 ) -> Result<(), EngineError> {
+    if harness != HarnessId::ClaudeCode
+        && input_items.iter().any(|s| {
+            matches!(
+                s,
+                ComposerInput::Skill {
+                    revision: Some(_),
+                    ..
+                }
+            )
+        })
+    {
+        return Err(EngineError::DispatchPreflight("This reviewed guidance selection belongs to Claude; reselect the skill for the current provider. Your draft is kept.".into()));
+    }
     match (harness).kind() {
         luna_proto::BuiltinHarnessId::Codex => {
             luna_harness::validate_composer_inputs(attachments, input_items)?
