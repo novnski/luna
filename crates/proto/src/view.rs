@@ -397,6 +397,7 @@ pub enum ThreadTool {
     Message,
     List,
     Models,
+    Stop,
 }
 
 impl ThreadTool {
@@ -414,6 +415,7 @@ impl ThreadTool {
             "send_message_to_thread" => Self::Message,
             "list_threads" => Self::List,
             "list_child_models" => Self::Models,
+            "interrupt_thread" => Self::Stop,
             _ => return None,
         })
     }
@@ -427,6 +429,7 @@ impl ThreadTool {
             Self::Message => "Message a thread",
             Self::List => "List threads",
             Self::Models => "Check available models",
+            Self::Stop => "Stop a thread",
         }
     }
 
@@ -439,6 +442,7 @@ impl ThreadTool {
             Self::Message => "Messaging a thread",
             Self::List => "Listing threads",
             Self::Models => "Checking available models",
+            Self::Stop => "Stopping a thread",
         }
     }
 }
@@ -535,6 +539,8 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut failed_threads = 0usize;
     let mut read_threads = 0usize;
     let mut messaged_threads = 0usize;
+    // A stop call is a request; its receipt says whether anything stopped.
+    let mut stop_requests = 0usize;
     let mut waited = false;
     let mut other = 0usize;
     let mut hooks = 0usize;
@@ -565,6 +571,10 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
             }
             Some(ThreadTool::Wait) => {
                 waited = true;
+                continue;
+            }
+            Some(ThreadTool::Stop) => {
+                stop_requests += 1;
                 continue;
             }
             Some(ThreadTool::List | ThreadTool::Models) | None => {}
@@ -633,6 +643,12 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
         segments.push(format!(
             "messaged {}",
             plural(messaged_threads, "thread", "threads")
+        ));
+    }
+    if stop_requests > 0 {
+        segments.push(format!(
+            "sent {}",
+            plural(stop_requests, "stop request", "stop requests")
         ));
     }
     if waited {

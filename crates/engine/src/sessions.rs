@@ -2177,23 +2177,7 @@ impl SessionsEngine {
         target_task_id: &str,
     ) -> Result<PreparedControlEvidence, crate::cross_task_tools::CrossTaskError> {
         use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
-        if authority.caller_task_id != claim.source_task_id
-            || authority.local_environment_id != self.inner.device_id
-            || !authority.delivery.attaches_luna_tools()
-            || authority.explicit_user_request
-            || authority.allow_projectless
-            // Only the automatic read grant; the board scopes never reach
-            // another chat (board tools check them on their own path).
-            || authority
-                .granted_scopes
-                .iter()
-                .filter(|scope| !scope.starts_with("board."))
-                .count()
-                != 1
-            || !authority.granted_scopes.contains("threads.read")
-            || authority.visible_project_ids.len() != 1
-            || target_task_id == claim.source_task_id
-        {
+        if !self.control_evidence_authority(&claim, authority, target_task_id) {
             return Err(CrossTaskError::TargetScope);
         }
         let source_project_id = authority
@@ -4234,35 +4218,42 @@ impl SessionsEngine {
                         let chat_id = chat_id.clone();
                         let run_id = run_id.clone();
                         Box::pin(async move {
-                            let result = if matches!(
-                                invocation.name.as_str(),
-                                "send_message_to_thread"
-                                    | "create_thread"
-                                    | "automation_update"
-                                    | "manage_workspace"
-                            ) {
-                                sessions
-                                    .invoke_approved_luna_send(
-                                        &chat_id, &run_id, &contract, invocation, &cancel, backend,
+                            let result =
+                                if invocation.name == crate::cross_task_tools::THREAD_STOP_TOOL {
+                                    sessions
+                                        .invoke_luna_thread_stop(
+                                            &chat_id, &run_id, &contract, invocation, backend,
+                                        )
+                                        .await
+                                } else if matches!(
+                                    invocation.name.as_str(),
+                                    "send_message_to_thread"
+                                        | "create_thread"
+                                        | "automation_update"
+                                        | "manage_workspace"
+                                ) {
+                                    sessions
+                                        .invoke_approved_luna_send(
+                                            &chat_id, &run_id, &contract, invocation, &cancel,
+                                            backend,
+                                        )
+                                        .await
+                                } else if invocation.name == crate::runtime_contract::ASK_USER_TOOL
+                                    && contract.tools.iter().any(|tool| {
+                                        tool.name == crate::runtime_contract::ASK_USER_TOOL
+                                    })
+                                {
+                                    sessions.invoke_ask_user(&chat_id, &run_id, &invocation)
+                                } else {
+                                    crate::runtime_contract::invoke_with_backend(
+                                        &contract,
+                                        &invocation.name,
+                                        invocation.arguments,
+                                        &cancel,
+                                        backend,
                                     )
                                     .await
-                            } else if invocation.name == crate::runtime_contract::ASK_USER_TOOL
-                                && contract
-                                    .tools
-                                    .iter()
-                                    .any(|tool| tool.name == crate::runtime_contract::ASK_USER_TOOL)
-                            {
-                                sessions.invoke_ask_user(&chat_id, &run_id, &invocation)
-                            } else {
-                                crate::runtime_contract::invoke_with_backend(
-                                    &contract,
-                                    &invocation.name,
-                                    invocation.arguments,
-                                    &cancel,
-                                    backend,
-                                )
-                                .await
-                            };
+                                };
                             result.map_err(|error| {
                                 luna_harness::HarnessError::Tool(error.to_string())
                             })

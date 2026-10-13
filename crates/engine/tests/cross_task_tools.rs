@@ -583,6 +583,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
             "read_thread",
             "wait_threads",
             "send_message_to_thread",
+            "interrupt_thread",
         ])
     );
     assert!(
@@ -1273,6 +1274,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
                     | "create_thread"
                     | "automation_update"
                     | "manage_workspace"
+                    | "interrupt_thread"
                     | "ask_user"
             )
         );
@@ -1758,6 +1760,583 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
     .expect("retired endpoint stops serving");
     assert!(matches!(retired, "refused" | "unauthorized"));
     core.shutdown().await;
+}
+
+/// SW-10 / E12 over the real per-process endpoint (the test is the MCP client
+/// the way Codex is). The parent stops exactly one of three running helpers:
+/// the stop has terminal readback and a durable, replayable receipt even
+/// while the helper's task revision keeps advancing; the siblings, an
+/// unrelated chat and the parent keep running; the parent's
+/// draft and layout are untouched; a helper cannot stop its sibling; a
+/// finished helper reads as alreadyEnded; each late result keeps its origin.
+/// The held fake ignores `turn/interrupt` like a busy CLI, so the adapter's
+/// own escalation ends the stopped turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_thread_stops_only_the_exact_owned_helper() {
+    use luna_proto::{ChatConfig, PermissionMode, SandboxLevel};
+    use serde_json::{Value, json};
+    use std::time::Duration;
+
+    let root = TempDir::new().unwrap();
+    let registry = Arc::new(HarnessRegistry::new());
+    registry.register(Arc::new(
+        CodexHarness::new()
+            .with_executable(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../harness/tests/fixtures/fake-codex.sh"),
+            )
+            .with_graces(Duration::from_millis(100), Duration::from_millis(500)),
+    ));
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(
+            &root.path().join("engine"),
+            "synthetic-org",
+            "synthetic-user",
+        ),
+        registry,
+        HarnessId::Codex,
+        None,
+        account_config(root.path()),
+    )
+    .unwrap();
+    let rpc = luna_rpc::memory_client(core.rpc_service());
+    let project_a = root.path().join("project-a");
+    let project_b = root.path().join("project-b");
+    std::fs::create_dir_all(&project_a).unwrap();
+    std::fs::create_dir_all(&project_b).unwrap();
+    for (id, path) in [("project-a", &project_a), ("project-b", &project_b)] {
+        core.workspace
+            .create_space(id, &core.device_id, path.to_str().unwrap(), None, false)
+            .unwrap();
+    }
+    let hold_dir = project_a.join(".luna-mcp-hold");
+    std::fs::write(project_a.join(".luna-fake-thread-per-task"), b"").unwrap();
+    let config = ChatConfig {
+        harness: HarnessId::Codex,
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        sandbox: SandboxLevel::ReadOnly,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    };
+    let source = root_task(&core, "project-a", &project_a, &config);
+    let unrelated = root_task(&core, "project-a", &project_a, &config);
+    let foreign = root_task(&core, "project-b", &project_b, &config);
+    let (_, mut source_events) = core.sessions.subscribe(&source, 0).unwrap();
+    dispatch_held(&core, &source, &project_a).await;
+    let a = held_endpoint(&hold_dir, &source, &mut source_events).await;
+    let (_, mut unrelated_events) = core.sessions.subscribe(&unrelated, 0).unwrap();
+    dispatch_held(&core, &unrelated, &project_a).await;
+    held_endpoint(&hold_dir, &unrelated, &mut unrelated_events).await;
+    let http = reqwest::Client::new();
+
+    // The scoped stop is attached, and it is a write.
+    let (status, _) = mcp_post(
+        &http,
+        &a.url,
+        &a.token,
+        &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"codex-mcp-client","version":"0.159.0"}}}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (_, listed) = mcp_post(
+        &http,
+        &a.url,
+        &a.token,
+        &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+    )
+    .await;
+    let stop_tool = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "interrupt_thread")
+        .cloned()
+        .expect("interrupt_thread attached to a project chat");
+    assert_eq!(stop_tool["annotations"]["readOnlyHint"], false);
+
+    // Three persistent helpers, each holding a live delegated turn. The
+    // outcome sweep reports only transcript turns, so the two that finish
+    // stream a reply first; h1 is stopped before it replies at all.
+    let mut helpers = Vec::new();
+    for (index, (title, brief)) in [
+        ("SW10 helper one", "scenario:mcp-hold"),
+        ("SW10 helper two", "scenario:mcp-hold:reply"),
+        ("SW10 helper three", "scenario:mcp-hold:reply"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (failed, text) = luna_tool(
+            &http,
+            &a,
+            10 + index as u64,
+            "create_thread",
+            json!({"prompt":brief,"idempotencyKey":format!("sw10-helper-{index}"),"title":title}),
+            &format!("c-sw10-create-{index}"),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        let receipt: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(receipt["parentTaskId"], source.as_str());
+        helpers.push(receipt["taskId"].as_str().unwrap().to_owned());
+    }
+    let [h1, h2, h3] = <[String; 3]>::try_from(helpers).unwrap();
+    let mut helper_endpoints = Vec::new();
+    for helper in [&h1, &h2, &h3] {
+        let (_, mut events) = core.sessions.subscribe(helper, 0).unwrap();
+        helper_endpoints.push(held_endpoint(&hold_dir, helper, &mut events).await);
+        assert!(core.sessions.active_turn_id(helper).is_some(), "{helper}");
+    }
+    let draft = json!({"version":1,"draftId":source,"taskId":source,"revision":1,
+        "text":"SW10_UNSENT_PARENT_DRAFT","updatedAtMs":100});
+    rpc.call("SaveComposerDraft", json!({"draft":draft}))
+        .await
+        .unwrap();
+    let draft_before = rpc
+        .call("GetComposerDraft", json!({"taskId":source}))
+        .await
+        .unwrap();
+    let workbench_before = rpc
+        .call("GetChatWorkbench", json!({"mainChatId":source}))
+        .await
+        .unwrap();
+
+    // A helper's own request cannot stop its sibling, even a live one that
+    // its owner can stop a moment later.
+    let (failed, text) = luna_tool(
+        &http,
+        &helper_endpoints[1],
+        20,
+        "interrupt_thread",
+        json!({"taskId":h1,"idempotencyKey":"sw10-sibling"}),
+        "c-sw10-sibling",
+    )
+    .await;
+    assert!(
+        failed && text.contains("does not own delegated work"),
+        "{text}"
+    );
+    assert!(core.sessions.active_turn_id(&h1).is_some());
+
+    // The owner stops exactly h1, with terminal readback, while h1 keeps
+    // moving: user read-state commands advance its task revision throughout
+    // the call. Ordinary progress must not refuse the stop (it used to fail
+    // as "the target task changed since the captured snapshot").
+    let churning = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let applied = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let churners = (0..3)
+        .map(|_| {
+            tokio::spawn(churn_read_state(
+                luna_rpc::memory_client(core.rpc_service()),
+                h1.clone(),
+                churning.clone(),
+                applied.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let applied_now = || applied.load(std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..400 {
+        if applied_now() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let applied_before = applied_now();
+    assert!(applied_before >= 3, "h1 read-state commands never applied");
+    let stop_h1 = json!({"taskId":h1,"idempotencyKey":"sw10-stop-h1"});
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        21,
+        "interrupt_thread",
+        stop_h1.clone(),
+        "c-sw10-stop-h1",
+    )
+    .await;
+    let applied_during = applied_now() - applied_before;
+    churning.store(false, std::sync::atomic::Ordering::SeqCst);
+    for churner in churners {
+        churner.await.unwrap();
+    }
+    assert!(!failed, "{text}");
+    assert!(
+        applied_during > 0,
+        "h1's revision never advanced during the stop"
+    );
+    let stopped: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(stopped["outcome"], "stopped", "{stopped:#}");
+    assert_eq!(stopped["receipt"]["taskId"], source.as_str());
+    assert_eq!(stopped["receipt"]["requestId"], "sw10-stop-h1");
+    assert_eq!(stopped["receipt"]["results"][0]["status"], "stopped");
+    assert_eq!(stopped["target"]["taskId"], h1.as_str());
+    assert_eq!(stopped["target"]["kind"], "childChat");
+    assert_eq!(stopped["target"]["state"], "stopped", "{stopped:#}");
+    assert_eq!(stopped["hostDeviceId"], core.device_id.as_str());
+    assert!(core.sessions.active_turn_id(&h1).is_none());
+    for running in [&h2, &h3, &unrelated, &source] {
+        assert!(
+            core.sessions.active_turn_id(running).is_some(),
+            "{running} stopped too"
+        );
+    }
+    let remaining = stopped["remaining"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "childChat")
+        .map(|item| item["taskId"].as_str().unwrap().to_owned())
+        .collect::<HashSet<_>>();
+    assert_eq!(remaining, HashSet::from([h2.clone(), h3.clone()]));
+
+    // An exact retry returns the recorded receipt; the same key cannot be
+    // spent on another thread.
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        22,
+        "interrupt_thread",
+        stop_h1,
+        "c-sw10-stop-h1-retry",
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let replay: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(replay["receipt"], stopped["receipt"]);
+    assert_eq!(replay["outcome"], "stopped");
+    // The owner's work panel reads the same terminal state, with nothing
+    // left needing attention or holding the parent's completion.
+    let panel = rpc
+        .call("GetTaskWork", json!({"taskId":source}))
+        .await
+        .unwrap();
+    let h1_row = panel["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "childChat" && item["taskId"] == h1.as_str())
+        .cloned()
+        .expect("stopped helper still listed");
+    assert_eq!(h1_row["state"], "stopped", "{panel:#}");
+    assert_eq!(h1_row["needsAttention"], false);
+    assert_eq!(h1_row["blocksCompletion"], false);
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        23,
+        "interrupt_thread",
+        json!({"taskId":h2,"idempotencyKey":"sw10-stop-h1"}),
+        "c-sw10-key-reuse",
+    )
+    .await;
+    assert!(failed && text.contains("another thread"), "{text}");
+    // Not the caller's work, another project, or smuggled authority.
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        24,
+        "interrupt_thread",
+        json!({"taskId":unrelated,"idempotencyKey":"sw10-unrelated"}),
+        "c-sw10-unrelated",
+    )
+    .await;
+    assert!(
+        failed && text.contains("does not own delegated work"),
+        "{text}"
+    );
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        25,
+        "interrupt_thread",
+        json!({"taskId":foreign,"idempotencyKey":"sw10-foreign"}),
+        "c-sw10-foreign",
+    )
+    .await;
+    assert!(
+        failed && text.contains("outside the active project"),
+        "{text}"
+    );
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        26,
+        "interrupt_thread",
+        json!({"taskId":h2,"idempotencyKey":"sw10-smuggle","ownerTaskId":source}),
+        "c-sw10-smuggle",
+    )
+    .await;
+    assert!(failed && text.contains("invalid or unbounded"), "{text}");
+    for running in [&h2, &h3, &unrelated, &source] {
+        assert!(core.sessions.active_turn_id(running).is_some(), "{running}");
+    }
+
+    // Results arrive out of order and keep their origin: h3, then h2. A
+    // helper that finished first reads as alreadyEnded.
+    std::fs::write(hold_dir.join(format!("release-{h3}")), b"").unwrap();
+    settled(&core, &h3).await;
+    let (h3_at, h3_notice) = child_notice(&core, &source, &h3, "h3").await;
+    assert!(h3_notice.ends_with(":turn-completed"), "{h3_notice}");
+    let (failed, text) = luna_tool(
+        &http,
+        &a,
+        27,
+        "interrupt_thread",
+        json!({"taskId":h3,"idempotencyKey":"sw10-stop-h3"}),
+        "c-sw10-stop-h3",
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let ended: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(ended["outcome"], "alreadyEnded", "{ended:#}");
+    assert_eq!(ended["receipt"]["results"][0]["status"], "rejected");
+    assert_eq!(ended["target"]["state"], "completed");
+    assert!(core.sessions.active_turn_id(&h2).is_some());
+    std::fs::write(hold_dir.join(format!("release-{h2}")), b"").unwrap();
+    settled(&core, &h2).await;
+    let (h2_at, h2_notice) = child_notice(&core, &source, &h2, "h2").await;
+    assert!(h2_notice.ends_with(":turn-completed"), "{h2_notice}");
+    assert!(h3_at < h2_at, "{h3_at} {h2_at}");
+    // Several outcome sweeps ran since h1's stop: it is never reported as
+    // finished. Stopped before it streamed a reply, it had no turn to report.
+    let parent_entries = core
+        .doc_host
+        .open(&source)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    let h1_prefix = format!("child-outcome:{h1}:");
+    let h1_notices = parent_entries
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .filter(|id| id.starts_with(&h1_prefix))
+        .collect::<Vec<_>>();
+    assert!(
+        h1_notices.iter().all(|id| id.ends_with(":interrupted")),
+        "{h1_notices:?}"
+    );
+    assert!(core.sessions.active_turn_id(&source).is_some());
+    let draft_after = rpc
+        .call("GetComposerDraft", json!({"taskId":source}))
+        .await
+        .unwrap();
+    let workbench_after = rpc
+        .call("GetChatWorkbench", json!({"mainChatId":source}))
+        .await
+        .unwrap();
+    assert_eq!(draft_after, draft_before);
+    assert_eq!(workbench_after, workbench_before);
+    if let Ok(directory) = std::env::var("SW10_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            std::path::Path::new(&directory).join("interrupt-thread.json"),
+            serde_json::to_vec_pretty(&json!({
+                "provider":"deterministic Codex peer through production MCP",
+                "parent":source,"helpers":[h1,h2,h3],"unrelated":unrelated,
+                "stopped":stopped,"readStateCommandsDuringStop":applied_during,
+                "replay":replay,"panelAfterStop":panel,"alreadyEnded":ended,
+                "notices":{"h1":h1_notices,"h3":h3_notice,"h2":h2_notice},
+                "draft":{"before":draft_before,"after":draft_after},
+                "workbench":{"before":workbench_before,"after":workbench_after}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    for task in [&unrelated, &source] {
+        std::fs::write(hold_dir.join(format!("release-{task}")), b"").unwrap();
+    }
+    settled(&core, &unrelated).await;
+    settled(&core, &source).await;
+    core.shutdown().await;
+}
+
+/// A root chat in `project`, ready for the held fake.
+fn root_task(
+    core: &EngineCore,
+    project: &str,
+    path: &std::path::Path,
+    config: &luna_proto::ChatConfig,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    core.workspace
+        .create_chat(&id, Some(project), None, Some(config.clone()), None)
+        .unwrap();
+    core.task_identity
+        .register_new_task(
+            &id,
+            Some(project),
+            None,
+            path.to_str(),
+            TaskLineage::default(),
+        )
+        .unwrap();
+    id
+}
+
+/// Start one `scenario:mcp-hold` turn: the fake publishes its endpoint and
+/// holds the turn until the test writes `release-<task>`.
+async fn dispatch_held(core: &EngineCore, task: &str, cwd: &std::path::Path) {
+    use luna_proto::{PermissionMode, RunRequest, SandboxLevel};
+    core.sessions
+        .dispatch(
+            task,
+            HarnessId::Codex,
+            RunRequest {
+                review: None,
+                goal: None,
+                input_items: Vec::new(),
+                prompt: "scenario:mcp-hold".into(),
+                harness: None,
+                provider_account_id: None,
+                model: None,
+                reasoning: None,
+                model_options: Default::default(),
+                cwd: cwd.display().to_string(),
+                sandbox: SandboxLevel::ReadOnly,
+                auto_approve: false,
+                permission_mode: PermissionMode::Ask,
+                parent_permission_ceiling: None,
+                environment_permission_ceiling: None,
+                permission_policy: None,
+                attachments: vec![],
+                worktree: None,
+                resume: None,
+            },
+            Some(format!("mcp-hold-{task}")),
+        )
+        .await
+        .unwrap();
+}
+
+/// A user toggling `task`'s read state as fast as the host admits it: each
+/// applied command advances the task revision through the ordinary command
+/// path (and its FIFO task gate), without touching the run, binding or work.
+async fn churn_read_state(
+    client: luna_rpc::RpcClient,
+    task: String,
+    churning: Arc<std::sync::atomic::AtomicBool>,
+    applied: Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::atomic::Ordering;
+    let mut read = false;
+    while churning.load(Ordering::SeqCst) {
+        read = !read;
+        let Ok(current) = client
+            .call(
+                "GetTaskCommandSnapshot",
+                serde_json::json!({"taskId": task}),
+            )
+            .await
+        else {
+            tokio::task::yield_now().await;
+            continue;
+        };
+        let receipt = client
+            .call(
+                "ExecuteTaskCommand",
+                serde_json::json!({
+                    "taskId": task, "commandId": uuid::Uuid::new_v4().to_string(),
+                    "actorId": "sw10-read-state", "clientId": "sw10-read-state",
+                    "clientSessionId": "sw10-read-state",
+                    "expectedTaskRevision": current["snapshot"]["taskRevision"],
+                    "expectedBindingGeneration": current["snapshot"]["bindingGeneration"],
+                    "intent": {"kind": "setRead", "read": read}
+                }),
+            )
+            .await;
+        if receipt.is_ok_and(|receipt| receipt["status"] == "applied") {
+            applied.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// One `tools/call` on a held endpoint, as Codex sends it.
+async fn luna_tool(
+    http: &reqwest::Client,
+    endpoint: &HeldEndpoint,
+    wire: u64,
+    name: &str,
+    arguments: serde_json::Value,
+    call_id: &str,
+) -> (bool, String) {
+    let body = mcp_tool_call(
+        wire,
+        name,
+        arguments,
+        &endpoint.thread,
+        &endpoint.turn,
+        call_id,
+    );
+    tool_text(
+        &mcp_post(http, &endpoint.url, &endpoint.token, &body)
+            .await
+            .1,
+    )
+}
+
+/// The parent's result notice for `child` (named `label` in the test), once
+/// the outcome sweep posts it: its transcript position and entry ID.
+async fn child_notice(
+    core: &EngineCore,
+    parent: &str,
+    child: &str,
+    label: &str,
+) -> (usize, String) {
+    let prefix = format!("child-outcome:{child}:");
+    let entries = |task: &str| {
+        core.doc_host
+            .open(task)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+    };
+    for _ in 0..600 {
+        let parent_entries = entries(parent);
+        if let Some(index) = parent_entries
+            .iter()
+            .position(|entry| entry.id.starts_with(&prefix))
+        {
+            return (index, parent_entries[index].id.clone());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let outline = |task: &str| {
+        entries(task)
+            .iter()
+            .map(|entry| format!("{} {:?} {:?}", entry.id, entry.role, entry.status))
+            .collect::<Vec<_>>()
+    };
+    let outcomes = core
+        .workspace
+        .chat(child)
+        .unwrap()
+        .and_then(|chat| chat.child_thread)
+        .map(|thread| thread.outcomes);
+    panic!(
+        "helper {label} ({child}) never reported to {parent}.\nchild entries: {:#?}\nchild outcomes: {outcomes:#?}\nparent entries: {:#?}",
+        outline(child),
+        outline(parent)
+    );
+}
+
+async fn settled(core: &EngineCore, task: &str) {
+    for _ in 0..600 {
+        if core.sessions.active_turn_id(task).is_none() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("{task} never settled");
 }
 
 async fn next_approval(

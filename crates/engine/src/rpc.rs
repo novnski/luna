@@ -8645,7 +8645,21 @@ impl CrossTaskBackend for EngineRpc {
             child_creation: true,
             child_models: true,
             automations: true,
+            thread_stop: true,
         }
+    }
+    async fn stop_owned_thread(
+        &self,
+        request: crate::cross_task_tools::ThreadStopRequest,
+        authority: &CrossTaskAuthority,
+        target_binding_generation: Option<u32>,
+        source_live: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<crate::cross_task_tools::ThreadStopResult, CrossTaskError> {
+        // The same exact project/host evidence scope as every cross-task
+        // control; launch ownership is checked by the work projection.
+        local_control_evidence_target(self, &request.task_id, authority).await?;
+        self.stop_owned_thread_for_agent(request, authority, target_binding_generation, source_live)
+            .await
     }
 
     async fn prepare_automation(

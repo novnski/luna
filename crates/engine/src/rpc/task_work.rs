@@ -31,6 +31,18 @@ struct StoredStop {
     request_hash: String,
     receipt: TaskWorkStopReceipt,
 }
+/// Durable terminal evidence for one delegated turn whose stop this host
+/// dispatched and then saw end. A turn interrupted before it streamed any
+/// reply leaves no transcript row, so without this record the delegation
+/// would read as unknown, and keep needing attention, after a confirmed stop.
+#[derive(Serialize, Deserialize)]
+struct EndedTurn {
+    run_id: String,
+    message_id: String,
+}
+fn ended_key(work_id: &str) -> String {
+    format!("luna-work-ended:{work_id}")
+}
 #[derive(Clone, PartialEq, Eq, Serialize)]
 enum Control {
     Turn {
@@ -174,6 +186,20 @@ impl WorkProjection {
         }
         Ok(row)
     }
+    /// Whether a work stop recorded that it ended this exact delegated turn.
+    fn stopped_delegation(
+        &self,
+        work_id: &str,
+        message_id: &str,
+    ) -> Result<bool, crate::EngineError> {
+        Ok(self
+            .store
+            .load_snapshot(&ended_key(work_id))?
+            .is_some_and(|bytes| {
+                serde_json::from_slice::<EndedTurn>(&bytes)
+                    .is_ok_and(|ended| ended.message_id == message_id)
+            }))
+    }
     fn work_rows(&self, owner: &str) -> Result<(Vec<Row>, bool), crate::EngineError> {
         let target = self.work_task(owner)?;
         let mut chats = self.workspace.read_chats()?;
@@ -230,7 +256,8 @@ impl WorkProjection {
                         .filter(|e| e.role == MessageRole::Assistant)
                         .last()
                 });
-                let state = if live.is_some() {
+                let work_id = id(&("child", &chat.id, &child.initial_message_id))?;
+                let mut state = if live.is_some() {
                     State::Running
                 } else if let Some(reply) = reply {
                     match reply.status {
@@ -251,6 +278,13 @@ impl WorkProjection {
                 } else {
                     State::Starting
                 };
+                // The transcript has no terminal row, but this host stopped
+                // exactly this delegation and saw its launching turn end.
+                if state == State::Unknown
+                    && self.stopped_delegation(&work_id, &child.initial_message_id)?
+                {
+                    state = State::Stopped;
+                }
                 let control = if owned {
                     live.map(|r| Control::Turn { runtime: r.clone() })
                 } else {
@@ -258,7 +292,7 @@ impl WorkProjection {
                 };
                 rows.push(Row {
                     item: TaskWorkItem {
-                        id: id(&("child", &chat.id, &child.initial_message_id))?,
+                        id: work_id,
                         task_id: chat.id.clone(),
                         title: chat.title.clone().unwrap_or_else(|| "Child chat".into()),
                         kind: Kind::ChildChat,
@@ -663,10 +697,23 @@ impl WorkProjection {
                 "Work changed after preview; review the exact targets again",
             ));
         }
+        self.record_and_dispatch(&key, &request_hash, p.request_id, &preview, &rows)
+            .await
+    }
+    /// Record the exact selection durably, then dispatch each eligible stop.
+    /// The caller holds the owner's command gate and has checked any replay.
+    async fn record_and_dispatch(
+        &self,
+        key: &str,
+        request_hash: &str,
+        request_id: String,
+        preview: &TaskWorkStopPreview,
+        rows: &[Row],
+    ) -> Result<TaskWorkStopReceipt, crate::EngineError> {
         let mut receipt = TaskWorkStopReceipt {
-            request_id: p.request_id,
-            task_id: p.task_id,
-            preview_id: p.preview_id,
+            request_id,
+            task_id: preview.task_id.clone(),
+            preview_id: preview.preview_id.clone(),
             results: rows
                 .iter()
                 .map(|r| TaskWorkStopResult {
@@ -687,9 +734,9 @@ impl WorkProjection {
         // The complete selection is durable before any side effect. Crash recovery
         // returns unknown; it never redispatches these stops.
         self.store.save_snapshot(
-            &key,
+            key,
             &serde_json::to_vec(&StoredStop {
-                request_hash: request_hash.clone(),
+                request_hash: request_hash.to_owned(),
                 receipt: receipt.clone(),
             })?,
         )?;
@@ -709,9 +756,9 @@ impl WorkProjection {
                 receipt.results[index].detail =
                     "Work ownership or execution changed before stop".into();
                 self.store.save_snapshot(
-                    &key,
+                    key,
                     &serde_json::to_vec(&StoredStop {
-                        request_hash: request_hash.clone(),
+                        request_hash: request_hash.to_owned(),
                         receipt: receipt.clone(),
                     })?,
                 )?;
@@ -765,27 +812,159 @@ impl WorkProjection {
                 }
                 None => continue,
             };
+            // Keep the confirmed end with the work item, not only in this
+            // request's receipt, so every later readback (panel, agent replay,
+            // restart) shows the delegation stopped rather than unknown.
+            if result.0 == StopStatus::Stopped
+                && let Some(Control::Turn { runtime }) = &row.control
+            {
+                let ended = serde_json::to_vec(&EndedTurn {
+                    run_id: runtime.run_id.clone(),
+                    message_id: runtime.message_id.clone(),
+                })?;
+                if let Err(error) = self.store.save_snapshot(&ended_key(&row.item.id), &ended) {
+                    tracing::warn!(work = %row.item.id, ?error, "stopped-turn evidence persistence failed; the delegation may read unknown");
+                }
+            }
             receipt.results[index].status = result.0;
             receipt.results[index].detail = result.1;
             self.store.save_snapshot(
-                &key,
+                key,
                 &serde_json::to_vec(&StoredStop {
-                    request_hash: request_hash.clone(),
+                    request_hash: request_hash.to_owned(),
                     receipt: receipt.clone(),
                 })?,
             )?;
         }
         Ok(receipt)
     }
+    /// `interrupt_thread`: the caller's own delegated turn in `target`, with
+    /// the same projection, owner gate, durable record and dispatch as
+    /// `StopTaskWork`. Its keys are separate from panel requests, and a replay
+    /// is matched by target, not by a preview that the stop itself changes.
+    async fn stop_owned_thread(
+        &self,
+        owner: &str,
+        target: &str,
+        request_id: &str,
+        binding_generation: Option<u32>,
+        source_live: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<crate::cross_task_tools::ThreadStopResult, CrossTaskError> {
+        use crate::cross_task_tools::{MAX_STOP_REMAINING, ThreadStopOutcome, ThreadStopResult};
+        const NOT_OWNED: &str = "Not stopped: this chat does not own delegated work in that thread. Only the chat that launched the delegation can stop it; reports, links and ancestry never grant stop authority.";
+        let failed = |e: crate::EngineError| CrossTaskError::Backend(e.to_string());
+        self.work_task(owner).map_err(failed)?;
+        let permit = self
+            .work_writes
+            .as_ref()
+            .map(|w| w.try_admit())
+            .transpose()
+            .map_err(|e| {
+                CrossTaskError::Backend(format!("Work control storage is unavailable: {e:?}"))
+            })?;
+        let gate = self.doc_host.task_command_gate(owner).await;
+        let key = format!(
+            "luna-thread-stop:{}",
+            crate::context_transfers::digest(&(owner, request_id)).map_err(failed)?
+        );
+        let request_hash = crate::context_transfers::digest(&(owner, target)).map_err(failed)?;
+        let stored = self
+            .store
+            .load_snapshot(&key)
+            .map_err(|e| failed(e.into()))?;
+        let receipt = if let Some(bytes) = stored {
+            let stored: StoredStop =
+                serde_json::from_slice(&bytes).map_err(|e| failed(e.into()))?;
+            if stored.request_hash != request_hash {
+                return Err(CrossTaskError::Backend(
+                    "This idempotencyKey already belongs to a stop of another thread; use a new key for a new stop".into(),
+                ));
+            }
+            // Exact replay: the first receipt, with no second dispatch.
+            stored.receipt
+        } else {
+            let (rows, _) = self.work_rows(owner).map_err(failed)?;
+            let row = rows
+                .iter()
+                .find(|r| r.item.task_id == target && r.item.kind == Kind::ChildChat)
+                .ok_or_else(|| CrossTaskError::Backend(NOT_OWNED.into()))?;
+            if !row.item.owned {
+                return Err(CrossTaskError::Backend(format!(
+                    "{NOT_OWNED} ({})",
+                    row.item.detail
+                )));
+            }
+            let (preview, rows) = self
+                .work_stop_plan(&WorkStop {
+                    task_id: owner.into(),
+                    work_ids: vec![row.item.id.clone()],
+                    preview_id: String::new(),
+                    request_id: request_id.into(),
+                })
+                .map_err(failed)?;
+            // Identity, not progress: the planned run must still be on the
+            // provider binding read at admission. Commands, transcript and read
+            // state on a busy helper never move it; a rebind does. Nothing is
+            // recorded, so the same key can be retried.
+            if let Some(expected) = binding_generation
+                && rows.iter().any(|r| {
+                    matches!(&r.control, Some(Control::Turn { runtime })
+                        if runtime.binding_generation.is_some_and(|current| current != expected))
+                })
+            {
+                return Err(CrossTaskError::Backend(
+                    "Not stopped: the helper moved to another provider binding while this stop was checked; read it again before stopping".into(),
+                ));
+            }
+            // The claimed provider call must still be live as the intent is
+            // recorded; a cancelled or replaced call stops nothing.
+            if !source_live() {
+                return Err(CrossTaskError::Cancelled);
+            }
+            self.record_and_dispatch(&key, &request_hash, request_id.into(), &preview, &rows)
+                .await
+                .map_err(failed)?
+        };
+        drop(gate);
+        drop(permit);
+        let work_id = receipt
+            .results
+            .first()
+            .map(|r| r.work_id.clone())
+            .unwrap_or_default();
+        let status = receipt
+            .results
+            .first()
+            .map_or(StopStatus::Unknown, |r| r.status);
+        // The receipt is durable already; an unreadable view reads as unknown.
+        let rows = self
+            .work_rows(owner)
+            .map(|(rows, _)| rows)
+            .unwrap_or_default();
+        let target_item = rows
+            .iter()
+            .find(|r| r.item.id == work_id)
+            .map(|r| r.item.clone());
+        let remaining: Vec<_> = rows
+            .into_iter()
+            .filter(|r| r.item.owned && !r.item.state.terminal() && r.item.id != work_id)
+            .map(|r| r.item)
+            .collect();
+        Ok(ThreadStopResult {
+            task_id: target.into(),
+            outcome: ThreadStopOutcome::of(status, target_item.as_ref().map(|item| item.state)),
+            receipt,
+            target: target_item,
+            remaining_count: remaining.len(),
+            remaining: remaining.into_iter().take(MAX_STOP_REMAINING).collect(),
+            host_device_id: self.engine_info.device_id.clone(),
+        })
+    }
 }
 
 impl EngineRpc {
-    pub(super) async fn handle_task_work(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<RpcReply, RpcError> {
-        let view = WorkProjection {
+    fn work_projection(&self) -> WorkProjection {
+        WorkProjection {
             work_writes: self.work_writes.clone(),
             terminals: self.terminals.clone(),
             workspace: self.workspace.clone(),
@@ -793,7 +972,33 @@ impl EngineRpc {
             sessions: self.sessions.clone(),
             store: self.store.clone(),
             engine_info: self.engine_info.clone(),
-        };
+        }
+    }
+    /// `interrupt_thread` backend. The caller is the engine-bound run; the
+    /// trait impl has already checked the target's project and host scope.
+    pub(super) async fn stop_owned_thread_for_agent(
+        &self,
+        request: crate::cross_task_tools::ThreadStopRequest,
+        authority: &CrossTaskAuthority,
+        binding_generation: Option<u32>,
+        source_live: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<crate::cross_task_tools::ThreadStopResult, CrossTaskError> {
+        self.work_projection()
+            .stop_owned_thread(
+                &authority.caller_task_id,
+                &request.task_id,
+                &request.idempotency_key,
+                binding_generation,
+                source_live,
+            )
+            .await
+    }
+    pub(super) async fn handle_task_work(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<RpcReply, RpcError> {
+        let view = self.work_projection();
         let failed = |e: crate::EngineError| RpcError::Failed(e.to_string());
         match method {
             methods::GET_TASK_WORK => {

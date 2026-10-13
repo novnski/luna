@@ -101,6 +101,123 @@ impl SessionsEngine {
             )
             .await?)
     }
+    /// The authority shape every control evidence needs: the claimed caller on
+    /// this host, only the automatic read grant, one project, another task.
+    pub(super) fn control_evidence_authority(
+        &self,
+        claim: &ClaimedProviderCall,
+        authority: &crate::cross_task_tools::CrossTaskAuthority,
+        target_task_id: &str,
+    ) -> bool {
+        authority.caller_task_id == claim.source_task_id
+            && authority.local_environment_id == self.inner.device_id
+            && authority.delivery.attaches_luna_tools()
+            && !authority.explicit_user_request
+            && !authority.allow_projectless
+            // Only the automatic read grant; the board scopes never reach
+            // another chat (board tools check them on their own path).
+            && authority
+                .granted_scopes
+                .iter()
+                .filter(|scope| !scope.starts_with("board."))
+                .count()
+                == 1
+            && authority.granted_scopes.contains("threads.read")
+            && authority.visible_project_ids.len() == 1
+            && target_task_id != claim.source_task_id
+    }
+    /// Stop evidence for a claimed call: the authority shape and the target's
+    /// project/host scope of `prepare_luna_control_evidence`, without its
+    /// two-read snapshot equality. That equality fences a send's commit to
+    /// the target's revision; a stop commits through the work view's run
+    /// fence instead, so a busy target's commands, transcript or read state
+    /// must not refuse it. The returned binding generation is the identity
+    /// the stop plan must still find.
+    async fn prepare_luna_stop_evidence(
+        &self,
+        claim: &ClaimedProviderCall,
+        authority: &crate::cross_task_tools::CrossTaskAuthority,
+        target_task_id: &str,
+    ) -> Result<Option<u32>, crate::cross_task_tools::CrossTaskError> {
+        use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
+        if !self.control_evidence_authority(claim, authority, target_task_id) {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let (interrupt, mut cancel) = self
+            .claimed_call_cancel_state(claim)
+            .ok_or(CrossTaskError::Unavailable)?;
+        let tools = CrossTaskTools::new(
+            self.cross_task_backend()
+                .ok_or(CrossTaskError::Unavailable)?,
+        );
+        let snapshot = tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => return Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => return Err(CrossTaskError::Cancelled),
+            result = tools.control_target_snapshot(authority, target_task_id, &interrupt) => result,
+        }?;
+        if !self.claimed_call_is_live(claim) {
+            return Err(CrossTaskError::Unavailable);
+        }
+        Ok(snapshot.binding_generation)
+    }
+    /// `interrupt_thread` from a provider call. The call is claimed once for
+    /// this run and the target passes the existing control-evidence scope;
+    /// the claim must still be live when the stop intent becomes durable.
+    /// Launch ownership and the receipt belong to the host's work view.
+    pub(super) async fn invoke_luna_thread_stop(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        contract: &luna_proto::LunaAgentRuntimeContract,
+        invocation: luna_harness::LunaToolInvocation,
+        backend: Option<Arc<dyn crate::cross_task_tools::CrossTaskBackend>>,
+    ) -> Result<serde_json::Value, EngineError> {
+        use crate::cross_task_tools::{
+            CrossTaskAuthority, CrossTaskError, CrossTaskTools, ThreadStopRequest,
+        };
+        let fail = |error: CrossTaskError| EngineError::Other(error.to_string());
+        let Some(tool) = contract
+            .tools
+            .iter()
+            .find(|tool| tool.name == invocation.name)
+        else {
+            return Err(fail(CrossTaskError::Unavailable));
+        };
+        if contract.context.thread_id != chat_id
+            || !contract.delivery.attaches_luna_tools()
+            || !tool
+                .required_scopes
+                .iter()
+                .all(|scope| contract.context.granted_scopes.contains(scope))
+        {
+            return Err(fail(CrossTaskError::Scope));
+        }
+        let request: ThreadStopRequest = serde_json::from_value(invocation.arguments.clone())
+            .map_err(|_| fail(CrossTaskError::Input))?;
+        let backend = backend.ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let authority =
+            CrossTaskAuthority::from_context(&contract.context, contract.delivery, false);
+        let claim = self
+            .wait_and_claim_luna_provider_invocation(
+                chat_id,
+                run_id,
+                &invocation.context,
+                tokio::time::Instant::now() + std::time::Duration::from_millis(500),
+            )
+            .await
+            .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let binding_generation = self
+            .prepare_luna_stop_evidence(&claim, &authority, &request.task_id)
+            .await
+            .map_err(fail)?;
+        let source_live = || self.claimed_call_is_live(&claim);
+        let result = CrossTaskTools::new(backend)
+            .stop_thread(&authority, request, binding_generation, &source_live)
+            .await
+            .map_err(fail)?;
+        serde_json::to_value(result).map_err(Into::into)
+    }
 }
 
 impl Inner {

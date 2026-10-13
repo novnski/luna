@@ -594,6 +594,14 @@ case "$turnline" in
   mkdir -p "$hold_dir"
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
   emit "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\"}}}"
+  # `scenario:mcp-hold:reply` first streams a short agent reply, as a working
+  # CLI does, so the held turn leaves a transcript row (and a child outcome).
+  # A plain hold streams nothing.
+  if has "$turnline" 'scenario:mcp-hold:reply'; then
+    emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$turn-msg\",\"text\":\"\"}}}"
+    emit "{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"itemId\":\"$turn-msg\",\"delta\":\"Held helper reply\"}}"
+    emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$thread\",\"turnId\":\"$turn\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$turn-msg\",\"text\":\"Held helper reply\"}}}"
+  fi
   # The thread request (with LUNA developerInstructions) for identity checks.
   printf '%s\n' "$thread_line" > "$hold_dir/$LUNA_THREAD_ID.thread"
   printf '%s\n%s\n%s\n%s\n' "$mcp_url" "$LUNA_MCP_BEARER_TOKEN" "$thread" "$turn" > "$hold_dir/$LUNA_THREAD_ID.tmp"
