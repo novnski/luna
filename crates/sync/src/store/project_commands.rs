@@ -2,6 +2,10 @@
 use super::*;
 use luna_proto::{ProjectAction, ProjectCommandRun};
 
+/// Accepted repository command ids kept per project and device. A file may
+/// declare at most 24 commands; the margin covers other branches' ids.
+const PROJECT_COMMAND_TRUST_LIMIT: i64 = 128;
+
 impl DocsStore {
     pub(super) fn command_writer(
         &self,
@@ -41,6 +45,58 @@ impl DocsStore {
         self.command_writer(permit)?.execute("INSERT INTO project_command_configs(project_id,device_id,config) VALUES(?1,?2,?3) ON CONFLICT(project_id,device_id) DO UPDATE SET config=excluded.config", params![project,device,serde_json::to_vec(actions)?])?;
         Ok(())
     }
+    /// AW-11: `(command id, accepted digest)` for one project on one device.
+    pub fn project_command_trust(
+        &self,
+        project: &str,
+        device: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT action_id,digest FROM project_command_trust WHERE project_id=?1 AND device_id=?2 ORDER BY action_id",
+        )?;
+        let rows = statement
+            .query_map(params![project, device], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    /// Accept exactly `digest` for one repository command id (replacing an
+    /// earlier acceptance of other content), or revoke it with `None`. The
+    /// ledger keeps the most recently accepted 128 ids per project and device.
+    pub fn set_project_command_trust(
+        &self,
+        project: &str,
+        device: &str,
+        action: &str,
+        digest: Option<&str>,
+        accepted_at_ms: i64,
+        permit: Option<&WritePermit>,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.command_writer(permit)?;
+        let tx = conn.transaction()?;
+        match digest {
+            Some(digest) => {
+                tx.execute(
+                    "INSERT INTO project_command_trust(project_id,device_id,action_id,digest,accepted_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(project_id,device_id,action_id) DO UPDATE SET digest=excluded.digest,accepted_at=excluded.accepted_at",
+                    params![project, device, action, digest, accepted_at_ms],
+                )?;
+                tx.execute(
+                    "DELETE FROM project_command_trust WHERE project_id=?1 AND device_id=?2 AND action_id NOT IN (SELECT action_id FROM project_command_trust WHERE project_id=?1 AND device_id=?2 ORDER BY accepted_at DESC, action_id LIMIT ?3)",
+                    params![project, device, PROJECT_COMMAND_TRUST_LIMIT],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM project_command_trust WHERE project_id=?1 AND device_id=?2 AND action_id=?3",
+                    params![project, device, action],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn project_command_runs(&self, device: &str) -> Result<Vec<ProjectCommandRun>, StoreError> {
         let conn = self.conn();
         let mut statement = conn.prepare(
@@ -78,7 +134,11 @@ impl DocsStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.command_writer(permit)?;
         let tx = conn.transaction()?;
-        for table in ["project_command_configs", "project_command_runs"] {
+        for table in [
+            "project_command_configs",
+            "project_command_runs",
+            "project_command_trust",
+        ] {
             let ids = {
                 let mut statement = tx.prepare(&format!(
                     "SELECT DISTINCT project_id FROM {table} WHERE device_id=?1"

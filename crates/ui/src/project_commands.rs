@@ -1,4 +1,7 @@
-//! Native project command settings card and checkout-scoped terminal controls.
+//! Native project command settings card and checkout-scoped terminal controls,
+//! plus the AW-11 repository layer: commands checked in as
+//! `.luna/project.toml` are shown with their provenance and this device's
+//! trust, and never get a Run control before their exact content is accepted.
 use crate::{
     button::{self, ButtonKind, ControlSize},
     composer::ComposerInput,
@@ -12,8 +15,13 @@ use gpui::{
     Action, AnyElement, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
     Subscription, Task, Window, div, prelude::*, px,
 };
-use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandStatus, ProjectCommandsSnapshot};
+use luna_proto::{
+    PROJECT_CONFIG_FILE, ProjectAction, ProjectCommandRun, ProjectCommandSource,
+    ProjectCommandStatus, ProjectCommandTrust, ProjectCommandsSnapshot, ProjectConfigState,
+    ProjectRepositoryCommand, ProjectRepositoryConfig,
+};
 use luna_rpc::methods;
+use std::collections::HashSet;
 
 /// A kit push button for a command control. GPUI sends Enter/Space on a
 /// focused `on_click` control as one keyboard click on key-up; the kit
@@ -53,6 +61,80 @@ fn code_text(theme: &Theme, cx: &gpui::App) -> gpui::Div {
         .text_color(theme.code_text)
 }
 
+/// A repository command's trust as a badge. Overridden reads neutral: this
+/// device's own command runs instead, whatever the repository trust.
+fn trust_badge(theme: &Theme, command: &ProjectRepositoryCommand) -> gpui::Div {
+    if command.overridden {
+        return widgets::badge(theme, "Overridden on this device");
+    }
+    match command.trust {
+        ProjectCommandTrust::Accepted => widgets::badge_active(theme, command.trust.label()),
+        ProjectCommandTrust::Unaccepted | ProjectCommandTrust::Changed => {
+            widgets::badge(theme, command.trust.label())
+                .border_color(theme.warning.opacity(0.35))
+                .text_color(theme.readable_tone(theme.warning_muted, 0.9))
+        }
+    }
+}
+
+fn trust_state(command: &ProjectRepositoryCommand) -> &'static str {
+    if command.overridden {
+        return "overridden";
+    }
+    match command.trust {
+        ProjectCommandTrust::Accepted => "accepted",
+        ProjectCommandTrust::Unaccepted => "unaccepted",
+        ProjectCommandTrust::Changed => "changed",
+    }
+}
+
+/// Every line of a repository command, exactly what Accept pins and Run
+/// would execute, plus its preview URL. Never truncated.
+fn exact_content(theme: &Theme, action: &ProjectAction, cx: &gpui::App) -> gpui::Div {
+    let mut lines = code_text(theme, cx).flex().flex_col();
+    for line in action.command.trim_end_matches('\n').split('\n') {
+        lines = lines.child(div().whitespace_nowrap().child(SharedString::from(
+            if line.is_empty() {
+                " ".to_string()
+            } else {
+                line.to_string()
+            },
+        )));
+    }
+    let selector = action.id.clone();
+    let mut block = div()
+        .min_w_0()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.code_wash)
+        .px(ui_rems(10.0))
+        .py(ui_rems(8.0))
+        .gap(ui_rems(4.0))
+        .flex()
+        .flex_col()
+        .when(cfg!(test), |el| {
+            el.debug_selector(move || format!("qa-repo-command-content-{selector}"))
+        })
+        .child(
+            div()
+                .id(SharedString::from(format!("exact-command-{}", action.id)))
+                .w_full()
+                .min_w_0()
+                .overflow_x_scroll()
+                .child(lines),
+        );
+    if let Some(url) = &action.preview_url {
+        block = block.child(
+            div()
+                .type_style(TextStyle::Caption)
+                .text_color(theme.readable_muted(0.8))
+                .child(SharedString::from(format!("Preview: {url}"))),
+        );
+    }
+    block
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json)]
 pub struct OpenCommandPreview(pub String);
@@ -76,6 +158,13 @@ pub struct ProjectCommandSettings {
     busy: bool,
     error: Option<String>,
     task: Option<Task<()>>,
+    /// AW-11: the project folder's `.luna/project.toml` with this device's
+    /// trust decisions. None until the first read answers.
+    repository: Option<ProjectRepositoryConfig>,
+    repository_error: Option<String>,
+    /// A trust decision is in flight; its controls are disabled.
+    trust_busy: bool,
+    repository_task: Option<Task<()>>,
 }
 impl ProjectCommandSettings {
     pub fn new(state: Entity<AppState>, space_id: String, cx: &mut Context<Self>) -> Self {
@@ -97,8 +186,13 @@ impl ProjectCommandSettings {
             busy: false,
             error: None,
             task: None,
+            repository: None,
+            repository_error: None,
+            trust_busy: false,
+            repository_task: None,
         };
         view.request(None, cx);
+        view.load_repository(cx);
         view
     }
     fn request(&mut self, actions: Option<Vec<ProjectAction>>, cx: &mut Context<Self>) {
@@ -127,6 +221,9 @@ impl ProjectCommandSettings {
                         view.actions = actions;
                         if saving {
                             view.editing = None;
+                            // A saved command may now override (or stop
+                            // overriding) a repository command.
+                            view.load_repository(cx);
                         }
                     }
                     Err(error) => view.error = Some(error.to_string()),
@@ -240,6 +337,87 @@ impl ProjectCommandSettings {
         }
     }
 
+    fn load_repository(&mut self, cx: &mut Context<Self>) {
+        // A trust write answers with the fresh layer; never cancel its waiter.
+        if self.trust_busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let params = serde_json::json!({"projectId": self.space_id});
+        self.repository_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call_as::<ProjectRepositoryConfig>(methods::GET_PROJECT_CONFIGURATION, params)
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(repository) => {
+                        view.repository = Some(repository);
+                        view.repository_error = None;
+                    }
+                    Err(error) => view.repository_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Accept (or revoke) exactly the content this card shows. The engine
+    /// re-reads the file and refuses a digest that no longer matches it.
+    /// Accepting never runs the command.
+    fn set_trust(
+        &mut self,
+        command: &ProjectRepositoryCommand,
+        trusted: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.trust_busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.trust_busy = true;
+        self.repository_error = None;
+        let params = serde_json::json!({
+            "projectId": self.space_id,
+            "actionId": command.action.id,
+            "digest": command.digest,
+            "trusted": trusted,
+        });
+        self.repository_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call_as::<ProjectRepositoryConfig>(methods::SET_PROJECT_COMMAND_TRUST, params)
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.trust_busy = false;
+                match result {
+                    Ok(repository) => view.repository = Some(repository),
+                    Err(error) => view.repository_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn reload_repository(&mut self, cx: &mut Context<Self>) {
+        self.repository_error = None;
+        self.load_repository(cx);
+        cx.notify();
+    }
+
+    fn repository_command(&self, id: &str) -> Option<&ProjectRepositoryCommand> {
+        self.repository
+            .as_ref()?
+            .commands
+            .iter()
+            .find(|command| command.action.id == id)
+    }
+
     /// One saved command: name, the command's first line, its badges, and
     /// Edit / Remove at the right (Remove asks to confirm in place).
     fn command_row(
@@ -249,6 +427,7 @@ impl ProjectCommandSettings {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let confirming = self.confirm_remove.as_deref() == Some(action.id.as_str());
+        let overrides = self.repository_command(&action.id).is_some();
         let name: SharedString = if action.name.trim().is_empty() {
             "Untitled command".into()
         } else {
@@ -270,8 +449,15 @@ impl ProjectCommandSettings {
             .child(widgets::row_title(theme, name.clone()));
         if confirming {
             text = text.child(
-                widgets::row_description(theme, "Remove this command from the project?")
-                    .text_color(theme.readable_tone(theme.danger_muted, 0.9)),
+                widgets::row_description(
+                    theme,
+                    if overrides {
+                        "Remove this command? The repository's command with this ID returns, and runs only if you accepted its exact content."
+                    } else {
+                        "Remove this command from the project?"
+                    },
+                )
+                .text_color(theme.readable_tone(theme.danger_muted, 0.9)),
             );
         } else if !first_line.trim().is_empty() {
             // User data: one line, truncated, with the whole command on hover.
@@ -291,6 +477,14 @@ impl ProjectCommandSettings {
         }
         let mut controls = widgets::row_controls();
         if !confirming {
+            if overrides {
+                let selector = action.id.clone();
+                controls = controls.child(
+                    widgets::badge(theme, "Overrides repository").when(cfg!(test), |el| {
+                        el.debug_selector(move || format!("qa-command-overrides-{selector}"))
+                    }),
+                );
+            }
             if action.setup_on_worktree_create {
                 controls = controls.child(widgets::badge(theme, "Worktree setup"));
             }
@@ -400,12 +594,23 @@ impl ProjectCommandSettings {
             .editing
             .as_ref()
             .is_none_or(|id| !self.actions.iter().any(|action| &action.id == id));
+        let overriding = creating
+            && self
+                .editing
+                .as_deref()
+                .is_some_and(|id| self.repository_command(id).is_some());
         vec![
             widgets::card_row(theme, false)
                 .child(
                     widgets::row_title(
                         theme,
-                        if creating { "New command" } else { "Edit command" },
+                        if overriding {
+                            "Override repository command on this device"
+                        } else if creating {
+                            "New command"
+                        } else {
+                            "Edit command"
+                        },
                     )
                     .font_weight(gpui::FontWeight::SEMIBOLD),
                 )
@@ -497,6 +702,240 @@ impl ProjectCommandSettings {
                 )
                 .into_any_element(),
         ]
+    }
+
+    /// One repository command: provenance tile, name, its exact content
+    /// until accepted (one line once accepted), the trust badge, and Accept
+    /// or Revoke plus Override. An overridden command has no trust controls:
+    /// this device's command with the same ID runs instead.
+    fn repository_row(
+        &self,
+        command: &ProjectRepositoryCommand,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let action = &command.action;
+        let id = action.id.clone();
+        let mut text = div()
+            .flex_1()
+            .min_w(ui_rems(widgets::ROW_TEXT_MIN))
+            .flex()
+            .flex_col()
+            .gap(ui_rems(4.0))
+            .child(widgets::row_title(
+                theme,
+                SharedString::from(action.name.clone()),
+            ));
+        if command.trust == ProjectCommandTrust::Accepted || command.overridden {
+            let first_line = action
+                .command
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let multi_line = action.command.trim_end().contains('\n');
+            text = text.child(
+                code_text(theme, cx)
+                    .id(SharedString::from(format!("repo-command-preview-{id}")))
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.readable_muted(0.85))
+                    .text_tooltip_above(action.command.clone())
+                    .child(SharedString::from(if multi_line {
+                        format!("{first_line} …")
+                    } else {
+                        first_line
+                    })),
+            );
+        } else {
+            text = text.child(exact_content(theme, action, cx));
+        }
+        if command.overridden {
+            text = text.child(widgets::row_description(
+                theme,
+                "Your command with this ID runs instead on this device.",
+            ));
+        } else if command.trust == ProjectCommandTrust::Changed {
+            text = text.child(widgets::row_description(
+                theme,
+                "This content changed since you accepted it. It won't run until you accept it again.",
+            ));
+        }
+        let state_selector = format!("qa-repo-command-state-{id}-{}", trust_state(command));
+        let mut controls = widgets::row_controls().child(
+            trust_badge(theme, command)
+                .when(cfg!(test), |el| el.debug_selector(move || state_selector)),
+        );
+        if !command.overridden {
+            let accepted = command.trust == ProjectCommandTrust::Accepted;
+            let override_action = action.clone();
+            let override_selector = id.clone();
+            controls = controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    !self.busy,
+                    SharedString::from(format!("override-repo-command-{id}")),
+                    format!(
+                        "Override repository command on this device: {}",
+                        action.name
+                    ),
+                )
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || {
+                        format!("qa-repo-command-override-{override_selector}")
+                    })
+                })
+                .child("Override")
+                .when(!self.busy, |el| {
+                    el.on_click(cx.listener(move |view, _, _, cx| {
+                        view.edit(Some(override_action.clone()), cx)
+                    }))
+                }),
+            );
+            let decision = command.clone();
+            let trust_selector = id.clone();
+            controls = controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    !self.trust_busy,
+                    SharedString::from(format!(
+                        "{}-repo-command-{id}",
+                        if accepted { "revoke" } else { "accept" }
+                    )),
+                    if accepted {
+                        format!("Revoke acceptance of repository command: {}", action.name)
+                    } else {
+                        format!(
+                            "Accept this exact repository command content: {}",
+                            action.name
+                        )
+                    },
+                )
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || {
+                        format!(
+                            "qa-repo-command-{}-{trust_selector}",
+                            if accepted { "revoke" } else { "accept" }
+                        )
+                    })
+                })
+                .when(!accepted, |el| {
+                    el.child(button::glyph(crate::icons::SHIELD_CHECK, ControlSize::Sm))
+                })
+                .child(if accepted { "Revoke" } else { "Accept" })
+                .when(!self.trust_busy, |el| {
+                    el.on_click(
+                        cx.listener(move |view, _, _, cx| view.set_trust(&decision, !accepted, cx)),
+                    )
+                }),
+            );
+        }
+        widgets::card_row(theme, false)
+            .child(widgets::row_tile(theme, crate::icons::FILE_CODE))
+            .child(text)
+            .child(controls)
+    }
+
+    /// The repository layer, read from the project folder. A task in another
+    /// checkout (a worktree on another branch) reads its own copy of the file
+    /// in Terminal → Commands.
+    fn repository_card(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "Repository commands",
+            Some(SharedString::from(format!(
+                "Shared through the project's {PROJECT_CONFIG_FILE}. They never run until you accept their exact content on this device, and any change needs a new acceptance. A command on this device with the same ID takes precedence."
+            ))),
+            vec![],
+        ));
+        match &self.repository {
+            None if self.repository_error.is_none() => {
+                card = card.child(
+                    widgets::card_row(theme, false).child(widgets::row_description(
+                        theme,
+                        format!("Checking {PROJECT_CONFIG_FILE}…"),
+                    )),
+                );
+            }
+            None => {}
+            Some(repository) => match repository.state {
+                ProjectConfigState::Absent => {
+                    card = card.child(widgets::card_row(theme, false).child(
+                        widgets::row_description(
+                            theme,
+                            format!(
+                                "No {} in {}. Check one in to share commands with everyone who opens this repository.",
+                                repository.file, repository.checkout
+                            ),
+                        ),
+                    ));
+                }
+                ProjectConfigState::Refused | ProjectConfigState::Unavailable => {
+                    let detail = repository.detail.clone().unwrap_or_default();
+                    let message = if repository.state == ProjectConfigState::Refused {
+                        format!(
+                            "LUNA ignored {}: {detail} Commands saved on this device keep working.",
+                            repository.file
+                        )
+                    } else {
+                        format!("Couldn't read {}: {detail}", repository.file)
+                    };
+                    card = card.child(
+                        widgets::card_row(theme, false).child(
+                            widgets::warning_strip(theme, message)
+                                .mt_0()
+                                .w_full()
+                                .when(cfg!(test), |el| {
+                                    el.debug_selector(|| "qa-repo-config-refused".into())
+                                }),
+                        ),
+                    );
+                }
+                ProjectConfigState::Loaded if repository.commands.is_empty() => {
+                    card = card.child(widgets::card_row(theme, false).child(
+                        widgets::row_description(
+                            theme,
+                            format!("{} declares no commands.", repository.file),
+                        ),
+                    ));
+                }
+                ProjectConfigState::Loaded => {
+                    for command in &repository.commands {
+                        card = card.child(self.repository_row(command, theme, cx));
+                    }
+                }
+            },
+        }
+        if let Some(error) = &self.repository_error {
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(widgets::error_strip(theme, error.clone()).mt_0().w_full())
+                    .child(
+                        widgets::row_controls().child(
+                            command_button(
+                                theme,
+                                ButtonKind::Secondary,
+                                ControlSize::Sm,
+                                !self.trust_busy,
+                                "reload-project-configuration",
+                                "Reload repository commands",
+                            )
+                            .child(button::glyph(crate::icons::REFRESH, ControlSize::Sm))
+                            .child("Reload")
+                            .when(!self.trust_busy, |el| {
+                                el.on_click(
+                                    cx.listener(|view, _, _, cx| view.reload_repository(cx)),
+                                )
+                            }),
+                        ),
+                    ),
+            );
+        }
+        card
     }
 }
 impl Render for ProjectCommandSettings {
@@ -595,10 +1034,19 @@ impl Render for ProjectCommandSettings {
                     ),
             );
         }
-        div().w_full().flex().flex_col().child(card).child(widgets::section_footer(
+        let mut column = div().w_full().flex().flex_col().child(card).child(widgets::section_footer(
             &theme,
             "Configuration and receipts are included in backups. Terminal output follows local terminal retention and is excluded from backups. Stop controls foreground processes; commands that detach themselves must manage their own lifecycle.",
-        ))
+        ));
+        if connected {
+            column = column
+                .child(self.repository_card(&theme, cx))
+                .child(widgets::section_footer(
+                    &theme,
+                    "Acceptance is saved on this device only and pins the command text, not scripts it calls. Repository commands never run on worktree creation.",
+                ));
+        }
+        column
     }
 }
 
@@ -647,6 +1095,8 @@ pub struct ProjectCommandPanel {
     snapshot: Option<ProjectCommandsSnapshot>,
     expanded: bool,
     expanded_command_run: Option<String>,
+    /// The repository command whose exact content is disclosed for review.
+    reviewing: Option<String>,
     busy: bool,
     write_pending: bool,
     error: Option<String>,
@@ -689,6 +1139,7 @@ impl ProjectCommandPanel {
             snapshot: None,
             expanded: false,
             expanded_command_run: None,
+            reviewing: None,
             busy: false,
             write_pending: false,
             error: None,
@@ -708,6 +1159,7 @@ impl ProjectCommandPanel {
         self.task = None;
         self.snapshot = None;
         self.expanded_command_run = None;
+        self.reviewing = None;
         self.error = None;
         self.busy = false;
         self.write_pending = false;
@@ -796,10 +1248,10 @@ impl ProjectCommandPanel {
                 view.write_pending = false;
                 match result {
                     Ok(run) => {
-                        if method == methods::STOP_PROJECT_COMMAND {
-                            if let Some(current) = view.snapshot.as_mut().and_then(|snapshot| snapshot.runs.iter_mut().find(|current| current.id == run.id)) {
-                                *current = run.clone();
-                            }
+                        if method == methods::STOP_PROJECT_COMMAND
+                            && let Some(current) = view.snapshot.as_mut().and_then(|snapshot| snapshot.runs.iter_mut().find(|current| current.id == run.id))
+                        {
+                            *current = run.clone();
                         }
                         if let Some(id) = run.terminal_id {
                             cx.emit(ProjectCommandEvent::Output { scope: scope.clone(), chat_id: run.chat_id, terminal_id: id });
@@ -814,11 +1266,199 @@ impl ProjectCommandPanel {
         cx.notify();
     }
 
-    /// One saved command: its name and, at the right, Preview (when it has a
-    /// URL) and Run.
+    /// Accept exactly the reviewed content of one repository command for
+    /// this checkout's file. It never runs it: the next status read only
+    /// shows it as runnable.
+    fn accept(
+        &mut self,
+        project: String,
+        action_id: String,
+        digest: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_scope(cx);
+        if self.write_pending || self.busy {
+            return;
+        }
+        let scope = self.scope.clone();
+        let Some(chat) = scope.chat.clone() else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.task = None;
+        self.busy = true;
+        self.write_pending = true;
+        self.error = None;
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call_as::<ProjectRepositoryConfig>(
+                    methods::SET_PROJECT_COMMAND_TRUST,
+                    serde_json::json!({"projectId":project,"chatId":chat,"actionId":action_id,"digest":digest,"trusted":true}),
+                )
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.scope != scope || !scope.is_current(view.state.read(cx)) {
+                    return;
+                }
+                view.busy = false;
+                view.write_pending = false;
+                match result {
+                    Ok(_) => {
+                        view.reviewing = None;
+                        view.load(cx);
+                    }
+                    Err(error) => view.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// A repository command this device has not accepted, or that changed
+    /// since: no Run. Review discloses its exact content; only then is
+    /// Accept offered.
+    fn review_row(
+        &self,
+        command: ProjectRepositoryCommand,
+        project: String,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let id = command.action.id.clone();
+        let reviewing = self.reviewing.as_deref() == Some(id.as_str());
+        let toggle_origin = self.scope.clone();
+        let toggle_id = id.clone();
+        let review_selector = id.clone();
+        let mut controls = div()
+            .flex_none()
+            .ml_auto()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .child(
+                command_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    SharedString::from(format!("review-repo-command-{id}")),
+                    if reviewing {
+                        format!("Hide the content of {}", command.action.name)
+                    } else {
+                        format!("Review the exact content of {}", command.action.name)
+                    },
+                )
+                .aria_expanded(reviewing)
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || format!("qa-repo-command-review-{review_selector}"))
+                })
+                .child(button::glyph(
+                    if reviewing {
+                        crate::icons::ALT_ARROW_UP
+                    } else {
+                        crate::icons::EYE
+                    },
+                    ControlSize::Sm,
+                ))
+                .child(if reviewing { "Hide" } else { "Review" })
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    if !toggle_origin.is_current(view.state.read(cx)) {
+                        return;
+                    }
+                    view.reviewing = if view.reviewing.as_deref() == Some(toggle_id.as_str()) {
+                        None
+                    } else {
+                        Some(toggle_id.clone())
+                    };
+                    cx.notify();
+                })),
+            );
+        if reviewing {
+            let origin = self.scope.clone();
+            let accept_selector = id.clone();
+            let action_id = id.clone();
+            let digest = command.digest.clone();
+            controls = controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    !self.busy,
+                    SharedString::from(format!("accept-repo-command-{id}")),
+                    format!("Accept this exact content of {}", command.action.name),
+                )
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || format!("qa-repo-command-accept-{accept_selector}"))
+                })
+                .child(button::glyph(crate::icons::SHIELD_CHECK, ControlSize::Sm))
+                .child("Accept")
+                .when(!self.busy, |el| {
+                    el.on_click(cx.listener(move |view, _, _, cx| {
+                        if !origin.is_current(view.state.read(cx)) {
+                            return;
+                        }
+                        view.accept(project.clone(), action_id.clone(), digest.clone(), cx)
+                    }))
+                }),
+            );
+        }
+        let summary = div()
+            .flex_1()
+            .min_w(ui_rems(140.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .child(
+                div()
+                    .min_w_0()
+                    .type_style(TextStyle::Footnote)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(SharedString::from(command.action.name.clone())),
+            )
+            .child(trust_badge(theme, &command))
+            .child(
+                div()
+                    .type_style(TextStyle::Caption)
+                    .text_color(theme.readable_muted(0.8))
+                    .child(SharedString::from(format!("From {PROJECT_CONFIG_FILE}"))),
+            );
+        let mut row = div().w_full().flex().flex_col().gap(ui_rems(4.0)).child(
+            div()
+                .w_full()
+                .min_h(ui_rems(28.0))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(ui_rems(8.0))
+                .child(summary)
+                .child(controls),
+        );
+        if reviewing {
+            row = row.child(exact_content(theme, &command.action, cx)).child(
+                widgets::row_description(
+                    theme,
+                    "Accepting lets Run execute exactly this content on this device. It doesn't run it, and any later change needs a new acceptance.",
+                ),
+            );
+        }
+        row
+    }
+
+    /// One runnable command: its name and, at the right, its provenance when
+    /// it comes from the repository, Preview (when it has a URL) and Run.
     fn action_row(
         &self,
         action: ProjectAction,
+        repository: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -832,6 +1472,12 @@ impl ProjectCommandPanel {
             .flex_row()
             .items_center()
             .gap(ui_rems(6.0));
+        if repository {
+            let badge_selector = action.id.clone();
+            controls = controls.child(widgets::badge(theme, "Repository").when(cfg!(test), |el| {
+                el.debug_selector(move || format!("qa-command-repository-{badge_selector}"))
+            }));
+        }
         if let Some(url) = action.preview_url.clone() {
             controls = controls.child(
                 command_button(
@@ -1063,6 +1709,9 @@ impl ProjectCommandPanel {
                     ))),
             )
             .child(status_badge(theme, run.status))
+            .when(run.source == ProjectCommandSource::Repository, |el| {
+                el.child(widgets::badge(theme, "Repository"))
+            })
             .child(
                 div()
                     .type_style(TextStyle::Caption)
@@ -1219,14 +1868,50 @@ impl Render for ProjectCommandPanel {
                     )
                     .child(div().min_w_0().child(SharedString::from(snapshot.cwd))),
             );
-            if snapshot.actions.is_empty() {
+            let repository = snapshot.repository.clone();
+            let accepted: HashSet<String> = repository
+                .iter()
+                .flat_map(|repository| repository.commands.iter())
+                .filter(|command| command.runnable())
+                .map(|command| command.action.id.clone())
+                .collect();
+            let pending: Vec<ProjectRepositoryCommand> = repository
+                .iter()
+                .flat_map(|repository| repository.commands.iter())
+                .filter(|command| !command.runnable() && !command.overridden)
+                .cloned()
+                .collect();
+            if snapshot.actions.is_empty() && pending.is_empty() {
                 rows = rows.child(widgets::row_description(
                     &theme,
                     "No saved commands. Add them in Settings → Projects.",
                 ));
             }
             for action in snapshot.actions {
-                rows = rows.child(self.action_row(action, &theme, cx));
+                let from_repository = accepted.contains(&action.id);
+                rows = rows.child(self.action_row(action, from_repository, &theme, cx));
+            }
+            if let Some(repository) = &repository
+                && matches!(
+                    repository.state,
+                    ProjectConfigState::Refused | ProjectConfigState::Unavailable
+                )
+            {
+                rows = rows.child(
+                    widgets::warning_strip(
+                        &theme,
+                        format!(
+                            "LUNA ignored {}: {}",
+                            repository.file,
+                            repository.detail.clone().unwrap_or_default()
+                        ),
+                    )
+                    .mt(ui_rems(4.0)),
+                );
+            }
+            for command in pending {
+                rows =
+                    rows.child(self.review_row(command, snapshot.project_id.clone(), &theme, cx));
             }
             for run in snapshot.runs.into_iter().take(12) {
                 rows = rows.child(self.run_row(run, &theme, cx));

@@ -974,6 +974,10 @@ struct ProjectCommandsParams {
     run_id: String,
     actions: Option<Vec<luna_proto::ProjectAction>>,
     expected_actions: Option<Vec<luna_proto::ProjectAction>>,
+    /// AW-11 trust: the reviewed repository content and the decision.
+    #[serde(default)]
+    digest: String,
+    trusted: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1236,6 +1240,8 @@ mod board;
 mod claude_goals;
 mod claude_history;
 mod context_transfer;
+mod diagnostics;
+mod extension_providers;
 mod extensions;
 mod native_extensions;
 mod prompt_stash;
@@ -1249,6 +1255,8 @@ pub struct EngineRpc {
     provider_defaults: Option<crate::provider_defaults::ProviderDefaults>,
     /// CORE-06 package store and grants; only on the engine's local service.
     extensions: Option<crate::extensions::ExtensionManager>,
+    /// AW-09 process and storage readback; only on the engine's local service.
+    diagnostics: Option<crate::diagnostics::Diagnostics>,
     work_writes: Option<crate::device_write::DeviceWriteHandle>,
     chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
     composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
@@ -1475,6 +1483,7 @@ impl EngineRpc {
             chat_workbenches: None,
             provider_defaults: None,
             extensions: None,
+            diagnostics: None,
             composer_catalog: std::sync::Mutex::new(
                 crate::composer_catalog::CatalogCache::default(),
             ),
@@ -9375,6 +9384,12 @@ impl EngineRpc {
         if extensions::handles(method) {
             return self.handle_extensions(method, params).await;
         }
+        if diagnostics::handles(method) {
+            return self.handle_diagnostics(method, params).await;
+        }
+        if extension_providers::handles(method) {
+            return self.handle_extension_providers(&params);
+        }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
@@ -12167,6 +12182,8 @@ impl EngineRpc {
             }
             methods::GET_PROJECT_COMMANDS
             | methods::SAVE_PROJECT_COMMANDS
+            | methods::GET_PROJECT_CONFIGURATION
+            | methods::SET_PROJECT_COMMAND_TRUST
             | methods::PROJECT_COMMAND_STATUS
             | methods::RUN_PROJECT_COMMAND
             | methods::STOP_PROJECT_COMMAND
@@ -12192,6 +12209,25 @@ impl EngineRpc {
                             .map_err(failed)?;
                         RpcReply::value(&commands.configuration(&p.project_id).map_err(failed)?)
                     }
+                    methods::GET_PROJECT_CONFIGURATION => RpcReply::value(
+                        &commands
+                            .project_configuration(&p.project_id)
+                            .map_err(failed)?,
+                    ),
+                    methods::SET_PROJECT_COMMAND_TRUST => RpcReply::value(
+                        &commands
+                            .set_trust(
+                                &p.project_id,
+                                Some(p.chat_id.as_str()).filter(|chat| !chat.is_empty()),
+                                &p.action_id,
+                                &p.digest,
+                                p.trusted.ok_or_else(|| {
+                                    RpcError::Failed("Missing trusted decision".into())
+                                })?,
+                            )
+                            .await
+                            .map_err(failed)?,
+                    ),
                     methods::PROJECT_COMMAND_STATUS => {
                         RpcReply::value(&commands.snapshot(&p.chat_id).await.map_err(failed)?)
                     }

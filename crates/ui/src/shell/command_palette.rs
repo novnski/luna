@@ -202,6 +202,63 @@ fn actions_for(query: &str, is_dark: bool) -> Vec<Entry> {
     .collect()
 }
 
+/// The truthful second line of a recorded-content result. Past work found
+/// here may be imported or months old, so it names the project, the provider
+/// and model the index recorded for it (absent stays absent, never guessed
+/// from the task's current settings), the recorded date and whether its task
+/// is archived. A row whose history is not here (an import boundary) says
+/// "History unavailable" instead of an outcome; another device's row keeps
+/// its short form.
+fn history_result_attribution(event: &ActivityEnvelope, project: &str, archived: bool) -> String {
+    if !event.source.available_here {
+        return format!("Recorded content · {project} · Other device");
+    }
+    let unavailable = event.source.unavailable_reason.is_some();
+    let mut parts = vec![
+        if unavailable {
+            "History unavailable"
+        } else {
+            "Recorded content"
+        }
+        .to_string(),
+        project.to_string(),
+    ];
+    if let Some(harness) = event.harness {
+        parts.push(super::child_chats::provider_label(harness).to_string());
+    }
+    if let Some(model) = event
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        parts.push(model.to_string());
+    }
+    if let Some(at) = chrono::DateTime::<Utc>::from_timestamp_millis(event.timestamp_ms) {
+        parts.push(
+            at.with_timezone(&chrono::Local)
+                .format("%b %-d, %Y")
+                .to_string(),
+        );
+    }
+    if !unavailable {
+        parts.push(
+            match event.outcome {
+                ActivityOutcome::Pending => "Pending",
+                ActivityOutcome::Succeeded => "Done",
+                ActivityOutcome::Failed => "Failed",
+                ActivityOutcome::Interrupted => "Interrupted",
+                ActivityOutcome::Unknown => "Unknown",
+            }
+            .to_string(),
+        );
+    }
+    if archived {
+        parts.push("Archived".into());
+    }
+    parts.join(" · ")
+}
+
 impl Shell {
     pub(super) fn reset_command_palette_key_state(&mut self) {
         if let Some(palette) = self.command_palette.as_mut() {
@@ -731,6 +788,23 @@ impl Shell {
         label.into()
     }
 
+    /// The second line of a recorded-content result, from the result and its
+    /// owning task row (see `history_result_attribution`).
+    pub(super) fn command_history_attribution(&self, event: &ActivityEnvelope, cx: &App) -> String {
+        let state = self.state.read(cx);
+        let project = event
+            .project_id
+            .as_ref()
+            .and_then(|id| state.spaces.iter().find(|space| &space.id == id))
+            .map(|space| space.display_name().to_string())
+            .unwrap_or_else(|| "Unknown project".into());
+        let archived = state
+            .chats
+            .iter()
+            .any(|chat| chat.id == event.task_id && chat.archived);
+        history_result_attribution(event, &project, archived)
+    }
+
     fn render_command_history_row(
         &self,
         event_id: &str,
@@ -744,30 +818,7 @@ impl Shell {
             .iter()
             .find(|event| event.event_id == event_id)?
             .clone();
-        let project = {
-            let state = self.state.read(cx);
-            event
-                .project_id
-                .as_ref()
-                .and_then(|id| state.spaces.iter().find(|space| &space.id == id))
-                .map(|space| space.display_name().to_string())
-                .unwrap_or_else(|| "Unknown project".into())
-        };
-        let outcome = match event.outcome {
-            ActivityOutcome::Pending => "Pending",
-            ActivityOutcome::Succeeded => "Done",
-            ActivityOutcome::Failed => "Failed",
-            ActivityOutcome::Interrupted => "Interrupted",
-            ActivityOutcome::Unknown => "Unknown",
-        };
-        let metadata = if event.source.available_here {
-            format!(
-                "Recorded content · {project} · {} · {outcome}",
-                event.model.as_deref().unwrap_or("Unknown model")
-            )
-        } else {
-            format!("Recorded content · {project} · Other device")
-        };
+        let metadata = self.command_history_attribution(&event, cx);
         let entry = Entry::History {
             event_id: event.event_id.clone(),
             group,

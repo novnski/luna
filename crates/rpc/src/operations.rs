@@ -804,6 +804,24 @@ pub const OPERATIONS: &[OperationSpec] = &[
         30,
     ),
     op(
+        methods::GET_ENGINE_DIAGNOSTICS,
+        "luna.core/get-engine-diagnostics",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::GET_STORAGE_USAGE,
+        "luna.core/get-storage-usage",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
         methods::WATCH_PREVIEWS,
         "luna.core/watch-previews",
         Watch,
@@ -837,6 +855,16 @@ pub const OPERATIONS: &[OperationSpec] = &[
         Unary,
         DeviceAddressable,
         Remote(RemoteScope::EnvironmentRead),
+        30,
+    ),
+    // CORE-08: what the device's enabled provider packages registered.
+    op(
+        methods::LIST_EXTENSION_PROVIDERS,
+        "luna.core/list-extension-providers",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
         30,
     ),
     op(
@@ -999,6 +1027,46 @@ pub const OPERATIONS: &[OperationSpec] = &[
     op(
         methods::RELEASE_EXTENSION_QUARANTINE,
         "luna.core/release-extension-quarantine",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    // CORE-19: version switches, removal, data erasure and safe mode stay
+    // with the device and profile that own the packages, grants and data.
+    // A switch may drain running work and run a migration, so its local
+    // deadline is longer.
+    op(
+        methods::UPDATE_EXTENSION,
+        "luna.core/update-extension",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        300,
+    ),
+    op(
+        methods::REMOVE_EXTENSION,
+        "luna.core/remove-extension",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::ERASE_EXTENSION_DATA,
+        "luna.core/erase-extension-data",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::SET_EXTENSION_SAFE_MODE,
+        "luna.core/set-extension-safe-mode",
         Command,
         Unary,
         Local,
@@ -2188,6 +2256,24 @@ pub const OPERATIONS: &[OperationSpec] = &[
     op(
         methods::SAVE_PROJECT_COMMANDS,
         "luna.core/save-project-commands",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::GET_PROJECT_CONFIGURATION,
+        "luna.core/get-project-configuration",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::SET_PROJECT_COMMAND_TRUST,
+        "luna.core/set-project-command-trust",
         Command,
         Unary,
         Local,

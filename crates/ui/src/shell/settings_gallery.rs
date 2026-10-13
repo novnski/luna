@@ -29,6 +29,7 @@ impl Shell {
             SettingsSection::Appearance => self.appearance_page.is_some(),
             SettingsSection::Files => self.files_settings_page.is_some(),
             SettingsSection::Backups => self.backups_page.is_some(),
+            SettingsSection::Diagnostics => self.diagnostics_page.is_some(),
             SettingsSection::Notifications => self.notifications_page.is_some(),
             SettingsSection::Shortcuts | SettingsSection::Appshots => self.shortcuts_page.is_some(),
             SettingsSection::Archived => self.archived_page.is_some(),

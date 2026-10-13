@@ -1,0 +1,39 @@
+#!/bin/sh
+# LUNA native entry point of the Gemini CLI provider (CORE-08 example).
+#
+# LUNA starts this from the installed, read-only package directory with an
+# allow-listed environment (PATH, HOME, USER, SHELL, locale, TMPDIR). A GUI
+# launch's PATH is often only /usr/bin:/bin, so look for Node.js where
+# Homebrew and common installers put it, then ask the login shell. The
+# worker must answer LUNA's hello within one second, so the login shell is
+# the last resort.
+set -u
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+find_node() {
+    for candidate in \
+        "$(command -v node 2>/dev/null || true)" \
+        /opt/homebrew/bin/node \
+        /usr/local/bin/node \
+        "${HOME:-/nonexistent}/.volta/bin/node"; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    if [ -n "${SHELL:-}" ] && [ -x "$SHELL" ]; then
+        found=$("$SHELL" -lc 'command -v node' 2>/dev/null | tail -n 1)
+        if [ -n "$found" ] && [ -x "$found" ]; then
+            printf '%s\n' "$found"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+if ! node=$(find_node); then
+    echo "gemini-cli provider: Node.js 22.6 or later was not found" >&2
+    exit 69
+fi
+exec "$node" --experimental-strip-types --no-warnings "$here/src/worker.ts"

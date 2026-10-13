@@ -14,6 +14,11 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
     use ApprovalActionKind::{Command, ExternalPath, FileChange, Network, Tool};
     use PermissionMode::{Ask, Auto, Full};
 
+    // CORE-08: a registered extension provider's reviewed declaration.
+    if let Some(declared) = crate::extensions::providers::declared_permissions(harness) {
+        return declared;
+    }
+
     match (harness).kind() {
         luna_proto::BuiltinHarnessId::Codex => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Auto, Full],
@@ -210,6 +215,9 @@ fn mode_from_env(name: &str) -> Option<PermissionMode> {
 }
 
 fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
+    if let Some(declared) = crate::extensions::providers::declared_mapping(harness, mode) {
+        return declared;
+    }
     match ((harness).kind(), mode) {
         (luna_proto::BuiltinHarnessId::Codex, PermissionMode::Ask) => {
             "workspace-write + on-request + reviewer user".into()

@@ -12,6 +12,11 @@
 //! checkout. A hard link that already exists inside the checkout is followed
 //! like any file, as the checkout's owner made it.
 //!
+//! The `data.*` operations (CORE-19) use the same confined path walk below
+//! the instance's data folder: the profile's current data generation for
+//! its extension, or, for a migration instance, the copy being migrated.
+//! The folder is bound by the server at start, like the task.
+//!
 //! These checks bound what LUNA brokers. A native worker keeps its own OS
 //! access regardless; see `ExtensionIsolation`.
 
@@ -52,10 +57,14 @@ pub(super) struct Principal {
     /// Sorted, unique capability ids granted for this exact package hash.
     pub grants: Vec<String>,
     pub target: BoundTarget,
+    /// The extension's data folder in this profile, when the package
+    /// declares data (CORE-19).
+    pub data_root: Option<PathBuf>,
     revoked: AtomicBool,
 }
 
 impl Principal {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         instance_id: String,
         extension_id: ExtensionId,
@@ -64,6 +73,7 @@ impl Principal {
         runtime: ExtensionRuntimeKind,
         grants: Vec<String>,
         target: BoundTarget,
+        data_root: Option<PathBuf>,
     ) -> Self {
         Self {
             instance_id,
@@ -73,6 +83,7 @@ impl Principal {
             runtime,
             grants,
             target,
+            data_root,
             revoked: AtomicBool::new(false),
         }
     }
@@ -164,6 +175,7 @@ impl BrokerError {
                 | "badRequest"
                 | "unknownOperation"
                 | "noTarget"
+                | "noData"
                 | "targetChanged"
                 | "revoked"
         )
@@ -293,6 +305,16 @@ impl Broker {
         Ok(root.clone())
     }
 
+    /// The instance's data folder, bound at start.
+    fn data_root(principal: &Principal) -> Result<PathBuf, BrokerError> {
+        principal.data_root.clone().ok_or_else(|| {
+            BrokerError::new(
+                "noData",
+                "this package declares no data, so its instances have no data folder",
+            )
+        })
+    }
+
     /// Run one broker operation for `principal`.
     pub async fn handle(
         &self,
@@ -364,6 +386,33 @@ impl Broker {
                     ));
                 }
                 let root = self.task_root(&principal)?;
+                run_blocking(move || confined::write(&root, &params.path, &bytes, params.create))
+                    .await
+            }
+            "data.read" => {
+                let params: ReadParams = strict(&op, params)?;
+                let root = Self::data_root(&principal)?;
+                let max = params.max_bytes.unwrap_or(READ_CHUNK).min(READ_CHUNK);
+                run_blocking(move || confined::read(&root, &params.path, params.offset, max)).await
+            }
+            "data.write" => {
+                let params: WriteParams = strict(&op, params)?;
+                if params.data.len() > WRITE_LIMIT.div_ceil(3) * 4 + 4 {
+                    return Err(BrokerError::new(
+                        "tooLarge",
+                        format!("data.write takes at most {} KiB", WRITE_LIMIT / 1024),
+                    ));
+                }
+                let bytes = BASE64.decode(params.data.as_bytes()).map_err(|error| {
+                    BrokerError::bad_request(format!("data is not base64: {error}"))
+                })?;
+                if bytes.len() > WRITE_LIMIT {
+                    return Err(BrokerError::new(
+                        "tooLarge",
+                        format!("data.write takes at most {} KiB", WRITE_LIMIT / 1024),
+                    ));
+                }
+                let root = Self::data_root(&principal)?;
                 run_blocking(move || confined::write(&root, &params.path, &bytes, params.create))
                     .await
             }

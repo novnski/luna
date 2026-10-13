@@ -33,6 +33,7 @@ fn status(label: &str) -> Value {
         cwd: format!("/{label}/checkout"),
         actions: vec![action()],
         runs: vec![],
+        repository: None,
     })
     .unwrap()
 }
@@ -55,6 +56,7 @@ fn run(label: &str, device: &str) -> Value {
         exit_code: None,
         detail: None,
         updated_at_ms: 1,
+        source: Default::default(),
     })
     .unwrap()
 }
@@ -654,6 +656,9 @@ fn commands_button_admission_fresh_same_engine_control(cx: &mut TestAppContext) 
 
 #[path = "project_commands_same_chat_tests.rs"]
 mod same_chat_context_tests;
+
+#[path = "project_commands_repository_tests.rs"]
+mod repository_trust_tests;
 
 #[gpui::test]
 fn commands_retry_current_stop_survives_status_poll(cx: &mut TestAppContext) {

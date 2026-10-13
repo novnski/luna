@@ -96,6 +96,10 @@ fn file_backed_provider_skill_lifecycle() {
     assert_eq!(installed.scope, IntegrationSkillScope::Project);
     assert_eq!(installed.provider, HarnessId::ClaudeCode);
     assert_eq!(installed.supporting_files, source.supporting_files);
+    // Migrating a reviewed skill to another provider keeps its reviewed tree
+    // revision (SW-11), so a selection reviewed against the source still
+    // names exactly the bytes the destination provider now holds.
+    assert_eq!(installed.revision, source.revision);
     assert_eq!(
         std::fs::read_to_string(
             roots

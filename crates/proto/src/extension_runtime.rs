@@ -22,8 +22,11 @@ pub struct ExtensionBrokerOperation {
     pub capability: Option<&'static str>,
 }
 
-/// The broker operations of extension API 1.1. Anything else is refused as
-/// `unknownOperation`; owner RPC methods are never broker operations.
+/// The broker operations of extension API 1.2. Anything else is refused as
+/// `unknownOperation`; owner RPC methods are never broker operations. The
+/// `data.*` operations (1.2) reach only the package's own data in this
+/// profile, so they need no capability; an instance without data gets
+/// `noData`.
 pub const EXTENSION_BROKER_OPERATIONS: &[ExtensionBrokerOperation] = &[
     ExtensionBrokerOperation {
         name: "host.info",
@@ -40,6 +43,14 @@ pub const EXTENSION_BROKER_OPERATIONS: &[ExtensionBrokerOperation] = &[
     ExtensionBrokerOperation {
         name: "tasks.list",
         capability: Some("luna.capability/tasks.read"),
+    },
+    ExtensionBrokerOperation {
+        name: "data.read",
+        capability: None,
+    },
+    ExtensionBrokerOperation {
+        name: "data.write",
+        capability: None,
     },
 ];
 
@@ -67,6 +78,9 @@ pub enum ExtensionInstanceState {
     /// Launching or handshaking.
     Starting,
     Running,
+    /// Its package version is being switched: it takes no new calls and
+    /// stops once the calls in progress finish (CORE-19).
+    Draining,
     /// The worker exited unexpectedly; the next call restarts it after the
     /// package and grants are verified again.
     Crashed,
@@ -92,6 +106,10 @@ pub enum ExtensionExitReason {
     Revoked,
     /// Stopped because its package was quarantined.
     Quarantined,
+    /// Stopped so the extension's enabled version could change (CORE-19).
+    Updating,
+    /// Stopped because safe mode was turned on (CORE-19).
+    SafeMode,
     /// Exited on its own with status 0.
     Exited,
     /// Exited with a failure status or a signal the supervisor did not send.
@@ -119,7 +137,12 @@ impl ExtensionExitReason {
     pub fn is_fault(self) -> bool {
         !matches!(
             self,
-            Self::Stopped | Self::Shutdown | Self::Revoked | Self::Quarantined
+            Self::Stopped
+                | Self::Shutdown
+                | Self::Revoked
+                | Self::Quarantined
+                | Self::Updating
+                | Self::SafeMode
         )
     }
 }
@@ -254,10 +277,24 @@ pub struct ExtensionPortableInfo {
     pub imports: Vec<String>,
 }
 
+/// Why an instance exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtensionInstancePurpose {
+    /// Started by the owner.
+    #[default]
+    Run,
+    /// Started by a version switch to run the new version's `luna.migrate`
+    /// on a copy of the data. It is never restarted.
+    Migration,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInstanceView {
     pub instance_id: String,
+    #[serde(default)]
+    pub purpose: ExtensionInstancePurpose,
     pub extension_id: ExtensionId,
     pub version: String,
     pub package_hash: String,
@@ -285,6 +322,10 @@ pub struct ExtensionInstanceView {
     pub started_at_ms: i64,
     /// The retained log window, oldest first.
     pub logs: Vec<ExtensionLogLine>,
+    /// The data schema of the data folder bound at start, when the package
+    /// declares data (CORE-19).
+    #[serde(default)]
+    pub data_schema_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +349,58 @@ pub struct ExtensionInstancesSnapshot {
     /// then refused.
     #[serde(default)]
     pub state_error: Option<String>,
+    /// Calls whose worker stopped before answering, oldest first, with how
+    /// each was settled (CORE-19). They are never replayed.
+    #[serde(default)]
+    pub unresolved: Vec<ExtensionUnresolvedCallView>,
+    /// Set while safe mode keeps every extension from running.
+    #[serde(default)]
+    pub safe_mode: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtensionCallResolutionOutcome {
+    /// The extension reports that the call took effect.
+    Applied,
+    /// The extension reports that it did not; sending it again is safe.
+    NotApplied,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionCallResolution {
+    pub outcome: ExtensionCallResolutionOutcome,
+    #[serde(default)]
+    pub detail: Option<String>,
+    pub resolved_at_ms: i64,
+    /// The version whose `luna.reconcile` answered.
+    pub resolved_by_version: String,
+    pub resolved_by_package_hash: String,
+}
+
+/// A call that reached a worker which stopped before answering: the
+/// extension may or may not have acted on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionUnresolvedCallView {
+    /// The id the worker saw in its `call` frame.
+    pub call_id: String,
+    /// The caller's request id, when it gave one.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    pub extension_id: ExtensionId,
+    pub version: String,
+    pub package_hash: String,
+    pub instance_id: String,
+    pub generation: u32,
+    pub method: String,
+    pub started_at_ms: i64,
+    pub interrupted_at_ms: i64,
+    pub exit_reason: ExtensionExitReason,
+    /// Absent while the outcome is unknown.
+    #[serde(default)]
+    pub resolution: Option<ExtensionCallResolution>,
 }
 
 /// `StartExtensionInstance`. Unknown fields are refused.
@@ -336,6 +429,11 @@ pub struct CallExtensionInstanceRequest {
     /// Caller deadline, at most [`ExtensionInstanceLimits::max_call_timeout_ms`].
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// The caller's id for this request (1 to 128 printable bytes). A
+    /// request id whose earlier delivery has an unknown outcome, or was
+    /// reconciled as applied, is refused instead of being sent again.
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +461,11 @@ pub struct ExtensionCallError {
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionCallOutcome {
     pub instance_id: String,
+    /// The id the worker saw in its `call` frame.
+    #[serde(default)]
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
     /// The worker generation that received the call.
     pub generation: u32,
     pub status: ExtensionCallStatus,

@@ -1,14 +1,27 @@
 //! One-time local→synced profile import: correctness, chat2 lineage of
-//! imported docs, journal carry-over, idempotence, and the uploads read-root
-//! marker.
+//! imported docs, journal carry-over, idempotence, the uploads read-root
+//! marker, and (SW-11 E14) imported Codex/Claude past work staying attributed
+//! in recorded-content search and handing off into a fresh task.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-use luna_doc::{MessagePart, MessageRole, SessionDoc, SessionMessageEntry};
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionDoc, SessionMessageEntry};
 
 use luna_engine::local_import::{ImportEvent, marker_grants_read_root};
 use luna_engine::run_journal::journal_paths;
-use luna_engine::{EngineCore, EngineProfile, HarnessId, default_registry};
+use luna_engine::{
+    AgentAccountsConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry, RunJournal,
+    default_registry,
+};
+use luna_harness::mock::MockHarness;
+use luna_proto::{
+    ActivityEnvelope, ActivityKind, AgentEvent, ChatConfig, ConversationSourceContext,
+    HistorySearchPage, PermissionMode, SandboxLevel,
+};
+use luna_rpc::{RpcClient, methods};
+use serde_json::{Value, json};
 
 fn assemble(profile: EngineProfile) -> EngineCore {
     EngineCore::assemble_with_profile(profile, Arc::new(default_registry()), HarnessId::Mock, None)
@@ -463,5 +476,402 @@ async fn later_local_work_imports_as_a_delta() {
     let (imported_chats, _, skipped_chats, _) = summary(&events);
     assert_eq!(imported_chats, 1);
     assert_eq!(skipped_chats, 2);
+    synced.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// SW-11 E14: past Codex and Claude work through the existing local import
+// ---------------------------------------------------------------------------
+
+const PAST_SPACE: &str = "past-work";
+const CODEX_TASK: &str = "codex-past";
+const CLAUDE_TASK: &str = "claude-past";
+/// 2026-03-12T12:00:00Z and 2026-03-11T12:00:00Z.
+const CODEX_ANSWER_AT: i64 = 1_773_316_800_000;
+const CLAUDE_ANSWER_AT: i64 = 1_773_230_400_000;
+
+/// Hermetic assembly: a mock-only registry and synthetic provider homes, so
+/// the maintenance this test starts (history indexing) can never discover or
+/// launch an installed provider CLI or read the user's provider state.
+fn hermetic(profile: EngineProfile, root: &Path) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(MockHarness { script: Vec::new() }));
+    let accounts = AgentAccountsConfig {
+        data_dir: root.join("provider-state"),
+        claude_config_dir: root.join("synthetic-claude"),
+        claude_config_file: root.join("synthetic-claude.json"),
+        codex_home: root.join("synthetic-codex"),
+    };
+    accounts.disable_claude_keychain_fallback().unwrap();
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        profile,
+        Arc::new(registry),
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .expect("assemble hermetic profile")
+}
+
+fn past_config(harness: HarnessId, model: &str, mode: PermissionMode) -> ChatConfig {
+    ChatConfig {
+        harness,
+        provider_account_id: None,
+        model: Some(model.into()),
+        reasoning: None,
+        model_options: Default::default(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        permission_mode: mode,
+        effective_permission_mode: mode,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    }
+}
+
+/// A local profile that ran one Codex and one Claude task in a plain (not
+/// Git) project folder, left exactly as those runs leave it: registry rows
+/// with their provider settings, archive state and run-start context,
+/// transcript snapshots, and journaled session metadata. Returns the rows as
+/// the local profile held them.
+async fn seed_past_work(data_dir: &Path, folder: &Path) -> (luna_proto::Chat, luna_proto::Chat) {
+    let local = hermetic(
+        EngineProfile::local(data_dir).expect("local profile"),
+        data_dir,
+    );
+    let device = local.device_id.clone();
+    let folder = folder.to_str().expect("utf-8 folder").to_string();
+    let workspace = &local.workspace;
+    workspace
+        .create_space(
+            PAST_SPACE,
+            &device,
+            &folder,
+            Some("Past work".into()),
+            false,
+        )
+        .expect("plain folder project");
+    workspace
+        .create_chat(
+            CODEX_TASK,
+            Some(PAST_SPACE),
+            None,
+            Some(past_config(
+                HarnessId::Codex,
+                "gpt-fixture",
+                PermissionMode::Full,
+            )),
+            Some(folder.clone()),
+        )
+        .expect("codex task");
+    workspace
+        .rename_chat(CODEX_TASK, "Migrated retry investigation")
+        .expect("codex title");
+    workspace
+        .set_chat_source_context(
+            CODEX_TASK,
+            &ConversationSourceContext {
+                checkout_id: "past-checkout".into(),
+                repo_root: folder.clone(),
+                cwd: folder.clone(),
+                branch: "feature/merged-retry".into(),
+                head_sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                observed_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+                    CODEX_ANSWER_AT - 30_000,
+                )
+                .unwrap(),
+            },
+        )
+        .expect("run-start context");
+    workspace.set_chat_harness_session(CODEX_TASK, "codex-native-session", &folder);
+    workspace
+        .set_chat_activity(
+            CODEX_TASK,
+            Some(CODEX_ANSWER_AT),
+            Some(CODEX_ANSWER_AT - 60_000),
+        )
+        .expect("codex activity");
+    workspace
+        .set_chat_archived(CODEX_TASK, true)
+        .expect("archive codex task");
+    workspace
+        .create_chat(
+            CLAUDE_TASK,
+            Some(PAST_SPACE),
+            None,
+            Some(past_config(
+                HarnessId::ClaudeCode,
+                "claude-fixture",
+                PermissionMode::Auto,
+            )),
+            Some(folder.clone()),
+        )
+        .expect("claude task");
+    workspace
+        .rename_chat(CLAUDE_TASK, "Flaky login follow-up")
+        .expect("claude title");
+    workspace
+        .set_chat_activity(
+            CLAUDE_TASK,
+            Some(CLAUDE_ANSWER_AT),
+            Some(CLAUDE_ANSWER_AT - 60_000),
+        )
+        .expect("claude activity");
+
+    let store = luna_sync::DocsStore::open(data_dir.join("profiles").join("local"))
+        .expect("open local store");
+    let journal = RunJournal::open(data_dir.join("profiles").join("local").join("journals"))
+        .expect("open local journals");
+    for (task, harness, model, prompt, answer, at) in [
+        (
+            CODEX_TASK,
+            HarnessId::Codex,
+            "gpt-fixture",
+            "Why does the importer retry twice?",
+            "Retry budget doubled after the migration; the second attempt reuses the cached session.",
+            CODEX_ANSWER_AT,
+        ),
+        (
+            CLAUDE_TASK,
+            HarnessId::ClaudeCode,
+            "claude-fixture",
+            "Is the login test still flaky?",
+            "Flaky login traced to the clock skew fixture; the suite now pins its timezone.",
+            CLAUDE_ANSWER_AT,
+        ),
+    ] {
+        let doc = SessionDoc::init(task).expect("init doc");
+        for (id, role, text, created_at) in [
+            (
+                format!("{task}-prompt"),
+                MessageRole::User,
+                prompt,
+                at - 30_000,
+            ),
+            (format!("{task}-answer"), MessageRole::Assistant, answer, at),
+        ] {
+            doc.push_message(&SessionMessageEntry {
+                id,
+                role,
+                parts: vec![MessagePart::Text {
+                    id: "text".into(),
+                    text: text.into(),
+                }],
+                created_at,
+                device_id: device.clone(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+            })
+            .expect("push message");
+        }
+        store
+            .save_snapshot_with_cursor(task, &doc.export_snapshot().expect("snapshot"), 0, 2)
+            .expect("save doc");
+        journal
+            .append(
+                task,
+                &AgentEvent::SessionStarted {
+                    harness,
+                    model: model.into(),
+                    tools: Vec::new(),
+                    cwd: folder.clone(),
+                    session_id: format!("{task}-native"),
+                    assistant_message_id: format!("{task}-answer"),
+                },
+            )
+            .expect("journal session metadata");
+    }
+    drop((store, journal));
+    let rows = (
+        workspace.chat(CODEX_TASK).unwrap().expect("codex row"),
+        workspace.chat(CLAUDE_TASK).unwrap().expect("claude row"),
+    );
+    local.shutdown().await;
+    rows
+}
+
+/// Poll the production index (the engine's own bootstrap ingests imported
+/// rows) for the answer `query` finds in `task`.
+async fn indexed_answer(client: &RpcClient, query: &str, task: &str) -> ActivityEnvelope {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let page: HistorySearchPage = client
+            .call_as(
+                methods::SEARCH_SESSION_HISTORY,
+                json!({"query": query, "scope": "global", "limit": 100}),
+            )
+            .await
+            .expect("search session history");
+        if let Some(event) = page
+            .events
+            .into_iter()
+            .find(|event| event.task_id == task && event.kind == ActivityKind::Answer)
+        {
+            return event;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "imported history for {task} never became searchable for {query:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn execute(client: &RpcClient, task: &str, command_id: &str, intent: Value) -> Value {
+    let basis: Value = client
+        .call_as("GetTaskCommandSnapshot", json!({"taskId": task}))
+        .await
+        .expect("command snapshot");
+    client
+        .call_as(
+            "ExecuteTaskCommand",
+            json!({
+                "taskId": task,
+                "commandId": command_id,
+                "actorId": "sw11-user",
+                "clientId": "sw11-past-work",
+                "clientSessionId": "sw11-past-work",
+                "expectedTaskRevision": basis["snapshot"]["taskRevision"],
+                "expectedBindingGeneration": basis["snapshot"]["bindingGeneration"],
+                "intent": intent,
+            }),
+        )
+        .await
+        .expect("execute task command")
+}
+
+/// Behavior: Codex and Claude work recorded in the local profile keeps its
+/// provider/model, timestamps, project, archive state and run-start context
+/// through the existing local import, is found by global recorded-content
+/// search with that attribution, and an explicit "new task with context"
+/// from the archived Codex task creates a fresh task in the same host,
+/// project and folder that resumes no provider session, runs with the
+/// settings chosen for it and does not claim the source's merged branch.
+/// Regressions caught: rows published before journals (provider/model lost
+/// from search), archive/time/context dropped on import, imported history
+/// invisible to search, and a fresh handoff that inherits the old provider
+/// session, archive flag or run-start branch/PR context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imported_codex_and_claude_history_stays_attributed_and_hands_off_fresh() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let folder = dir.path().join("plain folder");
+    std::fs::create_dir_all(&folder).expect("plain folder");
+    let (codex_before, claude_before) = seed_past_work(dir.path(), &folder).await;
+    assert!(codex_before.archived && !claude_before.archived);
+
+    let synced = hermetic(
+        EngineProfile::synced(dir.path(), "org1", "user1"),
+        dir.path(),
+    );
+    let client = luna_rpc::memory_client(synced.rpc_service());
+    let (imported_chats, imported_spaces, ..) = summary(&run_import(&synced));
+    assert_eq!((imported_chats, imported_spaces), (2, 1));
+
+    for before in [&codex_before, &claude_before] {
+        let after = synced
+            .workspace
+            .chat(&before.id)
+            .unwrap()
+            .expect("imported row");
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.config, before.config, "provider settings retained");
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.last_message_at, before.last_message_at);
+        assert_eq!(after.archived, before.archived);
+        assert_eq!(after.source_context, before.source_context);
+        assert_eq!(after.space_id.as_deref(), Some(PAST_SPACE));
+        assert_eq!(after.device_id, synced.device_id, "owned by this host");
+    }
+
+    for (task, query, harness, model, at) in [
+        (
+            CODEX_TASK,
+            "retry budget doubled",
+            HarnessId::Codex,
+            "gpt-fixture",
+            CODEX_ANSWER_AT,
+        ),
+        (
+            CLAUDE_TASK,
+            "flaky login traced",
+            HarnessId::ClaudeCode,
+            "claude-fixture",
+            CLAUDE_ANSWER_AT,
+        ),
+    ] {
+        let event = indexed_answer(&client, query, task).await;
+        assert_eq!(event.harness, Some(harness), "{task} provider from its run");
+        assert_eq!(event.model.as_deref(), Some(model));
+        assert_eq!(event.timestamp_ms, at, "{task} keeps its recorded time");
+        assert_eq!(event.project_id.as_deref(), Some(PAST_SPACE));
+        assert!(event.source.available_here);
+        assert_eq!(event.source.message_id, format!("{task}-answer"));
+    }
+
+    let fresh = uuid::Uuid::new_v4().to_string();
+    let request = json!({
+        "kind": "portableFork",
+        "sourceTaskId": CODEX_TASK,
+        "targetTaskId": fresh,
+        "newTarget": {
+            "config": {"harness": "mock", "model": "fixture", "sandbox": "workspace-write", "permissionMode": "auto"},
+            "title": "Fresh retry follow-up",
+        },
+    });
+    let preview: Value = client
+        .call_as(methods::PREVIEW_CONTEXT_TRANSFER, request.clone())
+        .await
+        .expect("preview the handoff");
+    assert!(
+        synced.workspace.chat(&fresh).unwrap().is_none(),
+        "a preview creates nothing"
+    );
+    let applied = execute(
+        &client,
+        &fresh,
+        "sw11-fresh-handoff",
+        json!({"kind": "applyContextTransfer", "request": request, "previewId": preview["previewId"]}),
+    )
+    .await;
+    assert_eq!(applied["status"], "applied", "{applied}");
+
+    let created = synced.workspace.chat(&fresh).unwrap().expect("fresh task");
+    assert_eq!(
+        created.harness_session_id, None,
+        "no provider session resumes"
+    );
+    assert!(!created.archived);
+    assert_eq!(
+        created
+            .config
+            .as_ref()
+            .map(|config| (config.harness, config.permission_mode)),
+        Some((HarnessId::Mock, PermissionMode::Auto)),
+        "the fresh task runs with the settings chosen for it"
+    );
+    assert_eq!(
+        created.source_context, None,
+        "a task that never ran claims no branch or pull request"
+    );
+    assert_eq!(created.device_id, synced.device_id);
+    assert_eq!(created.space_id.as_deref(), Some(PAST_SPACE));
+    assert_eq!(created.cwd, codex_before.cwd, "same plain (non-Git) folder");
+    let identity = synced
+        .task_identity
+        .view(&fresh)
+        .expect("fresh task identity");
+    assert_eq!(
+        identity.task.lineage.source_task_id.as_deref(),
+        Some(CODEX_TASK)
+    );
+    assert!(identity.current_binding.is_none() && identity.bindings.is_empty());
+
+    let source = synced.workspace.chat(CODEX_TASK).unwrap().unwrap();
+    assert!(source.archived, "handoff leaves the past task as it was");
+    assert_eq!(
+        source.harness_session_id.as_deref(),
+        Some("codex-native-session")
+    );
+    assert_eq!(source.source_context, codex_before.source_context);
     synced.shutdown().await;
 }

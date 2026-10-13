@@ -133,6 +133,7 @@ pub(crate) mod context_transfers;
 pub mod credentials;
 pub mod cross_task_tools;
 mod device_write;
+mod diagnostics;
 pub mod diff_sync;
 pub mod doc_host;
 mod engine_lifetime;
@@ -319,6 +320,8 @@ pub struct EngineCore {
     provider_defaults: provider_defaults::ProviderDefaults,
     /// CORE-06 device package store and this profile's grants.
     extensions: extensions::ExtensionManager,
+    /// AW-09 read-only process and storage readback of this engine's roots.
+    diagnostics: diagnostics::Diagnostics,
     chat_workbenches: chat_workbench::ChatWorkbenches,
     github_pr: source_control::pull_requests::GitHubPullRequests,
     backup_control: Option<backup_control::BackupControl>,
@@ -754,12 +757,20 @@ impl EngineCore {
             device_write.handle(),
             workspace.clone(),
         );
+        // CORE-08: enabled provider contributions join the ordinary registry.
+        extensions.attach_providers(registry.clone());
         let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
         let remote_access =
             remote_access::RemoteAccess::new(profile.store_root(), remote_auth.clone());
+        let diagnostics = diagnostics::Diagnostics::new(
+            data_dir,
+            profile.store_root(),
+            repos.managed_worktrees_root(),
+        );
         Ok(Self {
             provider_defaults,
             extensions,
+            diagnostics,
             chat_workbenches,
             github_pr,
             side_chats,
@@ -1015,6 +1026,8 @@ impl EngineCore {
             rpc = rpc.with_chat_workbenches(self.chat_workbenches.clone());
             // Packages and grants are managed only by the owning device.
             rpc = rpc.with_extensions(self.extensions.clone());
+            // Process and storage readback stays with the owner (AW-09).
+            rpc = rpc.with_diagnostics(self.diagnostics.clone());
         }
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());

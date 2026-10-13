@@ -1,19 +1,24 @@
 //! Saved local project actions over the existing terminal/process owner.
-//! No repository hook discovery and no alternate agent execution path.
+//! No repository hook discovery and no alternate agent execution path. The
+//! AW-11 repository layer (`.luna/project.toml`) is read as untrusted input
+//! and only ever adds commands this device accepted by exact digest.
+mod project_config;
+
 use crate::{
     EngineError, Repos, Terminals, WorkspaceHost,
     device_write::{DeviceWriteHandle, DeviceWritePermit},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use luna_proto::{
-    ProjectAction, ProjectCommandRun, ProjectCommandStatus as Status, ProjectCommandsSnapshot,
-    TerminalProcessState,
+    PROJECT_CONFIG_FILE, ProjectAction, ProjectCommandRun, ProjectCommandSource as Source,
+    ProjectCommandStatus as Status, ProjectCommandTrust, ProjectCommandsSnapshot,
+    ProjectConfigState, ProjectRepositoryConfig, TerminalProcessState,
 };
 use luna_sync::DocsStore;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, UNIX_EPOCH},
 };
@@ -47,6 +52,10 @@ fn digest(bytes: &[u8]) -> String {
 }
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+/// The receipt digest of an action; repository acceptance pins this value.
+fn action_digest(action: &ProjectAction) -> String {
+    digest(&serde_json::to_vec(action).unwrap_or_default())
 }
 
 impl ProjectCommands {
@@ -188,6 +197,154 @@ impl ProjectCommands {
             Some(permit.ticket()),
         )?;
         Ok(())
+    }
+    fn trust(&self, project: &str) -> Result<Vec<(String, String)>, EngineError> {
+        Ok(self
+            .inner
+            .store
+            .project_command_trust(project, &self.inner.device)?)
+    }
+    /// The repository layer of one canonical checkout over `personal`.
+    fn repository(
+        &self,
+        project: &str,
+        checkout: &Path,
+        personal: &[ProjectAction],
+    ) -> Result<ProjectRepositoryConfig, EngineError> {
+        let parsed = project_config::read(checkout);
+        Ok(project_config::layer(
+            checkout,
+            parsed,
+            personal,
+            &self.trust(project)?,
+        ))
+    }
+    fn project_folder(&self, project: &str) -> Result<String, EngineError> {
+        Ok(self
+            .inner
+            .workspace
+            .space(project)?
+            .ok_or_else(|| error("Project no longer exists"))?
+            .path)
+    }
+    /// Settings view: the project folder's `.luna/project.toml` over this
+    /// device's commands. A task's own checkout may hold another version;
+    /// its Terminal → Commands snapshot reads that one.
+    pub fn project_configuration(
+        &self,
+        project: &str,
+    ) -> Result<ProjectRepositoryConfig, EngineError> {
+        let personal = self.configuration(project)?;
+        let folder = self.project_folder(project)?;
+        match project_config::checkout_root(&folder) {
+            Ok(root) => self.repository(project, &root, &personal),
+            Err(detail) => Ok(project_config::unavailable(&folder, detail)),
+        }
+    }
+    /// Accept exactly `digest` for one repository command on this device, or
+    /// revoke it. The file is read again here, so content that changed after
+    /// the user reviewed it is refused. Accepting never runs anything.
+    pub async fn set_trust(
+        &self,
+        project: &str,
+        chat: Option<&str>,
+        action_id: &str,
+        digest: &str,
+        trusted: bool,
+    ) -> Result<ProjectRepositoryConfig, EngineError> {
+        // The reviewed file: the task's own checkout, else the project folder.
+        let task = match chat {
+            Some(chat) => Some((chat, self.target(chat).await?)),
+            None => None,
+        };
+        let _gate = self
+            .inner
+            .gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let permit = self.admit()?;
+        let checkout = match &task {
+            Some((chat, target)) => {
+                self.recheck(chat, target)?;
+                if target.project != project {
+                    return Err(error("Task belongs to another project; reload commands"));
+                }
+                PathBuf::from(&target.cwd)
+            }
+            None => {
+                self.project(project)?;
+                project_config::checkout_root(&self.project_folder(project)?)
+                    .map_err(EngineError::Other)?
+            }
+        };
+        let personal = self.configuration(project)?;
+        let accepted = if trusted {
+            let repository = self.repository(project, &checkout, &personal)?;
+            if repository.state != ProjectConfigState::Loaded {
+                return Err(error(format!(
+                    "{PROJECT_CONFIG_FILE} is not in use here: {}",
+                    repository
+                        .detail
+                        .unwrap_or_else(|| "the checkout has no such file.".into())
+                )));
+            }
+            let command = repository
+                .commands
+                .iter()
+                .find(|command| command.action.id == action_id)
+                .ok_or_else(|| {
+                    error(format!(
+                        "{PROJECT_CONFIG_FILE} no longer declares this command"
+                    ))
+                })?;
+            if command.digest != digest {
+                return Err(error(
+                    "This repository command changed after you reviewed it. Review its current content before accepting it.",
+                ));
+            }
+            Some(digest)
+        } else {
+            None
+        };
+        self.inner.store.set_project_command_trust(
+            project,
+            &self.inner.device,
+            action_id,
+            accepted,
+            now(),
+            Some(permit.ticket()),
+        )?;
+        self.repository(project, &checkout, &personal)
+    }
+    /// What Run may execute for `action_id` in this checkout: the personal
+    /// command, else repository content this device accepted exactly. Every
+    /// other repository state is refused with its review step.
+    fn runnable_action(
+        &self,
+        target: &Target,
+        action_id: &str,
+    ) -> Result<(ProjectAction, Source), EngineError> {
+        let personal = self.configuration(&target.project)?;
+        if let Some(action) = personal.iter().find(|action| action.id == action_id) {
+            return Ok((action.clone(), Source::Personal));
+        }
+        let repository = self.repository(&target.project, Path::new(&target.cwd), &personal)?;
+        let command = repository
+            .commands
+            .into_iter()
+            .find(|command| command.action.id == action_id)
+            .ok_or_else(|| error("Saved command no longer exists"))?;
+        match command.trust {
+            ProjectCommandTrust::Accepted => Ok((command.action, Source::Repository)),
+            ProjectCommandTrust::Unaccepted => Err(error(format!(
+                "“{}” comes from {PROJECT_CONFIG_FILE} and is not accepted on this device. Review its exact content in Terminal → Commands and accept it before running it.",
+                command.action.name
+            ))),
+            ProjectCommandTrust::Changed => Err(error(format!(
+                "“{}” changed in {PROJECT_CONFIG_FILE} since you accepted it. Review the new content in Terminal → Commands and accept it again before running it.",
+                command.action.name
+            ))),
+        }
     }
     async fn target(&self, chat_id: &str) -> Result<Target, EngineError> {
         let chat = self
@@ -362,8 +519,11 @@ impl ProjectCommands {
                     && (r.chat_id == chat || r.setup)
             })
             .collect();
+        let personal = self.configuration(&target.project)?;
+        let repository = self.repository(&target.project, Path::new(&target.cwd), &personal)?;
         Ok(ProjectCommandsSnapshot {
-            actions: self.configuration(&target.project)?,
+            actions: project_config::runnable(&personal, &repository),
+            repository: Some(repository),
             project_id: target.project,
             cwd: target.cwd,
             runs,
@@ -414,7 +574,7 @@ impl ProjectCommands {
         &self,
         chat: &str,
         target: &Target,
-        action: ProjectAction,
+        (action, source): (ProjectAction, Source),
         id: &str,
         setup: bool,
         permit: &DeviceWritePermit,
@@ -452,6 +612,7 @@ impl ProjectCommands {
             exit_code: None,
             detail: None,
             updated_at_ms: now(),
+            source,
         };
         if !self
             .inner
@@ -480,11 +641,7 @@ impl ProjectCommands {
         request_id: &str,
     ) -> Result<ProjectCommandRun, EngineError> {
         let target = self.target(chat).await?;
-        let action = self
-            .configuration(&target.project)?
-            .into_iter()
-            .find(|a| a.id == action_id)
-            .ok_or_else(|| error("Saved command no longer exists"))?;
+        let (action, source) = self.runnable_action(&target, action_id)?;
         if action.wait_for_setup {
             self.wait_for_setup(chat, &target.cwd).await?;
         }
@@ -495,7 +652,17 @@ impl ProjectCommands {
             .unwrap_or_else(PoisonError::into_inner);
         let permit = self.admit()?;
         self.recheck(chat, &target)?;
-        let run = self.admit_run(chat, &target, action, request_id, false, &permit)?;
+        // Trust is decided again under the gate: the file or this device's
+        // acceptance may have changed while setup was awaited.
+        if source == Source::Repository
+            && self.runnable_action(&target, action_id)? != (action.clone(), source)
+        {
+            return Err(error(format!(
+                "“{}” changed in {PROJECT_CONFIG_FILE} while waiting. Review it in Terminal → Commands before running it.",
+                action.name
+            )));
+        }
+        let run = self.admit_run(chat, &target, (action, source), request_id, false, &permit)?;
         self.launch_pending(run, &permit)
     }
     /// Reserve setup BEFORE publishing a new checkout to the chat. If the
@@ -531,7 +698,14 @@ impl ProjectCommands {
             .unwrap_or_else(PoisonError::into_inner);
         let permit = self.admit()?;
         self.recheck(chat, &original)?;
-        self.admit_run(chat, &target, action, &id, true, &permit)?;
+        self.admit_run(
+            chat,
+            &target,
+            (action, Source::Personal),
+            &id,
+            true,
+            &permit,
+        )?;
         Ok(())
     }
     /// Called ONLY for a newly materialized worktree, after the existing chat
@@ -577,7 +751,14 @@ impl ProjectCommands {
         else {
             return Ok(None);
         };
-        let run = self.admit_run(chat, &target, action, &id, true, &permit)?;
+        let run = self.admit_run(
+            chat,
+            &target,
+            (action, Source::Personal),
+            &id,
+            true,
+            &permit,
+        )?;
         self.launch_pending(run, &permit).map(Some)
     }
     pub async fn wait_for_setup(&self, chat: &str, cwd: &str) -> Result<(), EngineError> {
@@ -691,6 +872,20 @@ impl ProjectCommands {
         let mut run = self.matching(chat, id, &target, &permit)?;
         if run.status.is_active() {
             return Err(error("Command is still running; stop it before retrying"));
+        }
+        // A repository receipt reruns only content that is still exactly the
+        // checkout's accepted, non-overridden command.
+        if run.source == Source::Repository
+            && !self
+                .runnable_action(&target, &run.action.id)
+                .is_ok_and(|(action, source)| {
+                    source == Source::Repository && action_digest(&action) == run.action_digest
+                })
+        {
+            return Err(error(format!(
+                "“{}” changed in {PROJECT_CONFIG_FILE}, was overridden or is no longer accepted on this device since it ran. Review it in Terminal → Commands before running it again.",
+                run.action.name
+            )));
         }
         if run.process_group_id.is_some_and(group_alive) {
             return Err(error(

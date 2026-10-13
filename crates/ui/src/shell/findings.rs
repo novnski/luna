@@ -157,6 +157,9 @@ impl Shell {
             config
                 .reasoning
                 .map(|level| crate::pickers::reasoning_label(level).to_string()),
+            // The new task keeps the source's access level. Name it, so a
+            // past task's Full access is never carried into fresh work unseen.
+            Some(crate::execution_view::permission_title(config.permission_mode).to_string()),
         ]
         .into_iter()
         .flatten()

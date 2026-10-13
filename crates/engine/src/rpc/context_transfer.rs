@@ -53,6 +53,11 @@ impl EngineRpc {
         target.created_at = chrono::Utc::now();
         target.harness_session_id = None;
         target.harness_session_cwd = None;
+        // The source's run-start repository context is its own evidence. A
+        // fresh task that has never run must not claim that branch (often
+        // merged by the time past work is handed off) or its pull request;
+        // its first dispatch stamps the checkout it actually runs in.
+        target.source_context = None;
         target.room_gen = Some(2);
         target.last_seen_at = None;
         target.manually_unread = false;

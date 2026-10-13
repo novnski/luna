@@ -82,6 +82,16 @@ jobs:
           cargo build --locked -p luna-extension-host
           LUNA_EXTENSION_HOST="$PWD/target/debug/luna-extension-host" \
             cargo test --locked -p luna-engine --test extension_portable -- --nocapture
+      # CORE-08 E10: an installed provider package in the ordinary registry,
+      # picker, run and Stop paths (Python profile-1.0 peer).
+      - name: Provider extensions (CORE-08)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p luna-engine --test extension_providers -- --nocapture
+      # AW-09: read-only storage accounting and engine diagnostics over a
+      # disposable profile, checked against an independent walk.
+      - name: Diagnostics and storage accounting (AW-09)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p luna-engine --test diagnostics_storage -- --nocapture
 
   ui-tests:
     runs-on: ubuntu-24.04

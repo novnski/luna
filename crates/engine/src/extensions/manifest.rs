@@ -469,6 +469,21 @@ pub(super) fn validate(bytes: &[u8]) -> Result<ValidatedManifest, String> {
     {
         return Err("data.schemaVersion starts at 1".into());
     }
+    if let Some(from) = manifest.data.as_ref().and_then(|data| data.migrates_from) {
+        if manifest.api.min_minor < 2 {
+            return Err("data.migratesFrom needs extension API 1.2; set api.minMinor to 2".into());
+        }
+        if runtime.kind == ExtensionRuntimeKind::Data {
+            return Err("a data package runs nothing, so it cannot migrate data".into());
+        }
+        let schema = manifest.data.as_ref().map_or(0, |data| data.schema_version);
+        if from == 0 || from >= schema {
+            return Err(
+                "data.migratesFrom is an older schema: at least 1 and below data.schemaVersion"
+                    .into(),
+            );
+        }
+    }
 
     Ok(ValidatedManifest {
         package_hash: sha256_hex(bytes),

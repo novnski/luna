@@ -9,7 +9,8 @@
     "node": ">=23.6"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./provider": "./src/provider.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

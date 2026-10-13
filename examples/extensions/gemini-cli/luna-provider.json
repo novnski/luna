@@ -1,0 +1,42 @@
+{
+  "declarationVersion": 1,
+  "providers": [
+    {
+      "id": "novnski.gemini/gemini-cli",
+      "displayName": "Gemini CLI",
+      "profile": { "major": 1, "minor": 0 },
+      "optional": ["resume"],
+      "permissionModes": {
+        "full": "gemini --approval-mode yolo: every tool call runs without an approval prompt"
+      },
+      "automaticReviewer": false,
+      "reasoningLevels": [],
+      "unsupported": [
+        {
+          "capability": "auto",
+          "reason": "Gemini CLI has no automatic reviewer: its auto_edit mode only skips edit prompts by rule, so Approve for me is not offered"
+        },
+        {
+          "capability": "questions",
+          "reason": "headless Gemini CLI excludes its ask_user tool"
+        },
+        {
+          "capability": "approvals",
+          "reason": "with --approval-mode yolo no approval reaches LUNA; the other headless modes drop the tools that would need one"
+        },
+        {
+          "capability": "attachments",
+          "reason": "this provider sends the prompt text only"
+        },
+        {
+          "capability": "steer",
+          "reason": "headless Gemini CLI takes one prompt per process; a message sent during a turn runs after it"
+        }
+      ],
+      "limitations": [
+        "Gemini CLI uses its own sign-in (~/.gemini). LUNA gives the worker only PATH, HOME, USER, SHELL, locale and TMPDIR, so an API key exported in a shell profile does not reach Gemini; ~/.gemini/.env and the OAuth login do.",
+        "Models are the installed Gemini CLI's own catalog; whether your account may use one is decided by Google when the message runs."
+      ]
+    }
+  ]
+}

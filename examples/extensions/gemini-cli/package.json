@@ -1,0 +1,18 @@
+{
+  "name": "@novnski/luna-gemini-cli-provider",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A LUNA provider extension for Google Gemini CLI, built only on @luna/sdk/provider",
+  "license": "MIT",
+  "type": "module",
+  "imports": {
+    "#luna-sdk/provider": "./vendor/luna-sdk/provider.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "pack": "node scripts/pack.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  }
+}

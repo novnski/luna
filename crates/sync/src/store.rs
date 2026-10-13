@@ -359,6 +359,14 @@ const MIGRATIONS: &[&str] = &[
     // legacy binary ranks after the bounded-rank upgrade.
     "ALTER TABLE board_items ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
      CREATE INDEX board_items_live_order ON board_items(owner_host_id,deleted,archived,project_id,column_order,rank,id);",
+    // v21 — AW-11: this device's acceptance of one repository command's exact
+    // content (`.luna/project.toml`). One digest per command id; a changed
+    // command no longer matches and is unaccepted again.
+    "CREATE TABLE project_command_trust (
+        project_id TEXT NOT NULL, device_id TEXT NOT NULL, action_id TEXT NOT NULL,
+        digest TEXT NOT NULL, accepted_at INTEGER NOT NULL,
+        PRIMARY KEY(project_id,device_id,action_id)
+     ) STRICT;",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2867,6 +2875,10 @@ impl DocsStore {
         )?;
         tx.execute(
             "DELETE FROM project_command_runs WHERE project_id=?1",
+            [project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_command_trust WHERE project_id=?1",
             [project_id],
         )?;
         tx.commit()?;

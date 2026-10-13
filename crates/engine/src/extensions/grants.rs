@@ -5,6 +5,13 @@
 //! (`profileId`, which covers the device, scope and account); a file copied,
 //! restored or synced into another profile grants nothing there. The file is
 //! local only: it is outside every synced document and outside backups.
+//!
+//! CORE-19 adds the profile's plugin data pointers (`data`): for each
+//! extension id, its current data generation and the older copies kept for
+//! rollback. Enablement and data switch in one write, so a version switch
+//! has one commit point: this file's rename. A file holding data pointers is
+//! written as version 2, which an older LUNA refuses (and preserves) rather
+//! than rewriting it without them.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -16,6 +23,8 @@ use super::store::{publish_file, read_regular_file};
 
 const GRANTS_FILE: &str = "extension-grants.json";
 const GRANTS_VERSION: u32 = 1;
+/// Written when the file holds data pointers (CORE-19).
+const GRANTS_VERSION_DATA: u32 = 2;
 const GRANTS_TEMP_PREFIX: &str = ".extension-grants-";
 const MAX_GRANTS_BYTES: u64 = 1024 * 1024;
 
@@ -29,6 +38,30 @@ pub(super) struct GrantRecord {
     pub enabled_at_ms: i64,
 }
 
+/// One generation of an extension's data: the folder
+/// `{store root}/extensions/data/<key>/<id>/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DataGeneration {
+    pub id: String,
+    pub schema_version: u32,
+    /// The package version (and hash) that created or migrated it.
+    pub version: String,
+    pub package_hash: String,
+    pub created_at_ms: i64,
+}
+
+/// This profile's data for one extension id. It outlives enablement and
+/// installation; only an explicit erase removes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DataRecord {
+    pub current: DataGeneration,
+    /// Older generations kept for rollback, newest first.
+    #[serde(default)]
+    pub kept: Vec<DataGeneration>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct GrantsFile {
@@ -37,6 +70,9 @@ pub(super) struct GrantsFile {
     pub revision: u64,
     /// Extension id → its one enabled package.
     pub extensions: BTreeMap<String, GrantRecord>,
+    /// Extension id → its data in this profile (CORE-19).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<String, DataRecord>,
 }
 
 pub(super) struct ProfileGrants {
@@ -58,6 +94,7 @@ impl ProfileGrants {
             profile_id: self.profile_id.clone(),
             revision: 0,
             extensions: BTreeMap::new(),
+            data: BTreeMap::new(),
         }
     }
 
@@ -78,7 +115,7 @@ impl ProfileGrants {
         let file: GrantsFile = serde_json::from_slice(&bytes).map_err(|error| {
             format!("extension grants are invalid; the file was preserved: {error}")
         })?;
-        if file.version != GRANTS_VERSION {
+        if file.version != GRANTS_VERSION && file.version != GRANTS_VERSION_DATA {
             return Err(format!(
                 "extension grants have unsupported version {}; the file was preserved",
                 file.version
@@ -99,7 +136,11 @@ impl ProfileGrants {
 
     /// Publish `file` with its revision advanced.
     pub fn write(&self, mut file: GrantsFile) -> Result<GrantsFile, String> {
-        file.version = GRANTS_VERSION;
+        file.version = if file.data.is_empty() {
+            GRANTS_VERSION
+        } else {
+            GRANTS_VERSION_DATA
+        };
         file.profile_id = self.profile_id.clone();
         file.revision = file
             .revision

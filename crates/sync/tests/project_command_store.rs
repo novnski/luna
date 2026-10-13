@@ -1,4 +1,5 @@
-//! Failure-first file-backed migration, backup-snapshot and attempt-fence acceptance.
+//! Failure-first file-backed migration, backup-snapshot and attempt-fence acceptance,
+//! plus the AW-11 repository-command trust ledger stored beside them.
 #[test]
 fn migration_snapshot_ownership_and_attempt_fence() {
     use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandStatus};
@@ -15,6 +16,37 @@ fn migration_snapshot_ownership_and_attempt_fence() {
     store
         .save_project_command_config("project", "device", &[action.clone()], None)
         .unwrap();
+    // AW-11: one accepted digest per repository command id and device. A new
+    // acceptance replaces the old content's digest instead of adding to it,
+    // and revoking removes it; another device never sees this device's trust.
+    store
+        .set_project_command_trust("project", "device", "lint", Some("old"), 1, None)
+        .unwrap();
+    store
+        .set_project_command_trust("project", "device", "lint", Some("new"), 2, None)
+        .unwrap();
+    store
+        .set_project_command_trust("project", "device", "test", Some("t"), 3, None)
+        .unwrap();
+    store
+        .set_project_command_trust("project", "device", "test", None, 4, None)
+        .unwrap();
+    store
+        .set_project_command_trust("project", "device", "build", Some("b"), 5, None)
+        .unwrap();
+    assert_eq!(
+        store.project_command_trust("project", "device").unwrap(),
+        vec![
+            ("build".to_string(), "b".to_string()),
+            ("lint".to_string(), "new".to_string())
+        ]
+    );
+    assert!(
+        store
+            .project_command_trust("project", "foreign-device")
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         store
             .project_command_config("project", "foreign-device")
@@ -39,6 +71,7 @@ fn migration_snapshot_ownership_and_attempt_fence() {
         exit_code: None,
         detail: None,
         updated_at_ms: 1,
+        source: Default::default(),
     };
     assert!(store.save_project_command_run(&run, None, None).unwrap());
     assert!(!store.save_project_command_run(&run, None, None).unwrap());
@@ -89,6 +122,14 @@ fn migration_snapshot_ownership_and_attempt_fence() {
             .unwrap(),
         1
     );
+    assert_eq!(
+        snapshot
+            .query_row("SELECT count(*) FROM project_command_trust", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2,
+        "accepted repository digests are part of the backup snapshot"
+    );
     let mut setup = run.clone();
     setup.id = "setup-generation".into();
     setup.setup = true;
@@ -112,4 +153,11 @@ fn migration_snapshot_ownership_and_attempt_fence() {
             .is_empty()
     );
     assert!(store.project_command_runs("device").unwrap().is_empty());
+    assert!(
+        store
+            .project_command_trust("project", "device")
+            .unwrap()
+            .is_empty(),
+        "project retirement drops its accepted repository digests"
+    );
 }

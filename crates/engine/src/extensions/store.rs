@@ -253,6 +253,24 @@ impl PackageStore {
         Ok(record)
     }
 
+    /// Unlist one package, then delete its tree (CORE-19). Once the index no
+    /// longer lists it, it is not installed; a tree left by a crash before
+    /// the deletion is removed by [`Self::recover`].
+    pub fn remove(&self, package_hash: &str) -> Result<InstalledRecord, String> {
+        let mut index = self.read_index()?;
+        let position = index
+            .iter()
+            .position(|record| record.package_hash == package_hash)
+            .ok_or_else(|| "that package is not installed on this device".to_string())?;
+        let record = index.remove(position);
+        self.write_index(index)?;
+        if let Err(error) = remove_tree(&self.package_dir(package_hash)) {
+            tracing::warn!(%error, "a removed package's files remain until the next open");
+        }
+        sync_dir(&self.packages());
+        Ok(record)
+    }
+
     /// The installed manifest, re-validated, after checking its bytes still
     /// hash to the identity the index names.
     pub fn read_manifest(&self, package_hash: &str) -> Result<ValidatedManifest, String> {

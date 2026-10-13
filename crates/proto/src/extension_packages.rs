@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{ContributionId, ExtensionId, NamespacedId};
+use crate::extension_lifecycle::{ExtensionDataView, ExtensionSafeModeView, ExtensionSwitchView};
 
 /// The manifest's file name at the package root. Its exact bytes are hashed
 /// into the package hash, so it is never listed in its own `files`.
@@ -36,8 +37,10 @@ pub struct ExtensionContractVersion {
 
 /// The extension API this LUNA implements (manifest fields, contribution
 /// kinds and the capability vocabulary). 1.1 (CORE-07) adds
-/// `runtime.limits` and the broker operations in `extension_runtime`.
-pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 1 };
+/// `runtime.limits` and the broker operations in `extension_runtime`. 1.2
+/// (CORE-19) adds `data.migratesFrom`, the `data.read`/`data.write` broker
+/// operations and the `luna.migrate`/`luna.reconcile` worker operations.
+pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 2 };
 /// The native worker handshake (CORE-00: JSON lines, major/minor).
 pub const EXTENSION_WORKER_PROTOCOL: ExtensionContractVersion =
     ExtensionContractVersion { major: 1, minor: 0 };
@@ -258,6 +261,10 @@ pub struct ExtensionSettingsSchema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtensionDataSchema {
     pub schema_version: u32,
+    /// API 1.2: the oldest data schema this version migrates forward with
+    /// its `luna.migrate` operation. Absent: it reads only `schemaVersion`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrates_from: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,6 +387,16 @@ pub struct ExtensionPackageView {
     pub settings_schema_version: Option<u32>,
     #[serde(default)]
     pub data_schema_version: Option<u32>,
+    /// The oldest data schema this package migrates forward (API 1.2).
+    #[serde(default)]
+    pub data_migrates_from: Option<u32>,
+    /// Why this exact package hash is quarantined in this profile.
+    #[serde(default)]
+    pub quarantine_reason: Option<String>,
+    /// Set when another version of the same extension is enabled in this
+    /// profile: what switching to this package involves (CORE-19).
+    #[serde(default)]
+    pub switch: Option<ExtensionSwitchView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,6 +420,13 @@ pub struct ExtensionsSnapshot {
     /// then shows as disabled and enablement changes are refused.
     #[serde(default)]
     pub grants_error: Option<String>,
+    /// Set while safe mode keeps every extension from running.
+    #[serde(default)]
+    pub safe_mode: Option<ExtensionSafeModeView>,
+    /// This profile's extension data, including data whose package was
+    /// removed (it stays until it is erased).
+    #[serde(default)]
+    pub data: Vec<ExtensionDataView>,
 }
 
 /// `InstallExtension`. Unknown fields are refused.

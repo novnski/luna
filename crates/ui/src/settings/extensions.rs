@@ -7,13 +7,24 @@
 //! on, optional ones are the user's choice, and the engine receives exactly
 //! that hash and that set. The page reads and writes only through the
 //! engine's local-only extension methods.
+//!
+//! CORE-19: a disabled package whose extension has another version enabled
+//! offers **Update to** or **Roll back to** instead of enabling. Its review
+//! shows both versions, what happens to the data, and every capability the
+//! enabled version was not granted, marked so and off unless it is required:
+//! nothing the old version was not granted is granted without a decision
+//! here. Running work is waited for unless the owner chooses to stop it.
+//! **Remove…** and **Erase data…** are separate confirmations, and **Safe
+//! mode** keeps every extension from running while all of this stays
+//! available.
 
 use std::collections::BTreeSet;
 
 use gpui::{AnyElement, Context, Entity, SharedString, Subscription, Window, div, prelude::*};
 use luna_proto::{
-    ExtensionIntegrityStatus, ExtensionPackageView, ExtensionState, ExtensionTrust,
-    ExtensionsSnapshot,
+    ExtensionDataPlan, ExtensionDataView, ExtensionIntegrityStatus, ExtensionPackageView,
+    ExtensionSafeModeSource, ExtensionSafeModeView, ExtensionState, ExtensionSwitchKind,
+    ExtensionSwitchView, ExtensionTrust, ExtensionsSnapshot,
 };
 use luna_rpc::methods;
 
@@ -24,10 +35,139 @@ use crate::state::AppState;
 use crate::theme::Theme;
 use crate::typography::ui_rems;
 
-/// The enable review: one exact package and the capabilities left granted.
+/// The enable or switch review: one exact package and the capabilities left
+/// granted. `switch` is set when another version is enabled (CORE-19).
 struct Review {
     package: ExtensionPackageView,
     granted: BTreeSet<String>,
+    switch: Option<ExtensionSwitchView>,
+    /// Stop running work instead of waiting for it (switches only).
+    stop_running: bool,
+}
+
+/// A destructive action waiting for its confirmation.
+enum Confirm {
+    Remove(Box<ExtensionPackageView>),
+    Erase(Box<ExtensionDataView>),
+}
+
+/// What a package row offers, in order. The render and the lifecycle tests
+/// read the same list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RowAction {
+    Disable,
+    Review,
+    Switch {
+        kind: ExtensionSwitchKind,
+        version: String,
+        blocked: Option<String>,
+    },
+    Release,
+    Remove,
+}
+
+impl RowAction {
+    fn label(&self) -> String {
+        match self {
+            Self::Disable => "Disable".into(),
+            Self::Review => "Review and enable".into(),
+            Self::Switch {
+                kind: ExtensionSwitchKind::Update,
+                version,
+                ..
+            } => format!("Update to v{version}"),
+            Self::Switch {
+                kind: ExtensionSwitchKind::Rollback,
+                version,
+                ..
+            } => format!("Roll back to v{version}"),
+            Self::Release => "Release".into(),
+            Self::Remove => "Remove…".into(),
+        }
+    }
+}
+
+fn row_actions(package: &ExtensionPackageView) -> Vec<RowAction> {
+    let mut actions = Vec::new();
+    if package.state == ExtensionState::Enabled {
+        actions.push(RowAction::Disable);
+    } else if let Some(switch) = &package.switch {
+        actions.push(RowAction::Switch {
+            kind: switch.kind,
+            version: package.version.clone(),
+            blocked: switch.blocked.clone(),
+        });
+    } else {
+        actions.push(RowAction::Review);
+    }
+    if package.quarantine_reason.is_some() {
+        actions.push(RowAction::Release);
+    }
+    actions.push(RowAction::Remove);
+    actions
+}
+
+fn row_badges(package: &ExtensionPackageView) -> Vec<&'static str> {
+    let mut badges = vec![if package.state == ExtensionState::Enabled {
+        "Enabled"
+    } else {
+        "Off"
+    }];
+    if package.quarantine_reason.is_some() {
+        badges.push("Quarantined");
+    }
+    badges
+}
+
+fn safe_mode_copy(safe_mode: &ExtensionSafeModeView) -> String {
+    match safe_mode.source {
+        ExtensionSafeModeSource::Profile => "Safe mode is on. No extension runs; you can still disable, roll back, remove or erase them, and LUNA's built-in agents work as usual.".into(),
+        ExtensionSafeModeSource::Launch => "Safe mode is on for this launch (LUNA_EXTENSIONS_SAFE_MODE). No extension runs until LUNA is started without it; you can still disable, roll back, remove or erase them.".into(),
+    }
+}
+
+fn data_plan_copy(plan: &ExtensionDataPlan) -> String {
+    match plan {
+        ExtensionDataPlan::None => {
+            "This version keeps no data; existing data stays untouched.".into()
+        }
+        ExtensionDataPlan::Keep { schema_version } => {
+            format!("Its data (schema {schema_version}) carries over unchanged.")
+        }
+        ExtensionDataPlan::Fresh { schema_version } => {
+            format!("It starts with empty data (schema {schema_version}).")
+        }
+        ExtensionDataPlan::Migrate {
+            from_schema_version,
+            to_schema_version,
+        } => format!(
+            "It migrates a copy of the data from schema {from_schema_version} to {to_schema_version}. The current data is kept for a rollback, and nothing changes if the migration fails."
+        ),
+        ExtensionDataPlan::Restore {
+            schema_version,
+            written_by_version,
+            ..
+        } => format!(
+            "It goes back to the schema-{schema_version} copy last written by v{written_by_version}. Changes made since are kept aside, not merged."
+        ),
+    }
+}
+
+fn data_summary(data: &ExtensionDataView) -> String {
+    let mut parts = vec![
+        format!("Schema {}", data.current.schema_version),
+        format!("{} bytes", data.current.size_bytes),
+        format!("written by v{}", data.current.version),
+    ];
+    match data.kept.len() {
+        0 => {}
+        1 => parts.push("1 earlier copy kept".into()),
+        kept => parts.push(format!("{kept} earlier copies kept")),
+    }
+    if !data.installed {
+        parts.push("package removed".into());
+    }
+    parts.join(" · ")
 }
 
 pub struct ExtensionsPage {
@@ -42,6 +182,7 @@ pub struct ExtensionsPage {
     /// Why the last install or enablement change failed; dismissible.
     error: Option<SharedString>,
     review: Option<Review>,
+    confirm: Option<Confirm>,
     _observe: Subscription,
 }
 
@@ -57,6 +198,7 @@ impl ExtensionsPage {
             load_error: None,
             error: None,
             review: None,
+            confirm: None,
             _observe: observe,
         };
         page.refresh(cx);
@@ -136,8 +278,47 @@ impl ExtensionsPage {
             .filter(|capability| capability.required)
             .map(|capability| capability.id.to_string())
             .collect();
-        self.review = Some(Review { package, granted });
+        self.review = Some(Review {
+            package,
+            granted,
+            switch: None,
+            stop_running: false,
+        });
         cx.notify();
+    }
+
+    /// Review a switch to `package`. Required capabilities start on; others
+    /// start on only if the enabled version already had them. A capability
+    /// the new version adds is never on unless it is required.
+    fn open_switch(&mut self, package: ExtensionPackageView, cx: &mut Context<Self>) {
+        let Some(switch) = package.switch.clone() else {
+            return;
+        };
+        if switch.blocked.is_some() {
+            return;
+        }
+        let granted = package
+            .capabilities
+            .iter()
+            .filter(|capability| {
+                capability.required || !switch.new_capabilities.contains(&capability.id)
+            })
+            .map(|capability| capability.id.to_string())
+            .collect();
+        self.review = Some(Review {
+            package,
+            granted,
+            switch: Some(switch),
+            stop_running: false,
+        });
+        cx.notify();
+    }
+
+    fn toggle_stop_running(&mut self, cx: &mut Context<Self>) {
+        if let Some(review) = self.review.as_mut() {
+            review.stop_running = !review.stop_running;
+            cx.notify();
+        }
     }
 
     fn toggle_grant(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -158,17 +339,83 @@ impl ExtensionsPage {
         cx.notify();
     }
 
-    fn confirm_enable(&mut self, cx: &mut Context<Self>) {
+    fn confirm_review(&mut self, cx: &mut Context<Self>) {
         let Some(review) = self.review.take() else {
             return;
         };
+        let grants = review.granted.into_iter().collect::<Vec<_>>();
+        match review.switch {
+            None => {
+                let params = serde_json::json!({
+                    "extensionId": review.package.id,
+                    "packageHash": review.package.package_hash,
+                    "enabled": true,
+                    "grants": grants,
+                });
+                self.change(methods::SET_EXTENSION_ENABLED, params, "Enable failed", cx);
+            }
+            Some(switch) => {
+                let params = serde_json::json!({
+                    "extensionId": review.package.id,
+                    "fromPackageHash": switch.from_package_hash,
+                    "toPackageHash": review.package.package_hash,
+                    "grants": grants,
+                    "active": if review.stop_running { "stop" } else { "drain" },
+                });
+                let failure = match switch.kind {
+                    ExtensionSwitchKind::Update => "Update failed",
+                    ExtensionSwitchKind::Rollback => "Rollback failed",
+                };
+                self.change(methods::UPDATE_EXTENSION, params, failure, cx);
+            }
+        }
+    }
+
+    fn release(&mut self, package: &ExtensionPackageView, cx: &mut Context<Self>) {
         let params = serde_json::json!({
-            "extensionId": review.package.id,
-            "packageHash": review.package.package_hash,
-            "enabled": true,
-            "grants": review.granted.into_iter().collect::<Vec<_>>(),
+            "extensionId": package.id,
+            "packageHash": package.package_hash,
         });
-        self.change(methods::SET_EXTENSION_ENABLED, params, "Enable failed", cx);
+        self.change(
+            methods::RELEASE_EXTENSION_QUARANTINE,
+            params,
+            "Release failed",
+            cx,
+        );
+    }
+
+    fn ask(&mut self, confirm: Confirm, cx: &mut Context<Self>) {
+        if !self.busy {
+            self.confirm = Some(confirm);
+            cx.notify();
+        }
+    }
+
+    fn confirm_destructive(&mut self, cx: &mut Context<Self>) {
+        match self.confirm.take() {
+            Some(Confirm::Remove(package)) => {
+                let params = serde_json::json!({
+                    "extensionId": package.id,
+                    "packageHash": package.package_hash,
+                });
+                self.change(methods::REMOVE_EXTENSION, params, "Remove failed", cx);
+            }
+            Some(Confirm::Erase(data)) => {
+                let params = serde_json::json!({ "extensionId": data.extension_id });
+                self.change(methods::ERASE_EXTENSION_DATA, params, "Erase failed", cx);
+            }
+            None => {}
+        }
+    }
+
+    fn set_safe_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let params = serde_json::json!({ "enabled": enabled });
+        self.change(
+            methods::SET_EXTENSION_SAFE_MODE,
+            params,
+            "Safe mode change failed",
+            cx,
+        );
     }
 
     fn disable(&mut self, package: &ExtensionPackageView, cx: &mut Context<Self>) {
@@ -230,7 +477,6 @@ impl ExtensionsPage {
         package: &ExtensionPackageView,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let enabled = package.state == ExtensionState::Enabled;
         let changed = package.integrity.status == ExtensionIntegrityStatus::Failed;
         let tile = widgets::row_tile(
             theme,
@@ -258,48 +504,68 @@ impl ExtensionsPage {
                 .child(SharedString::from(short_hash(&hash)))
                 .into_any_element(),
         ];
-        let action = if enabled {
-            let package = package.clone();
-            crate::button::button(
-                format!("extension-disable-{hash}"),
-                ButtonKind::Ghost,
+        let mut controls = widgets::row_controls();
+        for badge in row_badges(package) {
+            controls = controls.child(if badge == "Enabled" {
+                widgets::badge_active(theme, badge)
+            } else {
+                widgets::badge(theme, badge)
+            });
+        }
+        let mut blocked = None;
+        for action in row_actions(package) {
+            let (kind, key, enabled) = match &action {
+                RowAction::Disable => (ButtonKind::Ghost, "disable", !self.busy),
+                RowAction::Review => (ButtonKind::Secondary, "review", !self.busy && !changed),
+                RowAction::Switch {
+                    blocked: reason, ..
+                } => {
+                    blocked = reason.clone();
+                    (
+                        ButtonKind::Secondary,
+                        "switch",
+                        !self.busy && !changed && reason.is_none(),
+                    )
+                }
+                RowAction::Release => (ButtonKind::Ghost, "release", !self.busy),
+                RowAction::Remove => (ButtonKind::Ghost, "remove", !self.busy),
+            };
+            let label = action.label();
+            let target = package.clone();
+            let button = crate::button::button(
+                format!("extension-{key}-{hash}"),
+                kind,
                 ControlSize::Sm,
-                !self.busy,
+                enabled,
                 theme,
             )
             .aria_label(SharedString::from(format!(
-                "Disable {}",
-                package.display_name
-            )))
-            .on_click(cx.listener(move |this, _, _, cx| this.disable(&package, cx)))
-            .child(SharedString::from("Disable"))
-        } else {
-            let package = package.clone();
-            crate::button::button(
-                format!("extension-review-{hash}"),
-                ButtonKind::Secondary,
-                ControlSize::Sm,
-                !self.busy && !changed,
-                theme,
-            )
-            .aria_label(SharedString::from(format!(
-                "Review and enable {}",
+                "{label} {}",
                 package.display_name
             )))
             .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.busy && package.integrity.status != ExtensionIntegrityStatus::Failed {
-                    this.open_review(package.clone(), cx);
+                if this.busy {
+                    return;
+                }
+                match &action {
+                    RowAction::Disable => this.disable(&target, cx),
+                    RowAction::Review => {
+                        if target.integrity.status != ExtensionIntegrityStatus::Failed {
+                            this.open_review(target.clone(), cx);
+                        }
+                    }
+                    RowAction::Switch { .. } => {
+                        if target.integrity.status != ExtensionIntegrityStatus::Failed {
+                            this.open_switch(target.clone(), cx);
+                        }
+                    }
+                    RowAction::Release => this.release(&target, cx),
+                    RowAction::Remove => this.ask(Confirm::Remove(Box::new(target.clone())), cx),
                 }
             }))
-            .child(SharedString::from("Review and enable"))
-        };
-        let controls = widgets::row_controls()
-            .child(if enabled {
-                widgets::badge_active(theme, "Enabled")
-            } else {
-                widgets::badge(theme, "Off")
-            })
-            .child(action);
+            .child(SharedString::from(label));
+            controls = controls.child(button);
+        }
         let mut row = widgets::card_row(theme, false)
             .child(tile)
             .child(
@@ -311,6 +577,32 @@ impl ExtensionsPage {
                 .child(widgets::meta_line(theme, meta)),
             )
             .child(controls);
+        if let Some(reason) = &package.quarantine_reason {
+            row = row.child(
+                widgets::row_block().child(
+                    widgets::warning_strip(
+                        theme,
+                        format!(
+                            "This exact package is quarantined in this profile after repeated crashes ({reason}). Release it to run it again, or remove it."
+                        ),
+                    )
+                    .mt(ui_rems(0.0))
+                    .w_full(),
+                ),
+            );
+        }
+        if let Some(reason) = blocked {
+            row = row.child(
+                widgets::row_block().child(
+                    widgets::warning_strip(
+                        theme,
+                        format!("Can't switch to this version: {reason}"),
+                    )
+                    .mt(ui_rems(0.0))
+                    .w_full(),
+                ),
+            );
+        }
         if changed {
             let detail = package
                 .integrity
@@ -374,6 +666,13 @@ impl ExtensionsPage {
             if capability.required {
                 description.push_str(" · required");
             }
+            if let Some(switch) = review
+                .switch
+                .as_ref()
+                .filter(|switch| switch.new_capabilities.contains(&capability.id))
+            {
+                description.push_str(&format!(" · not granted to v{}", switch.from_version));
+            }
             if let Some(reason) = &capability.reason {
                 description.push_str(" · ");
                 description.push_str(reason);
@@ -392,23 +691,88 @@ impl ExtensionsPage {
                     .child(switch),
             );
         }
-        let card = popover::dialog_card(&theme)
-            .w(ui_rems(460.0))
-            .child(popover::dialog_title(
-                &theme,
-                &format!("Enable {}?", package.display_name),
-            ))
-            .child(
-                div().mt(ui_rems(8.0)).child(popover::dialog_body(
-                    &theme,
+        let (title, body, confirm) = match &review.switch {
+            None => (
+                format!("Enable {}?", package.display_name),
+                format!(
+                    "{} {} from {}. Enabling applies to this profile only.",
+                    package.id.as_str(),
+                    package.version,
+                    package.origin.source
+                ),
+                "Enable",
+            ),
+            Some(switch) => {
+                let (verb, confirm) = match switch.kind {
+                    ExtensionSwitchKind::Update => ("Update", "Update"),
+                    ExtensionSwitchKind::Rollback => ("Roll back", "Roll back"),
+                };
+                (
+                    format!("{verb} {} to v{}?", package.display_name, package.version),
                     format!(
-                        "{} {} from {}. Enabling applies to this profile only.",
+                        "{}: v{} → v{}, from {}. This applies to this profile only; the grants below replace the current ones.",
                         package.id.as_str(),
+                        switch.from_version,
                         package.version,
                         package.origin.source
                     ),
-                )),
-            )
+                    confirm,
+                )
+            }
+        };
+        let mut lifecycle = div().flex().flex_col().gap(ui_rems(8.0));
+        if let Some(switch) = &review.switch {
+            lifecycle = lifecycle.child(popover::dialog_body(&theme, data_plan_copy(&switch.data)));
+            if !switch.dropped_grants.is_empty() {
+                let dropped = switch
+                    .dropped_grants
+                    .iter()
+                    .map(|grant| grant.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lifecycle = lifecycle.child(popover::dialog_body(
+                    &theme,
+                    format!("No longer requested, so no longer granted: {dropped}."),
+                ));
+            }
+            if switch.running_instances > 0 {
+                let copy = if review.stop_running {
+                    format!(
+                        "{} running instance(s) stop now. A call in progress ends without an answer; LUNA records it as unknown and never sends it again.",
+                        switch.running_instances
+                    )
+                } else {
+                    format!(
+                        "{} running instance(s) take no new calls and stop once their calls finish (up to 30 seconds); otherwise nothing changes.",
+                        switch.running_instances
+                    )
+                };
+                lifecycle = lifecycle.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(ui_rems(12.0))
+                        .child(widgets::row_text(
+                            &theme,
+                            "Stop running work instead of waiting",
+                            Some(copy.into()),
+                        ))
+                        .child(widgets::switch_control(
+                            SharedString::from("extension-review-stop-running"),
+                            "Stop running work instead of waiting",
+                            review.stop_running,
+                            &theme,
+                            cx,
+                            |this: &mut Self, cx| this.toggle_stop_running(cx),
+                        )),
+                );
+            }
+        }
+        let card = popover::dialog_card(&theme)
+            .w(ui_rems(460.0))
+            .child(popover::dialog_title(&theme, &title))
+            .child(div().mt(ui_rems(8.0)).child(popover::dialog_body(&theme, body)))
             .child(
                 div()
                     .mt(ui_rems(6.0))
@@ -423,6 +787,7 @@ impl ExtensionsPage {
                     "This package runs native code with your account's access. LUNA does not sandbox it; enable it only if you trust its publisher.",
                 ))
             })
+            .child(div().mt(ui_rems(8.0)).child(lifecycle))
             .child(capabilities)
             .child(
                 div()
@@ -440,13 +805,122 @@ impl ExtensionsPage {
                             })),
                     )
                     .child(
-                        popover::btn_primary(&theme, "Enable")
+                        popover::btn_primary(&theme, confirm)
                             .id("extension-review-enable")
-                            .on_click(cx.listener(|this, _, _, cx| this.confirm_enable(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_review(cx))),
                     ),
             )
             .into_any_element();
         Some(popover::modal("extension-review-dialog", viewport, card))
+    }
+
+    /// The Remove… or Erase data… confirmation.
+    fn render_confirm(
+        &mut self,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let theme = Theme::of(cx).for_popup();
+        let (title, body, action) = match self.confirm.as_ref()? {
+            Confirm::Remove(package) => (
+                format!("Remove {} v{}?", package.display_name, package.version),
+                "LUNA stops it, deletes the package from this device and releases its quarantine. If it is enabled here, it is disabled first. Its data in this profile is kept until you erase it.".to_string(),
+                "Remove",
+            ),
+            Confirm::Erase(data) => (
+                format!("Erase {}'s data?", data.extension_id.as_str()),
+                format!(
+                    "This deletes its data in this profile{}. Installed packages and permissions don't change. This can't be undone.",
+                    match data.kept.len() {
+                        0 => String::new(),
+                        1 => ", including 1 copy kept for rollback".into(),
+                        kept => format!(", including {kept} copies kept for rollback"),
+                    }
+                ),
+                "Erase",
+            ),
+        };
+        let card = popover::dialog_card(&theme)
+            .w(ui_rems(420.0))
+            .child(popover::dialog_title(&theme, &title))
+            .child(
+                div()
+                    .mt(ui_rems(8.0))
+                    .child(popover::dialog_body(&theme, body)),
+            )
+            .child(
+                div()
+                    .mt(ui_rems(16.0))
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .gap(ui_rems(8.0))
+                    .child(
+                        popover::btn_ghost(&theme, "Cancel", "extension-confirm-cancel")
+                            .id("extension-confirm-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.confirm = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        popover::btn_danger(&theme, action)
+                            .id("extension-confirm-action")
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_destructive(cx))),
+                    ),
+            )
+            .into_any_element();
+        Some(popover::modal("extension-confirm-dialog", viewport, card))
+    }
+
+    fn data_card(
+        &self,
+        theme: &Theme,
+        data: &[ExtensionDataView],
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "Extension data in this profile",
+            Some(
+                "Removing an extension keeps its data. Erase it here when you no longer need it."
+                    .into(),
+            ),
+            Vec::new(),
+        ));
+        for entry in data {
+            let target = entry.clone();
+            let key = entry.extension_id.as_str().replace(['/', '.'], "-");
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(widgets::row_tile(theme, crate::icons::WIDGET))
+                    .child(widgets::row_text(
+                        theme,
+                        entry.extension_id.as_str().to_owned(),
+                        Some(data_summary(entry).into()),
+                    ))
+                    .child(
+                        widgets::row_controls().child(
+                            crate::button::button(
+                                format!("extension-erase-{key}"),
+                                ButtonKind::Ghost,
+                                ControlSize::Sm,
+                                !self.busy,
+                                theme,
+                            )
+                            .aria_label(SharedString::from(format!(
+                                "Erase the data of {}",
+                                entry.extension_id.as_str()
+                            )))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.ask(Confirm::Erase(Box::new(target.clone())), cx)
+                            }))
+                            .child(SharedString::from("Erase data…")),
+                        ),
+                    ),
+            );
+        }
+        card
     }
 }
 
@@ -481,6 +955,7 @@ impl Render for ExtensionsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let dialog = self.render_review(window.viewport_size(), cx);
+        let confirm = self.render_confirm(window.viewport_size(), cx);
         let packages = self
             .snapshot
             .as_ref()
@@ -490,6 +965,15 @@ impl Render for ExtensionsPage {
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.grants_error.clone());
+        let safe_mode = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.safe_mode.clone());
+        let data = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.data.clone())
+            .unwrap_or_default();
 
         let install = widgets::ghost_action("extensions-install", !self.busy, &theme)
             .aria_label("Install an extension package")
@@ -500,6 +984,16 @@ impl Render for ExtensionsPage {
             ))
             .child(SharedString::from("Install…"))
             .into_any_element();
+        let mut actions = vec![install];
+        if safe_mode.is_none() && self.snapshot.is_some() {
+            actions.push(
+                widgets::ghost_action("extensions-safe-mode", !self.busy, &theme)
+                    .aria_label("Turn on safe mode: no extension runs")
+                    .on_click(cx.listener(|this, _, _, cx| this.set_safe_mode(true, cx)))
+                    .child(SharedString::from("Safe mode"))
+                    .into_any_element(),
+            );
+        }
 
         let mut card = widgets::section_card(&theme).child(widgets::section_header(
             &theme,
@@ -510,6 +1004,31 @@ impl Render for ExtensionsPage {
             ),
             Vec::new(),
         ));
+        if let Some(safe_mode) = &safe_mode {
+            let mut strip = widgets::card_row(&theme, false).child(
+                widgets::warning_strip(&theme, safe_mode_copy(safe_mode))
+                    .mt(ui_rems(0.0))
+                    .w_full()
+                    .id("extensions-safe-mode-banner"),
+            );
+            if safe_mode.profile_enabled {
+                strip = strip.child(
+                    widgets::row_controls().child(
+                        crate::button::button(
+                            "extensions-safe-mode-off",
+                            ButtonKind::Secondary,
+                            ControlSize::Sm,
+                            !self.busy,
+                            &theme,
+                        )
+                        .aria_label("Turn off safe mode")
+                        .on_click(cx.listener(|this, _, _, cx| this.set_safe_mode(false, cx)))
+                        .child(SharedString::from("Turn off safe mode")),
+                    ),
+                );
+            }
+            card = card.child(strip);
+        }
         if let Some(message) = self.error.clone() {
             card = card.child(
                 widgets::card_row(&theme, false).child(
@@ -568,6 +1087,7 @@ impl Render for ExtensionsPage {
         }
 
         let count = packages.len();
+        let data_card = (!data.is_empty()).then(|| self.data_card(&theme, &data, cx));
         let scrollbar = popover::rail(self, "extensions-page-scrollbar", &theme, cx);
         div()
             .id("extensions-page-host")
@@ -586,16 +1106,22 @@ impl Render for ExtensionsPage {
                                 &theme,
                                 "Extensions",
                                 (count > 0).then_some(count),
-                                vec![install],
+                                actions,
                             ))
                             .child(widgets::page_subtitle(
                                 &theme,
                                 "Local extension packages for this device. LUNA verifies every file when it installs a package and runs nothing until you enable it.",
                             ))
-                            .child(card),
+                            .child(card)
+                            .children(data_card),
                     ),
             )
             .children(scrollbar)
             .when_some(dialog, |el, dialog| el.child(dialog))
+            .when_some(confirm, |el, confirm| el.child(confirm))
     }
 }
+
+#[cfg(test)]
+#[path = "extensions_lifecycle_tests.rs"]
+mod lifecycle_tests;

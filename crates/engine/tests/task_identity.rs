@@ -13,8 +13,9 @@ use luna_engine::{
 use luna_harness::codex::native::CodexNativeClient;
 use luna_harness::mock::MockHarness;
 use luna_proto::{
-    AgentEvent, BindingOrigin, DoneStatus, HarnessId, ImportOwnership, ReconciliationState,
-    RunRequest, SandboxLevel, TaskLineage,
+    ActivityKind, AgentEvent, BindingOrigin, DoneStatus, HarnessId, HistorySearchPage,
+    ImportOwnership, ProviderImportPreview, ReconciliationState, RunRequest, SandboxLevel,
+    TaskIdentityView, TaskLineage,
 };
 use luna_rpc::{RpcService, methods};
 use luna_sync::DocsStore;
@@ -871,4 +872,179 @@ async fn adoption_transitions_ownership_normalizes_lifecycle_and_recovers_materi
         Some("qa-recovery")
     );
     fixture.workspace.shutdown();
+}
+
+/// SW-11 E14 at the real UI-RPC -> engine -> native Codex metadata boundary
+/// (`fake-codex.sh` answers `thread/read` with metadata only, as the
+/// deprecated full-history hydration is never requested).
+///
+/// Behavior: a provider import copies a Codex task's metadata, never its
+/// earlier transcript. Recorded-content search still finds the imported task
+/// through exactly one boundary row that names the provider and import time
+/// and states that the earlier history is unavailable; no transcript entry
+/// or other index row is invented; the provider's archive state is kept; a
+/// provider-owned import binds no resumable provider session; and a Claude
+/// native import is refused before any task exists.
+/// Regressions caught: an imported task with zero index rows (invisible, its
+/// silence reading as an empty history), a fabricated message for the
+/// provider's history, a duplicated boundary, a remembered resume session
+/// for a read-only import, and an unsupported provider import that silently
+/// creates a task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_import_is_found_with_explicit_unavailable_history_and_no_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(MockHarness { script: Vec::new() }));
+    let accounts = luna_engine::AgentAccountsConfig {
+        data_dir: temp.path().join("provider-state"),
+        claude_config_dir: temp.path().join("synthetic-claude"),
+        claude_config_file: temp.path().join("synthetic-claude.json"),
+        codex_home: temp.path().join("synthetic-codex"),
+    };
+    accounts.disable_claude_keychain_fallback().unwrap();
+    let native = CodexNativeClient::new(&accounts.codex_home).with_executable(fake_codex());
+    let core = EngineCore::assemble_with_profile_and_injected_codex_metadata_client(
+        luna_engine::EngineProfile::development(&temp.path().join("data"), "sw11-org", "sw11-user"),
+        Arc::new(registry),
+        HarnessId::Mock,
+        None,
+        accounts,
+        native,
+    )
+    .unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let space = uuid::Uuid::new_v4().to_string();
+    core.workspace
+        .create_space(
+            &space,
+            &core.device_id,
+            "/tmp",
+            Some("Past work".into()),
+            false,
+        )
+        .unwrap();
+
+    let before = core.task_identity.managed_task_ids();
+    let refused = client
+        .call(
+            methods::PREVIEW_PROVIDER_TASK_IMPORT,
+            serde_json::json!({
+                "providerId": "claude-code",
+                "providerTaskId": "claude-native-session",
+                "ownership": "providerOwned",
+                "spaceId": &space,
+            }),
+        )
+        .await
+        .expect_err("Claude native history import is unsupported");
+    assert!(refused.to_string().contains("unsupported"), "{refused}");
+    assert_eq!(core.task_identity.managed_task_ids(), before);
+
+    let preview: ProviderImportPreview = client
+        .call_as(
+            methods::PREVIEW_PROVIDER_TASK_IMPORT,
+            serde_json::json!({
+                "providerId": "codex",
+                "providerTaskId": "qa-archived",
+                "ownership": "providerOwned",
+                "spaceId": &space,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(preview.adoptable, "{:?}", preview.conflict);
+    let imported: TaskIdentityView = client
+        .call_as(
+            methods::ADOPT_PROVIDER_TASK,
+            serde_json::json!({"previewId": preview.preview_id}),
+        )
+        .await
+        .unwrap();
+    let task_id = imported.task.task_id.clone();
+    let import_binding = imported
+        .bindings
+        .iter()
+        .find(|binding| binding.origin == BindingOrigin::ProviderImported)
+        .expect("import binding")
+        .clone();
+    let chat = core
+        .workspace
+        .chat(&task_id)
+        .unwrap()
+        .expect("imported row");
+    assert!(chat.archived, "the provider's archive state is kept");
+    assert_eq!(chat.space_id.as_deref(), Some(space.as_str()));
+    assert_eq!(
+        chat.harness_session_id, None,
+        "a provider-owned import binds no resumable provider session"
+    );
+    assert!(
+        core.doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .is_empty(),
+        "the provider's earlier transcript is never fabricated"
+    );
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let boundary = loop {
+        let page: HistorySearchPage = client
+            .call_as(
+                methods::SEARCH_SESSION_HISTORY,
+                serde_json::json!({"query": "imported from codex", "scope": "global", "limit": 100}),
+            )
+            .await
+            .unwrap();
+        if let Some(event) = page
+            .events
+            .into_iter()
+            .find(|event| event.task_id == task_id)
+        {
+            break event;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the imported task never became searchable"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(boundary.kind, ActivityKind::Withheld);
+    assert_eq!(boundary.harness, Some(HarnessId::Codex));
+    assert_eq!(boundary.timestamp_ms, import_binding.created_at_ms);
+    assert_eq!(boundary.project_id.as_deref(), Some(space.as_str()));
+    assert!(boundary.source.available_here, "the task itself opens here");
+    assert!(
+        boundary.source.message_id.is_empty(),
+        "no transcript message stands in for the provider's history"
+    );
+    assert!(
+        boundary
+            .source
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("not copied into LUNA")),
+        "{:?}",
+        boundary.source.unavailable_reason
+    );
+    let everything: HistorySearchPage = client
+        .call_as(
+            methods::SEARCH_SESSION_HISTORY,
+            serde_json::json!({"query": "", "scope": "global", "limit": 100}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        everything
+            .events
+            .iter()
+            .filter(|event| event.task_id == task_id)
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![boundary.event_id.as_str()],
+        "one boundary row and nothing invented"
+    );
+    core.shutdown().await;
 }

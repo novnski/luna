@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use luna_proto::{
     ACTIVITY_ENVELOPE_VERSION, APPSHOT_CONTEXT_MARKER, ActivityEnvelope, ActivityKind,
     ActivityOutcome, ActivityRedaction, ActivitySourceRef, AppshotActivityKind,
-    AppshotActivityRecord, Chat, CommandReceiptStatus, HistoryProjectPolicy, TaskCommandEvent,
-    TaskIdentityView, ToolCall,
+    AppshotActivityRecord, BindingOrigin, Chat, CommandReceiptStatus, HarnessId,
+    HistoryProjectPolicy, TaskCommandEvent, TaskIdentityView, TaskOrigin, ToolCall,
 };
 
 /// Project viewer-owned capture facts into L14 without reading provider
@@ -144,6 +144,14 @@ pub(crate) fn build_activity_envelopes(
         )
     });
     let mut events = Vec::new();
+    events.extend(import_boundary_event(
+        chat,
+        identity,
+        &environment_id,
+        workspace_id.as_deref(),
+        available_here,
+        unavailable_reason.clone(),
+    ));
     for (message_index, entry) in entries.iter().enumerate() {
         for (part_index, part) in entry.parts.iter().enumerate() {
             let sequence = (message_index as u64)
@@ -293,6 +301,91 @@ pub(crate) fn build_activity_envelopes(
         });
     }
     events
+}
+
+/// A provider import copies the task's metadata, never the provider's earlier
+/// transcript (`TaskIdentityService::adopt_preview` reads thread metadata
+/// only). Without a row of its own such a task is invisible to recorded
+/// content search, and its silence reads as an empty history. One boundary
+/// row, at the import time and attributed to the provider that owns that
+/// history, keeps it findable and says the earlier history is not here. It
+/// is derived from the immutable first import binding, so reindexing never
+/// adds a second row, and it carries no title, path or provider content.
+fn import_boundary_event(
+    chat: &Chat,
+    identity: Option<&TaskIdentityView>,
+    environment_id: &str,
+    workspace_id: Option<&str>,
+    available_here: bool,
+    remote_reason: Option<String>,
+) -> Option<ActivityEnvelope> {
+    let view = identity?;
+    if view.task.tombstoned
+        || !matches!(
+            view.task.origin,
+            TaskOrigin::ProviderImported | TaskOrigin::ProviderAdopted
+        )
+    {
+        return None;
+    }
+    let import = view
+        .bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.origin,
+                BindingOrigin::ProviderImported | BindingOrigin::ProviderAdopted
+            )
+        })
+        .min_by_key(|binding| binding.generation)?;
+    let provider = imported_provider_label(import.provider_id);
+    let reason = remote_reason.unwrap_or_else(|| {
+        format!(
+            "History from before this {provider} import was not copied into LUNA. \
+             Only messages LUNA recorded after the import are shown here."
+        )
+    });
+    Some(ActivityEnvelope {
+        schema_version: ACTIVITY_ENVELOPE_VERSION,
+        event_id: format!("import:{}:{}", chat.id, import.binding_id),
+        environment_id: environment_id.to_owned(),
+        device_id: chat.device_id.clone(),
+        task_id: chat.id.clone(),
+        turn_id: format!("import:{}", import.binding_id),
+        sequence: 0,
+        timestamp_ms: import.created_at_ms,
+        kind: ActivityKind::Withheld,
+        outcome: ActivityOutcome::Unknown,
+        harness: Some(import.provider_id),
+        provider: None,
+        model: None,
+        reasoning: None,
+        project_id: chat.space_id.clone(),
+        workspace_id: workspace_id.map(str::to_owned),
+        tool: None,
+        app: None,
+        file: None,
+        command: None,
+        summary: format!("Imported from {provider} · earlier history unavailable in LUNA"),
+        redaction: ActivityRedaction::Withheld,
+        source: ActivitySourceRef {
+            task_id: chat.id.clone(),
+            // No transcript message exists for the provider's earlier history.
+            message_id: String::new(),
+            part_id: None,
+            available_here,
+            unavailable_reason: Some(reason),
+        },
+    })
+}
+
+fn imported_provider_label(provider: HarnessId) -> &'static str {
+    match provider.kind() {
+        luna_proto::BuiltinHarnessId::Codex => "Codex",
+        luna_proto::BuiltinHarnessId::ClaudeCode => "Claude Code",
+        luna_proto::BuiltinHarnessId::Opencode => "OpenCode",
+        _ => "provider",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

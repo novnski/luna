@@ -995,8 +995,8 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
     );
     let backup = service.export(&f.backups.join("board.lunabk")).unwrap();
     evidence.step(
-        "archive records schema 20",
-        json!(20),
+        "archive records schema 21",
+        json!(21),
         json!(backup.manifest.databases[0].schema_version),
         None,
     );
@@ -1108,6 +1108,7 @@ async fn every_board_method_is_routed_and_older_profiles_upgrade_additively() {
          DROP TABLE board_launches; DROP TABLE board_outcomes; DROP TABLE board_intents;
          DROP TABLE board_review_runs; DROP TABLE board_authoring_sessions;
          DROP TABLE board_authoring_entries; DROP TABLE board_dependencies;
+         DROP TABLE project_command_trust;
          DELETE FROM schema_migrations WHERE version > 18;",
     )
     .unwrap();
@@ -1169,7 +1170,7 @@ async fn every_board_method_is_routed_and_older_profiles_upgrade_additively() {
             row.get(0)
         })
         .unwrap();
-    evidence.step("schema is 20", json!(20), json!(version), None);
+    evidence.step("schema is 21", json!(21), json!(version), None);
     evidence.write();
 }
 

@@ -9,6 +9,10 @@
 //! `CallExtensionInstance`, `StopExtensionInstance` and
 //! `ReleaseExtensionQuarantine`. Workers never reach these: they talk only to
 //! the capability broker over their own stdio.
+//!
+//! CORE-19 adds `UpdateExtension`, `RemoveExtension`, `EraseExtensionData`
+//! and `SetExtensionSafeMode`, local-only on the same terms. Each runs to
+//! completion in its own task even if the caller disconnects.
 
 use super::*;
 
@@ -24,6 +28,10 @@ pub(super) fn handles(method: &str) -> bool {
             | methods::CALL_EXTENSION_INSTANCE
             | methods::STOP_EXTENSION_INSTANCE
             | methods::RELEASE_EXTENSION_QUARANTINE
+            | methods::UPDATE_EXTENSION
+            | methods::REMOVE_EXTENSION
+            | methods::ERASE_EXTENSION_DATA
+            | methods::SET_EXTENSION_SAFE_MODE
     )
 }
 
@@ -101,6 +109,32 @@ impl EngineRpc {
                 let request: luna_proto::ReleaseExtensionQuarantineRequest = parse_params(params)?;
                 let snapshot = manager
                     .release_quarantine(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&snapshot)
+            }
+            methods::UPDATE_EXTENSION => {
+                let request: luna_proto::UpdateExtensionRequest = parse_params(params)?;
+                let outcome = manager.update(request).await.map_err(RpcError::Failed)?;
+                RpcReply::value(&outcome)
+            }
+            methods::REMOVE_EXTENSION => {
+                let request: luna_proto::RemoveExtensionRequest = parse_params(params)?;
+                let outcome = manager.remove(request).await.map_err(RpcError::Failed)?;
+                RpcReply::value(&outcome)
+            }
+            methods::ERASE_EXTENSION_DATA => {
+                let request: luna_proto::EraseExtensionDataRequest = parse_params(params)?;
+                let outcome = manager
+                    .erase_data(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&outcome)
+            }
+            methods::SET_EXTENSION_SAFE_MODE => {
+                let request: luna_proto::SetExtensionSafeModeRequest = parse_params(params)?;
+                let snapshot = manager
+                    .set_safe_mode(request)
                     .await
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&snapshot)

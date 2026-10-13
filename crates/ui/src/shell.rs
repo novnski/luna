@@ -47,6 +47,7 @@ use crate::settings::archived::ArchivedPage;
 use crate::settings::backup::BackupsPage;
 use crate::settings::connections::{ConnectionsPage, HostingChanged};
 use crate::settings::devices::DevicesPage;
+use crate::settings::diagnostics::DiagnosticsPage;
 use crate::settings::extensions::ExtensionsPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::general::{GeneralEvent, GeneralPage};
@@ -533,6 +534,9 @@ pub enum SettingsSection {
     Appearance,
     Files,
     Backups,
+    /// Read-only process, connection, version, resource, error and storage
+    /// readback from the existing owners (AW-09).
+    Diagnostics,
     Notifications,
     Shortcuts,
     Appshots,
@@ -544,7 +548,7 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 16] = [
+    pub const ALL: [SettingsSection; 17] = [
         SettingsSection::General,
         SettingsSection::Projects,
         SettingsSection::Providers,
@@ -560,6 +564,7 @@ impl SettingsSection {
         SettingsSection::Connections,
         SettingsSection::Devices,
         SettingsSection::Backups,
+        SettingsSection::Diagnostics,
         SettingsSection::Archived,
     ];
 
@@ -577,6 +582,7 @@ impl SettingsSection {
             "settings/appearance" => Self::Appearance,
             "settings/files" => Self::Files,
             "settings/backups" => Self::Backups,
+            "settings/diagnostics" => Self::Diagnostics,
             "settings/notifications" => Self::Notifications,
             "settings/shortcuts" => Self::Shortcuts,
             "settings/appshots" => Self::Appshots,
@@ -601,6 +607,7 @@ impl SettingsSection {
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Backups => "Backups",
+            SettingsSection::Diagnostics => "Diagnostics",
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::Appshots => "Appshots",
@@ -2556,6 +2563,7 @@ pub struct Shell {
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
     backups_page: Option<Entity<BackupsPage>>,
+    diagnostics_page: Option<Entity<DiagnosticsPage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
@@ -3133,6 +3141,7 @@ impl Shell {
             appearance_page: None,
             files_settings_page: None,
             backups_page: None,
+            diagnostics_page: None,
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
@@ -5592,6 +5601,12 @@ impl Shell {
         if section == SettingsSection::Backups {
             self.backups_page = None;
         }
+        // Each visit re-reads the owners (and the engine attached now).
+        if section == SettingsSection::Diagnostics
+            && let Some(page) = &self.diagnostics_page
+        {
+            page.update(cx, |page, cx| page.refresh(cx));
+        }
         if section != SettingsSection::Connections {
             if let Some(page) = &self.connections_page {
                 page.update(cx, |page, cx| page.cancel_pairing(cx));
@@ -5928,6 +5943,16 @@ impl Shell {
                     self.backups_page = Some(cx.new(|cx| BackupsPage::new(state, cx)));
                 }
                 match &self.backups_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Diagnostics => {
+                if self.diagnostics_page.is_none() {
+                    let state = self.state.clone();
+                    self.diagnostics_page = Some(cx.new(|cx| DiagnosticsPage::new(state, cx)));
+                }
+                match &self.diagnostics_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -8948,6 +8973,7 @@ impl Shell {
             SettingsSection::Appearance => icons::PAINT_BRUSH,
             SettingsSection::Files => icons::FOLDER,
             SettingsSection::Backups => icons::DATABASE,
+            SettingsSection::Diagnostics => icons::HARD_DRIVE,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
             // Appshots are captured window images; Devices keeps the monitor.
@@ -10275,14 +10301,23 @@ impl Shell {
             cx.notify();
             return;
         }
-        self.transcript.update(cx, |transcript, cx| {
-            transcript.navigate_to_message(
-                event.task_id.clone(),
-                event.source.message_id.clone(),
-                cx,
-            )
-        });
+        // An import boundary has no transcript message to land on: open its
+        // task at its own position and say why the earlier history is absent.
+        if !event.source.message_id.is_empty() {
+            self.transcript.update(cx, |transcript, cx| {
+                transcript.navigate_to_message(
+                    event.task_id.clone(),
+                    event.source.message_id.clone(),
+                    cx,
+                )
+            });
+        }
+        let unavailable = event.source.unavailable_reason.clone();
         self.open_chat(event.task_id, cx);
+        if let Some(reason) = unavailable {
+            self.sidebar_notice = Some(SidebarNotice::status(reason));
+            cx.notify();
+        }
     }
 
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -17810,6 +17845,9 @@ mod exit_regressions {
 
     struct ShellDraftRpc {
         drafts: Mutex<HashMap<String, ComposerDraft>>,
+        /// Recorded-content rows answered for `SearchSessionHistory`, matched
+        /// by a case-insensitive summary substring like the engine index.
+        history: Mutex<Vec<ActivityEnvelope>>,
     }
 
     struct UsageRefreshRpc {
@@ -18106,7 +18144,13 @@ mod exit_regressions {
                         .map(|draft| (draft.draft_id.clone(), draft))
                         .collect(),
                 ),
+                history: Mutex::new(Vec::new()),
             }
+        }
+
+        fn with_history(self, events: Vec<ActivityEnvelope>) -> Self {
+            *self.history.lock().unwrap() = events;
+            self
         }
 
         fn text_for_task(&self, task_id: Option<&str>) -> Option<String> {
@@ -18176,6 +18220,25 @@ mod exit_regressions {
                 }
                 methods::GET_TASK_COMMAND_RECEIPT => {
                     RpcReply::value(&Option::<luna_proto::CommandReceipt>::None)
+                }
+                methods::SEARCH_SESSION_HISTORY => {
+                    let request: HistorySearchRequest = serde_json::from_value(params)
+                        .map_err(|error| RpcError::BadParams(error.to_string()))?;
+                    let needle = request.query.trim().to_lowercase();
+                    let events = self
+                        .history
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event.summary.to_lowercase().contains(&needle))
+                        .cloned()
+                        .collect();
+                    RpcReply::value(&HistorySearchPage {
+                        events,
+                        next_cursor: None,
+                        indexed_through_ms: 10_000,
+                        heuristic_redaction: true,
+                    })
                 }
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
@@ -19871,6 +19934,224 @@ mod exit_regressions {
             blank_service.text_for_task(Some(HANDOFF_SOURCE)).as_deref(),
             Some("blank source sentinel")
         );
+    }
+
+    /// SW-11 E14 journey at the recorded-content search owner. The rows are
+    /// the shapes the engine owners prove it indexes for an imported,
+    /// archived Codex task (`local_import::imported_codex_and_claude_history_
+    /// stays_attributed_and_hands_off_fresh`, `task_identity::provider_import_
+    /// is_found_with_explicit_unavailable_history_and_no_session`); IC-5's
+    /// owner tests and native fixture own Find inside the opened conversation.
+    ///
+    /// Behavior: a LUNA-recorded passage and an import boundary are each
+    /// found and attributed with project, provider (and model only when
+    /// recorded), date and the task's archive state. The passage opens its
+    /// task without claiming missing history; the boundary opens the same task
+    /// and states that its earlier history is not here. A fresh handoff from
+    /// the task search opened carries that task's visible context into an
+    /// unowned new-task draft and leaves the past task archived.
+    /// Regressions caught: unattributed or "Unknown model" past-work rows, a
+    /// boundary row that cannot open or opens without saying why its history
+    /// is empty, and a handoff from a task other than the one search opened.
+    #[gpui::test]
+    fn past_work_search_opens_imported_task_truthfully_and_hands_off_fresh(
+        cx: &mut TestAppContext,
+    ) {
+        const UNAVAILABLE: &str = "History from before this Codex import was not copied into LUNA. Only messages LUNA recorded after the import are shown here.";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        init_handoff_shell_test(cx, dir.path());
+
+        let mut passage = HistorySearchRpc::event("handoff-project", 0);
+        passage.event_id = format!("message:{HANDOFF_SOURCE}:handoff-assistant:part:text");
+        passage.task_id = HANDOFF_SOURCE.into();
+        passage.source.task_id = HANDOFF_SOURCE.into();
+        passage.source.message_id = "handoff-assistant".into();
+        // 2026-03-12T12:00:00Z: the same calendar day in every common zone.
+        passage.timestamp_ms = 1_773_316_800_000;
+        passage.harness = Some(HarnessId::Codex);
+        passage.model = Some("gpt-fixture".into());
+        passage.summary = "Retry budget doubled after the migration".into();
+        let mut boundary = passage.clone();
+        boundary.event_id = format!("import:{HANDOFF_SOURCE}:import-binding");
+        boundary.kind = luna_proto::ActivityKind::Withheld;
+        boundary.outcome = ActivityOutcome::Unknown;
+        boundary.model = None;
+        boundary.timestamp_ms = 1_773_230_400_000;
+        boundary.redaction = luna_proto::ActivityRedaction::Withheld;
+        boundary.summary = "Imported from Codex · earlier history unavailable in LUNA".into();
+        boundary.source.message_id = String::new();
+        boundary.source.unavailable_reason = Some(UNAVAILABLE.into());
+        let service = Arc::new(
+            ShellDraftRpc::new(vec![shell_draft(
+                "canvas-draft",
+                None,
+                4,
+                "existing new-task draft",
+            )])
+            .with_history(vec![passage.clone(), boundary.clone()]),
+        );
+        let window = handoff_shell(cx, dir.path(), None, service.clone());
+        // The imported task as it arrived: archived, Codex, Full access.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, cx| {
+                    let chat = state
+                        .chats
+                        .iter_mut()
+                        .find(|chat| chat.id == HANDOFF_SOURCE)
+                        .unwrap();
+                    chat.archived = true;
+                    chat.title = Some("Migrated retry investigation".into());
+                    if let Some(config) = chat.config.as_mut() {
+                        config.harness = HarnessId::Codex;
+                        config.permission_mode = PermissionMode::Full;
+                        config.effective_permission_mode = PermissionMode::Full;
+                    }
+                    cx.notify();
+                });
+            })
+            .unwrap();
+
+        // A passage LUNA recorded for the imported task.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&window, "retry budget", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .iter()
+                        .any(|event| event.event_id == passage.event_id)
+                })
+            })
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.command_entries(cx).iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::History { event_id, .. }
+                        if *event_id == passage.event_id
+                )));
+                assert_eq!(
+                    shell.command_history_attribution(&passage, cx),
+                    "Recorded content · Handoff · Codex · gpt-fixture · Mar 12, 2026 · Done · Archived"
+                );
+            })
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.command_palette.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some(HANDOFF_SOURCE)
+                );
+                assert_ne!(
+                    shell
+                        .sidebar_notice
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .as_deref(),
+                    Some(UNAVAILABLE),
+                    "recorded content claims no missing history"
+                );
+            })
+            .unwrap();
+
+        // The import boundary for the same task.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&window, "imported from codex", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .iter()
+                        .any(|event| event.event_id == boundary.event_id)
+                })
+            })
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(
+                    shell.command_history_attribution(&boundary, cx),
+                    "History unavailable · Handoff · Codex · Mar 11, 2026 · Archived"
+                );
+            })
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.command_palette.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some(HANDOFF_SOURCE)
+                );
+                assert_eq!(
+                    shell
+                        .sidebar_notice
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .as_deref(),
+                    Some(UNAVAILABLE)
+                );
+            })
+            .unwrap();
+
+        // A fresh handoff from the task search opened.
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).0 == HANDOFF_SOURCE
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, cx| {
+                    state.transcript = handoff_transcript();
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.start_new_task_with_context(HANDOFF_SOURCE, cx)
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            let (key, text) = shell_composer_snapshot(cx, &window);
+            key.is_empty()
+                && text.matches(HANDOFF_MARKER).count() == 1
+                && service
+                    .text_for_task(None)
+                    .is_some_and(|saved| saved.matches(HANDOFF_MARKER).count() == 1)
+        });
+        let (_, draft) = shell_composer_snapshot(cx, &window);
+        assert!(draft.contains("Visible assistant context"), "{draft}");
+        assert!(draft.contains("existing new-task draft"), "{draft}");
+        window
+            .read_with(cx, |shell, cx| {
+                let state = shell.state.read(cx);
+                assert_eq!(state.selected_chat, None, "a fresh task, not the past one");
+                assert!(
+                    state
+                        .chats
+                        .iter()
+                        .any(|chat| chat.id == HANDOFF_SOURCE && chat.archived),
+                    "the past task stays archived"
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

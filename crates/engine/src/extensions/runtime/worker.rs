@@ -315,11 +315,25 @@ pub(super) struct Handshake {
     pub portable: Option<ExtensionPortableInfo>,
 }
 
+/// A call still waiting for its answer when the worker exited: the worker
+/// may or may not have acted on it (CORE-19).
+#[derive(Debug, Clone)]
+pub(super) struct InterruptedCall {
+    pub call_id: String,
+    pub request_id: Option<String>,
+    pub method: String,
+    pub started_at_ms: i64,
+}
+
 /// Called once per worker generation when its exit has been reaped and
 /// classified, before callers waiting on the exit are released. `ready` says
-/// whether the worker had completed its handshake.
-pub(super) type ExitHook =
-    Arc<dyn Fn(u32, ExtensionWorkerExit, bool) -> BoxFuture<'static, ()> + Send + Sync>;
+/// whether the worker had completed its handshake; the calls are those it
+/// never answered.
+pub(super) type ExitHook = Arc<
+    dyn Fn(u32, ExtensionWorkerExit, bool, Vec<InterruptedCall>) -> BoxFuture<'static, ()>
+        + Send
+        + Sync,
+>;
 
 pub(super) enum CallResult {
     Ok(Value),
@@ -331,6 +345,14 @@ pub(super) enum CallResult {
 
 type Reply = Result<Value, protocol::WorkerError>;
 
+/// One call sent to the worker and not answered yet.
+struct PendingCall {
+    reply: oneshot::Sender<Reply>,
+    request_id: Option<String>,
+    method: String,
+    started_at_ms: i64,
+}
+
 struct WorkerCore {
     generation: u32,
     pid: u32,
@@ -338,7 +360,7 @@ struct WorkerCore {
     out: mpsc::Sender<Vec<u8>>,
     /// Ends the worker's input once queued frames are written.
     input_closed: CancellationToken,
-    pending: Mutex<HashMap<String, oneshot::Sender<Reply>>>,
+    pending: Mutex<HashMap<String, PendingCall>>,
     /// Cancelled calls whose acknowledgement is still due.
     cancelled: Mutex<HashSet<String>>,
     host_tasks: Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -484,8 +506,8 @@ impl WorkerCore {
         match inbound {
             Inbound::Response { id, outcome } => {
                 let waiting = lock(&self.pending).remove(&id);
-                if let Some(sender) = waiting {
-                    let _ = sender.send(outcome);
+                if let Some(call) = waiting {
+                    let _ = call.reply.send(outcome);
                     return true;
                 }
                 if lock(&self.cancelled).remove(&id) {
@@ -734,14 +756,35 @@ impl Worker {
         self.core.stop.is_cancelled()
     }
 
-    /// Send one call and wait for its answer, the deadline or the worker's
-    /// exit. A deadline cancels the call; nothing is ever retried.
-    pub async fn call(&self, method: &str, params: &Value, timeout: Duration) -> CallResult {
+    /// Calls sent and not answered yet.
+    pub fn calls_in_flight(&self) -> usize {
+        lock(&self.core.pending).len()
+    }
+
+    /// Whether the worker advertised `operation` in its hello.
+    pub fn advertises(&self, operation: &str) -> bool {
+        self.handshake
+            .operations
+            .iter()
+            .any(|advertised| advertised == operation)
+    }
+
+    /// Send one call (`id` is the frame id the worker sees) and wait for its
+    /// answer, the deadline or the worker's exit. A deadline cancels the
+    /// call; nothing is ever retried.
+    pub async fn call(
+        &self,
+        id: &str,
+        request_id: Option<&str>,
+        method: &str,
+        params: &Value,
+        timeout: Duration,
+    ) -> CallResult {
         let core = &self.core;
         if core.stop.is_cancelled() {
             return CallResult::WorkerExited(core.wait_exit(EXIT_RECORD_WAIT).await);
         }
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = id.to_owned();
         let frame = match protocol::encode(&CallFrame {
             kind: "call",
             id: &id,
@@ -765,7 +808,15 @@ impl Worker {
                     "this instance already has {MAX_CONCURRENT_CALLS} calls in progress"
                 ));
             }
-            pending.insert(id.clone(), sender);
+            pending.insert(
+                id.clone(),
+                PendingCall {
+                    reply: sender,
+                    request_id: request_id.map(str::to_owned),
+                    method: method.to_owned(),
+                    started_at_ms: now_ms(),
+                },
+            );
         }
         let guard = CallGuard {
             core: core.clone(),
@@ -858,6 +909,8 @@ fn describe(reason: ExtensionExitReason) -> &'static str {
             "stopped because the package was disabled or its grants changed"
         }
         ExtensionExitReason::Quarantined => "stopped because the package was quarantined",
+        ExtensionExitReason::Updating => "stopped so the extension's enabled version could change",
+        ExtensionExitReason::SafeMode => "stopped because safe mode was turned on",
         _ => "stopped by the supervisor",
     }
 }
@@ -1170,8 +1223,17 @@ async fn monitor(
     }
     let status = child.wait().await.ok();
     core.stop.cancel();
-    // Waiting callers see the exit; nothing is replayed.
-    lock(&core.pending).clear();
+    // Waiting callers see the exit; nothing is replayed. What they asked
+    // for is reported, so its unknown outcome is recorded.
+    let interrupted: Vec<InterruptedCall> = lock(&core.pending)
+        .drain()
+        .map(|(call_id, call)| InterruptedCall {
+            call_id,
+            request_id: call.request_id,
+            method: call.method,
+            started_at_ms: call.started_at_ms,
+        })
+        .collect();
     lock(&core.cancelled).clear();
     for (_, task) in lock(&core.host_tasks).drain() {
         task.abort();
@@ -1232,6 +1294,6 @@ async fn monitor(
         at_ms: now_ms(),
         group_cleared,
     };
-    hook(core.generation, exit.clone(), ready).await;
+    hook(core.generation, exit.clone(), ready, interrupted).await;
     let _ = exit_sender.send(Some(exit));
 }

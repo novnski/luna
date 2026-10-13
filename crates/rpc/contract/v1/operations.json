@@ -890,6 +890,30 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "GetEngineDiagnostics",
+      "id": "luna.core/get-engine-diagnostics",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetStorageUsage",
+      "id": "luna.core/get-storage-usage",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "WatchPreviews",
       "id": "luna.core/watch-previews",
       "version": 1,
@@ -937,6 +961,18 @@
       "authority": {
         "kind": "remote",
         "scope": "environment-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ListExtensionProviders",
+      "id": "luna.core/list-extension-providers",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
       },
       "forwardDeadlineSecs": 30
     },
@@ -1149,6 +1185,54 @@
     {
       "method": "ReleaseExtensionQuarantine",
       "id": "luna.core/release-extension-quarantine",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "UpdateExtension",
+      "id": "luna.core/update-extension",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 300
+    },
+    {
+      "method": "RemoveExtension",
+      "id": "luna.core/remove-extension",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "EraseExtensionData",
+      "id": "luna.core/erase-extension-data",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetExtensionSafeMode",
+      "id": "luna.core/set-extension-safe-mode",
       "version": 1,
       "kind": "command",
       "reply": "unary",
@@ -2758,6 +2842,30 @@
     {
       "method": "SaveProjectCommands",
       "id": "luna.core/save-project-commands",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetProjectConfiguration",
+      "id": "luna.core/get-project-configuration",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetProjectCommandTrust",
+      "id": "luna.core/set-project-command-trust",
       "version": 1,
       "kind": "command",
       "reply": "unary",

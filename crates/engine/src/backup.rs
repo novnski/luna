@@ -49,7 +49,8 @@ const CHUNK: usize = 64 * 1024;
 // v19 preserves the project board: tickets, key counters, receipts, the
 // event journal and every linked record (links, issues, launches, outcomes,
 // intents, review runs, authoring drafts and dependencies).
-const CURRENT_SCHEMA: i64 = 20;
+// v21 preserves this device's accepted repository command digests (AW-11).
+const CURRENT_SCHEMA: i64 = 21;
 
 // Serialized legacy labels are part of archive validation. The credentials/
 // directory, including the new device-local key, remains outside the allowlist.
@@ -1217,6 +1218,7 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         (19, "board_authoring_sessions"),
         (19, "board_authoring_entries"),
         (19, "board_dependencies"),
+        (21, "project_command_trust"),
     ] {
         if schema_version >= introduced && !has_table(conn, table)? {
             return Err(BackupError::Invalid(format!(

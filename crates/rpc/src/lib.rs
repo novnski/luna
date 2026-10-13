@@ -124,11 +124,19 @@ pub mod methods {
     pub const EXPORT_BACKUP: &str = "ExportBackup";
     pub const INSPECT_BACKUP: &str = "InspectBackup";
     pub const STAGE_BACKUP_RESTORE: &str = "StageBackupRestore";
+    /// AW-09 read-only diagnostics (owner only): the serving engine process,
+    /// and a bounded walk of what this engine owns on disk. Neither writes.
+    pub const GET_ENGINE_DIAGNOSTICS: &str = "GetEngineDiagnostics";
+    pub const GET_STORAGE_USAGE: &str = "GetStorageUsage";
     pub const WATCH_PREVIEWS: &str = "WatchPreviews";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
     pub const GET_PROVIDER_CATALOG: &str = "GetProviderCatalog";
     pub const WATCH_PROVIDER_CATALOG: &str = "WatchProviderCatalog";
     pub const GET_PROVIDER_MODELS: &str = "GetProviderModels";
+    /// CORE-08 provider contributions of enabled extension packages (owner
+    /// only): registered or refused, their declarations, omitted
+    /// capabilities and last `describe`.
+    pub const LIST_EXTENSION_PROVIDERS: &str = "ListExtensionProviders";
     /// Per-device CLI versions and available updates; cached between checks.
     pub const GET_PROVIDER_UPDATES: &str = "GetProviderUpdates";
     /// Explicitly update one locally installed CLI through its install method.
@@ -156,6 +164,14 @@ pub mod methods {
     pub const CALL_EXTENSION_INSTANCE: &str = "CallExtensionInstance";
     pub const STOP_EXTENSION_INSTANCE: &str = "StopExtensionInstance";
     pub const RELEASE_EXTENSION_QUARANTINE: &str = "ReleaseExtensionQuarantine";
+    /// CORE-19 lifecycle (owner only): switch the enabled version (update or
+    /// rollback, draining or stopping pinned instances and migrating data on
+    /// a copy), remove a package (data kept), erase a profile's data for an
+    /// extension, and safe mode (nothing runs; management still works).
+    pub const UPDATE_EXTENSION: &str = "UpdateExtension";
+    pub const REMOVE_EXTENSION: &str = "RemoveExtension";
+    pub const ERASE_EXTENSION_DATA: &str = "EraseExtensionData";
+    pub const SET_EXTENSION_SAFE_MODE: &str = "SetExtensionSafeMode";
     pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
@@ -388,6 +404,10 @@ pub mod methods {
     // Terminals (ControlRpc, relay-forwardable; SubscribeTerminal streams).
     pub const GET_PROJECT_COMMANDS: &str = "GetProjectCommands";
     pub const SAVE_PROJECT_COMMANDS: &str = "SaveProjectCommands";
+    /// AW-11: the project folder's `.luna/project.toml` under this device's commands.
+    pub const GET_PROJECT_CONFIGURATION: &str = "GetProjectConfiguration";
+    /// AW-11: accept or revoke one repository command's exact content on this device.
+    pub const SET_PROJECT_COMMAND_TRUST: &str = "SetProjectCommandTrust";
     pub const PROJECT_COMMAND_STATUS: &str = "ProjectCommandStatus";
     pub const RUN_PROJECT_COMMAND: &str = "RunProjectCommand";
     pub const STOP_PROJECT_COMMAND: &str = "StopProjectCommand";
@@ -570,11 +590,14 @@ pub mod methods {
         EXPORT_BACKUP,
         INSPECT_BACKUP,
         STAGE_BACKUP_RESTORE,
+        GET_ENGINE_DIAGNOSTICS,
+        GET_STORAGE_USAGE,
         WATCH_PREVIEWS,
         LIST_HARNESSES,
         GET_PROVIDER_CATALOG,
         WATCH_PROVIDER_CATALOG,
         GET_PROVIDER_MODELS,
+        LIST_EXTENSION_PROVIDERS,
         GET_PROVIDER_UPDATES,
         UPDATE_PROVIDER,
         GET_TITLE_SETTINGS,
@@ -592,10 +615,16 @@ pub mod methods {
         CALL_EXTENSION_INSTANCE,
         STOP_EXTENSION_INSTANCE,
         RELEASE_EXTENSION_QUARANTINE,
+        UPDATE_EXTENSION,
+        REMOVE_EXTENSION,
+        ERASE_EXTENSION_DATA,
+        SET_EXTENSION_SAFE_MODE,
         LIST_COMMANDS,
         LIST_COMPOSER_CATALOG,
         GET_PROJECT_COMMANDS,
         SAVE_PROJECT_COMMANDS,
+        GET_PROJECT_CONFIGURATION,
+        SET_PROJECT_COMMAND_TRUST,
         RUN_PROJECT_COMMAND,
         RETRY_PROJECT_COMMAND,
         STOP_PROJECT_COMMAND,
