@@ -7,6 +7,9 @@ mod macos;
 use linux as native;
 #[cfg(target_os = "macos")]
 use macos as native;
+/// IC-0 isolated document prototype; fixture builds only (IC-1 promotes it).
+#[cfg(all(target_os = "macos", feature = "browser-fixture"))]
+pub mod isolated;
 pub mod model;
 mod view;
 

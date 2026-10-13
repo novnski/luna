@@ -27,6 +27,15 @@ required-features = ["browser-fixture"]
 name = "browser-fixture"
 required-features = ["browser-fixture"]
 
+# IC-0 feasibility probes (docs/pending-tasks/interactive-chat-surfaces/ic-0).
+[[example]]
+name = "isolated-document-fixture"
+required-features = ["browser-fixture"]
+
+[[example]]
+name = "ic0-find-feasibility"
+required-features = ["browser-fixture"]
+
 [[example]]
 name = "windows-render-fixture"
 required-features = ["windows-render-fixture"]
