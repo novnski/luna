@@ -2656,6 +2656,19 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "SearchWorkspaceText",
+      "id": "luna.core/search-workspace-text",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "files-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "ReadWorkspaceImage",
       "id": "luna.core/read-workspace-image",
       "version": 1,

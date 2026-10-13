@@ -56,6 +56,7 @@ enum EntryIdentity {
     Theme,
     SearchAllContent,
     SearchCurrentContent,
+    SearchCheckoutText,
     Workbench(super::workbench::WorkbenchAction),
     Board(super::board::chat_badges::palette::BoardPaletteEntry),
     Chat(String),
@@ -84,6 +85,9 @@ pub(super) enum Entry {
     Theme(AppearanceMode),
     SearchAllContent,
     SearchCurrentContent,
+    /// Literal text in the current chat's checkout files, searched by the
+    /// workspace's owning host in its Files surface (ZI-05).
+    SearchCheckoutText,
     /// A workbench tab/split command (dragging is never the only way).
     Workbench(super::workbench::WorkbenchAction),
     /// A board action on the current chat, a ticket, or a ticket's chat
@@ -129,6 +133,7 @@ impl Entry {
             Self::Theme(_) => EntryIdentity::Theme,
             Self::SearchAllContent => EntryIdentity::SearchAllContent,
             Self::SearchCurrentContent => EntryIdentity::SearchCurrentContent,
+            Self::SearchCheckoutText => EntryIdentity::SearchCheckoutText,
             Self::Workbench(action) => EntryIdentity::Workbench(*action),
             Self::Board(entry) => EntryIdentity::Board(entry.clone()),
             Self::Chat { id, .. } => EntryIdentity::Chat(id.clone()),
@@ -155,6 +160,9 @@ impl Entry {
             Self::SearchAllContent => Some(("Search content in all projects", icons::GLOBE)),
             Self::SearchCurrentContent => {
                 Some(("Search content in current project", icons::FOLDER))
+            }
+            Self::SearchCheckoutText => {
+                Some(("Search text in this task's files", icons::FILE_SEARCH))
             }
             Self::Workbench(action) => Some((action.label(), action.icon())),
             Self::Board(entry) => entry.action(),
@@ -294,6 +302,16 @@ impl Shell {
             } else {
                 Entry::SearchAllContent
             });
+            // Files text search, labelled apart from recorded-content search.
+            if !self.active_chat.is_empty()
+                && crate::files::client::FilesRequestContext::for_chat(
+                    self.state.read(cx),
+                    &self.active_chat,
+                )
+                .is_some()
+            {
+                entries.push(Entry::SearchCheckoutText);
+            }
         }
         let state = self.state.read(cx);
         let results_start = entries.len();
@@ -622,6 +640,14 @@ impl Shell {
             }
             _ => {}
         }
+        // The literal query, untrimmed beyond the palette's own blank check.
+        let checkout_query = if matches!(entry, Entry::SearchCheckoutText) {
+            self.command_palette
+                .as_ref()
+                .map(|palette| palette.search.read(cx).text().to_string())
+        } else {
+            None
+        };
         let history_event = if let Entry::History { ref event_id, .. } = entry {
             self.history_search_results
                 .iter()
@@ -646,9 +672,34 @@ impl Shell {
                     self.open_session_history_result(event, cx);
                 }
             }
+            Entry::SearchCheckoutText => {
+                if let Some(query) = checkout_query {
+                    self.open_checkout_text_search(query, window, cx);
+                }
+            }
             Entry::SearchAllContent | Entry::SearchCurrentContent | Entry::LoadOlder(_) => {
                 unreachable!()
             }
+        }
+    }
+
+    /// Show the active chat's Files surface in text mode for `query`. The
+    /// surface owns the request, its generation fence and navigation.
+    fn open_checkout_text_search(
+        &mut self,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_chat.is_empty() {
+            return;
+        }
+        if !self.right_pane_open(cx) {
+            self.toggle_right_pane(cx);
+        }
+        self.add_files_surface(window, cx);
+        if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {
+            files.update(cx, |files, cx| files.start_text_search(query, window, cx));
         }
     }
 

@@ -1070,5 +1070,146 @@ async fn remote_target_without_links_fails_clearly() {
         err.to_string().contains("remote routing unavailable"),
         "got: {err}"
     );
+    // ZI-05: an offline owner yields an error, never an empty answer.
+    let err = client
+        .call(
+            methods::SEARCH_WORKSPACE_TEXT,
+            serde_json::json!({
+                "chatId": "missing-local-chat",
+                "query": "needle",
+                "targetDeviceId": "device-elsewhere",
+            }),
+        )
+        .await
+        .expect_err("text search must not fall back locally");
+    assert!(
+        err.to_string().contains("remote routing unavailable"),
+        "got: {err}"
+    );
     core.shutdown().await;
+}
+
+/// ZI-05: text search runs on the chat's owning host. Device A has its own
+/// copy of the same chat id and relative path with different bytes; only the
+/// addressed host's bytes, hash and checkout identity may answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_text_search_answers_from_the_owning_host() {
+    let (relay_url, _relay) = fake_device_room().await;
+    let dirs = tempfile::tempdir().expect("tempdir");
+    let repo_b = dirs.path().join("repo-b");
+    init_workspace_repo(&repo_b).await;
+    let repo_a = dirs.path().join("repo-a");
+    std::fs::create_dir_all(repo_a.join("src")).unwrap();
+    std::fs::write(
+        repo_a.join("src/remote.rs"),
+        "pub const REMOTE: bool = false; // device A copy\n",
+    )
+    .unwrap();
+
+    let core_b = assemble(&dirs.path().join("b-text"), "device-b");
+    core_b
+        .workspace
+        .create_space(
+            "space-files",
+            "device-b",
+            &repo_b.to_string_lossy(),
+            None,
+            true,
+        )
+        .expect("space on B");
+    core_b
+        .workspace
+        .create_chat("chat-files", Some("space-files"), None, None, None)
+        .expect("chat on B");
+    let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
+
+    let core_a = assemble(&dirs.path().join("a-text"), "device-a");
+    core_a
+        .workspace
+        .create_space(
+            "space-files",
+            "device-a",
+            &repo_a.to_string_lossy(),
+            None,
+            false,
+        )
+        .expect("same-named space on A");
+    core_a
+        .workspace
+        .create_chat("chat-files", Some("space-files"), None, None, None)
+        .expect("same-named chat on A");
+    let mut link_config =
+        LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
+    link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session);
+    core_a.set_links(LinkCache::new(link_config));
+    let client = luna_rpc::memory_client(core_a.rpc_service());
+
+    let remote_request = serde_json::json!({
+        "chatId": "chat-files", "query": "REMOTE", "targetDeviceId": "device-b",
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let remote: luna_proto::WorkspaceTextSearchResult = loop {
+        match client
+            .call(methods::SEARCH_WORKSPACE_TEXT, remote_request.clone())
+            .await
+        {
+            Ok(value) => break serde_json::from_value(value).expect("typed remote result"),
+            Err(error) => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "relay never came up: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    };
+    let local: luna_proto::WorkspaceTextSearchResult = serde_json::from_value(
+        client
+            .call(
+                methods::SEARCH_WORKSPACE_TEXT,
+                serde_json::json!({ "chatId": "chat-files", "query": "REMOTE" }),
+            )
+            .await
+            .expect("local search"),
+    )
+    .unwrap();
+    let remote_read = client
+        .call(
+            methods::READ_WORKSPACE_FILE,
+            serde_json::json!({
+                "chatId": "chat-files", "path": "src/remote.rs", "targetDeviceId": "device-b",
+            }),
+        )
+        .await
+        .expect("remote read");
+    let local_read = client
+        .call(
+            methods::READ_WORKSPACE_FILE,
+            serde_json::json!({ "chatId": "chat-files", "path": "src/remote.rs" }),
+        )
+        .await
+        .expect("local read");
+
+    for (result, read, bytes) in [
+        (&remote, &remote_read, "true"),
+        (&local, &local_read, "false"),
+    ] {
+        assert_eq!(
+            result.status,
+            luna_proto::WorkspaceTextSearchStatus::Complete
+        );
+        assert_eq!(result.files.len(), 1, "{result:?}");
+        let file = &result.files[0];
+        assert_eq!(file.path, "src/remote.rs");
+        assert!(file.matches[0].preview.contains(bytes), "{file:?}");
+        assert_eq!(read["contentHash"], file.content_hash.as_str());
+        assert_eq!(read["checkoutId"], result.checkout_id.as_str());
+    }
+    assert_ne!(remote.files[0].content_hash, local.files[0].content_hash);
+    assert_ne!(remote.checkout_id, local.checkout_id);
+
+    core_a.shutdown().await;
+    core_b.shutdown().await;
 }

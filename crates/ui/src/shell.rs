@@ -4460,6 +4460,13 @@ impl Shell {
                 window,
                 move |this: &mut Self, _, event, window, cx| match event {
                     FilesEvent::OpenFile(path) => this.add_file_surface(path.clone(), window, cx),
+                    FilesEvent::OpenFileAt { path, target } => this.open_file_surface_at(
+                        this.active_chat.clone(),
+                        path.clone(),
+                        target.clone(),
+                        window,
+                        cx,
+                    ),
                     FilesEvent::OpenWebLink(activation) => {
                         if let crate::markdown::render::LinkOutcome::External(url) =
                             this.activate_session_link(activation, window, cx)
@@ -4540,6 +4547,13 @@ impl Shell {
                 FilesEvent::OpenFile(path) => {
                     this.add_file_surface_for_owner(event_owner.clone(), path.clone(), window, cx)
                 }
+                FilesEvent::OpenFileAt { path, target } => this.open_file_surface_at(
+                    event_owner.clone(),
+                    path.clone(),
+                    target.clone(),
+                    window,
+                    cx,
+                ),
                 FilesEvent::OpenWebLink(activation) => {
                     if let crate::markdown::render::LinkOutcome::External(url) =
                         this.activate_session_link(activation, window, cx)
@@ -4576,6 +4590,27 @@ impl Shell {
         self.file_surface_subs.insert(id, sub);
         self.push_right_tab(&panel_key, RightSurface::File(id));
         self.set_right_active(RightSurface::File(id), cx);
+    }
+
+    /// Open (or focus) the owner's file tab, then select a workspace text
+    /// match in it (ZI-05).
+    fn open_file_surface_at(
+        &mut self,
+        owner: String,
+        path: String,
+        target: crate::files::text_search::TextNavigationTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_file_surface_for_owner(owner.clone(), path.clone(), window, cx);
+        let surface = self
+            .file_surface_keys
+            .get(&(self.panel_key(cx), owner, path))
+            .and_then(|id| self.file_surfaces.get(id))
+            .cloned();
+        if let Some(surface) = surface {
+            surface.update(cx, |surface, cx| surface.navigate_to_text_match(target, cx));
+        }
     }
 
     fn open_workspace_file_link(

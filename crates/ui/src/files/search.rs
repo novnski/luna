@@ -12,7 +12,10 @@ use luna_proto::{
 };
 
 use super::{
-    FilesSurface, WorkspacePathDrag, client::WorkspaceFilesClient, model::parent_path,
+    FilesSurface, WorkspacePathDrag,
+    client::WorkspaceFilesClient,
+    model::parent_path,
+    text_search::{FileSearchMode, TextSearchState},
     workspace_path_drag_ghost,
 };
 use crate::interaction::HoverFill as _;
@@ -255,6 +258,9 @@ pub(super) struct FileSearchState {
     pub task: Option<Task<()>>,
     pub reveal_task: Option<Task<()>>,
     tree: SearchTreeModel,
+    /// File names (the default) or literal file contents (ZI-05).
+    pub(super) mode: FileSearchMode,
+    pub(super) text: TextSearchState,
 }
 
 impl FileSearchState {

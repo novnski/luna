@@ -21,6 +21,7 @@ use super::{
     FilesCloseDisposition, FilesEvent, FilesSurface,
     client::{FilesRequestContext, WorkspaceFilesClient},
     document::{DocumentKey, DocumentPhase, FileDocument},
+    text_search::{TextLocation, TextNavigationTarget, locate_text_match},
     toolbar, toolbar_button,
 };
 use crate::interaction::HoverFill as _;
@@ -95,6 +96,17 @@ struct EditorOverlayLayout {
     viewport_height: f32,
     rows: Vec<EditorOverlayRow>,
 }
+
+/// A workspace text match waiting for its document (ZI-05). It is applied
+/// once the document's text is loaded, fresh and laid out.
+struct PendingTextNavigation {
+    target: TextNavigationTarget,
+    reconcile_requested: bool,
+    layout_frames: u8,
+}
+
+/// Frames to wait for the editor's first layout before selecting anyway.
+const MAX_TEXT_NAVIGATION_LAYOUT_FRAMES: u8 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReloadDecision {
@@ -171,6 +183,11 @@ pub(super) struct FilePreviewState {
     comment_draft: Option<EditorCommentDraft>,
     active_comment: Option<String>,
     typography_generation: u32,
+    text_navigation: Option<PendingTextNavigation>,
+    /// Why the last text-match navigation was not an exact hit, per path.
+    text_notice: Option<(String, SharedString)>,
+    /// The read-only preview row of the last text-match navigation.
+    text_highlight: Option<(String, usize)>,
 }
 
 impl FilePreviewState {
@@ -208,6 +225,9 @@ impl FilePreviewState {
             comment_draft: None,
             active_comment: None,
             typography_generation: 0,
+            text_navigation: None,
+            text_notice: None,
+            text_highlight: None,
         }
     }
 
@@ -228,6 +248,9 @@ impl FilePreviewState {
         self.comment_anchors.clear();
         self.comment_draft = None;
         self.active_comment = None;
+        self.text_navigation = None;
+        self.text_notice = None;
+        self.text_highlight = None;
     }
 
     pub(super) fn has_active(&self) -> bool {
@@ -1148,6 +1171,22 @@ impl FilesSurface {
             .is_some_and(|pending| pending != path);
         if leaving_reload_confirmation {
             self.cancel_reload_confirmation(cx);
+        }
+        if self
+            .preview
+            .text_navigation
+            .as_ref()
+            .is_some_and(|pending| pending.target.path != path)
+        {
+            self.preview.text_navigation = None;
+        }
+        if self
+            .preview
+            .text_notice
+            .as_ref()
+            .is_some_and(|(notice_path, _)| notice_path != &path)
+        {
+            self.preview.text_notice = None;
         }
         self.preview.active = Some(path.clone());
         self.preview.touch_document(&path);
@@ -2289,6 +2328,7 @@ impl FilesSurface {
                     )
                 },
             )
+            .children(self.render_text_navigation_notice(&active, &theme, cx))
             .child(body)
             .into_any_element()
     }
@@ -2727,6 +2767,7 @@ impl FilesSurface {
         }
         self.apply_pending_external_reload(path, window, cx);
         let editor = self.ensure_editor(path, theme, window, cx);
+        self.apply_pending_text_navigation(path, editor.as_ref(), window, cx);
         if let Some(editor) = &editor {
             self.sync_editor_comment_anchors(path, editor, cx);
         }
@@ -3224,10 +3265,16 @@ impl FilesSurface {
             &theme,
         );
         let row_height = self.preview.line_height();
+        let text_match_row = self
+            .preview
+            .text_highlight
+            .as_ref()
+            .is_some_and(|(highlight_path, row)| highlight_path == path && *row == index);
         div()
             .min_h(row_height)
             .flex_none()
             .flex()
+            .when(text_match_row, |element| element.bg(theme.code_wash))
             .when(word_wrap, |element| element.w_full().items_stretch())
             .when(!word_wrap, |element| {
                 element.h(row_height).min_w_full().items_center()
@@ -3378,6 +3425,238 @@ impl FilesSurface {
                 }),
             )
             .into_any_element()
+    }
+}
+
+impl FilesSurface {
+    /// Open `target.path` in this surface and select the text match there,
+    /// once the document is loaded, fresh and laid out (ZI-05). Unsaved
+    /// edits are never reloaded; the match is re-located in what is shown.
+    pub fn navigate_to_text_match(&mut self, target: TextNavigationTarget, cx: &mut Context<Self>) {
+        let path = target.path.clone();
+        self.preview.text_notice = None;
+        self.preview.text_highlight = None;
+        self.preview.text_navigation = Some(PendingTextNavigation {
+            target,
+            reconcile_requested: false,
+            layout_frames: 0,
+        });
+        self.open_file(path, cx);
+        cx.notify();
+    }
+
+    fn finish_text_navigation(&mut self, path: &str, notice: Option<SharedString>) {
+        self.preview.text_navigation = None;
+        self.preview.text_notice = notice.map(|notice| (path.to_string(), notice));
+    }
+
+    fn apply_pending_text_navigation(
+        &mut self,
+        path: &str,
+        editor: Option<&Entity<super::editor::FileEditorState>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.preview.text_navigation.as_ref() else {
+            return;
+        };
+        if pending.target.path != path {
+            return;
+        }
+        let target = pending.target.clone();
+        let reconcile_requested = pending.reconcile_requested;
+        let Some(document) = self.preview.documents.get(path) else {
+            return;
+        };
+        match &document.phase {
+            DocumentPhase::Loading => return,
+            DocumentPhase::Error(error) => {
+                let notice = format!("The matched file could not be opened: {error}");
+                self.finish_text_navigation(path, Some(notice.into()));
+                return;
+            }
+            DocumentPhase::DeletedOnDisk => {
+                self.finish_text_navigation(
+                    path,
+                    Some("This file was deleted after the search.".into()),
+                );
+                return;
+            }
+            _ => {}
+        }
+        if super::image_preview::is_image(path) || document.image.is_some() {
+            self.finish_text_navigation(
+                path,
+                Some("This match is in an image file, which opens as a preview.".into()),
+            );
+            return;
+        }
+        let Some(file) = document.file.as_ref() else {
+            return;
+        };
+        if file.text.is_none() {
+            self.finish_text_navigation(
+                path,
+                Some("This file can no longer be shown as text.".into()),
+            );
+            return;
+        }
+        let dirty = document.is_dirty();
+        let stale = document.content_hash() != Some(target.content_hash.as_str());
+        if stale && !dirty && !reconcile_requested {
+            // A clean copy opened before the file changed: re-read the
+            // owning host's bytes before claiming any position.
+            if let Some(pending) = self.preview.text_navigation.as_mut() {
+                pending.reconcile_requested = true;
+            }
+            self.reconcile_document(path.to_string(), cx);
+            // A reconcile that finds no change does not repaint by itself.
+            window.request_animation_frame();
+            return;
+        }
+        if stale && document.reconcile_task.is_some() {
+            window.request_animation_frame();
+            return;
+        }
+        let other_checkout = !target.checkout_id.is_empty()
+            && !file.checkout_id.is_empty()
+            && file.checkout_id != target.checkout_id;
+        // A match is shown in source, never in the rendered Markdown view.
+        if document.show_markdown
+            && let Some(document) = self.preview.documents.get_mut(path)
+        {
+            document.show_markdown = false;
+            if let Some(view) = &document.markdown {
+                view.update(cx, |view, cx| view.suspend(cx));
+            }
+        }
+        let location = if let Some(editor) = editor {
+            if editor.read(cx).line_height().is_none()
+                && self
+                    .preview
+                    .text_navigation
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.layout_frames < MAX_TEXT_NAVIGATION_LAYOUT_FRAMES
+                    })
+            {
+                // Selecting before the first layout cannot scroll the row
+                // into view; wait for it.
+                if let Some(pending) = self.preview.text_navigation.as_mut() {
+                    pending.layout_frames += 1;
+                }
+                window.request_animation_frame();
+                return;
+            }
+            let text = editor.read(cx).value();
+            let location = locate_text_match(&text, &target);
+            let selection = location.selection();
+            let row = location.row();
+            let center = !self.preview.word_wrap;
+            editor.update(cx, |state, cx| {
+                state.set_selected_range(selection, cx);
+                if center && let Some(line_height) = state.line_height() {
+                    let line_height = f32::from(line_height);
+                    let viewport = f32::from(state.input_bounds().size.height);
+                    let top = (line_height * row as f32 - (viewport - line_height) / 2.0).max(0.0);
+                    let x = state.scroll_offset().x;
+                    state.set_scroll_offset(gpui::point(x, px(-top)), cx);
+                }
+            });
+            let focus = editor.focus_handle(cx);
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+            location
+        } else {
+            let Some(text) = self
+                .preview
+                .documents
+                .get(path)
+                .and_then(|document| document.file.as_ref())
+                .and_then(|file| file.text.clone())
+            else {
+                return;
+            };
+            let location = locate_text_match(&text, &target);
+            self.preview.list.scroll_to_reveal_item(location.row());
+            self.preview.text_highlight = Some((path.to_string(), location.row()));
+            location
+        };
+        let differs = stale || dirty;
+        let query: String = target.query.chars().take(60).collect();
+        let notice = match &location {
+            TextLocation::Exact { .. } if other_checkout => Some(
+                "This tab shows a different checkout than the search; the match was re-verified here."
+                    .to_string(),
+            ),
+            TextLocation::Exact { .. } if differs => Some(
+                "This file differs from the searched version; the match was re-verified."
+                    .to_string(),
+            ),
+            TextLocation::Exact { .. } => None,
+            TextLocation::Moved { row, .. } => Some(format!(
+                "This file differs from the searched version; the nearest match is on line {}.",
+                row + 1
+            )),
+            TextLocation::Missing { .. } => Some(format!(
+                "This file differs from the searched version; “{query}” is no longer in it."
+            )),
+        };
+        self.finish_text_navigation(path, notice.map(SharedString::from));
+        cx.notify();
+    }
+
+    fn render_text_navigation_notice(
+        &self,
+        path: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (notice_path, notice) = self.preview.text_notice.as_ref()?;
+        if notice_path != path {
+            return None;
+        }
+        Some(
+            div()
+                .id("files-text-match-notice")
+                .role(gpui::Role::Status)
+                .aria_label(notice.clone())
+                .min_h(crate::typography::ui_rems(28.0))
+                .py(crate::typography::ui_rems(5.0))
+                .flex_none()
+                .px(crate::typography::ui_rems(10.0))
+                .flex()
+                .items_center()
+                .gap(crate::typography::ui_rems(8.0))
+                .border_b_1()
+                .border_color(theme.warning.opacity(0.25))
+                .bg(theme.warning.opacity(0.045))
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(theme.readable_on(
+                    theme.warning_muted,
+                    theme.warning.opacity(0.045),
+                    crate::theme::TEXT_CONTRAST_TARGET,
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .whitespace_normal()
+                        .child(notice.clone()),
+                )
+                .child(
+                    banner_action(
+                        "files-dismiss-text-match-notice",
+                        "Dismiss",
+                        theme.text_muted,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.preview.text_notice = None;
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+        )
     }
 }
 
@@ -4763,3 +5042,7 @@ mod markdown_buffer_tests {
         assert!(weak.upgrade().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "text_search_e2e.rs"]
+mod text_search_e2e;

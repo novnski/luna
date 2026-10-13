@@ -26,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Repos, WorkspaceHost};
 
+pub mod text_search;
+
 const MAX_RELATIVE_PATH_BYTES: usize = 4096;
 const MAX_RELATIVE_PATH_COMPONENTS: usize = 256;
 pub const DIRECTORY_PAGE_SIZE: usize = 500;
@@ -53,6 +55,8 @@ struct WorkspaceFilesInner {
     device_id: String,
     write_locks: Mutex<HashMap<WorkspaceFileKey, Weak<tokio::sync::Mutex<()>>>>,
     watches: Mutex<HashMap<String, Arc<CheckoutWatch>>>,
+    text_searches: Mutex<text_search::TextSearchSessions>,
+    text_search_permits: Arc<tokio::sync::Semaphore>,
     cancel: CancellationToken,
 }
 
@@ -213,6 +217,10 @@ impl WorkspaceFiles {
                 device_id: device_id.into(),
                 write_locks: Mutex::new(HashMap::new()),
                 watches: Mutex::new(HashMap::new()),
+                text_searches: Mutex::new(HashMap::new()),
+                text_search_permits: Arc::new(tokio::sync::Semaphore::new(
+                    text_search::TEXT_SEARCH_CONCURRENCY,
+                )),
                 cancel: CancellationToken::new(),
             }),
         }
@@ -517,6 +525,7 @@ impl WorkspaceFiles {
             let _ = task.await;
         }
         lock(&self.inner.write_locks).clear();
+        lock(&self.inner.text_searches).clear();
     }
 }
 

@@ -28,6 +28,7 @@ mod markdown_preview;
 pub mod model;
 pub mod preview;
 pub mod search;
+pub mod text_search;
 pub mod tree;
 pub mod watch;
 
@@ -140,9 +141,18 @@ pub(crate) fn workspace_path_drag_ghost(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilesEvent {
     OpenFile(String),
+    /// Open `path` in its own owning-chat editor tab, then re-locate the
+    /// workspace text match described by `target` (ZI-05).
+    OpenFileAt {
+        path: String,
+        target: text_search::TextNavigationTarget,
+    },
     OpenWebLink(crate::markdown::render::LinkActivation),
     TitleChanged,
-    FileRenamed { old_path: String, new_path: String },
+    FileRenamed {
+        old_path: String,
+        new_path: String,
+    },
     WordWrapChanged(bool),
     ShowAllFilesChanged(bool),
     CloseReady,
@@ -211,7 +221,11 @@ impl Render for FilesSurface {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = crate::theme::Theme::of(cx).clone();
         let phase = self.tree.node("").map(|root| root.load.clone());
-        let content = if !self.search_state.query.is_empty() {
+        let content = if self.showing_text_search() {
+            self.render_text_search_results(cx)
+        } else if self.search_mode() == text_search::FileSearchMode::Names
+            && !self.search_state.query.is_empty()
+        {
             self.render_search_results(cx)
         } else if let Some(error) = self.error.clone().filter(|_| !self.tree_has_content()) {
             let retry = div()
@@ -523,11 +537,24 @@ impl FilesSurface {
                 .with_text_metrics(11.0, 16.0)
         });
         let search_events = cx.subscribe(&search, |this: &mut Self, _, event, cx| match event {
-            ComposerInputEvent::Edited => this.on_search_edited(cx),
+            ComposerInputEvent::Edited => this.on_search_input_edited(cx),
+            ComposerInputEvent::Submitted
+            | ComposerInputEvent::ModifierSubmitted
+            | ComposerInputEvent::OppositeSubmitted
+            | ComposerInputEvent::MentionAccept
+                if this.search_mode() == text_search::FileSearchMode::Text =>
+            {
+                this.activate_text_search_result(cx)
+            }
             ComposerInputEvent::Submitted
             | ComposerInputEvent::ModifierSubmitted
             | ComposerInputEvent::OppositeSubmitted
             | ComposerInputEvent::MentionAccept => this.activate_search_result(cx),
+            ComposerInputEvent::MentionNavigate(delta)
+                if this.search_mode() == text_search::FileSearchMode::Text =>
+            {
+                this.move_text_search_selection(*delta, cx)
+            }
             ComposerInputEvent::MentionNavigate(delta) => {
                 let len = this.search_state.visible_len();
                 if len > 0 {
@@ -836,6 +863,7 @@ impl FilesSurface {
                 self.search_state.query.clear();
                 self.on_search_edited(cx);
             }
+            self.restart_text_search(cx);
         }
     }
 
@@ -983,6 +1011,14 @@ impl FilesSurface {
         };
         self.request_context = next;
         self.started = false;
+        // Search answers belong to the root and host they were asked of. A
+        // late answer for the previous target must not publish, so restart
+        // the current query against the new target.
+        if !self.search_state.query.is_empty() {
+            self.search_state.query.clear();
+            self.on_search_edited(cx);
+        }
+        self.restart_text_search(cx);
     }
 
     fn tree_has_content(&self) -> bool {
@@ -1008,6 +1044,7 @@ impl FilesSurface {
 
     fn render_header(&mut self, theme: &crate::theme::Theme, cx: &mut Context<Self>) -> gpui::Div {
         let include_ignored = self.tree.include_ignored();
+        let text_mode = self.search_mode() == text_search::FileSearchMode::Text;
         toolbar(theme)
             .child(
                 crate::surface_chrome::input()
@@ -1018,6 +1055,34 @@ impl FilesSurface {
                             .text_color(theme.text_faint),
                     )
                     .child(div().min_w_0().flex_1().child(self.search.clone())),
+            )
+            .child(
+                toolbar_button("files-search-text-mode", "Search text in files")
+                    .aria_toggled(if text_mode {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(text_mode, |element| element.bg(crate::theme::wash(0.1)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_search_mode(
+                            if text_mode {
+                                text_search::FileSearchMode::Names
+                            } else {
+                                text_search::FileSearchMode::Text
+                            },
+                            cx,
+                        )
+                    }))
+                    .child(
+                        crate::icons::icon(crate::icons::FILE_SEARCH)
+                            .size(px(crate::surface_chrome::ICON_SIZE))
+                            .text_color(if text_mode {
+                                theme.text
+                            } else {
+                                theme.text_muted
+                            }),
+                    ),
             )
             .child(
                 toolbar_button(

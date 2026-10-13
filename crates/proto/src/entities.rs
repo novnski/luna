@@ -651,6 +651,133 @@ pub struct WorkspaceFileSearchMatch {
     pub score: i64,
 }
 
+/// A caller's tightening of the owning host's text-search budget (ZI-05).
+/// The host clamps every field to its own maximum; omitted fields use it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextSearchBudget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_elapsed_ms: Option<u32>,
+}
+
+/// Literal source-text search in one authorized checkout (`SearchWorkspaceText`).
+/// `query` is compared byte-for-byte: it is never trimmed, never a pattern and
+/// never a command. Smart case: a query with any uppercase character is
+/// case-sensitive; otherwise ASCII letters match case-insensitively and every
+/// other character must match exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchWorkspaceTextRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+    pub query: String,
+    #[serde(default)]
+    pub include_ignored: bool,
+    /// Maximum reported matches; clamped by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<WorkspaceTextSearchBudget>,
+    /// Caller-chosen scan owner. A newer `generation` from the same session
+    /// cancels this session's older scans on the owning host, and an older
+    /// generation arriving late is answered as superseded without scanning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_session: Option<String>,
+    #[serde(default)]
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceTextSearchStatus {
+    /// Every eligible file was searched and every match fit the result budget.
+    Complete,
+    /// A budget, unreadable entry or skipped large text file left coverage
+    /// incomplete; `limits` says why. Zero matches here is not "no matches".
+    Partial,
+    /// A newer generation from the same session replaced this request.
+    Superseded,
+    /// A status this build does not know; treat as incomplete.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceTextSearchLimit {
+    /// The match limit or the response-size budget was reached.
+    Results,
+    /// At least one file had more matches than the per-file cap.
+    FileMatches,
+    Files,
+    Bytes,
+    Elapsed,
+    /// A text file larger than the per-file size cap was not searched.
+    LargeFiles,
+    /// An entry could not be read (permission, escape, non-UTF-8 path).
+    Unreadable,
+    #[serde(other)]
+    Unknown,
+}
+
+/// One literal match. `line` is 1-based. `byte_start..byte_end` are UTF-8
+/// byte offsets within that line's text, which excludes the line terminator
+/// (`\n` or `\r\n`) and, on line 1, a UTF-8 byte-order mark: the same text a
+/// Files editor shows. `column` is the 1-based character column for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextMatch {
+    pub line: u32,
+    pub column: u32,
+    pub byte_start: u32,
+    pub byte_end: u32,
+    /// Bounded excerpt of the line containing the match.
+    pub preview: String,
+    pub preview_match_start: u32,
+    pub preview_match_end: u32,
+    pub preview_truncated_before: bool,
+    pub preview_truncated_after: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextSearchFile {
+    pub path: String,
+    /// Hash of the searched bytes, comparable with `WorkspaceFileText::content_hash`.
+    pub content_hash: String,
+    pub matches: Vec<WorkspaceTextMatch>,
+    /// More matches exist in this file than were reported.
+    pub matches_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextSearchResult {
+    /// Identity of the checkout that was searched (empty when superseded
+    /// before resolution).
+    pub checkout_id: String,
+    /// The literal query and generation this result answers.
+    pub query: String,
+    pub generation: u64,
+    pub case_sensitive: bool,
+    pub status: WorkspaceTextSearchStatus,
+    #[serde(default)]
+    pub limits: Vec<WorkspaceTextSearchLimit>,
+    pub files: Vec<WorkspaceTextSearchFile>,
+    pub match_count: u32,
+    pub files_scanned: u32,
+    pub bytes_scanned: u64,
+    /// Binary or non-UTF-8 files: not text, so not a coverage gap.
+    pub skipped_binary: u32,
+    pub skipped_large: u32,
+    pub skipped_unreadable: u32,
+    pub elapsed_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadWorkspaceFileRequest {

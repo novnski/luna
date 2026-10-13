@@ -2114,6 +2114,15 @@ pub const OPERATIONS: &[OperationSpec] = &[
         30,
     ),
     op(
+        methods::SEARCH_WORKSPACE_TEXT,
+        "luna.core/search-workspace-text",
+        Query,
+        Unary,
+        DeviceAddressable,
+        Remote(RemoteScope::FilesRead),
+        30,
+    ),
+    op(
         methods::READ_WORKSPACE_IMAGE,
         "luna.core/read-workspace-image",
         Query,

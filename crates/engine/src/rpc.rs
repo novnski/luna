@@ -12087,6 +12087,17 @@ impl EngineRpc {
                 .map_err(RpcError::from)?;
                 RpcReply::value(&matches)
             }
+            methods::SEARCH_WORKSPACE_TEXT => {
+                let request: luna_proto::SearchWorkspaceTextRequest = parse_params(params)?;
+                let result = tokio::time::timeout(
+                    crate::workspace_files::text_search::TEXT_SEARCH_RPC_TIMEOUT,
+                    self.workspace_files.search_text(request),
+                )
+                .await
+                .map_err(|_| RpcError::Failed("workspace text search timed out".into()))?
+                .map_err(RpcError::from)?;
+                RpcReply::value(&result)
+            }
             methods::READ_WORKSPACE_IMAGE => {
                 let request: luna_proto::ReadWorkspaceImageRequest = parse_params(params)?;
                 let chunk = tokio::time::timeout(

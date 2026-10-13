@@ -3,8 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use luna_proto::{
     ListWorkspaceDirectoryRequest, ReadWorkspaceFileRequest, SearchWorkspaceFilesRequest,
-    WatchWorkspaceFilesRequest, WorkspaceDirectoryPage, WorkspaceFileSearchMatch,
-    WorkspaceFileText, WorkspaceTarget, WriteWorkspaceFileOutcome, WriteWorkspaceFileRequest,
+    SearchWorkspaceTextRequest, WatchWorkspaceFilesRequest, WorkspaceDirectoryPage,
+    WorkspaceFileSearchMatch, WorkspaceFileText, WorkspaceTarget, WorkspaceTextSearchResult,
+    WriteWorkspaceFileOutcome, WriteWorkspaceFileRequest,
 };
 use luna_rpc::{RpcError, methods};
 use serde::{Serialize, de::DeserializeOwned};
@@ -55,6 +56,35 @@ pub enum FilesClientError {
 impl FilesClientError {
     pub fn retryable(&self) -> bool {
         matches!(self, Self::Transport(_))
+    }
+}
+
+/// Why the owning host produced no text-search answer. Each case renders
+/// differently from a complete search that found nothing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TextSearchError {
+    /// The host's LUNA predates `SearchWorkspaceText`.
+    #[error("the workspace host cannot search file contents")]
+    Unsupported,
+    /// The owning device could not be reached; nothing was searched.
+    #[error("the workspace host is unreachable: {0}")]
+    Unreachable(String),
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<RpcError> for TextSearchError {
+    fn from(error: RpcError) -> Self {
+        match error {
+            RpcError::UnknownMethod(_) => Self::Unsupported,
+            RpcError::Transport(message) => Self::Unreachable(message),
+            RpcError::Closed => Self::Unreachable("connection closed".into()),
+            // The routing engine reports an unreachable owner as a failure.
+            RpcError::Failed(message) if message.contains("remote routing unavailable") => {
+                Self::Unreachable(message)
+            }
+            RpcError::BadParams(message) | RpcError::Failed(message) => Self::Failed(message),
+        }
     }
 }
 
@@ -167,6 +197,23 @@ impl WorkspaceFilesClient {
         request: SearchWorkspaceFilesRequest,
     ) -> Result<Vec<WorkspaceFileSearchMatch>, FilesClientError> {
         self.call(methods::SEARCH_WORKSPACE_FILES, &request).await
+    }
+
+    /// Literal text search on the chat's owning host. Never falls back to
+    /// another device or to a local read.
+    pub async fn search_text(
+        &self,
+        request: SearchWorkspaceTextRequest,
+    ) -> Result<WorkspaceTextSearchResult, TextSearchError> {
+        let params = request_params(&request, self.context.target_device_id.as_deref())
+            .map_err(|error| TextSearchError::Failed(error.to_string()))?;
+        let response = self
+            .transport
+            .call(methods::SEARCH_WORKSPACE_TEXT, params)
+            .await?;
+        serde_json::from_value(response).map_err(|error| {
+            TextSearchError::Failed(format!("workspace response was invalid: {error}"))
+        })
     }
 
     pub async fn read_file(
