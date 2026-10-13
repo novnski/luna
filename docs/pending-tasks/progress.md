@@ -1,9 +1,9 @@
 # Pending task checkpoint
 
-Generated 2026-10-14T01:15:31+03:00.
+Generated 2026-10-14T01:48:10+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **39.1% accepted**, **27/81 Done**.
+Active scope: **42.0% accepted**, **27/81 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
 Next eligible: none
@@ -81,8 +81,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-01 — Searchable scoped settings, provenance and reset](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [ZI-05 — Search checkout text and open the exact matching line](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-05 (orchestrator d19437b2) |
 | [IC-5 — Find and highlight text throughout selected conversation](interactive-chat-surfaces/README.md) | done | 100.0% | claude-team/IC-5 (orchestrator d19437b2) |
-| [ZI-04 — Open typed tool files in the owning Files surface](zeron-upstream-improvements/README.md) | in_progress | 0.0% | claude-team/ZI-04 (orchestrator d19437b2) |
-| [SW-11 — Migrate skills, history and general-work context](luna-only-workflows/README.md) | in_progress | 50.0% | claude-team/SW-11 (orchestrator d19437b2) |
+| [SW-11 — Migrate skills, history and general-work context](luna-only-workflows/README.md) | in_progress | 75.0% | claude-team/SW-11 (orchestrator d19437b2) |
+| [ZI-04 — Open typed tool files in the owning Files surface](zeron-upstream-improvements/README.md) | in_progress | 66.7% | claude-team/ZI-04 (orchestrator d19437b2) |
 
 ## Workspace performance, settings and run/review UX
 
@@ -114,8 +114,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
 | [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | done | 100.0% | claude-team/SW-10 (orchestrator d19437b2) |
-| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | in_progress | 0.0% | claude-team/AW-10 (orchestrator d19437b2) |
-| [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | in_progress | 0.0% | claude-team/PB-4A (orchestrator d19437b2) |
+| [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | in_progress | 75.0% | claude-team/PB-4A (orchestrator d19437b2) |
+| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | in_progress | 75.0% | claude-team/AW-10 (orchestrator d19437b2) |
 
 ## One direct paired-Mac product
 

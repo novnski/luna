@@ -247,8 +247,10 @@ is a screenshot of the Activity view (bell in the sidebar) into
    transcript still has no new message. Send it again so it waits.
 5. Stop A (or let it finish): within about a second B starts. Activity
    reads "1 of 1 turns active", nothing waiting.
-6. Queued row: choose **2**, start long turns in A and B, queue a follow-up
-   in A, choose **1**, and stop A's turn. The follow-up stays in A's queue
+6. Queued row: choose **2**, start a short turn in A (about 45 s) and a
+   long one in B, queue a follow-up in A, choose **1**, and let A's turn
+   finish on its own (Stop freezes that chat's queue by design, so a
+   stopped A never releases its follow-up). The follow-up stays in A's queue
    (not "sending") and Activity lists *Queued message · waiting…* with
    **Open**, which opens A. Stop B: A's follow-up starts once.
 7. Restart: with B held behind A (limit 1), quit LUNA Dev normally and

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791929731.919541,
+  "created_at": 1791931690.199511,
   "summary": {
     "counts": {
       "blocked": 1,
@@ -164,9 +164,9 @@
         "tasks": 4,
         "done": 2,
         "remaining": 2,
-        "accepted_units": 10,
+        "accepted_units": 13,
         "total_units": 15,
-        "acceptance_percent": 66.7,
+        "acceptance_percent": 86.7,
         "milestone_status": {}
       },
       {
@@ -186,9 +186,9 @@
         "tasks": 4,
         "done": 2,
         "remaining": 2,
-        "accepted_units": 8,
+        "accepted_units": 14,
         "total_units": 16,
-        "acceptance_percent": 50.0,
+        "acceptance_percent": 87.5,
         "milestone_status": {}
       },
       {
@@ -370,16 +370,14 @@
         "milestone_status": {}
       }
     ],
-    "expired_claims": [
-      "SW-13"
-    ],
+    "expired_claims": [],
     "active_scope": {
       "tasks": 81,
       "done": 27,
       "remaining": 54,
-      "accepted_units": 124,
+      "accepted_units": 133,
       "total_units": 317,
-      "acceptance_percent": 39.1
+      "acceptance_percent": 42.0
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": []
@@ -3158,24 +3156,6 @@
     {
       "attempts": 1,
       "blocker": null,
-      "checks": {},
-      "id": "SW-13",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791913202.1555011,
-        "expires_at": 1791927602.1555011,
-        "heartbeat_at": 1791913202.1555011,
-        "owner": "claude-team/SW-13 (orchestrator d19437b2)",
-        "session": "agent-run:45597ac7-d3be-43ee-aba9-c125bc6fa9f5",
-        "expired": true
-      },
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "paused",
-      "updated_at": 1791913202.1555169
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
       "checks": {
         "contract": {
           "at": 1791918116.666943,
@@ -3725,61 +3705,30 @@
       "updated_at": 1791923266.262475
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {},
-      "id": "ZI-04",
+      "id": "SW-13",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791924087.5774348,
-        "expires_at": 1791930404.6446521,
-        "heartbeat_at": 1791926804.6446521,
-        "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
-        "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764",
+        "claimed_at": 1791930536.544066,
+        "expires_at": 1791944936.544066,
+        "heartbeat_at": 1791930536.544066,
+        "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-13",
         "expired": false
       },
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
       "status": "paused",
-      "updated_at": 1791926804.6446562
+      "updated_at": 1791930536.544108
     },
     {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "AW-10",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791924823.193419,
-        "expires_at": 1791930404.761236,
-        "heartbeat_at": 1791926804.761236,
-        "owner": "claude-team/AW-10 (orchestrator d19437b2)",
-        "session": "agent-run:21fd2603-f714-4db0-8730-ae747fe5ef35",
-        "expired": false
-      },
-      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; dependency CORE-03 done, no conflicting reservation.",
-      "status": "paused",
-      "updated_at": 1791926804.7612412
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "PB-4A",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791925113.744284,
-        "expires_at": 1791930404.870958,
-        "heartbeat_at": 1791926804.870958,
-        "owner": "claude-team/PB-4A (orchestrator d19437b2)",
-        "session": "agent-run:ee103c33-6778-47fb-9d79-6377db49a352",
-        "expired": false
-      },
-      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; no dependencies or conflicting reservations.",
-      "status": "paused",
-      "updated_at": 1791926804.8709629
-    },
-    {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {
         "contract": {
@@ -3816,72 +3765,24 @@
       "id": "CORE-08",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791920321.818603,
-        "expires_at": 1791930403.9970508,
-        "heartbeat_at": 1791926803.9970508,
+        "claimed_at": 1791930537.479383,
+        "expires_at": 1791944937.479383,
+        "heartbeat_at": 1791930537.479383,
         "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
-        "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08",
         "expired": false
       },
-      "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending.",
-      "status": "paused",
-      "updated_at": 1791926805.112194
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {
-        "migration": {
-          "at": 1791926805.958988,
-          "evidence": [
-            {
-              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
-              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
-            },
-            {
-              "ref": "target/qa/batch3-20261014/manifest.sha256",
-              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
-            },
-            {
-              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
-            }
-          ],
-          "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
-        },
-        "scope": {
-          "at": 1791926806.08353,
-          "evidence": [
-            {
-              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
-              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
-            },
-            {
-              "ref": "target/qa/batch3-20261014/manifest.sha256",
-              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
-            },
-            {
-              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
-            }
-          ],
-          "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
-      },
-      "id": "SW-11",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791923603.3959,
-        "expires_at": 1791930404.4301991,
-        "heartbeat_at": 1791926804.4301991,
-        "owner": "claude-team/SW-11 (orchestrator d19437b2)",
-        "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db",
-        "expired": false
-      },
-      "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6.",
+      ],
       "status": "paused",
-      "updated_at": 1791926806.09791
+      "updated_at": 1791930537.479415
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {
         "rebase": {
@@ -3935,19 +3836,24 @@
       "id": "AW-09",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791922412.898318,
-        "expires_at": 1791930404.2132852,
-        "heartbeat_at": 1791926804.2132852,
+        "claimed_at": 1791930537.7587452,
+        "expires_at": 1791944937.7587452,
+        "heartbeat_at": 1791930537.7587452,
         "owner": "claude-team/AW-09 (orchestrator d19437b2)",
-        "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09",
         "expired": false
       },
-      "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control.",
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
       "status": "paused",
-      "updated_at": 1791928096.939053
+      "updated_at": 1791930537.75876
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {
         "rebase": {
@@ -4001,19 +3907,24 @@
       "id": "AW-11",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791922413.135981,
-        "expires_at": 1791930404.322728,
-        "heartbeat_at": 1791926804.322728,
+        "claimed_at": 1791930538.037899,
+        "expires_at": 1791944938.037899,
+        "heartbeat_at": 1791930538.037899,
         "owner": "claude-team/AW-11 (orchestrator d19437b2)",
-        "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11",
         "expired": false
       },
-      "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test.",
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
       "status": "paused",
-      "updated_at": 1791928097.072182
+      "updated_at": 1791930538.03792
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {
         "contract": {
@@ -4063,19 +3974,24 @@
       "id": "CORE-19",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791920321.951952,
-        "expires_at": 1791930404.1034749,
-        "heartbeat_at": 1791926804.1034749,
+        "claimed_at": 1791930538.3128378,
+        "expires_at": 1791944938.3128378,
+        "heartbeat_at": 1791930538.3128378,
         "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
-        "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19",
         "expired": false
       },
-      "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts.",
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
       "status": "paused",
-      "updated_at": 1791929336.693984
+      "updated_at": 1791930538.3128629
     },
     {
-      "attempts": 1,
+      "attempts": 2,
       "blocker": null,
       "checks": {
         "client": {
@@ -4133,16 +4049,279 @@
       "id": "RM-03",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791923018.936496,
-        "expires_at": 1791930404.5381382,
-        "heartbeat_at": 1791926804.5381382,
+        "claimed_at": 1791930538.588902,
+        "expires_at": 1791944938.588902,
+        "heartbeat_at": 1791930538.588902,
         "owner": "claude-team/RM-03 (orchestrator d19437b2)",
-        "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03",
         "expired": false
       },
-      "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending.",
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
       "status": "paused",
-      "updated_at": 1791929719.295954
+      "updated_at": 1791930538.588924
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "journey": {
+          "at": 1791930320.05384,
+          "evidence": [
+            {
+              "ref": "target/qa/sw11/native/results.md",
+              "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+            },
+            {
+              "ref": "target/qa/sw11/manifest.sha256",
+              "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+            },
+            {
+              "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+            }
+          ],
+          "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+        },
+        "migration": {
+          "at": 1791926805.958988,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+        },
+        "scope": {
+          "at": 1791926806.08353,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+        }
+      },
+      "id": "SW-11",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930538.870007,
+        "expires_at": 1791944938.870007,
+        "heartbeat_at": 1791930538.870007,
+        "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11",
+        "expired": false
+      },
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791930538.870029
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "delivery": {
+          "at": 1791930401.805984,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+              "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+        },
+        "verification": {
+          "at": 1791930401.932312,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-04/20261014/native/results.md",
+              "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+            },
+            {
+              "ref": "target/qa/zi-04/20261014/manifest.sha256",
+              "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+        }
+      },
+      "id": "ZI-04",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930539.145974,
+        "expires_at": 1791944939.145974,
+        "heartbeat_at": 1791930539.145974,
+        "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04",
+        "expired": false
+      },
+      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791930539.145994
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791930552.001793,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+              "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+            },
+            {
+              "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+              "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+        },
+        "decision": {
+          "at": 1791930551.869523,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+              "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+            },
+            {
+              "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+              "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+        },
+        "verification": {
+          "at": 1791930552.136013,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+              "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+            },
+            {
+              "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+              "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
+        }
+      },
+      "id": "PB-4A",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930537.201347,
+        "expires_at": 1791944937.201347,
+        "heartbeat_at": 1791930537.201347,
+        "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A",
+        "expired": false
+      },
+      "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791930552.151477
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "rebase": {
+          "at": 1791931629.225079,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-10/20261014/results.md",
+              "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+            }
+          ],
+          "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+        },
+        "scope": {
+          "at": 1791931629.331607,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+              "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+            }
+          ],
+          "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+        },
+        "verification": {
+          "at": 1791931629.441123,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-10/20261014/manifest.sha256",
+              "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+            }
+          ],
+          "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+        }
+      },
+      "id": "AW-10",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930536.9167092,
+        "expires_at": 1791946021.199054,
+        "heartbeat_at": 1791931621.199053,
+        "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10",
+        "expired": false
+      },
+      "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32.",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "paused",
+      "updated_at": 1791931629.441268
     }
   ],
   "events": [
@@ -21131,6 +21310,1671 @@
           "heartbeat_at": 1791926804.5381382,
           "owner": "claude-team/RM-03 (orchestrator d19437b2)",
           "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74"
+        }
+      }
+    },
+    {
+      "seq": 454,
+      "task": "SW-11",
+      "at": 1791930320.069823,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": "journey",
+        "evidence": null,
+        "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expired": false,
+          "expires_at": 1791930404.4301991,
+          "heartbeat_at": 1791926804.4301991,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
+        }
+      }
+    },
+    {
+      "seq": 455,
+      "task": "ZI-04",
+      "at": 1791930401.821333,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924087.5774348,
+          "expired": false,
+          "expires_at": 1791930404.6446521,
+          "heartbeat_at": 1791926804.6446521,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764"
+        }
+      }
+    },
+    {
+      "seq": 456,
+      "task": "ZI-04",
+      "at": 1791930401.946966,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924087.5774348,
+          "expired": false,
+          "expires_at": 1791930404.6446521,
+          "heartbeat_at": 1791926804.6446521,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764"
+        }
+      }
+    },
+    {
+      "seq": 457,
+      "task": "SW-13",
+      "at": 1791930536.341627,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791913202.1555011,
+          "expires_at": 1791927602.1555011,
+          "heartbeat_at": 1791913202.1555011,
+          "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+          "session": "agent-run:45597ac7-d3be-43ee-aba9-c125bc6fa9f5"
+        }
+      }
+    },
+    {
+      "seq": 458,
+      "task": "SW-13",
+      "at": 1791930536.544339,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.544066,
+          "expired": false,
+          "expires_at": 1791944936.544066,
+          "heartbeat_at": 1791930536.544066,
+          "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-13"
+        }
+      }
+    },
+    {
+      "seq": 459,
+      "task": "AW-10",
+      "at": 1791930536.801455,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924823.193419,
+          "expires_at": 1791930404.761236,
+          "heartbeat_at": 1791926804.761236,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "agent-run:21fd2603-f714-4db0-8730-ae747fe5ef35"
+        }
+      }
+    },
+    {
+      "seq": 460,
+      "task": "AW-10",
+      "at": 1791930536.9168088,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791944936.9167092,
+          "heartbeat_at": 1791930536.9167092,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 461,
+      "task": "PB-4A",
+      "at": 1791930537.0836952,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791925113.744284,
+          "expires_at": 1791930404.870958,
+          "heartbeat_at": 1791926804.870958,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "agent-run:ee103c33-6778-47fb-9d79-6377db49a352"
+        }
+      }
+    },
+    {
+      "seq": 462,
+      "task": "PB-4A",
+      "at": 1791930537.201483,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791944937.201347,
+          "heartbeat_at": 1791930537.201347,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 463,
+      "task": "CORE-08",
+      "at": 1791930537.363893,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.818603,
+          "expires_at": 1791930403.9970508,
+          "heartbeat_at": 1791926803.9970508,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934"
+        }
+      }
+    },
+    {
+      "seq": 464,
+      "task": "CORE-08",
+      "at": 1791930537.47957,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.479383,
+          "expired": false,
+          "expires_at": 1791944937.479383,
+          "heartbeat_at": 1791930537.479383,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
+        }
+      }
+    },
+    {
+      "seq": 465,
+      "task": "AW-09",
+      "at": 1791930537.640718,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          },
+          "verification": {
+            "at": 1791928096.923012,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/native/results.md",
+                "sha256": "aeac4fc96fcd976957fe5cacaeeeb98c56d5ca5ce20e276e9622b42ba112ddca"
+              },
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922412.898318,
+          "expires_at": 1791930404.2132852,
+          "heartbeat_at": 1791926804.2132852,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f"
+        }
+      }
+    },
+    {
+      "seq": 466,
+      "task": "AW-09",
+      "at": 1791930537.758864,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          },
+          "verification": {
+            "at": 1791928096.923012,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/native/results.md",
+                "sha256": "aeac4fc96fcd976957fe5cacaeeeb98c56d5ca5ce20e276e9622b42ba112ddca"
+              },
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.7587452,
+          "expired": false,
+          "expires_at": 1791944937.7587452,
+          "heartbeat_at": 1791930537.7587452,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09"
+        }
+      }
+    },
+    {
+      "seq": 467,
+      "task": "AW-11",
+      "at": 1791930537.924007,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          },
+          "verification": {
+            "at": 1791928097.057185,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/native/results.md",
+                "sha256": "8c237ad5af235c1f8bee0729ce8b3d6fd44df9b9b1629d6e5ae3af38b5b61f8a"
+              },
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922413.135981,
+          "expires_at": 1791930404.322728,
+          "heartbeat_at": 1791926804.322728,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a"
+        }
+      }
+    },
+    {
+      "seq": 468,
+      "task": "AW-11",
+      "at": 1791930538.0380569,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          },
+          "verification": {
+            "at": 1791928097.057185,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/native/results.md",
+                "sha256": "8c237ad5af235c1f8bee0729ce8b3d6fd44df9b9b1629d6e5ae3af38b5b61f8a"
+              },
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.037899,
+          "expired": false,
+          "expires_at": 1791944938.037899,
+          "heartbeat_at": 1791930538.037899,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11"
+        }
+      }
+    },
+    {
+      "seq": 469,
+      "task": "CORE-19",
+      "at": 1791930538.199619,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          },
+          "verification": {
+            "at": 1791929336.678725,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/native/results.md",
+                "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+              },
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.951952,
+          "expires_at": 1791930404.1034749,
+          "heartbeat_at": 1791926804.1034749,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611"
+        }
+      }
+    },
+    {
+      "seq": 470,
+      "task": "CORE-19",
+      "at": 1791930538.313,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          },
+          "verification": {
+            "at": 1791929336.678725,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/native/results.md",
+                "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+              },
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.3128378,
+          "expired": false,
+          "expires_at": 1791944938.3128378,
+          "heartbeat_at": 1791930538.3128378,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19"
+        }
+      }
+    },
+    {
+      "seq": 471,
+      "task": "RM-03",
+      "at": 1791930538.472685,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "client": {
+            "at": 1791929719.153385,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
+          },
+          "projections": {
+            "at": 1791929719.029908,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
+          },
+          "verification": {
+            "at": 1791929719.2827342,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923018.936496,
+          "expires_at": 1791930404.5381382,
+          "heartbeat_at": 1791926804.5381382,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74"
+        }
+      }
+    },
+    {
+      "seq": 472,
+      "task": "RM-03",
+      "at": 1791930538.589059,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "client": {
+            "at": 1791929719.153385,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
+          },
+          "projections": {
+            "at": 1791929719.029908,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
+          },
+          "verification": {
+            "at": 1791929719.2827342,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.588902,
+          "expired": false,
+          "expires_at": 1791944938.588902,
+          "heartbeat_at": 1791930538.588902,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03"
+        }
+      }
+    },
+    {
+      "seq": 473,
+      "task": "SW-11",
+      "at": 1791930538.752002,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expires_at": 1791930404.4301991,
+          "heartbeat_at": 1791926804.4301991,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
+        }
+      }
+    },
+    {
+      "seq": 474,
+      "task": "SW-11",
+      "at": 1791930538.870178,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.870007,
+          "expired": false,
+          "expires_at": 1791944938.870007,
+          "heartbeat_at": 1791930538.870007,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11"
+        }
+      }
+    },
+    {
+      "seq": 475,
+      "task": "ZI-04",
+      "at": 1791930539.026873,
+      "action": "recover",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924087.5774348,
+          "expires_at": 1791930404.6446521,
+          "heartbeat_at": 1791926804.6446521,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764"
+        }
+      }
+    },
+    {
+      "seq": 476,
+      "task": "ZI-04",
+      "at": 1791930539.146126,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930539.145974,
+          "expired": false,
+          "expires_at": 1791944939.145974,
+          "heartbeat_at": 1791930539.145974,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04"
+        }
+      }
+    },
+    {
+      "seq": 477,
+      "task": "PB-4A",
+      "at": 1791930551.884854,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          }
+        },
+        "criterion": "decision",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791944937.201347,
+          "heartbeat_at": 1791930537.201347,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 478,
+      "task": "PB-4A",
+      "at": 1791930552.01653,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791930552.001793,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+          },
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          }
+        },
+        "criterion": "contract",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791944937.201347,
+          "heartbeat_at": 1791930537.201347,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 479,
+      "task": "PB-4A",
+      "at": 1791930552.151833,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791930552.001793,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+          },
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          },
+          "verification": {
+            "at": 1791930552.136013,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791944937.201347,
+          "heartbeat_at": 1791930537.201347,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 480,
+      "task": "AW-10",
+      "at": 1791931621.199175,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946021.199054,
+          "heartbeat_at": 1791931621.199053,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 481,
+      "task": "AW-10",
+      "at": 1791931629.225276,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          }
+        },
+        "criterion": "rebase",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946021.199054,
+          "heartbeat_at": 1791931621.199053,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 482,
+      "task": "AW-10",
+      "at": 1791931629.3317828,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          },
+          "scope": {
+            "at": 1791931629.331607,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+                "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              }
+            ],
+            "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          }
+        },
+        "criterion": "scope",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946021.199054,
+          "heartbeat_at": 1791931621.199053,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 483,
+      "task": "AW-10",
+      "at": 1791931629.441387,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          },
+          "scope": {
+            "at": 1791931629.331607,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+                "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              }
+            ],
+            "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          },
+          "verification": {
+            "at": 1791931629.441123,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946021.199054,
+          "heartbeat_at": 1791931621.199053,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
         }
       }
     }
