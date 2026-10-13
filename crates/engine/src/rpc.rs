@@ -11679,13 +11679,11 @@ impl EngineRpc {
                                 .chat_id
                                 .as_deref()
                                 .ok_or_else(|| RpcError::Failed("chatId required".into()))?;
-                            let snapshot = self
-                                .diff_sync
-                                .turn_snapshot(chat_id)
-                                .filter(|s| s.root == identity.root)
-                                .ok_or_else(|| RpcError::Failed("no turn recorded".into()))?;
-                            crate::diff_sync::capture_turn_diff(&self.repos, root, &snapshot.tree)
+                            // Holding the base keeps its private object store alive.
+                            let base = Box::pin(self.diff_sync.latest_turn_base(chat_id, &identity))
                                 .await
+                                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                            crate::diff_sync::capture_turn_diff(&self.repos, root, &base).await
                         }
                         _ => crate::diff_sync::capture_diff(&self.repos, root).await,
                     }
@@ -11719,7 +11717,8 @@ impl EngineRpc {
                         return Err(RpcError::Failed("checkoutId does not match cwd".into()));
                     }
                     let root = identity.root.as_path();
-                    let (snapshot, base, target) = match p.mode.as_str() {
+                    // `turn` is the Latest turn base, held for the whole read.
+                    let (snapshot, base, target, turn) = match p.mode.as_str() {
                         "branch" => {
                             let base_ref = p
                                 .base_ref
@@ -11735,7 +11734,7 @@ impl EngineRpc {
                             ))
                             .await
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
-                            (snapshot, base, None)
+                            (snapshot, base, None, None)
                         }
                         "commit" => {
                             let sha = p
@@ -11751,26 +11750,24 @@ impl EngineRpc {
                             ))
                             .await
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
-                            (snapshot, base, Some(sha.to_string()))
+                            (snapshot, base, Some(sha.to_string()), None)
                         }
                         "turn" => {
                             let chat_id = p
                                 .chat_id
                                 .as_deref()
                                 .ok_or_else(|| RpcError::Failed("chatId required".into()))?;
-                            let turn = self
-                                .diff_sync
-                                .turn_snapshot(chat_id)
-                                .filter(|snapshot| snapshot.root == identity.root)
-                                .ok_or_else(|| RpcError::Failed("no turn recorded".into()))?;
+                            let turn = Box::pin(self.diff_sync.latest_turn_base(chat_id, &identity))
+                                .await
+                                .map_err(|error| RpcError::Failed(error.to_string()))?;
                             let snapshot = Box::pin(crate::diff_sync::capture_turn_diff(
                                 &self.repos,
                                 root,
-                                &turn.tree,
+                                &turn,
                             ))
                             .await
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
-                            (snapshot, turn.tree, None)
+                            (snapshot, turn.tree.clone(), None, Some(turn))
                         }
                         _ => {
                             let base = Box::pin(crate::diff_sync::working_diff_base(root))
@@ -11780,7 +11777,7 @@ impl EngineRpc {
                                 Box::pin(crate::diff_sync::capture_diff(&self.repos, root))
                                     .await
                                     .map_err(|error| RpcError::Failed(error.to_string()))?;
-                            (snapshot, base, None)
+                            (snapshot, base, None, None)
                         }
                     };
                     let stale = || luna_proto::CheckoutFileDiffText {
@@ -11807,6 +11804,7 @@ impl EngineRpc {
                         root,
                         &base,
                         target.as_deref(),
+                        turn.as_ref(),
                         file,
                     ))
                     .await
@@ -11820,14 +11818,17 @@ impl EngineRpc {
                             ))
                             .await
                         }
-                        "turn" => {
-                            Box::pin(crate::diff_sync::capture_turn_diff(
-                                &self.repos,
-                                root,
-                                &base,
-                            ))
-                            .await
-                        }
+                        "turn" => match turn.as_ref() {
+                            Some(turn) => {
+                                Box::pin(crate::diff_sync::capture_turn_diff(
+                                    &self.repos,
+                                    root,
+                                    turn,
+                                ))
+                                .await
+                            }
+                            None => Err(crate::EngineError::Other("no turn recorded".into())),
+                        },
                         "commit" => {
                             let sha = p
                                 .commit_sha

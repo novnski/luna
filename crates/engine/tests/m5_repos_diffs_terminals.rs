@@ -10,8 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use luna_engine::{
     EngineCore, HarnessRegistry, Repos, Terminals, capture_commit_diff, capture_diff,
-    capture_diff_against, capture_turn_diff, merge_base, read_diff_file_text, snapshot_tree,
-    working_diff_base,
+    capture_diff_against, merge_base, read_diff_file_text, working_diff_base,
 };
 use luna_proto::{GitHistoryRefKind, TerminalEvent};
 use luna_rpc::methods;
@@ -670,52 +669,6 @@ async fn commit_diff_captures_one_commit_and_roots_diff_the_empty_tree() {
         .await
         .expect("root capture");
     assert!(root_snapshot.files.iter().any(|f| f.path == "a.txt"));
-}
-
-#[tokio::test]
-async fn turn_diff_captures_only_changes_since_snapshot() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let repo_dir = tmp.path().join("repo");
-    init_repo(&repo_dir).await;
-    let repos = test_repos(&tmp.path().join("data"));
-
-    // Pre-turn state: a tracked edit and an untracked file already exist.
-    std::fs::write(repo_dir.join("a.txt"), "one\ntwo\npre-turn\n").expect("edit a.txt");
-    std::fs::write(repo_dir.join("pre.txt"), "before the turn\n").expect("pre.txt");
-    let turn_tree = snapshot_tree(&repo_dir).await.expect("snapshot");
-
-    // Nothing changed yet: the turn diff is empty (pre-existing untracked
-    // files must NOT reappear as new).
-    let clean = capture_turn_diff(&repos, &repo_dir, &turn_tree)
-        .await
-        .expect("clean turn diff");
-    assert!(clean.patch.is_empty(), "unexpected: {}", clean.patch);
-    assert!(clean.files.is_empty());
-
-    // The "turn" edits one file and adds another.
-    std::fs::write(
-        repo_dir.join("pre.txt"),
-        "before the turn\nedited in turn\n",
-    )
-    .expect("edit pre.txt");
-    std::fs::write(repo_dir.join("turn.txt"), "made this turn\n").expect("turn.txt");
-    let turn = capture_turn_diff(&repos, &repo_dir, &turn_tree)
-        .await
-        .expect("turn diff");
-    assert!(turn.patch.contains("+edited in turn"));
-    assert!(turn.patch.contains("+made this turn"));
-    assert!(
-        !turn.patch.contains("pre-turn"),
-        "pre-turn tracked edit leaked into the turn diff"
-    );
-    assert!(turn.files.iter().any(|f| f.path == "turn.txt"));
-    let pre = turn
-        .files
-        .iter()
-        .find(|f| f.path == "pre.txt")
-        .expect("pre.txt summary");
-    assert_eq!(pre.status, "modified");
-    assert_eq!(pre.additions, 1);
 }
 
 #[tokio::test]

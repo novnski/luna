@@ -30,11 +30,15 @@
 //! Beyond the working-tree watch, the service also answers one-shot
 //! `GetCheckoutDiff` captures for the Changes pane's scopes: *branch changes*
 //! (vs `merge-base(baseRef, HEAD)`, same capture path with the base overridden)
-//! and *latest turn* (vs a temp-index `write-tree` snapshot taken when a turn
-//! dispatches — see [`CheckoutDiffSync::note_turn_start`]).
+//! and *latest turn* (vs a private-store tree snapshot taken when a turn
+//! dispatches — see [`CheckoutDiffSync::note_turn_start`] and the
+//! `turn_snapshot` module).
+
+mod turn_snapshot;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -50,6 +54,8 @@ use crate::EngineError;
 use crate::doc_host::EdgeConfig;
 use crate::repos::{CheckoutIdentity, Repos};
 use crate::workspace_host::WorkspaceHost;
+pub use turn_snapshot::TurnSnapshot;
+use turn_snapshot::{SNAPSHOT_TIMEOUT, SnapshotRuntime, UNAVAILABLE, unavailable};
 
 /// Hard cap on the unified patch (plus untracked hunks) — "Partial snapshot".
 pub const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
@@ -66,6 +72,13 @@ const REPAIR_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_WATCH_DIRS: usize = 8_000;
 /// `git hash-object -t tree /dev/null` — diff base for repos with no commits yet.
 const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/// The Changes pane treats this reply as the expected pre-first-turn state.
+const NO_TURN_RECORDED: &str = "no turn recorded";
+/// How long a Latest turn read waits for its turn-start capture.
+const TURN_BASE_WAIT: Duration = SNAPSHOT_TIMEOUT.saturating_add(Duration::from_secs(5));
+/// Ready turn-start snapshots kept at once; the oldest beyond this are
+/// released (and reported unavailable) so retained stores stay bounded.
+const MAX_RETAINED_TURN_BASES: usize = 32;
 
 /// Latest-only diff sidecar published to each chat's session DO slot
 /// (`POST /diff/{chatId}`; shape: edge/src/session-doc/sidecar.ts).
@@ -132,16 +145,28 @@ struct CheckoutEntry {
     watchers: Mutex<Vec<notify::RecommendedWatcher>>,
 }
 
-/// Working-tree snapshot recorded when a chat's turn dispatches — the diff
-/// base for the Changes pane's "Latest turn" scope. In-memory only: after an
-/// engine restart the scope is unavailable until the next turn.
-#[derive(Debug, Clone)]
-pub struct TurnSnapshot {
-    /// Canonical checkout root the tree was captured in.
-    pub root: PathBuf,
-    /// `git write-tree` sha of the tracked + untracked (unignored) tree.
-    pub tree: String,
-    pub at: chrono::DateTime<chrono::Utc>,
+/// A chat's "Latest turn" diff base. In-memory only: after an engine restart
+/// the scope is unavailable until the next turn. A turn start replaces the
+/// slot synchronously, so a pending, failed or superseded capture can never
+/// answer for a newer turn with an older turn's tree.
+struct TurnSlot {
+    generation: u64,
+    state: TurnBase,
+    /// When reconcile first found the chat archived or gone (see
+    /// [`release_ended_turns`]).
+    ended_since: Option<std::time::Instant>,
+}
+
+enum TurnBase {
+    /// The capture for this generation is running; `done` flips once the
+    /// slot leaves this state.
+    Pending {
+        cancel: CancellationToken,
+        done: watch::Receiver<bool>,
+    },
+    Ready(TurnSnapshot),
+    /// The user-facing reason this turn has no base.
+    Unavailable(String),
 }
 
 struct DiffSyncInner {
@@ -161,8 +186,11 @@ struct DiffSyncInner {
     /// How long an entry may sit chat-less before reconcile removes it.
     orphan_grace: Duration,
     diffs_tx: watch::Sender<Vec<CheckoutDiff>>,
-    /// chat_id → turn-start tree (see [`TurnSnapshot`]).
-    turn_trees: Mutex<HashMap<String, TurnSnapshot>>,
+    /// chat_id → Latest turn base (see [`TurnSlot`]).
+    turn_trees: Mutex<HashMap<String, TurnSlot>>,
+    /// Private object stores and capture budget for turn snapshots.
+    turn_runtime: Arc<SnapshotRuntime>,
+    turn_generation: AtomicU64,
     /// The tasks hold `Weak` refs, but an in-flight iteration holds an
     /// upgraded Arc — the token cuts it so no sidecar HTTP outlives shutdown.
     cancel: CancellationToken,
@@ -203,6 +231,9 @@ impl CheckoutDiffSync {
         orphan_grace: Duration,
     ) -> Self {
         let (diffs_tx, _) = watch::channel(Vec::new());
+        let turn_runtime = Arc::new(SnapshotRuntime::new(repos.data_dir()));
+        // Engine assembly holds the data root's InstanceLock here.
+        turn_runtime.sweep_stale_runs();
         let sync = Self {
             inner: Arc::new(DiffSyncInner {
                 repos,
@@ -216,6 +247,8 @@ impl CheckoutDiffSync {
                 orphan_grace,
                 diffs_tx,
                 turn_trees: Mutex::new(HashMap::new()),
+                turn_runtime,
+                turn_generation: AtomicU64::new(0),
                 cancel: CancellationToken::new(),
                 supervisor: Mutex::new(None),
             }),
@@ -239,6 +272,10 @@ impl CheckoutDiffSync {
         if let Some(task) = task {
             let _ = task.await;
         }
+        // Turn captures observe the same token (their Git children die with
+        // them). Releasing the slots deletes every store no reader holds.
+        let released = std::mem::take(&mut *lock(&self.inner.turn_trees));
+        drop(released);
     }
 
     /// `WatchCheckoutDiffs` source: every tracked checkout's latest diff.
@@ -270,41 +307,200 @@ impl CheckoutDiffSync {
     }
 
     /// A turn is starting for `chat_id` in `cwd`: snapshot the checkout's tree
-    /// in the background so "Latest turn" has a base. Best-effort — failures
-    /// only log; a chat outside a checkout simply records nothing.
+    /// in the background so "Latest turn" has a base. The previous turn's base
+    /// is released at once and any capture still running for it is cancelled
+    /// (its Git children are killed); only this generation's capture may
+    /// publish. A failure or a cwd outside a checkout leaves the scope
+    /// unavailable for this turn — never answered by an earlier turn.
     pub fn note_turn_start(&self, chat_id: &str, cwd: &str) {
+        if self.inner.cancel.is_cancelled() {
+            return;
+        }
+        let generation = self.inner.turn_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let cancel = self.inner.cancel.child_token();
+        let (done_tx, done_rx) = watch::channel(false);
+        let replaced = lock(&self.inner.turn_trees).insert(
+            chat_id.to_string(),
+            TurnSlot {
+                generation,
+                state: TurnBase::Pending {
+                    cancel: cancel.clone(),
+                    done: done_rx,
+                },
+                ended_since: None,
+            },
+        );
+        if let Some(TurnSlot {
+            state: TurnBase::Pending { cancel, .. },
+            ..
+        }) = &replaced
+        {
+            cancel.cancel();
+        }
+        // A reader still holding the old base keeps its store until it ends.
+        drop(replaced);
+
         let inner = Arc::downgrade(&self.inner);
         let chat_id = chat_id.to_string();
         let cwd = PathBuf::from(cwd);
         tokio::spawn(async move {
-            let Some(inner) = inner.upgrade() else { return };
-            let identity = match inner.repos.checkout_identity(&cwd).await {
-                Ok(identity) => identity,
-                Err(_) => return, // not a checkout
+            let (repos, runtime) = {
+                let Some(inner) = inner.upgrade() else { return };
+                (inner.repos.clone(), inner.turn_runtime.clone())
             };
-            match snapshot_tree(&identity.root).await {
-                Ok(tree) => {
-                    lock(&inner.turn_trees).insert(
-                        chat_id,
-                        TurnSnapshot {
-                            root: identity.root,
-                            tree,
-                            at: chrono::Utc::now(),
-                        },
-                    );
-                }
-                Err(err) => {
-                    tracing::debug!(chat = %chat_id, error = %err,
-                        "diff-sync: turn snapshot failed");
-                }
-            }
+            let capture = async {
+                let identity = repos
+                    .checkout_identity(&cwd)
+                    .await
+                    .map_err(|_| unavailable("the turn started outside a Git checkout"))?;
+                SnapshotRuntime::capture(&runtime, &identity.root, &identity.id, generation).await
+            };
+            // Cancellation drops the capture, and with it every Git child.
+            let result = tokio::select! {
+                _ = cancel.cancelled() => return,
+                result = capture => result,
+            };
+            let Some(inner) = inner.upgrade() else { return };
+            let evicted = {
+                let mut slots = lock(&inner.turn_trees);
+                let Some(slot) = slots
+                    .get_mut(&chat_id)
+                    .filter(|slot| slot.generation == generation)
+                else {
+                    return; // superseded or released: a stale generation never publishes
+                };
+                slot.state = match result {
+                    Ok(snapshot) => TurnBase::Ready(snapshot),
+                    Err(err) => {
+                        tracing::debug!(chat = %chat_id, error = %err,
+                            "diff-sync: turn snapshot failed");
+                        let reason = err.to_string();
+                        TurnBase::Unavailable(if reason.starts_with(UNAVAILABLE) {
+                            reason
+                        } else {
+                            format!("{UNAVAILABLE}: the turn snapshot failed ({reason})")
+                        })
+                    }
+                };
+                evict_excess_turn_bases(&mut slots)
+            };
+            drop(evicted);
+            let _ = done_tx.send(true);
         });
     }
 
-    /// The recorded turn-start snapshot for a chat, if any turn dispatched
-    /// since boot.
-    pub fn turn_snapshot(&self, chat_id: &str) -> Option<TurnSnapshot> {
-        lock(&self.inner.turn_trees).get(chat_id).cloned()
+    /// The Latest turn base for `chat_id` in the checkout `identity`, waiting
+    /// for a capture still in flight. The returned clone keeps its private
+    /// object store alive: hold it for the whole read. Errors carry the
+    /// user-facing reason ("no turn recorded" before the first turn).
+    pub async fn latest_turn_base(
+        &self,
+        chat_id: &str,
+        identity: &CheckoutIdentity,
+    ) -> Result<TurnSnapshot, EngineError> {
+        let deadline = tokio::time::Instant::now() + TURN_BASE_WAIT;
+        loop {
+            let (generation, mut done) = {
+                let slots = lock(&self.inner.turn_trees);
+                let Some(slot) = slots.get(chat_id) else {
+                    return Err(EngineError::Other(NO_TURN_RECORDED.into()));
+                };
+                match &slot.state {
+                    TurnBase::Ready(snapshot) => {
+                        if snapshot.checkout_id != identity.id || snapshot.root != identity.root {
+                            return Err(unavailable(
+                                "the latest turn started in a different checkout",
+                            ));
+                        }
+                        return Ok(snapshot.clone());
+                    }
+                    TurnBase::Unavailable(reason) => {
+                        return Err(EngineError::Other(reason.clone()));
+                    }
+                    TurnBase::Pending { done, .. } => (slot.generation, done.clone()),
+                }
+            };
+            let waited = tokio::time::timeout_at(deadline, async move {
+                done.wait_for(|finished| *finished).await.is_ok()
+            })
+            .await;
+            let still_pending = lock(&self.inner.turn_trees)
+                .get(chat_id)
+                .is_some_and(|slot| {
+                    slot.generation == generation && matches!(slot.state, TurnBase::Pending { .. })
+                });
+            if still_pending {
+                return Err(unavailable(match waited {
+                    Err(_) => "the turn snapshot is still being captured",
+                    Ok(_) => "the turn snapshot capture stopped before finishing",
+                }));
+            }
+            // Finished, superseded by a newer turn, or released: read again.
+        }
+    }
+}
+
+/// Release the oldest ready bases beyond [`MAX_RETAINED_TURN_BASES`]; their
+/// chats report the scope unavailable until their next turn. Returns the
+/// released snapshots so the caller drops them outside the lock.
+fn evict_excess_turn_bases(slots: &mut HashMap<String, TurnSlot>) -> Vec<TurnSnapshot> {
+    let mut ready: Vec<(chrono::DateTime<chrono::Utc>, String)> = slots
+        .iter()
+        .filter_map(|(chat_id, slot)| match &slot.state {
+            TurnBase::Ready(snapshot) => Some((snapshot.at, chat_id.clone())),
+            _ => None,
+        })
+        .collect();
+    if ready.len() <= MAX_RETAINED_TURN_BASES {
+        return Vec::new();
+    }
+    ready.sort();
+    let excess = ready.len() - MAX_RETAINED_TURN_BASES;
+    let mut evicted = Vec::new();
+    for (_, chat_id) in ready.into_iter().take(excess) {
+        let Some(slot) = slots.get_mut(&chat_id) else {
+            continue;
+        };
+        let released = std::mem::replace(
+            &mut slot.state,
+            TurnBase::Unavailable(format!(
+                "{UNAVAILABLE}: its snapshot was released to bound retained storage; the next turn records a new one"
+            )),
+        );
+        if let TurnBase::Ready(snapshot) = released {
+            evicted.push(snapshot);
+        }
+    }
+    evicted
+}
+
+/// Release the Latest turn bases of chats that are archived or gone. Like a
+/// checkout entry, a chat must stay absent for the orphan grace first: one
+/// flapping chat-watch emission must not discard a live turn's base.
+fn release_ended_turns(inner: &Arc<DiffSyncInner>, live: &HashSet<String>) {
+    let now = std::time::Instant::now();
+    let released: Vec<TurnSlot> = {
+        let mut slots = lock(&inner.turn_trees);
+        let ended: Vec<String> = slots
+            .iter_mut()
+            .filter_map(|(chat_id, slot)| {
+                if live.contains(chat_id) {
+                    slot.ended_since = None;
+                    return None;
+                }
+                let since = *slot.ended_since.get_or_insert(now);
+                (now.duration_since(since) >= inner.orphan_grace).then(|| chat_id.clone())
+            })
+            .collect();
+        ended
+            .iter()
+            .filter_map(|chat_id| slots.remove(chat_id))
+            .collect()
+    };
+    for slot in &released {
+        if let TurnBase::Pending { cancel, .. } = &slot.state {
+            cancel.cancel();
+        }
     }
 }
 
@@ -368,6 +564,12 @@ pub(crate) fn has_checkout_marker(root: &Path) -> bool {
 async fn reconcile(inner: &Arc<DiffSyncInner>, chats: Vec<Chat>, fresh: bool) {
     // One pass at a time — see `reconcile_gate`.
     let _gate = inner.reconcile_gate.lock().await;
+    let live_turn_chats: HashSet<String> = chats
+        .iter()
+        .filter(|chat| chat.device_id == inner.device_id && !chat.archived)
+        .map(|chat| chat.id.clone())
+        .collect();
+    release_ended_turns(inner, &live_turn_chats);
     // Group this device's cwd-bearing chats by canonical checkout identity.
     let mut groups: HashMap<String, (CheckoutIdentity, Vec<Chat>)> = HashMap::new();
     // Dedupe resolution within this pass — many chats share one checkout.
@@ -803,6 +1005,8 @@ async fn capture_git(cwd: &Path, args: &[&str], max_bytes: usize) -> Result<Capt
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    // A dropped capture (shutdown, a superseded RPC) must not leave git running.
+    cmd.kill_on_drop(true);
     let mut child = cmd
         .spawn()
         .map_err(|e| EngineError::Other(format!("git spawn failed: {e}")))?;
@@ -1025,9 +1229,19 @@ async fn read_worktree_source(root: &Path, path: &Path) -> Result<Capture, Engin
     })
 }
 
-async fn read_git_source(root: &Path, revision: &str, path: &Path) -> Result<Capture, EngineError> {
+/// `turn` supplies the private object context a Latest turn tree lives in.
+async fn read_git_source(
+    root: &Path,
+    revision: &str,
+    path: &Path,
+    turn: Option<&TurnSnapshot>,
+) -> Result<Capture, EngineError> {
     let spec = format!("{revision}:{}", path.to_string_lossy());
-    capture_git(root, &["cat-file", "blob", &spec], MAX_DIFF_SOURCE_BYTES).await
+    let args = ["cat-file", "blob", spec.as_str()];
+    match turn {
+        Some(turn) => turn_snapshot::capture_git_in(turn, &args, MAX_DIFF_SOURCE_BYTES).await,
+        None => capture_git(root, &args, MAX_DIFF_SOURCE_BYTES).await,
+    }
 }
 
 /// Read the exact old/new documents for one file in a previously captured diff.
@@ -1038,16 +1252,18 @@ pub async fn read_diff_file_text(
     base: &str,
     file: &DiffFileSummary,
 ) -> Result<DiffFileTextPair, EngineError> {
-    read_diff_file_text_at(root, base, None, file).await
+    read_diff_file_text_at(root, base, None, None, file).await
 }
 
 /// Read the exact old/new documents for one file in a diff between `base` and
 /// an optional committed target. Without a target, the new source is the live
-/// working tree; with one, both sources are immutable Git blobs.
+/// working tree; with one, both sources are immutable Git blobs. For a Latest
+/// turn diff, `base` is `turn`'s tree and is read through its private store.
 pub(crate) async fn read_diff_file_text_at(
     root: &Path,
     base: &str,
     target: Option<&str>,
+    turn: Option<&TurnSnapshot>,
     file: &DiffFileSummary,
 ) -> Result<DiffFileTextPair, EngineError> {
     let new_path = validate_diff_path(&file.path)?;
@@ -1056,12 +1272,12 @@ pub(crate) async fn read_diff_file_text_at(
     let old = if file.status == "added" {
         None
     } else {
-        Some(read_git_source(root, base, old_path).await?)
+        Some(read_git_source(root, base, old_path, turn).await?)
     };
     let new = if file.status == "deleted" {
         None
     } else if let Some(target) = target {
-        Some(read_git_source(root, target, new_path).await?)
+        Some(read_git_source(root, target, new_path, turn).await?)
     } else {
         Some(read_worktree_source(root, new_path).await?)
     };
@@ -1405,65 +1621,47 @@ pub async fn merge_base(root: &Path, base_ref: &str) -> Result<String, EngineErr
     Ok(sha)
 }
 
-/// Write the checkout's current tracked + untracked (unignored) tree into the
-/// object db via a throwaway index: `git add -A` under `GIT_INDEX_FILE`, then
-/// `git write-tree`. The real index is never touched. Costs one full hash pass
-/// over the working tree (no stat cache in a fresh index) — run once per turn
-/// dispatch, that is the same cost class as the untracked-file reads the watch
-/// capture already does.
-pub async fn snapshot_tree(root: &Path) -> Result<String, EngineError> {
-    let index = std::env::temp_dir().join(format!(
-        "luna-turn-index-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_micros()
-    ));
-    let run = |args: &[&str]| {
-        let mut cmd = tokio::process::Command::new("git");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.as_std_mut().creation_flags(0x08000000);
-        }
-        cmd.arg("-C").arg(root).args(args);
-        cmd.env("GIT_INDEX_FILE", &index);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.output()
-    };
-    let added = run(&["add", "-A", "--ignore-errors", "."])
-        .await
-        .map_err(|e| EngineError::Other(format!("git add failed: {e}")))?;
-    if !added.status.success() {
-        let _ = tokio::fs::remove_file(&index).await;
-        return Err(EngineError::Other(format!(
-            "git add: {}",
-            String::from_utf8_lossy(&added.stderr).trim()
-        )));
-    }
-    let written = run(&["write-tree"])
-        .await
-        .map_err(|e| EngineError::Other(format!("git write-tree failed: {e}")));
-    let _ = tokio::fs::remove_file(&index).await;
-    let written = written?;
-    if !written.status.success() {
-        return Err(EngineError::Other(format!(
-            "git write-tree: {}",
-            String::from_utf8_lossy(&written.stderr).trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&written.stdout).trim().to_string())
-}
-
-/// "Latest turn" capture: tree-to-tree diff from the turn-start snapshot to a
-/// fresh [`snapshot_tree`] of the current state. Both trees carry untracked
-/// (unignored) files, so no synthesis is needed and a file that was already
-/// untracked at turn start diffs correctly (the watch capture's synthesis
-/// would misreport it as entirely new).
+/// "Latest turn" capture: tree-to-tree diff from the turn-start snapshot to
+/// the current state layered on it ([`TurnSnapshot`] owns both stores). Both
+/// trees carry untracked (unignored) files, so no synthesis is needed and a
+/// file that was already untracked at turn start diffs correctly (the watch
+/// capture's synthesis would misreport it as entirely new). Every read goes
+/// through the snapshots' private object stores. Paths either side omitted
+/// for budget make the result partial: `truncated`, plus a patch marker.
 pub async fn capture_turn_diff(
     repos: &Repos,
     root: &Path,
-    turn_tree: &str,
+    base: &TurnSnapshot,
 ) -> Result<DiffSnapshot, EngineError> {
-    let current = snapshot_tree(root).await?;
+    let canonical = tokio::fs::canonicalize(root)
+        .await
+        .unwrap_or_else(|_| root.to_path_buf());
+    if canonical != base.root {
+        return Err(unavailable(
+            "the latest turn started in a different checkout",
+        ));
+    }
+    let current = Box::pin(base.capture_current()).await?;
+    match tokio::time::timeout(
+        SNAPSHOT_TIMEOUT,
+        Box::pin(turn_diff_between(repos, base, &current)),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(unavailable(&format!(
+            "reading the turn diff took longer than {}s",
+            SNAPSHOT_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
+async fn turn_diff_between(
+    repos: &Repos,
+    base: &TurnSnapshot,
+    current: &TurnSnapshot,
+) -> Result<DiffSnapshot, EngineError> {
+    let root = current.root.as_path();
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
         .await
         .map(|c| String::from_utf8_lossy(&c.stdout).trim().to_string())
@@ -1472,45 +1670,39 @@ pub async fn capture_turn_diff(
         .current_branch(root)
         .await
         .unwrap_or_else(|_| "HEAD".into());
+    let (from, to) = (base.tree.as_str(), current.tree.as_str());
 
-    let names = capture_git(
-        root,
+    // The current store reads through the base store and the checkout.
+    let names = turn_snapshot::capture_git_in(
+        current,
         &[
             "diff",
             "--name-status",
             "-z",
             "--find-renames",
-            turn_tree,
-            &current,
+            from,
+            to,
             "--",
         ],
         2 * 1024 * 1024,
     )
     .await?;
-    let nums = capture_git(
-        root,
-        &[
-            "diff",
-            "--numstat",
-            "-z",
-            "--find-renames",
-            turn_tree,
-            &current,
-            "--",
-        ],
+    let nums = turn_snapshot::capture_git_in(
+        current,
+        &["diff", "--numstat", "-z", "--find-renames", from, to, "--"],
         2 * 1024 * 1024,
     )
     .await?;
-    let tracked = capture_git(
-        root,
+    let tracked = turn_snapshot::capture_git_in(
+        current,
         &[
             "diff",
             "--no-ext-diff",
             "--no-color",
             "--find-renames",
             "--unified=3",
-            turn_tree,
-            &current,
+            from,
+            to,
             "--",
         ],
         MAX_PATCH_BYTES,
@@ -1520,11 +1712,22 @@ pub async fn capture_turn_diff(
     let mut files = parse_name_status(&names.stdout);
     apply_numstat(&mut files, &nums.stdout);
     let mut patch = String::from_utf8_lossy(&tracked.stdout).to_string();
-    let truncated = tracked.truncated || names.truncated || nums.truncated;
+    let mut truncated = tracked.truncated || names.truncated || nums.truncated;
     if tracked.truncated {
         let boundary = patch.rfind('\n').unwrap_or(0);
         patch.truncate(boundary);
         patch.push_str("\n# Luna diff truncated\n");
+    }
+    // An omitted path may have changed: never present the result as complete.
+    let omitted = current.omitted_paths();
+    if omitted > 0 {
+        truncated = true;
+        if !patch.is_empty() && !patch.ends_with('\n') {
+            patch.push('\n');
+        }
+        patch.push_str(&format!(
+            "# Luna turn snapshot omitted {omitted} path(s) over the snapshot budget\n"
+        ));
     }
 
     let additions: u32 = files.iter().map(|f| f.additions).sum();

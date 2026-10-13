@@ -137,6 +137,10 @@ impl Repos {
     pub(crate) fn managed_worktrees_root(&self) -> &Path {
         &self.inner.worktrees_root
     }
+    /// The engine data root (device-scoped) this registry was opened on.
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.inner.data_dir
+    }
     /// `data_dir` holds `repos.json` + cloned/created repos; the worktree root
     /// comes from `$LUNA_WORKTREES_DIR` or `~/.luna/worktrees`.
     pub fn new(data_dir: &Path, device_id: &str) -> Self {
