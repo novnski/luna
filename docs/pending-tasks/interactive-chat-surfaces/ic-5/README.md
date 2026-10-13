@@ -59,11 +59,15 @@ opening replay has not arrived yet, which Find reports as *Partial history*.
   Diacritic-insensitive matching and regex stay out of scope.
 - **Off-thread, chunked, fenced.** Rows are projected, folded and matched on
   the background executor in pipelined chunks (128 KiB first for latency,
-  then 1 MiB or 4,096 rows, so a 10 MiB pass needs about a dozen UI-thread
-  merges). A query
-  generation fences every chunk; a new query drops the running task. The
-  pass starts at the viewport, so the first match found is the first at or
-  after the reader's position; it becomes active and is revealed.
+  then 2 MiB or 8,192 rows, so a 10 MiB / 57k-row pass needs about seven
+  UI-thread merges). Each chunk is cut from the live rows on the UI thread
+  just before it runs, so starting a pass costs one small chunk, never a walk
+  over the whole history; the previous query's results are freed on the
+  background executor. A query generation fences every chunk; a new query
+  drops the running task. The pass starts at the viewport's top row (while
+  the view follows the tail, at the first row the last frame painted), so
+  the first match found is the first at or after what the reader sees; it
+  becomes active and is revealed.
 - **Incremental.** Display segments are cached per row id and version and
   reused across queries. After each row sync only rows whose version changed
   are re-matched, removed rows are forgotten, and a coverage change from
@@ -128,6 +132,11 @@ Owned (`ui/transcript`, `ui/markdown`):
   helpers made `pub(super)`; highlights painted for text elements and code
   lines.
 - `crates/ui/src/markdown/mod.rs`: `pub mod find`.
+- `crates/ui/src/rail.rs` (the transcript's MessageRail `impl Transcript`):
+  the tick-to-row map is cached per row generation. Per frame it deep-copied
+  the whole transcript, rebuilt every preview and searched the rows linearly
+  for every tick (~370 ms a frame at 10,000 entries / 57,346 rows, the C12
+  finding below).
 - `crates/ui/examples/ic5-conversation-find-fixture.rs` (new).
 
 Shared, additive hunks:
@@ -221,6 +230,23 @@ running reply. Record a screenshot per step in `$RUN/native/`.
    count.
 6. **Appearance.** Repeat step 2 in light and dark themes; the bar sits below
    the titlebar fade and above the rows; nothing is clipped at narrow widths.
+
+## P01 finding and fix (fix round 1)
+
+The first release run (`ic5-20261013`, M3 Max, 10,000 entries, 57,346 rows)
+missed the budget: worst first match 2,107 ms, worst frame while searching
+369 ms, merges at most 1.47 ms. The 369 ms frame was not Find: the
+transcript's MessageRail rebuilt its tick-to-row map every frame (a deep copy
+of the transcript, 5,000 previews, and 5,000 linear row searches). Every
+Find merge notifies the view, so each merge cost a ~370 ms frame, and the
+merges (and so the first match) queued behind those frames. Fixed by caching
+the rail per row generation and mapping ticks in one pass; Find also cuts
+chunks lazily, uses larger later chunks, frees old results off-thread and
+keeps the status position without materializing every match. The fixture
+now records per-phase attribution (`performance.phases`: prepare, first
+chunk, first match, background, slowest chunk and merge, reveal frame) and
+budgets every frame of a step (`worstStepFrameMs`), not only frames drawn
+while searching.
 
 ## Limitations and open items
 

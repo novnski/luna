@@ -36,8 +36,10 @@ const MAX_QUERY_CHARS: usize = 256;
 /// thread: a small first chunk for first-match latency, then larger ones so
 /// a 10 MiB pass needs a handful of UI-thread merges, not hundreds.
 const FIRST_CHUNK_BYTES: usize = 128 * 1024;
-const CHUNK_BYTES: usize = 1024 * 1024;
-const CHUNK_ROWS: usize = 4_096;
+/// Later chunks: a 10 MiB / 57k-row pass is ~7 merges. A merge of 8,192
+/// rows is a few ms of map inserts; cutting a chunk visits at most as many.
+const CHUNK_BYTES: usize = 2 * 1024 * 1024;
+const CHUNK_ROWS: usize = 8_192;
 /// A transcript selection seeds a new query only when it is this short.
 const SEED_SELECTION_CHARS: usize = 120;
 const FIND_BAR_WIDTH: f32 = 420.0;
@@ -324,24 +326,32 @@ enum WorkInput {
 
 struct FindWork {
     row_id: SharedString,
+    /// Where the row was when the chunk was cut (a hint; ids are the truth).
+    row_ix: usize,
     version: u64,
-    bytes: usize,
     input: WorkInput,
 }
 
 struct RowResult {
     row_id: SharedString,
+    row_ix: usize,
     version: u64,
     projected: Option<Arc<[Segment]>>,
     matches: Arc<[ElementMatch]>,
 }
 
-fn run_chunk(
-    work: Vec<FindWork>,
-    query: &FindQuery,
-    workspace_root: Option<&str>,
-) -> Vec<RowResult> {
-    work.into_iter()
+/// One chunk's results plus its own background cost, for attribution.
+struct ChunkResult {
+    rows: Vec<RowResult>,
+    elapsed_ms: f64,
+}
+
+fn run_chunk(work: Vec<FindWork>, query: &FindQuery, workspace_root: Option<&str>) -> ChunkResult {
+    let started = Instant::now();
+    // Most rows match nothing: share one empty slice instead of allocating.
+    let empty: Arc<[ElementMatch]> = Vec::new().into();
+    let rows = work
+        .into_iter()
         .map(|item| {
             let (segments, projected) = match item.input {
                 WorkInput::Cached(segments) => (segments, None),
@@ -360,26 +370,21 @@ fn run_chunk(
             }
             RowResult {
                 row_id: item.row_id,
+                row_ix: item.row_ix,
                 version: item.version,
                 projected,
-                matches: matches.into(),
+                matches: if matches.is_empty() {
+                    empty.clone()
+                } else {
+                    matches.into()
+                },
             }
         })
-        .collect()
-}
-
-/// Take the next chunk of work, bounded by `budget` bytes and [`CHUNK_ROWS`].
-fn next_chunk(work: &mut std::vec::IntoIter<FindWork>, budget: usize) -> Vec<FindWork> {
-    let mut chunk = Vec::new();
-    let mut bytes = 0;
-    while chunk.len() < CHUNK_ROWS && bytes < budget {
-        let Some(item) = work.next() else {
-            break;
-        };
-        bytes += item.bytes;
-        chunk.push(item);
+        .collect();
+    ChunkResult {
+        rows,
+        elapsed_ms: ms_since(started),
     }
-    chunk
 }
 
 fn spawn_chunk(
@@ -387,9 +392,37 @@ fn spawn_chunk(
     chunk: Vec<FindWork>,
     query: FindQuery,
     workspace_root: Option<SharedString>,
-) -> Task<Vec<RowResult>> {
+) -> Task<ChunkResult> {
     cx.background_executor()
         .spawn(async move { run_chunk(chunk, &query, workspace_root.as_deref()) })
+}
+
+/// The rows a pass still has to hand to the background executor. Chunks
+/// are cut from the live rows on the UI thread just before they run, so
+/// starting a pass costs one chunk, never a walk over the whole history.
+enum PassOrder {
+    /// Every row once, starting at `start` and wrapping (a full pass).
+    Rotated { start: usize, len: usize },
+    /// Specific rows (an incremental pass after streaming or edits).
+    Rows(Vec<usize>),
+}
+
+pub(super) struct FindPass {
+    order: PassOrder,
+    next: usize,
+}
+
+impl FindPass {
+    fn row_at(&self, k: usize) -> Option<usize> {
+        match &self.order {
+            PassOrder::Rotated { start, len } => (k < *len).then(|| (start + k) % len),
+            PassOrder::Rows(rows) => rows.get(k).copied(),
+        }
+    }
+
+    fn exhausted(&self) -> bool {
+        self.row_at(self.next).is_none()
+    }
 }
 
 fn no_matches() -> Arc<[ElementMatch]> {
@@ -439,13 +472,21 @@ struct MatchPos {
     match_ix: usize,
 }
 
-/// Measurements for the evidence record (P01); observation only.
+/// Measurements for the evidence record (P01); observation only. Phases:
+/// `prepare_ms` is the UI-thread cost of starting the pass (through cutting
+/// its first chunk), `first_chunk_ms` when that chunk's results landed,
+/// `background_ms`/`max_chunk_ms` the executor's own projection and
+/// matching time, and `max_apply_ms` the slowest UI-thread merge.
 #[derive(Clone, Debug, Default)]
 pub(super) struct FindStats {
     started: Option<Instant>,
+    prepare_ms: Option<f64>,
+    first_chunk_ms: Option<f64>,
     first_match_ms: Option<f64>,
     complete_ms: Option<f64>,
     chunks: usize,
+    background_ms: f64,
+    max_chunk_ms: f64,
     max_apply_ms: f64,
     rows: usize,
     projected_rows: usize,
@@ -471,7 +512,13 @@ pub(super) struct FindState {
     /// Matches of the current query per row (version-keyed).
     matches: HashMap<SharedString, (u64, Arc<[ElementMatch]>)>,
     total: usize,
+    /// The running pass's remaining rows.
+    pass: Option<FindPass>,
+    /// Every match in reading order; built only to step (Enter/arrows).
     ordered: Option<Rc<[MatchPos]>>,
+    /// The active match's 1-based-minus-one position for the status line,
+    /// cached until matches, rows or the active match change.
+    position: Option<Option<usize>>,
     active: Option<FindAnchor>,
     /// The running full pass picks (and reveals) the first match it finds.
     pick_first: bool,
@@ -495,6 +542,12 @@ pub(super) struct FindState {
 }
 
 impl FindState {
+    /// Matches, rows or the active match changed: derived orderings are stale.
+    fn invalidate_order(&mut self) {
+        self.ordered = None;
+        self.position = None;
+    }
+
     /// Note a wheel/touch scroll: the viewport is the user's again.
     pub(super) fn note_user_scroll(&mut self) {
         if self.open {
@@ -594,13 +647,19 @@ impl Transcript {
         self.find.open = false;
         self.find.generation = self.find.generation.wrapping_add(1);
         self.find.task = None;
+        self.find.pass = None;
         self.find.searching = false;
         self.find.dirty = false;
         self.find.query = None;
-        self.find.matches.clear();
-        self.find.segments.clear();
+        // ~57k entries and the ~18 MiB segment index: free them off the UI
+        // thread rather than in the Escape keystroke.
+        let matches = std::mem::take(&mut self.find.matches);
+        let segments = std::mem::take(&mut self.find.segments);
+        cx.background_executor()
+            .spawn(async move { drop((matches, segments)) })
+            .detach();
         self.find.total = 0;
-        self.find.ordered = None;
+        self.find.invalidate_order();
         self.find.active = None;
         self.find.active_rect.set(None);
         self.find.reveal_frames = 0;
@@ -725,28 +784,59 @@ impl Transcript {
     /// starting at the viewport so the first match found is the first one
     /// at or after what the reader is looking at.
     fn restart_find(&mut self, cx: &mut Context<Self>) {
+        let started = Instant::now();
         self.find.generation = self.find.generation.wrapping_add(1);
         self.find.task = None;
+        self.find.pass = None;
         self.find.searching = false;
         self.find.dirty = false;
-        self.find.matches.clear();
+        // Dropping ~57k result entries is the one O(rows) step here: hand
+        // the old map to the background executor instead of a keystroke.
+        let previous = std::mem::take(&mut self.find.matches);
+        if !previous.is_empty() {
+            cx.background_executor()
+                .spawn(async move { drop(previous) })
+                .detach();
+        }
         self.find.total = 0;
-        self.find.ordered = None;
+        self.find.invalidate_order();
         self.find.active = None;
         self.find.active_rect.set(None);
         self.find.history_complete = self.find_history_complete(cx);
         self.find.stats = FindStats {
-            started: Some(Instant::now()),
+            started: Some(started),
             rows: self.rows.len(),
             ..Default::default()
         };
         self.find.pick_first = self.find.query.is_some();
         if self.find.query.is_some() {
-            let start = self.list.logical_scroll_top().item_ix.min(self.rows.len());
-            let order: Vec<usize> = (start..self.rows.len()).chain(0..start).collect();
+            let order = PassOrder::Rotated {
+                start: self.find_scan_start(),
+                len: self.rows.len(),
+            };
             self.run_find_job(order, true, cx);
         }
         cx.notify();
+    }
+
+    /// The first row a full pass reads: the viewport's top row, or, while the
+    /// view follows the tail (the list's scroll top is then past the end),
+    /// the first row the last frame painted.
+    fn find_scan_start(&self) -> usize {
+        let len = self.rows.len();
+        let top = self.list.logical_scroll_top().item_ix;
+        if top < len {
+            return top;
+        }
+        let mut start = len;
+        while start > 0
+            && len - start < CHUNK_ROWS
+            && self.rendered_rows.contains(&self.rows[start - 1].id)
+        {
+            start -= 1;
+        }
+        // Nothing painted yet: read from the start of the history.
+        if start == len { 0 } else { start }
     }
 
     /// After every row sync: re-match only rows whose content changed,
@@ -770,8 +860,10 @@ impl Transcript {
             self.restart_find(cx);
             return;
         }
-        self.find.ordered = None;
+        self.find.invalidate_order();
         if self.find.searching {
+            // The running pass (full or incremental) keeps its first-match
+            // progress; one incremental pass follows it for what changed.
             self.find.dirty = true;
             return;
         }
@@ -805,17 +897,27 @@ impl Transcript {
         if changed.is_empty() {
             self.resolve_find_active();
         } else {
-            self.run_find_job(changed, false, cx);
+            self.run_find_job(PassOrder::Rows(changed), false, cx);
         }
         cx.notify();
     }
 
-    fn run_find_job(&mut self, order: Vec<usize>, full: bool, cx: &mut Context<Self>) {
-        let Some(query) = self.find.query.clone() else {
-            return;
-        };
+    /// Cut the next chunk from the running pass, from the live rows: up to
+    /// `budget` bytes or [`CHUNK_ROWS`] rows visited. Rows with nothing to
+    /// search are settled here (no matches) without a background trip.
+    fn take_find_work(&mut self, budget: usize) -> Vec<FindWork> {
         let mut work = Vec::new();
-        for ix in order {
+        let Some(mut pass) = self.find.pass.take() else {
+            return work;
+        };
+        let mut bytes = 0;
+        let mut visited = 0;
+        while visited < CHUNK_ROWS && bytes < budget {
+            let Some(ix) = pass.row_at(pass.next) else {
+                break;
+            };
+            pass.next += 1;
+            visited += 1;
             let Some(row) = self.rows.get(ix) else {
                 continue;
             };
@@ -824,8 +926,10 @@ impl Transcript {
                     .find
                     .matches
                     .insert(row.id.clone(), (row.version, no_matches()))
+                    && !old.is_empty()
                 {
                     self.find.total -= old.len();
+                    self.find.invalidate_order();
                 }
                 continue;
             };
@@ -835,19 +939,38 @@ impl Transcript {
                 }
                 _ => WorkInput::Project(source),
             };
-            let bytes = match &input {
+            let row_bytes = match &input {
                 WorkInput::Cached(segments) => segments.iter().map(Segment::bytes).sum(),
                 WorkInput::Project(source) => source.estimated_bytes(),
             };
+            bytes += row_bytes;
             work.push(FindWork {
                 row_id: row.id.clone(),
+                row_ix: ix,
                 version: row.version,
-                bytes,
                 input,
             });
         }
-        self.find.ordered = None;
-        if work.is_empty() {
+        self.find.pass = Some(pass);
+        work
+    }
+
+    fn find_pass_exhausted(&self) -> bool {
+        self.find.pass.as_ref().is_none_or(FindPass::exhausted)
+    }
+
+    fn run_find_job(&mut self, order: PassOrder, full: bool, cx: &mut Context<Self>) {
+        let Some(query) = self.find.query.clone() else {
+            return;
+        };
+        self.find.pass = Some(FindPass { order, next: 0 });
+        self.find.invalidate_order();
+        let first = self.take_find_work(FIRST_CHUNK_BYTES);
+        if full {
+            self.find.stats.prepare_ms = self.find.stats.started.map(ms_since);
+        }
+        if first.is_empty() && self.find_pass_exhausted() {
+            self.find.pass = None;
             self.finish_find_job(full, cx);
             return;
         }
@@ -855,33 +978,60 @@ impl Transcript {
         let workspace_root = self.row_workspace_root(cx);
         self.find.searching = true;
         self.find.task = Some(cx.spawn(async move |this, cx| {
-            let mut work = work.into_iter();
-            // Pipelined: the next chunk runs on the background executor while
-            // the UI thread merges the previous one. A small first chunk gets
-            // the first match out quickly; larger later chunks keep the
-            // number of UI-thread merges (and re-renders) per pass small.
-            let first = next_chunk(&mut work, FIRST_CHUNK_BYTES);
-            let mut pending = Some(spawn_chunk(
+            // Pipelined: one chunk runs on the background executor while the
+            // UI thread merges the one before it and cuts the next. A small
+            // first chunk gets the first match out quickly; larger later
+            // chunks keep UI-thread merges (and re-renders) per pass few.
+            let mut in_flight = VecDeque::new();
+            in_flight.push_back(spawn_chunk(
                 cx,
                 first,
                 query.clone(),
                 workspace_root.clone(),
             ));
-            while let Some(running) = pending.take() {
-                let results = running.await;
-                let rest = next_chunk(&mut work, CHUNK_BYTES);
-                let last = rest.is_empty();
-                if !last {
-                    pending = Some(spawn_chunk(cx, rest, query.clone(), workspace_root.clone()));
+            let mut exhausted = false;
+            loop {
+                while !exhausted && in_flight.len() < 2 {
+                    let Ok(Some((work, done))) = this.update(cx, |this, _| {
+                        (this.find.generation == generation).then(|| {
+                            let work = this.take_find_work(CHUNK_BYTES);
+                            (work, this.find_pass_exhausted())
+                        })
+                    }) else {
+                        // Obsolete pass, or the view is gone.
+                        return;
+                    };
+                    exhausted = done;
+                    if !work.is_empty() {
+                        in_flight.push_back(spawn_chunk(
+                            cx,
+                            work,
+                            query.clone(),
+                            workspace_root.clone(),
+                        ));
+                    }
                 }
+                let Some(running) = in_flight.pop_front() else {
+                    this.update(cx, |this, cx| {
+                        if this.find.generation == generation {
+                            this.find.pass = None;
+                            this.finish_find_job(full, cx);
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                    return;
+                };
+                let results = running.await;
+                let last = exhausted && in_flight.is_empty();
                 let proceed = this
                     .update(cx, |this, cx| {
                         this.apply_find_chunk(generation, full, results, last, cx)
                     })
                     .unwrap_or(false);
-                if !proceed {
-                    // Dropping the queued chunk cancels it.
-                    break;
+                if !proceed || last {
+                    // Dropping a queued chunk cancels it.
+                    return;
                 }
             }
         }));
@@ -893,7 +1043,7 @@ impl Transcript {
         &mut self,
         generation: u64,
         full: bool,
-        results: Vec<RowResult>,
+        results: ChunkResult,
         last: bool,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -901,8 +1051,13 @@ impl Transcript {
             return false;
         }
         let started = Instant::now();
-        let mut first: Option<(SharedString, ElementMatch)> = None;
-        for result in results {
+        if full && self.find.stats.first_chunk_ms.is_none() {
+            self.find.stats.first_chunk_ms = self.find.stats.started.map(ms_since);
+        }
+        self.find.stats.background_ms += results.elapsed_ms;
+        self.find.stats.max_chunk_ms = self.find.stats.max_chunk_ms.max(results.elapsed_ms);
+        let mut first: Option<(SharedString, usize, ElementMatch)> = None;
+        for result in results.rows {
             if let Some(segments) = result.projected {
                 self.find.stats.projected_rows += 1;
                 self.find
@@ -912,7 +1067,7 @@ impl Transcript {
             if first.is_none()
                 && let Some(found) = result.matches.first()
             {
-                first = Some((result.row_id.clone(), found.clone()));
+                first = Some((result.row_id.clone(), result.row_ix, found.clone()));
             }
             self.find.total += result.matches.len();
             if let Some((_, old)) = self
@@ -923,18 +1078,19 @@ impl Transcript {
                 self.find.total -= old.len();
             }
         }
-        self.find.ordered = None;
+        self.find.invalidate_order();
         self.find.stats.chunks += 1;
         if self.find.pick_first
-            && let Some((row_id, found)) = first
+            && let Some((row_id, row_ix, found)) = first
         {
             self.find.pick_first = false;
             self.find.stats.first_match_ms = self.find.stats.started.map(ms_since);
-            self.set_find_active(row_id, found, true, cx);
+            self.set_find_active(row_id, Some(row_ix), found, true, cx);
         } else if !full {
             self.resolve_find_active();
         }
         if last {
+            self.find.pass = None;
             self.finish_find_job(full, cx);
         }
         let elapsed = ms_since(started);
@@ -956,8 +1112,12 @@ impl Transcript {
                 projected_rows = stats.projected_rows,
                 chunks = stats.chunks,
                 matches = self.find.total,
+                prepare_ms = ?stats.prepare_ms,
+                first_chunk_ms = ?stats.first_chunk_ms,
                 first_match_ms = ?stats.first_match_ms,
                 complete_ms = ?stats.complete_ms,
+                background_ms = stats.background_ms,
+                max_chunk_ms = stats.max_chunk_ms,
                 max_apply_ms = stats.max_apply_ms,
                 "conversation find pass complete"
             );
@@ -971,14 +1131,14 @@ impl Transcript {
     fn set_find_active(
         &mut self,
         row_id: SharedString,
+        row_ix: Option<usize>,
         found: ElementMatch,
         reveal: bool,
         cx: &mut Context<Self>,
     ) {
-        let row_hint = self
-            .rows
-            .iter()
-            .position(|row| row.id == row_id)
+        let row_hint = row_ix
+            .filter(|&ix| self.rows.get(ix).is_some_and(|row| row.id == row_id))
+            .or_else(|| self.rows.iter().position(|row| row.id == row_id))
             .unwrap_or(0);
         self.find.active = Some(FindAnchor {
             row_id,
@@ -986,6 +1146,7 @@ impl Transcript {
             range: found.range,
             row_hint,
         });
+        self.find.position = None;
         self.find.active_rect.set(None);
         if reveal {
             self.reveal_find_active(cx);
@@ -1014,6 +1175,7 @@ impl Transcript {
             if let Some(found) = kept {
                 if found.range != anchor.range {
                     self.find.active_rect.set(None);
+                    self.find.position = None;
                 }
                 self.find.active = Some(FindAnchor {
                     row_id: anchor.row_id,
@@ -1041,6 +1203,7 @@ impl Transcript {
             range: found.range,
             row_hint,
         });
+        self.find.position = None;
         self.find.active_rect.set(None);
     }
 
@@ -1066,6 +1229,31 @@ impl Transcript {
         let ordered: Rc<[MatchPos]> = out.into();
         self.find.ordered = Some(ordered.clone());
         ordered
+    }
+
+    /// The active match's place in reading order for the status line,
+    /// counted from per-row totals (no list of every match) and cached
+    /// until matches, rows or the active match change.
+    fn find_status_position(&mut self) -> Option<usize> {
+        if let Some(position) = self.find.position {
+            return position;
+        }
+        let position = (|| {
+            let anchor = self.find.active.as_ref()?;
+            let row_ix = self.find_row_ix(anchor)?;
+            let (_, matches) = self.find.matches.get(&anchor.row_id)?;
+            let match_ix = matches
+                .iter()
+                .position(|found| found.element == anchor.element && found.range == anchor.range)?;
+            let before: usize = self.rows[..row_ix]
+                .iter()
+                .filter_map(|row| self.find.matches.get(&row.id))
+                .map(|(_, matches)| matches.len())
+                .sum();
+            Some(before + match_ix)
+        })();
+        self.find.position = Some(position);
+        position
     }
 
     fn find_active_position(&self, ordered: &[MatchPos]) -> Option<usize> {
@@ -1113,7 +1301,7 @@ impl Transcript {
         else {
             return;
         };
-        self.set_find_active(row_id, found, true, cx);
+        self.set_find_active(row_id, Some(position.row_ix), found, true, cx);
         cx.notify();
     }
 
@@ -1323,8 +1511,7 @@ impl Transcript {
         }
         let total = self.find.total;
         let position = if total > 0 {
-            let ordered = self.find_ordered();
-            self.find_active_position(&ordered)
+            self.find_status_position()
         } else {
             None
         };
@@ -1572,8 +1759,12 @@ impl Transcript {
                 "rows": stats.rows,
                 "projectedRows": stats.projected_rows,
                 "chunks": stats.chunks,
+                "prepareMs": stats.prepare_ms,
+                "firstChunkMs": stats.first_chunk_ms,
                 "firstMatchMs": stats.first_match_ms,
                 "completeMs": stats.complete_ms,
+                "backgroundMs": stats.background_ms,
+                "maxChunkMs": stats.max_chunk_ms,
                 "maxApplyMs": stats.max_apply_ms,
                 "segmentBytes": segment_bytes,
             },
@@ -2081,12 +2272,27 @@ mod tests {
         assert!(harness.transcript(|this, _, _| this.pinned));
 
         harness.open();
-        // Typed into the focused bar (keystroke syntax reserves '-').
+        // Typed into the focused bar (keystroke syntax reserves '-'). The
+        // view follows the tail, so the first match at or after what is on
+        // screen is the visible reply, not the oldest prompt.
         harness.window.simulate_input("folded");
         harness.window.draw();
+        assert_eq!(harness.active(), Some(("second".into(), "FOLDED".into())));
+        assert_eq!(harness.status(), "2 of 3");
         assert_eq!(
-            harness.active(),
-            Some(("long-prompt".into(), "FOLDED".into()))
+            fold(&mut harness),
+            None,
+            "no fold opens for a visible match"
+        );
+
+        let step = |harness: &mut Harness, keys: &str| {
+            harness.window.simulate_keystrokes(keys);
+            harness.window.draw();
+            harness.active().map(|(entry, _)| entry)
+        };
+        assert_eq!(
+            step(&mut harness, "shift-enter").as_deref(),
+            Some("long-prompt")
         );
         assert_eq!(
             fold(&mut harness),
@@ -2094,14 +2300,8 @@ mod tests {
             "the hidden line's fold opens"
         );
         let top = harness.transcript(|this, _, _| this.list.logical_scroll_top().item_ix);
-        assert_eq!(top, prompt_ix);
+        assert_eq!(top, prompt_ix, "the off-screen prompt is revealed");
         assert_eq!(harness.status(), "1 of 3");
-
-        let step = |harness: &mut Harness, keys: &str| {
-            harness.window.simulate_keystrokes(keys);
-            harness.window.draw();
-            harness.active().map(|(entry, _)| entry)
-        };
         assert_eq!(step(&mut harness, "enter").as_deref(), Some("second"));
         assert_eq!(fold(&mut harness), None, "moving on restores Find's fold");
         assert_eq!(step(&mut harness, "enter").as_deref(), Some("third"));
@@ -2126,9 +2326,10 @@ mod tests {
         // Reopen (the query is remembered), then change the fold and the
         // viewport by hand: closing keeps the user's changes.
         harness.open();
+        assert_eq!(harness.active(), Some(("second".into(), "FOLDED".into())));
         assert_eq!(
-            harness.active(),
-            Some(("long-prompt".into(), "FOLDED".into()))
+            step(&mut harness, "shift-enter").as_deref(),
+            Some("long-prompt")
         );
         assert_eq!(fold(&mut harness), Some(true));
         let toggled = prompt_row.clone();

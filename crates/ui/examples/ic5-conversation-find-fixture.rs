@@ -230,7 +230,7 @@ fn probe(index: usize, entries: usize) -> Option<&'static str> {
 }
 
 fn entry(index: usize, entries: usize, rng: &mut Lcg) -> SessionMessageEntry {
-    let role = if index % 2 == 0 {
+    let role = if index.is_multiple_of(2) {
         MessageRole::User
     } else {
         MessageRole::Assistant
@@ -336,6 +336,10 @@ impl Run {
         let mut last_frame: Option<Instant> = None;
         let mut max_frame_ms = 0f64;
         let mut frames = 0usize;
+        // Attribution: the first frame drawn once an active match exists is
+        // the reveal (scroll to its row, lay out rows never measured there).
+        let mut reveal_frame_ms: Option<f64> = None;
+        let mut max_step_frame_ms = 0f64;
         let mut state = readback(&self.transcript, cx);
         let mut timed_out = false;
         while state["searching"] == true {
@@ -344,8 +348,13 @@ impl Run {
                 break;
             }
             if last_frame.is_none_or(|at| at.elapsed() >= FRAME_SAMPLE_EVERY) {
+                let had_active = !state["active"].is_null();
                 let frame_ms = frame(self.window, cx)?;
                 max_frame_ms = max_frame_ms.max(frame_ms);
+                max_step_frame_ms = max_step_frame_ms.max(frame_ms);
+                if had_active && reveal_frame_ms.is_none() {
+                    reveal_frame_ms = Some(frame_ms);
+                }
                 frames += 1;
                 last_frame = Some(Instant::now());
             }
@@ -362,7 +371,12 @@ impl Run {
             state = readback(&self.transcript, cx);
         }
         for _ in 0..3 {
-            frame(self.window, cx)?;
+            let had_active = !readback(&self.transcript, cx)["active"].is_null();
+            let frame_ms = frame(self.window, cx)?;
+            max_step_frame_ms = max_step_frame_ms.max(frame_ms);
+            if had_active && reveal_frame_ms.is_none() {
+                reveal_frame_ms = Some(frame_ms);
+            }
             cx.background_executor().timer(POLL).await;
         }
         let mut state = readback(&self.transcript, cx);
@@ -383,6 +397,9 @@ impl Run {
         state["stepMs"] = json!(ms(started));
         state["framesWhileSearching"] = json!(frames);
         state["maxFrameMsWhileSearching"] = json!(max_frame_ms);
+        // Every frame of the step, the settle and reveal frames included.
+        state["maxFrameMs"] = json!(max_step_frame_ms);
+        state["revealFrameMs"] = json!(reveal_frame_ms);
         state["timedOut"] = json!(timed_out);
         Ok(state)
     }
@@ -423,7 +440,7 @@ fn active_entry(state: &Value) -> Option<&str> {
 fn worst(states: &[&Value], pick: impl Fn(&Value) -> Option<f64>) -> f64 {
     states
         .iter()
-        .filter_map(|state| pick(*state))
+        .filter_map(|state| pick(state))
         .fold(0f64, f64::max)
 }
 
@@ -571,6 +588,9 @@ async fn scenarios(
     let worst_first = worst(&firsts, |state| state["stats"]["firstMatchMs"].as_f64());
     let worst_merge = worst(&passes, |state| state["stats"]["maxApplyMs"].as_f64());
     let worst_frame = worst(&passes, |state| state["maxFrameMsWhileSearching"].as_f64());
+    // Stricter than frames-while-searching: also the reveal and settle frames.
+    let worst_step_frame = worst(&passes, |state| state["maxFrameMs"].as_f64());
+    let worst_reveal = worst(&firsts, |state| state["revealFrameMs"].as_f64());
     let hardware = std::process::Command::new("/usr/sbin/sysctl")
         .args(["-n", "hw.model", "machdep.cpu.brand_string"])
         .output()
@@ -611,13 +631,28 @@ async fn scenarios(
             "worstFirstMatchMs": worst_first,
             "worstMergeMs": worst_merge,
             "worstFrameMsWhileSearching": worst_frame,
+            "worstStepFrameMs": worst_step_frame,
+            "worstRevealFrameMs": worst_reveal,
+            "phases": passes.iter().map(|state| json!({
+                "query": state["query"],
+                "prepareMs": state["stats"]["prepareMs"],
+                "firstChunkMs": state["stats"]["firstChunkMs"],
+                "firstMatchMs": state["stats"]["firstMatchMs"],
+                "completeMs": state["stats"]["completeMs"],
+                "backgroundMs": state["stats"]["backgroundMs"],
+                "maxChunkMs": state["stats"]["maxChunkMs"],
+                "maxMergeMs": state["stats"]["maxApplyMs"],
+                "revealFrameMs": state["revealFrameMs"],
+                "maxFrameMs": state["maxFrameMs"],
+            })).collect::<Vec<_>>(),
             "budget": {
                 "firstMatchMs": FIRST_MATCH_BUDGET_MS,
                 "frameMs": FRAME_BUDGET_MS,
                 "measuredAtRepresentativeSize": entries_wanted >= DEFAULT_ENTRIES && !cfg!(debug_assertions),
                 "withinProvisionalBudget": worst_first <= FIRST_MATCH_BUDGET_MS
                     && worst_merge <= FRAME_BUDGET_MS
-                    && worst_frame <= FRAME_BUDGET_MS,
+                    && worst_frame <= FRAME_BUDGET_MS
+                    && worst_step_frame <= FRAME_BUDGET_MS,
             },
         },
         "checks": run.checks,

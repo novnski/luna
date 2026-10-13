@@ -4149,6 +4149,10 @@ pub struct Transcript {
     /// Find in Conversation (IC-5): bar, query, results and active match.
     /// View-local; never part of the document or the row fingerprints.
     find: find::FindState,
+    /// Bumped whenever `rows` is replaced or cleared; keys row-derived
+    /// caches such as the rail's tick-to-row map.
+    rows_generation: u64,
+    rail_cache: Option<(u64, Rc<crate::rail::RailLayout>)>,
     _observe: Subscription,
     _text_changes: Subscription,
     /// Inline automation cards repaint when their records land or change.
@@ -4416,6 +4420,8 @@ impl Transcript {
             blob_fetch_order: HashMap::new(),
             blob_fetch_counter: 0,
             find: Default::default(),
+            rows_generation: 0,
+            rail_cache: None,
             _observe: observe,
             _text_changes: text_changes,
             _automation_cards: automation_cards,
@@ -4485,6 +4491,14 @@ impl Transcript {
 
     pub(crate) fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    pub(crate) fn rows_generation(&self) -> u64 {
+        self.rows_generation
+    }
+
+    pub(crate) fn rail_cache_mut(&mut self) -> &mut Option<(u64, Rc<crate::rail::RailLayout>)> {
+        &mut self.rail_cache
     }
 
     pub(crate) fn list_state(&self) -> &ListState {
@@ -5667,6 +5681,7 @@ impl Transcript {
             }
             self.chat_id = selected;
             self.rows.clear();
+            self.rows_generation = self.rows_generation.wrapping_add(1);
             self.live_parsers.clear();
             self.folds.clear();
             self.tool_group_reveals.clear();
@@ -6047,6 +6062,7 @@ impl Transcript {
         match diff_rows(&self.rows, &new_rows) {
             None => {
                 self.rows = new_rows;
+                self.rows_generation = self.rows_generation.wrapping_add(1);
                 self.refresh_protected_attachments(cx);
                 self.reconcile_own_turn_prompt();
                 // Replay readiness is independent of row content: an empty
@@ -6111,6 +6127,7 @@ impl Transcript {
             }
         }
         self.rows = new_rows;
+        self.rows_generation = self.rows_generation.wrapping_add(1);
         if old_last != self.rows.len().checked_sub(1) {
             if let Some(ix) = old_last.filter(|&ix| ix < self.rows.len()) {
                 // Bottom chrome moves to the new tail too.

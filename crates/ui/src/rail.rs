@@ -8,6 +8,8 @@
 //! extension since the rail shares the transcript's rows and `ListState`.
 
 use gpui::{AnyElement, Context, ListOffset, SharedString, div, prelude::*, px};
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use luna_doc::{MessagePart, MessageRole, SessionMessageEntry};
@@ -27,6 +29,13 @@ pub fn rail_visible(container_width: f32) -> bool {
 /// Preview text caps (grapheme-unaware char cut is fine for a preview card).
 pub const PREVIEW_PROMPT_CHARS: usize = 160;
 pub const PREVIEW_REPLY_CHARS: usize = 200;
+
+/// The rail's ticks paired with their transcript rows, cached per row
+/// generation by the transcript (see `Transcript::rail_layout`).
+pub(crate) struct RailLayout {
+    pairs: Vec<(RailTick, usize)>,
+    tick_rows: Vec<usize>,
+}
 
 /// One rail tick: a user prompt and the opening of the reply that followed.
 #[derive(Debug, Clone, PartialEq)]
@@ -406,33 +415,61 @@ impl Transcript {
         }));
     }
 
+    /// The ticks mapped to their transcript rows, rebuilt only when the rows
+    /// change. Per frame this was a deep copy of the whole transcript, a
+    /// preview per prompt and a linear row search per tick: ~370 ms a frame
+    /// for a 10,000-entry chat (5,000 ticks over 57,000 rows).
+    fn rail_layout(&mut self, cx: &mut Context<Self>) -> Rc<RailLayout> {
+        let generation = self.rows_generation();
+        if let Some((cached, layout)) = self.rail_cache_mut().as_ref()
+            && *cached == generation
+        {
+            return layout.clone();
+        }
+        let ticks = {
+            let state = self.state_entity().read(cx);
+            rail_ticks(&state.transcript, state.pending_echoes())
+        };
+        // One pass over the rows (user rows share the entry id); the first
+        // row carrying a tick's id is its row, as before.
+        let wanted: HashMap<&str, usize> = ticks
+            .iter()
+            .enumerate()
+            .map(|(ix, tick)| (tick.message_id.as_str(), ix))
+            .collect();
+        let mut rows_of: Vec<Option<usize>> = vec![None; ticks.len()];
+        for (row_ix, row) in self.rows().iter().enumerate() {
+            if let Some(&tick_ix) = wanted.get(row.id.as_ref())
+                && rows_of[tick_ix].is_none()
+            {
+                rows_of[tick_ix] = Some(row_ix);
+            }
+        }
+        drop(wanted);
+        let pairs: Vec<(RailTick, usize)> = ticks
+            .into_iter()
+            .zip(rows_of)
+            .filter_map(|(tick, row)| Some((tick, row?)))
+            .collect();
+        let tick_rows = pairs.iter().map(|(_, row)| *row).collect();
+        let layout = Rc::new(RailLayout { pairs, tick_rows });
+        *self.rail_cache_mut() = Some((generation, layout.clone()));
+        layout
+    }
+
     /// The rail element — an absolute overlay along the transcript's left edge.
     pub fn render_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.rail_enabled() {
             return gpui::Empty.into_any_element();
         }
-        let (entries, echoes) = {
-            let state = self.state_entity().read(cx);
-            (state.transcript.clone(), state.pending_echoes().to_vec())
-        };
-        let ticks = rail_ticks(&entries, &echoes);
-        // Map each tick to its transcript row (user rows share the entry id).
-        let pairs: Vec<(RailTick, usize)> = ticks
-            .into_iter()
-            .filter_map(|tick| {
-                let row = self
-                    .rows()
-                    .iter()
-                    .position(|r| r.id.as_ref() == tick.message_id.as_str())?;
-                Some((tick, row))
-            })
-            .collect();
+        let layout = self.rail_layout(cx);
+        let pairs = &layout.pairs;
         // A minimap of one exchange is noise, not navigation — the original
         // rail hides below two marks (message-rail.tsx `marks.length < 2`).
         if pairs.len() < 2 {
             return gpui::Empty.into_any_element();
         }
-        let tick_rows: Vec<usize> = pairs.iter().map(|(_, row)| *row).collect();
+        let tick_rows = &layout.tick_rows;
         // Active detection reads from the READING line, not the raw clip top:
         // the titlebar overlays the list, so a row whose top sits within that
         // chrome band is what you're reading — the sliver of the previous row
@@ -453,7 +490,7 @@ impl Transcript {
                 break;
             }
         }
-        let active = active_tick(&tick_rows, top_row);
+        let active = active_tick(tick_rows, top_row);
         let hover = self.rail_hover();
         let theme = Theme::of(cx).clone();
 
