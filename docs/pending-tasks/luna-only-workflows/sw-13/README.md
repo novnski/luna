@@ -48,6 +48,7 @@ runner checks observed behaviour against them; it does not redefine them.
 | F13 | Auth-style failure | Completed or silent; resent after the account reconnects; the failure is muted | Failed (or Unknown) with reason, Needs attention, message once, sentinel 0, later slots are new occurrences |
 | F14 | A saved schedule is not execution | A saved, paused or never-run schedule counted as a run | The runner counts only run rows with transcript and sentinel proof; no rows exist while the host is down |
 | F15 | Refusal at the task-command fence | Pause, edit, delete or a busy target found under the task gate after Dispatching is recorded **Unknown**, which blocks later work until a manual Resolve | `automations_e2e` (see G1) |
+| F16 | An occurrence routed to a parked warm runtime | The provider turn completes but the run stays Accepted, so every later slot is Skipped as busy; or a later turn's Done settles an earlier occurrence | `automations_e2e` (see G2); live runner phases `lifecycle`/`restart` |
 
 ## Demonstrated gap and fix
 
@@ -76,6 +77,38 @@ Regression: the same test now asserts the refused occurrence is `skipped`
 with no command receipt, then resumes the automation and requires the next
 occurrence to be delivered exactly once. On the pre-fix code it fails on the
 state (`unknown`), and the resumed slot would be Skipped as blocked.
+
+**G2 (F16), found live.** In run `sw13-live-20261013-224947` the first
+`codex-full-existing` occurrence after its update stayed Accepted for over
+7 minutes. Its turn had completed, the reply and the single sentinel line
+existed, and every later slot was Skipped as busy. The revision only
+coincided with it. Codex and Claude runtimes park after a completed turn. A
+later Run whose configuration still matches is routed into the parked
+runtime's mailbox (`AllowFollowUpTurn`). That starts a new provider turn
+inside the same run task, confirmed by a `Steered` boundary that applies the
+message's receipt. The Done handler settled automation outcomes only for the
+run task's original message (`resume_state.user_message_id`), which changes
+only for goal-attachment runs. So the routed occurrence never completed, and
+the earlier occurrence could be re-settled by a later turn. The two earlier
+runs in that chat completed, so each must have started a fresh runtime
+process. Routing requires an identical runtime configuration, including the
+compiled runtime contract. The second dispatch's contract differs from the
+first (a resumed rather than a fresh session) and forces a replacement; the
+third is the first routed one. That is inferred from the code, not observed.
+
+Fix (`crates/engine/src/sessions.rs`, the run event loop): a confirmed,
+non-historical boundary that resumes a parked runtime for an
+`AllowFollowUpTurn` message records that message as the turn's owner. Done
+settles the owner, falling back to the original message, then clears it. A
+steer into an already active turn keeps the original owner. Recovery and
+transcript identity are unchanged.
+
+Regression: `automations_e2e::revised_existing_chat_occurrences_complete_on_a_parked_runtime`.
+A steerable peer parks after each turn and confirms routed messages with
+`Steered`. The first occurrence starts it. A revised prompt's next occurrence,
+and the slot after it, must each reach Completed without a Skipped slot. The
+peer must record them as routed follow-ups, not fresh runs. On the pre-fix
+code the revised occurrence stays Accepted and the wait times out.
 
 ## Criteria mapping
 

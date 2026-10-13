@@ -7735,6 +7735,9 @@ async fn drive_run(
     let mut interrupt_deadline: Option<tokio::time::Instant> = None;
     let mut interrupted = false;
     let mut saw_session_started = false;
+    // The routed message whose confirmed boundary resumed this parked runtime
+    // owns the current provider turn; None means the run's original message.
+    let mut turn_owner: Option<String> = None;
     let mut recovery_session_id = recovery_request.resume.clone();
     let mut last_error_message: Option<String> = None;
     // Liveness heartbeat: this loop RUNNING is proof the harness stream is
@@ -9231,6 +9234,15 @@ async fn drive_run(
                     tracing::error!(chat = %chat_id, run = %run_id, %error,
                         "steer recording receipt finalization failed");
                 } else {
+                    // A warm route into a parked runtime starts a new provider
+                    // turn for this exact message; a steer into an already
+                    // active turn joins it and keeps that turn's owner.
+                    if !historical_steer
+                        && !turn_was_active
+                        && steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
+                    {
+                        turn_owner = Some(steer.message_id.clone());
+                    }
                     if !historical_steer
                         && resume_state.control_only
                         && let Some(snapshot) = steer.frozen_request.as_ref()
@@ -9658,10 +9670,14 @@ async fn drive_run(
         }
 
         if let AgentEvent::Done { status, error, .. } = &event {
-            // Exact automation message identity, never the latest conversation
-            // message or a later turn. Completion survives a scheduler restart.
-            if !resume_state.control_only {
-                let message = resume_state.user_message_id.as_str();
+            // Exact automation message identity of THIS provider turn: the
+            // routed message that resumed a parked runtime, else the run's
+            // original message; never the latest conversation message.
+            // Completion survives a scheduler restart.
+            let turn_message = turn_owner.take().or_else(|| {
+                (!resume_state.control_only).then(|| resume_state.user_message_id.clone())
+            });
+            if let Some(message) = turn_message.as_deref() {
                 let state = if saw_session_started && *status == DoneStatus::Completed {
                     luna_proto::AutomationRunState::Completed
                 } else {

@@ -304,7 +304,16 @@ const preferred = {
 async function pickModel(provider, mode) {
   const key = `${provider}:${mode}`;
   if (models[key]) return models[key];
-  const catalog = await ipc.call('ListModels', {harness: provider}, 90_000);
+  // A freshly started engine may still be loading accounts or the registry;
+  // only that explicitly retryable refusal is retried, for at most 30 s.
+  let catalog;
+  for (let attempt = 1, end = Math.min(Date.now() + 30_000, deadline); ; attempt++) {
+    try { catalog = await ipc.call('ListModels', {harness: provider}, 90_000); break; } catch (error) {
+      if (!/changed during model discovery; retry/i.test(String(error)) || Date.now() >= end) throw error;
+      observe('F2', `${key} model discovery asked for a retry`, {attempt, error: String(error)});
+      await delay(Math.min(1000 * attempt, 5000));
+    }
+  }
   const override = provider === 'codex' ? process.env.LUNA_QA_CODEX_MODEL
     : (mode === 'auto' && process.env.LUNA_QA_CLAUDE_AUTO_MODEL) || process.env.LUNA_QA_CLAUDE_MODEL;
   const list = provider === 'codex' ? preferred.codex : mode === 'auto' ? preferred.claudeAuto : preferred.claude;

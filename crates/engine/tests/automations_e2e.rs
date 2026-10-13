@@ -93,6 +93,103 @@ impl Harness for Peer {
         .boxed())
     }
 }
+/// A steerable protocol peer that parks after each completed turn, as the
+/// Codex and Claude adapters do. A routed message starts the next provider
+/// turn on the same runtime, confirmed by its exact `Steered` boundary.
+struct ParkedPeer {
+    seen: Arc<Mutex<Vec<Value>>>,
+}
+#[async_trait]
+impl Harness for ParkedPeer {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Parked automation peer"
+    }
+    fn supports_steering(&self) -> bool {
+        true
+    }
+    fn steering_mode(&self) -> luna_proto::SteeringMode {
+        luna_proto::SteeringMode::StepBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        r: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(json!({"routed":false,"prompt":r.prompt}));
+        let done = || -> Result<AgentEvent, HarnessError> {
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some("parked-native".into()),
+            })
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<AgentEvent, HarnessError>>();
+        for event in [
+            Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "fixture".into(),
+                tools: vec![],
+                cwd: r.cwd,
+                session_id: "parked-native".into(),
+                assistant_message_id: format!("reply-{}", uuid::Uuid::new_v4()),
+            }),
+            Ok(AgentEvent::TextDelta {
+                text: "automation completed".into(),
+            }),
+            done(),
+        ] {
+            let _ = tx.send(event);
+        }
+        let seen = self.seen.clone();
+        let (interrupt, mut mailbox) = (controls.interrupt, controls.steering);
+        tokio::spawn(async move {
+            loop {
+                let steer = tokio::select! {
+                    _ = interrupt.cancelled() => return,
+                    steer = mailbox.recv() => match steer {
+                        Some(steer) => steer,
+                        None => return,
+                    },
+                };
+                seen.lock()
+                    .unwrap()
+                    .push(json!({"routed":true,"prompt":steer.prompt}));
+                for event in [
+                    Ok(AgentEvent::Steered {
+                        user_message_id: steer.message_id,
+                        assistant_message_id: None,
+                        next_assistant_message_id: Some(format!("reply-{}", uuid::Uuid::new_v4())),
+                    }),
+                    Ok(AgentEvent::TextDelta {
+                        text: "follow-up completed".into(),
+                    }),
+                    done(),
+                ] {
+                    if tx.send(event).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (event, rx))
+        })
+        .boxed())
+    }
+}
 fn core(root: &std::path::Path, seen: Arc<Mutex<Vec<Value>>>) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(Peer {
@@ -2435,6 +2532,62 @@ async fn a_registered_worktree_runs_but_a_changed_checkout_is_not_reused() {
     evidence(
         "workflow-checkout-revalidation",
         json!({"saved":saved,"first":first,"after":after,"providerCalls":seen.lock().unwrap().len()}),
+    );
+    e.shutdown().await;
+}
+
+/// SW-13 G2: a revised existing-chat schedule's next slot reaches a runtime
+/// that parked after the previous turn. The warm route starts a new provider
+/// turn whose Done must settle that exact occurrence; otherwise it stays
+/// Accepted and every later slot is skipped as busy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revised_existing_chat_occurrences_complete_on_a_parked_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(ParkedPeer { seen: seen.clone() }));
+    let e = registered_core(root.path(), registry, HarnessId::Mock);
+    let c = luna_rpc::memory_client(e.rpc_service());
+    create(&c, &e).await;
+    mutate(
+        &c,
+        save(
+            &e,
+            "parked",
+            "first revision",
+            json!({"kind":"interval","anchorMs":NOW+1000,"everyMinutes":1}),
+        ),
+    )
+    .await;
+    let first = complete_at(&e, &c, "parked", NOW + 1000).await;
+    let live = call(&c, "ListAutomations", json!({"automationId":"parked"})).await;
+    let mut definition = live["items"][0]["definition"].clone();
+    definition["prompt"] = json!("second revision");
+    mutate(&c,json!({"requestId":"revise-parked","automationId":"parked","ownerHostId":e.device_id,"expectedRevision":live["items"][0]["revision"],"operation":{"kind":"save","definition":definition}})).await;
+    let revised = complete_at(&e, &c, "parked", NOW + 61000).await;
+    let later = complete_at(&e, &c, "parked", NOW + 121000).await;
+    let ledger = later["items"].as_array().unwrap();
+    assert_eq!(ledger.len(), 3, "{later}");
+    assert!(
+        ledger
+            .iter()
+            .all(|run| run["state"] == "completed" && run["taskId"] == CHAT),
+        "{later}"
+    );
+    assert_eq!(revised["items"][0]["automationRevision"], 2);
+    assert_eq!(later["items"][0]["automationRevision"], 2);
+    // Both later occurrences went through the parked runtime, not a restart.
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            json!({"routed":false,"prompt":"first revision"}),
+            json!({"routed":true,"prompt":"second revision"}),
+            json!({"routed":true,"prompt":"second revision"}),
+        ]
+    );
+    evidence(
+        "parked-runtime-occurrences",
+        json!({"first":first,"revised":revised,"later":later,"provider":seen.lock().unwrap().clone()}),
     );
     e.shutdown().await;
 }
