@@ -394,3 +394,13 @@ evidence; it never sends a prompt.
 - **Gemini:** no Auto reviewer, no mid-turn steering, no questions; model
   availability depends on the user's Gemini account; token usage is the
   CLI's own `result.stats`.
+- **Closed without a real Gemini run (user decision, 2026-10-14):** LUNA
+  will not add Gemini. Native QA steps 1–3 and 8–10 passed on unchanged app
+  bytes (`target/qa/core08/20261013/native/results.md`). Step 4 surfaced a
+  real failure: Gemini refused the account (`IneligibleTierError`) before
+  any model call. Steps 5–7 (Stop, continuity, resume failure) were not run
+  against a real CLI; the conformance E2E covers them with a scripted CLI.
+  The first real provider turn, Stop and continuation through a package
+  path are proven by CORE-09–11, which move Codex, Claude Code and OpenCode
+  onto this contract. `examples/extensions/gemini-cli/` stays as the
+  reference third-party package; it is not shipped.
