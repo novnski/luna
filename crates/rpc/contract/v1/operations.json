@@ -1099,6 +1099,66 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "ListExtensionInstances",
+      "id": "luna.core/list-extension-instances",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StartExtensionInstance",
+      "id": "luna.core/start-extension-instance",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "CallExtensionInstance",
+      "id": "luna.core/call-extension-instance",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "StopExtensionInstance",
+      "id": "luna.core/stop-extension-instance",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ReleaseExtensionQuarantine",
+      "id": "luna.core/release-extension-quarantine",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "ListComposerCatalog",
       "id": "luna.core/list-composer-catalog",
       "version": 1,

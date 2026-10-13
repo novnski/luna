@@ -3,6 +3,12 @@
 //! catalog rows (owner IPC and the in-process app; never a remote session)
 //! and are served only by the engine's local service. Package I/O runs on a
 //! blocking thread; the command admission stays held until it finishes.
+//!
+//! CORE-07 adds the supervised-instance methods on the same terms:
+//! `ListExtensionInstances`, `StartExtensionInstance`,
+//! `CallExtensionInstance`, `StopExtensionInstance` and
+//! `ReleaseExtensionQuarantine`. Workers never reach these: they talk only to
+//! the capability broker over their own stdio.
 
 use super::*;
 
@@ -13,6 +19,11 @@ pub(super) fn handles(method: &str) -> bool {
             | methods::INSPECT_EXTENSION
             | methods::INSTALL_EXTENSION
             | methods::SET_EXTENSION_ENABLED
+            | methods::LIST_EXTENSION_INSTANCES
+            | methods::START_EXTENSION_INSTANCE
+            | methods::CALL_EXTENSION_INSTANCE
+            | methods::STOP_EXTENSION_INSTANCE
+            | methods::RELEASE_EXTENSION_QUARANTINE
     )
 }
 
@@ -57,6 +68,42 @@ impl EngineRpc {
                 let request: luna_proto::SetExtensionEnabledRequest = parse_params(params)?;
                 let view = blocking(move || manager.set_enabled(&request)).await?;
                 RpcReply::value(&view)
+            }
+            methods::LIST_EXTENSION_INSTANCES => {
+                let snapshot = manager.instances().map_err(RpcError::Failed)?;
+                RpcReply::value(&snapshot)
+            }
+            methods::START_EXTENSION_INSTANCE => {
+                let request: luna_proto::StartExtensionInstanceRequest = parse_params(params)?;
+                let view = manager
+                    .start_instance(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&view)
+            }
+            methods::CALL_EXTENSION_INSTANCE => {
+                let request: luna_proto::CallExtensionInstanceRequest = parse_params(params)?;
+                let outcome = manager
+                    .call_instance(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&outcome)
+            }
+            methods::STOP_EXTENSION_INSTANCE => {
+                let request: luna_proto::StopExtensionInstanceRequest = parse_params(params)?;
+                let view = manager
+                    .stop_instance(&request.instance_id)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&view)
+            }
+            methods::RELEASE_EXTENSION_QUARANTINE => {
+                let request: luna_proto::ReleaseExtensionQuarantineRequest = parse_params(params)?;
+                let snapshot = manager
+                    .release_quarantine(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&snapshot)
             }
             other => Err(RpcError::UnknownMethod(other.to_string())),
         }

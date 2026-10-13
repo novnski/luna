@@ -70,6 +70,9 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 # remote_access.rs pins the gateway's key the way the phone does.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 x509-parser = "0.18"
+# extension_portable.rs (CORE-07) assembles its independently written WAT
+# guests into real module bytes; the same version Wasmtime 49.0.2 uses.
+wat = "=1.261.0"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mimalloc.workspace = true

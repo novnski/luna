@@ -751,6 +751,7 @@ impl EngineCore {
             profile.store_root(),
             workspace.profile_id(profile.scope()),
             device_write.handle(),
+            workspace.clone(),
         );
         let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
         let remote_access =
@@ -1090,6 +1091,8 @@ impl EngineCore {
         clean &= self.sessions.shutdown().await;
         // Temporary Board discussions never keep working after quit.
         rpc::board_engine::authoring::shutdown_all(&self.board_hub).await;
+        // CORE-07: no extension worker outlives the engine.
+        self.extensions.shutdown().await;
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();

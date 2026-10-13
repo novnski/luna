@@ -9,6 +9,9 @@ members = [
     "crates/sync",
     "crates/harness",
     "crates/engine",
+    # CORE-07 portable (Wasm) extension host: a separate process, never
+    # linked into the app or the engine.
+    "crates/extension-host",
     "crates/rpc",
     "crates/sdk",
     "crates/remote",

@@ -1,0 +1,20 @@
+[package]
+name = "luna-extension-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "LUNA's portable extension host: one supervised process per Wasm instance, core modules with luna_broker_v1 imports only (CORE-07)."
+
+[[bin]]
+name = "luna-extension-host"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+# CORE-00 ADR: Wasmtime 49.0.2, the feature set its probe exercised. Kept out
+# of the app and engine; only this separate host process links it.
+wasmtime = { version = "=49.0.2", default-features = false, features = ["std", "runtime", "cranelift", "async", "wat", "anyhow"] }

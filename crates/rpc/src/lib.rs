@@ -148,6 +148,14 @@ pub mod methods {
     pub const INSPECT_EXTENSION: &str = "InspectExtension";
     pub const INSTALL_EXTENSION: &str = "InstallExtension";
     pub const SET_EXTENSION_ENABLED: &str = "SetExtensionEnabled";
+    /// CORE-07 supervised instances of enabled packages (owner only). Every
+    /// start re-verifies the exact enabled hash and grants; workers reach
+    /// LUNA only through the capability broker, never through these.
+    pub const LIST_EXTENSION_INSTANCES: &str = "ListExtensionInstances";
+    pub const START_EXTENSION_INSTANCE: &str = "StartExtensionInstance";
+    pub const CALL_EXTENSION_INSTANCE: &str = "CallExtensionInstance";
+    pub const STOP_EXTENSION_INSTANCE: &str = "StopExtensionInstance";
+    pub const RELEASE_EXTENSION_QUARANTINE: &str = "ReleaseExtensionQuarantine";
     pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
@@ -577,6 +585,11 @@ pub mod methods {
         INSPECT_EXTENSION,
         INSTALL_EXTENSION,
         SET_EXTENSION_ENABLED,
+        LIST_EXTENSION_INSTANCES,
+        START_EXTENSION_INSTANCE,
+        CALL_EXTENSION_INSTANCE,
+        STOP_EXTENSION_INSTANCE,
+        RELEASE_EXTENSION_QUARANTINE,
         LIST_COMMANDS,
         LIST_COMPOSER_CATALOG,
         GET_PROJECT_COMMANDS,

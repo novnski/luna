@@ -35,8 +35,9 @@ pub struct ExtensionContractVersion {
 }
 
 /// The extension API this LUNA implements (manifest fields, contribution
-/// kinds and the capability vocabulary).
-pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 0 };
+/// kinds and the capability vocabulary). 1.1 (CORE-07) adds
+/// `runtime.limits` and the broker operations in `extension_runtime`.
+pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 1 };
 /// The native worker handshake (CORE-00: JSON lines, major/minor).
 pub const EXTENSION_WORKER_PROTOCOL: ExtensionContractVersion =
     ExtensionContractVersion { major: 1, minor: 0 };
@@ -181,7 +182,31 @@ pub struct ExtensionRuntime {
     /// Platform key → listed executable file (`native` only).
     #[serde(default)]
     pub entries: BTreeMap<String, String>,
+    /// API 1.1: resources the worker asks for, within the host's ceilings
+    /// (`wasm` and `native` only). Absent fields take the host's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<ExtensionRuntimeLimits>,
 }
+
+/// What one worker may use. The supervisor enforces these; the manifest can
+/// only choose values inside the host's published range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionRuntimeLimits {
+    /// Resident memory of the worker's whole process group, in MiB
+    /// ([`EXTENSION_MEMORY_MIB_RANGE`]).
+    #[serde(default, rename = "memoryMiB")]
+    pub memory_mib: Option<u32>,
+    /// CPU seconds each worker process may use (`RLIMIT_CPU`,
+    /// [`EXTENSION_CPU_SECONDS_RANGE`]).
+    #[serde(default)]
+    pub cpu_seconds: Option<u32>,
+}
+
+/// Accepted `runtime.limits.memoryMiB` values, inclusive.
+pub const EXTENSION_MEMORY_MIB_RANGE: (u32, u32) = (16, 4096);
+/// Accepted `runtime.limits.cpuSeconds` values, inclusive.
+pub const EXTENSION_CPU_SECONDS_RANGE: (u32, u32) = (1, 86_400);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

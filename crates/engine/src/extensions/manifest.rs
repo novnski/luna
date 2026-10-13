@@ -309,6 +309,30 @@ pub(super) fn validate(bytes: &[u8]) -> Result<ValidatedManifest, String> {
             }
         }
     }
+    if let Some(limits) = &runtime.limits {
+        if runtime.kind == ExtensionRuntimeKind::Data {
+            return Err("a data package runs nothing, so it has no runtime.limits".into());
+        }
+        if manifest.api.min_minor < 1 {
+            return Err("runtime.limits needs extension API 1.1; set api.minMinor to 1".into());
+        }
+        let in_range = |label: &str, value: Option<u32>, (min, max): (u32, u32)| match value {
+            Some(value) if value < min || value > max => Err(format!(
+                "runtime.limits.{label} must be between {min} and {max}"
+            )),
+            _ => Ok(()),
+        };
+        in_range(
+            "memoryMiB",
+            limits.memory_mib,
+            luna_proto::EXTENSION_MEMORY_MIB_RANGE,
+        )?;
+        in_range(
+            "cpuSeconds",
+            limits.cpu_seconds,
+            luna_proto::EXTENSION_CPU_SECONDS_RANGE,
+        )?;
+    }
     for key in &manifest.platforms {
         check_platform_key(key)?;
     }
