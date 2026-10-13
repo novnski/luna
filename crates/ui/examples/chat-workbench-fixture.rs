@@ -228,8 +228,8 @@
 //!     required a 320x240 minimum per group and a scrolling canvas; native
 //!     RED `ui-resize-red-1200` showed that design overflowing by up to
 //!     1,014 px, so groups now share the viewport.)
-//! 25. With both sidebars open, a group's strip in the bottom row runs past
-//!     the row's right edge, under the right sidebar; the bottom row still
+//! 25. With both sidebars open, a group's strip in the titlebar's tab row
+//!     runs past the row's right edge, under the right sidebar; the tab row
 //!     shows Review changes or Commit & push (the Overview has them); or a
 //!     real click on the Overview's Review changes does not open Changes
 //!     bound to the focused chat's checkout.
@@ -258,18 +258,22 @@
 //! 15. A side chat opens as a Side tab without its exact source parent,
 //!     closing its tab stops or ends it, or a closed Side tab cannot be
 //!     reopened from Main's Related library.
-//! 62. (Bottom tab row, docs/design/bottom-tabs-2026-10-12.) A tab paints
-//!     inside the canvas (the old top strip) or a group has no strip in the
-//!     frame's bottom row; a strip leaves the row.
-//! 63. A side-by-side group's strip is not under its own column (outside
+//! 62. (Tabs in the titlebar, docs/design/titlebar-tabs-2026-10-13; the
+//!     bottom row of docs/design/bottom-tabs-2026-10-12 before it.) A tab
+//!     paints anywhere but the titlebar's tab row (inside the canvas or
+//!     under it), a group has no strip there, a strip leaves the row, or the
+//!     canvas does not reach the window's bottom inset.
+//! 63. A side-by-side group's strip is not over its own column (outside
 //!     its x-range, or not spanning it when nothing is stacked there); two
 //!     strips overlap; stacked groups' strips put the lower group first.
 //! 64. A shown chat's composer has no checkout row above its pill, the row
 //!     sits under, over or away from the pill, or it is wider than the pill.
-//! 65. A tab drag onto another group's strip in the bottom row does not
-//!     move it there (drops still aimed at the old top strip).
-//! 66. Balance panes, gone from the bottom row, is missing from the tab
+//! 65. A tab drag onto another group's strip in the titlebar does not move
+//!     it there (drops aimed at a strip inside the canvas).
+//! 66. Balance panes, gone from the frame row, is missing from the tab
 //!     menu with a split.
+//! 67. A group's `+` is not right after its last tab (it sits at the
+//!     strip's far end), or after tabs that are not its own.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example chat-workbench-fixture
@@ -759,7 +763,7 @@ fn fully_revealed(rb: &Value, chat: &str) -> bool {
         })
 }
 
-/// `pane`'s tab strip in the frame's bottom row.
+/// `pane`'s tab strip in the titlebar's tab row.
 fn strip_rect(rb: &Value, pane: &str) -> anyhow::Result<(f32, f32, f32, f32)> {
     rb["stripBounds"]
         .as_array()
@@ -767,7 +771,7 @@ fn strip_rect(rb: &Value, pane: &str) -> anyhow::Result<(f32, f32, f32, f32)> {
         .flatten()
         .find(|entry| entry["pane"] == pane)
         .map(|entry| rect(&entry["bounds"]))
-        .ok_or_else(|| anyhow::anyhow!("group {pane} has no strip in the bottom row: {rb}"))
+        .ok_or_else(|| anyhow::anyhow!("group {pane} has no strip in the tab row: {rb}"))
 }
 
 /// A readback `[x, y, w, h]` array.
@@ -787,17 +791,17 @@ fn overlap_x(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
 /// A group's id and its strip's rect.
 type PaneStrip = (String, (f32, f32, f32, f32));
 
-/// Failure cases 62 and 63: every group's tabs sit in the frame's bottom
-/// row, below the canvas, each strip under its own column. A group with
+/// Failure cases 62, 63 and 67: every group's tabs sit in the titlebar's
+/// tab row, above the canvas, each strip over its own column. A group with
 /// only side-by-side ancestors spans its column; a stacked split keeps all
 /// its strips inside its own width, the upper side's left of the lower's;
-/// no two strips overlap.
-fn assert_bottom_row(rb: &Value, what: &str) -> anyhow::Result<()> {
+/// no two strips overlap; a group's `+` follows its last tab.
+fn assert_tab_row(rb: &Value, what: &str) -> anyhow::Result<()> {
     let row = rect(&rb["rowBounds"]);
     let view = rect(&rb["rootBounds"]);
     anyhow::ensure!(
-        row.2 > 0.0 && row.1 >= view.1 + view.3 - 0.5,
-        "{what}: the bottom row sits under the canvas: {rb}"
+        row.2 > 0.0 && row.1 >= -0.5 && row.1 + row.3 <= view.1 + 0.5,
+        "{what}: the tab row sits in the titlebar, above the canvas: {rb}"
     );
     let mut strips = Vec::new();
     for pane in all_panes(rb) {
@@ -808,7 +812,7 @@ fn assert_bottom_row(rb: &Value, what: &str) -> anyhow::Result<()> {
                 && strip.0 + strip.2 <= row.0 + row.2 + 0.5
                 && strip.1 >= row.1 - 0.5
                 && strip.1 + strip.3 <= row.1 + row.3 + 0.5,
-            "{what}: group {id}'s strip stays inside the bottom row: {strip:?} in {row:?}"
+            "{what}: group {id}'s strip stays inside the tab row: {strip:?} in {row:?}"
         );
         for tab in rb["tabBounds"]
             .as_array()
@@ -820,9 +824,42 @@ fn assert_bottom_row(rb: &Value, what: &str) -> anyhow::Result<()> {
             let bounds = rect(&tab["bounds"]);
             anyhow::ensure!(
                 bounds.1 >= strip.1 - 0.5 && bounds.1 + bounds.3 <= strip.1 + strip.3 + 0.5,
-                "{what}: tab {} paints in its group's bottom strip, not in the canvas: {bounds:?} vs {strip:?}",
+                "{what}: tab {} paints in its group's strip in the titlebar, not in the canvas: {bounds:?} vs {strip:?}",
                 tab["chatId"]
             );
+        }
+        // `+` right after the group's last tab: its tab viewport hugs the
+        // tabs (until they fill the strip and scroll), and `+` follows it.
+        let view_of = rb["tabBounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["pane"] == id.as_str())
+            .map(|entry| {
+                let last = entry["tabs"]
+                    .as_array()
+                    .and_then(|tabs| tabs.last())
+                    .map(|tab| rect(&tab["bounds"]));
+                (rect(&entry["view"]), last)
+            });
+        let plus = rb["plusBounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["pane"] == id.as_str())
+            .map(|entry| rect(&entry["bounds"]));
+        if let (Some((view, last)), Some(plus)) = (view_of, plus) {
+            let after = plus.0 - (view.0 + view.2);
+            anyhow::ensure!(
+                (-0.5..=8.0).contains(&after),
+                "{what}: group {id}'s + follows its tabs (gap {after}): {plus:?} after {view:?}"
+            );
+            if let Some(last) = last.filter(|last| last.0 + last.2 <= view.0 + view.2 + 0.5) {
+                anyhow::ensure!(
+                    (view.0 + view.2) - (last.0 + last.2) <= 1.5,
+                    "{what}: group {id}'s tab viewport ends at its last tab: {view:?} vs {last:?}"
+                );
+            }
         }
         strips.push((id, strip));
     }
@@ -1097,7 +1134,7 @@ fn assert_contained(rb: &Value, what: &str) -> anyhow::Result<()> {
             "{what}: the focused group's selected fill differs from the other groups': {selection:?}"
         );
     }
-    assert_bottom_row(rb, what)?;
+    assert_tab_row(rb, what)?;
     assert_context_rows(rb, what)
 }
 
@@ -1114,7 +1151,7 @@ fn pane_areas(rb: &Value) -> Vec<f32> {
 }
 
 /// Balance panes through real clicks (failure case 66): a right click on a
-/// tab in the bottom row opens the tab menu, whose Balance panes row is
+/// tab in the titlebar opens the tab menu, whose Balance panes row is
 /// clicked. The tab is the focused group's active one, so opening the menu
 /// changes nothing; with an empty group focused it is Main's, whose press
 /// focuses Main's group first (one write of its own). Returns the settled
@@ -1182,8 +1219,8 @@ async fn settle_frames(window: Window, cx: &mut AsyncApp) -> anyhow::Result<()> 
 }
 
 /// Bring `chat`'s tab where a real pointer can click it, with real wheel
-/// events, and return the fresh readback. Every strip is in the frame's
-/// bottom row (never hidden by the canvas): if the tab is wholly scrolled
+/// events, and return the fresh readback. Every strip is in the titlebar's
+/// tab row (never hidden by the canvas): if the tab is wholly scrolled
 /// out of its strip (its tabs are wider than it), wheel the strip itself
 /// toward the tab.
 ///
@@ -2327,7 +2364,7 @@ fn main() -> anyhow::Result<()> {
                     shell.fixture_workbench_type(CHILD_B, "Check the release notes", true, cx)
                 })?;
                 anyhow::ensure!(sent, "Child B's composer must exist");
-                // Onto Main's group's strip in the bottom row (failure case 65).
+                // Onto Main's group's strip in the titlebar (failure case 65).
                 let main_strip = {
                     let (x, y, _, h) = strip_rect(&nested, &main_pane)?;
                     (x + 200.0, y + h / 2.0)
@@ -3261,10 +3298,11 @@ fn main() -> anyhow::Result<()> {
                 }
                 progress(&output, &mut record, "narrow".into(), narrow);
 
-                // w15b. The bottom row with both sidebars open and a long
+                // w15b. The tab row with both sidebars open and a long
                 // focused title (failure case 25): every group's strip stays
                 // wholly inside the row, left of the right sidebar; the row
-                // holds no Git actions (the Overview has them); the focused
+                // holds no Git actions (the Overview has them); the canvas
+                // reaches the window's bottom inset (case 62); the focused
                 // alongside chat's checkout row names its own worktree; and
                 // a real click on the Overview's Review changes opens
                 // Changes bound to the alongside chat's checkout.
@@ -3298,22 +3336,24 @@ fn main() -> anyhow::Result<()> {
                     }
                     let state_now = frame(window, cx)?;
                     anyhow::ensure!(state_now["rightOpen"] == true && state_now["sidebarCollapsed"] == false, "both sidebars open: {state_now}");
-                    let row = rect(&state_now["footer"]);
+                    let row = rect(&state_now["tabRow"]);
                     let right_limit = state_now["viewportWidth"].as_f64().unwrap_or(0.0) as f32 - state_now["rightNow"].as_f64().unwrap_or(0.0) as f32;
-                    anyhow::ensure!(row.2 > 0.0 && row.0 + row.2 <= right_limit + 0.5, "the bottom row ends left of the right sidebar at {width}: {row:?} (limit {right_limit})");
+                    anyhow::ensure!(row.2 > 0.0 && row.0 + row.2 <= right_limit + 0.5, "the tab row ends left of the right sidebar at {width}: {row:?} (limit {right_limit})");
+                    let viewport = rect(&state_now["canvas"]);
+                    anyhow::ensure!(((viewport.1 + viewport.3) - (HEIGHT - 14.0)).abs() <= 1.5, "the canvas reaches the window's bottom inset at {width}: {viewport:?} in a {HEIGHT} px window");
                     let strips: Vec<(f32, f32, f32, f32)> = state_now["strips"].as_array().into_iter().flatten().map(rect).collect();
-                    anyhow::ensure!(!strips.is_empty(), "the bottom row holds the strips at {width}: {state_now}");
+                    anyhow::ensure!(!strips.is_empty(), "the tab row holds the strips at {width}: {state_now}");
                     for strip in &strips {
                         anyhow::ensure!(strip.0 >= row.0 - 0.5 && strip.0 + strip.2 <= row.0 + row.2 + 0.5, "a strip stays wholly inside the row at {width}: {strip:?} in {row:?}");
                     }
                     let rb_now = wb(window, cx)?;
-                    assert_bottom_row(&rb_now, &format!("bottom row at {width}"))?;
+                    assert_tab_row(&rb_now, &format!("tab row at {width}"))?;
                     assert_context_rows(&rb_now, &format!("checkout rows at {width}"))?;
                     anyhow::ensure!(
                         context_labels(&rb_now, ALONG).first().map(String::as_str) == Some("Worktree"),
                         "the focused alongside chat's row names its own worktree at {width}: {rb_now}"
                     );
-                    shot(window, cx, output.join(format!("w15b-bottom-row-{}.png", width as i32))).await?;
+                    shot(window, cx, output.join(format!("w15b-tab-row-{}.png", width as i32))).await?;
                     // The Overview's Review changes: a real pointer click
                     // (no Git mutation: it only opens the view).
                     window.update(cx, |shell, _, cx| shell.fixture_clear_right_probe(cx))?;
@@ -3321,7 +3361,7 @@ fn main() -> anyhow::Result<()> {
                     let right = window.update(cx, |shell, _, cx| shell.fixture_right_sidebar_readback(cx))?;
                     let review = quad(&right["bounds"]["overview-review"])
                         .ok_or_else(|| anyhow::anyhow!("the Overview offers Review changes at {width}: {right}"))?;
-                    anyhow::ensure!(review.0 >= right_limit - 0.5, "Review changes is in the right sidebar, not the bottom row, at {width}: {review:?}");
+                    anyhow::ensure!(review.0 >= right_limit - 0.5, "Review changes is in the right sidebar, not the tab row, at {width}: {review:?}");
                     click(window, cx, (review.0 + review.2 / 2.0, review.1 + review.3 / 2.0), MouseButton::Left).await?;
                     let mut reviewed = Value::Null;
                     for _ in 0..30 {
@@ -4664,7 +4704,7 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_request_child(&main_group, Some(HarnessId::Mock), cx))?;
                 let unknown = wait_for(window, cx, "an unknown New thread outcome", |rb| rb["creatingChild"] == false && rb["childFailureRequest"]["ambiguous"] == true).await?;
                 let original = unknown["childFailureRequest"].clone();
-                anyhow::ensure!(original["parent"] == MAIN && original["provider"] == "Mock" && original["pane"] == main_group.as_str() && original["split"] == false, "the unknown request is recorded as asked: {original}");
+                anyhow::ensure!(original["parent"] == MAIN && original["provider"] == HarnessId::Mock.as_str() && original["pane"] == main_group.as_str() && original["split"] == false, "the unknown request is recorded as asked: {original}");
                 anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_unknown + 1, "the engine did create it (only the response was lost)");
                 shot(window, cx, output.join("w20g3-unknown-child.png")).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_request_child(&blank_group, Some(HarnessId::Codex), cx))?;

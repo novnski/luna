@@ -138,7 +138,7 @@ pub(super) struct Geometry {
     pub(super) canvas: Option<Bounds<Pixels>>,
     /// Each group's body by pane id (its tab strip is in the bottom row).
     pub(super) panes: HashMap<String, Bounds<Pixels>>,
-    /// Each group's tab strip in the frame's bottom row, by pane id.
+    /// Each group's tab strip in the titlebar's tab row, by pane id.
     pub(super) strips: HashMap<String, Bounds<Pixels>>,
     /// Pane id -> `(chat id, tab bounds)` in strip order.
     pub(super) tabs: HashMap<String, Vec<(String, Bounds<Pixels>)>>,
@@ -151,13 +151,16 @@ pub(super) struct Geometry {
     /// The open tab / Group actions menu's rows by id, as last painted
     /// (QA readback; empty while it is closed).
     pub(super) menu_rows: Vec<(&'static str, Bounds<Pixels>)>,
-    /// The frame's bottom row (the groups' tab strips).
-    pub(super) footer: Option<Bounds<Pixels>>,
+    /// The titlebar's tab row (the groups' tab strips).
+    pub(super) tab_row: Option<Bounds<Pixels>>,
     /// The workbench notice's Dismiss control, while a notice shows.
     pub(super) notice_dismiss: Option<Bounds<Pixels>>,
     /// Each strip's visible tab viewport: tabs scrolled outside it are
     /// clipped for hit-testing and readback.
     pub(super) tab_view: HashMap<String, Bounds<Pixels>>,
+    /// Each strip's room for its tabs and `+` (the viewport hugs the tabs,
+    /// so this, not the viewport, bounds how wide one tab may get).
+    pub(super) tab_slot: HashMap<String, Bounds<Pixels>>,
     /// Width of the pane showing Main, for the main composer's layout, and
     /// the center column width it was measured at (a different column width
     /// makes it stale).
@@ -175,6 +178,7 @@ impl Geometry {
         self.group_actions
             .retain(|id, _| panes.contains(id.as_str()));
         self.tab_view.retain(|id, _| panes.contains(id.as_str()));
+        self.tab_slot.retain(|id, _| panes.contains(id.as_str()));
         self.splits.retain(|id, _| layout.root.node(id).is_some());
         if !has_main_visible(layout) {
             self.main_width = None;
@@ -183,7 +187,7 @@ impl Geometry {
     }
 
     /// `pane_id`'s tabs clipped to what can be seen: the strip's viewport,
-    /// within the frame's bottom row. A tab scrolled out of view keeps its
+    /// within the titlebar's tab row. A tab scrolled out of view keeps its
     /// slot as a zero-width span at the edge it left by, so it can never be
     /// hit or mis-targeted.
     pub(super) fn visible_tabs(&self, pane_id: &str) -> Vec<(String, Bounds<Pixels>)> {
@@ -194,7 +198,7 @@ impl Geometry {
             return tabs.clone();
         };
         let (mut view_left, mut view_right) = (f32::from(view.left()), f32::from(view.right()));
-        if let Some(row) = self.footer {
+        if let Some(row) = self.tab_row {
             view_left = view_left.max(f32::from(row.left()));
             view_right = view_right.min(f32::from(row.right())).max(view_left);
         }
@@ -367,6 +371,13 @@ pub(super) struct WorkbenchState {
     pub(super) notice: Option<SharedString>,
     /// Tracks keyboard focus inside the canvas (Cmd-W scope).
     pub(super) focus: FocusHandle,
+    /// Tracks keyboard focus on the tab row in the titlebar (the rest of the
+    /// workbench's scope: see `workbench_holds_focus`).
+    pub(super) title_focus: FocusHandle,
+    /// This frame's tab row, built with the canvas
+    /// (`render_workbench_tab_row`) and taken by the titlebar, which places
+    /// it over the canvas's columns. `None` off the workbench.
+    pub(super) title_tabs: Option<AnyElement>,
     /// A chat whose composer takes focus once its view mounts.
     focus_composer: Option<String>,
     /// A group (without a composer to focus) whose own focus scope takes
@@ -488,6 +499,8 @@ impl WorkbenchState {
             menu: popover::Popup::default(),
             notice: None,
             focus: cx.focus_handle(),
+            title_focus: cx.focus_handle(),
+            title_tabs: None,
             focus_composer: None,
             focus_pane: None,
             chooser: None,
@@ -1551,7 +1564,7 @@ impl Shell {
                 self.composer.clone(),
             ));
         }
-        if !self.workbench.focus.contains_focused(window, cx) {
+        if !self.workbench_holds_focus(window, cx) {
             // Focus vanished from a tab that no longer renders a composer:
             // the keys belong to that tab, which has none.
             return None;
@@ -1666,8 +1679,15 @@ impl Shell {
         handle
     }
 
+    /// Whether keyboard focus is in the workbench: its canvas, or its tab
+    /// row in the titlebar.
+    pub(super) fn workbench_holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.workbench.focus.contains_focused(window, cx)
+            || self.workbench.title_focus.contains_focused(window, cx)
+    }
+
     /// Whether keyboard focus is in `pane_id`'s group: in its pane, or on
-    /// its tab strip in the bottom row.
+    /// its tab strip in the titlebar.
     pub(super) fn workbench_group_holds_focus(
         &self,
         pane_id: &str,
@@ -1899,17 +1919,20 @@ impl Shell {
         pane_id: &str,
         min: f32,
         max: f32,
+        reserved: f32,
         cx: &mut Context<Self>,
     ) -> f32 {
-        let viewport = self
+        // The strip's room for tabs (less `reserved`, what follows them: `+`
+        // and its gap), never the viewport itself, which hugs the tabs.
+        let room = self
             .workbench
             .geometry
             .borrow()
-            .tab_view
+            .tab_slot
             .get(pane_id)
-            .map(|view| f32::from(view.size.width));
-        // A hair under the viewport: tab gaps and rounding never overflow it.
-        let cap = viewport
+            .map(|slot| f32::from(slot.size.width) - reserved);
+        // A hair under the room: tab gaps and rounding never overflow it.
+        let cap = room
             .map_or(max, |width| (width - 4.0).clamp(min, max))
             .floor();
         if self.workbench.tab_caps.insert(pane_id.to_string(), cap) != Some(cap) {
@@ -1936,7 +1959,7 @@ impl Shell {
         }
         let layout = self.workbench.layout();
         let app: &App = cx;
-        if self.workbench.focus.contains_focused(window, app) {
+        if self.workbench_holds_focus(window, app) {
             let home = model::panes(&layout).into_iter().find_map(|pane| {
                 let chat = pane.active_chat_id?;
                 self.workbench_group_holds_focus(pane.id, window, app)
@@ -2012,14 +2035,14 @@ impl Shell {
     }
 
     /// Any press: a new pointer gesture (an earlier Escape no longer
-    /// applies); a press outside the workbench (its canvas and its bottom
-    /// row of tabs) is the user leaving it, so the keyboard's home in the
+    /// applies); a press outside the workbench (its canvas and its tab row
+    /// in the titlebar) is the user leaving it, so the keyboard's home in the
     /// workbench is forgotten.
     pub(super) fn workbench_pressed_at(&mut self, position: Point<Pixels>) {
         self.workbench.gesture_cancelled = false;
         let inside = {
             let geometry = self.workbench.geometry.borrow();
-            [geometry.canvas, geometry.footer]
+            [geometry.canvas, geometry.tab_row]
                 .iter()
                 .flatten()
                 .any(|area| area.contains(&position))
@@ -2033,8 +2056,7 @@ impl Shell {
     /// Whether composer-scoped keys and Cmd-W act in the workbench canvas:
     /// focus is inside it, or it just vanished from a tab there.
     pub(super) fn workbench_keyboard_in_canvas(&self, window: &Window, cx: &App) -> bool {
-        self.workbench.focus.contains_focused(window, cx)
-            || self.workbench_focus_vanished(window, cx)
+        self.workbench_holds_focus(window, cx) || self.workbench_focus_vanished(window, cx)
     }
 
     /// Keyboard focus just moved by a key (Tab / Shift-Tab): make the group
@@ -3567,8 +3589,8 @@ impl Shell {
             "maxX": f32::from(max.x),
             "maxY": f32::from(max.y),
         });
-        // The frame's bottom row and each group's strip in it.
-        let row_bounds = geometry.footer.as_ref().map(bounds);
+        // The titlebar's tab row and each group's strip in it.
+        let row_bounds = geometry.tab_row.as_ref().map(bounds);
         let strip_bounds: Vec<serde_json::Value> = geometry
             .strips
             .iter()
@@ -3969,7 +3991,7 @@ impl Shell {
             .and_then(|(chat, _)| chat)
     }
     pub fn fixture_workbench_has_focus(&self, window: &Window, cx: &App) -> bool {
-        self.workbench.focus.contains_focused(window, cx)
+        self.workbench_holds_focus(window, cx)
     }
     /// Main transcript's retained outgoing-chat caches (slice 6).
     pub fn fixture_main_retained(&self, cx: &App) -> serde_json::Value {
@@ -4013,7 +4035,7 @@ impl Shell {
         let composer = self.composer.read(cx);
         json!({
             "framed": self.workbench_framed(cx),
-            "row": geometry.footer.as_ref().map(rect),
+            "row": geometry.tab_row.as_ref().map(rect),
             "canvas": geometry.canvas.as_ref().map(rect),
             "strips": geometry
                 .strips
@@ -4282,13 +4304,13 @@ impl Shell {
             "rightDiffTarget": self
                 .active_diff_entity(cx)
                 .and_then(|changes| changes.read(cx).target_chat_id().map(str::to_string)),
-            "footer": geometry.footer.map(|footer| json!({
-                "x": f32::from(footer.origin.x),
-                "y": f32::from(footer.origin.y),
-                "w": f32::from(footer.size.width),
-                "h": f32::from(footer.size.height),
+            "tabRow": geometry.tab_row.map(|row| json!({
+                "x": f32::from(row.origin.x),
+                "y": f32::from(row.origin.y),
+                "w": f32::from(row.size.width),
+                "h": f32::from(row.size.height),
             })),
-            // Each group's tab strip in the bottom row, by pane id.
+            // Each group's tab strip in the titlebar's tab row, by pane id.
             "strips": geometry.strips.iter().map(|(pane, strip)| json!({
                 "pane": pane,
                 "x": f32::from(strip.origin.x),

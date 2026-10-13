@@ -902,33 +902,12 @@ pub fn menu_at(
     content: AnyElement,
     closing: Option<std::time::Instant>,
 ) -> AnyElement {
-    menu_anchored(id, position, Anchor::TopLeft, content, closing)
-}
-
-/// [`menu_at`] rising from `position` (its bottom-left corner there), for
-/// menus opened from controls along the window's bottom edge.
-pub fn menu_above(
-    id: impl Into<SharedString>,
-    position: Point<Pixels>,
-    content: AnyElement,
-    closing: Option<std::time::Instant>,
-) -> AnyElement {
-    menu_anchored(id, position, Anchor::BottomLeft, content, closing)
-}
-
-fn menu_anchored(
-    id: impl Into<SharedString>,
-    position: Point<Pixels>,
-    anchor: Anchor,
-    content: AnyElement,
-    closing: Option<std::time::Instant>,
-) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = frosted_menu(exit, content);
     gpui::deferred(
         gpui::anchored()
             .position(position)
-            .anchor(anchor)
+            .anchor(Anchor::TopLeft)
             .snap_to_window_with_margin(px(8.0))
             .child(menu_motion(id.into(), exit, div().occlude().child(content))),
     )

@@ -9319,6 +9319,22 @@ impl RpcService for EngineRpc {
     }
 }
 
+/// Whether `method` runs the task command pipeline: those methods are
+/// served by `EngineRpc::handle_task_command_method`, outside the method
+/// table's frame (see `EngineRpc::handle_engine`).
+fn is_task_command_method(method: &str) -> bool {
+    matches!(
+        method,
+        methods::EXECUTE_TASK_COMMAND
+            | methods::QUEUE_COMMAND
+            | methods::QUEUE_MESSAGE
+            | methods::FINISH_QUEUED_MESSAGE_EDIT
+            | methods::REMOVE_QUEUED_MESSAGE
+            | methods::SEND_QUEUED_MESSAGE_NOW
+            | methods::STEER_QUEUED_MESSAGE_NOW
+    )
+}
+
 impl EngineRpc {
     async fn handle_engine(
         &self,
@@ -9394,6 +9410,25 @@ impl EngineRpc {
                 .handle(method, params)
                 .await;
         }
+        // Task commands run under this small frame, never under the method
+        // table's. In a debug build the table's poll frame holds every arm's
+        // locals at once (about 1 MiB), and stacked over the task command
+        // pipeline (`apply_task_command_intent`, itself about 600 KiB, then
+        // queue dispatch and document reads) it overflowed tokio's 2 MiB
+        // worker stack on Send now. Every check above still applies to them.
+        if is_task_command_method(method) {
+            return self.handle_task_command_method(method, params).await;
+        }
+        self.handle_engine_method(method, params).await
+    }
+
+    /// The engine's method table, reached past `handle_engine`'s routing and
+    /// checks (task commands go to `handle_task_command_method` instead).
+    async fn handle_engine_method(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
         match method {
             methods::WATCH_AUTOMATIONS => Ok(RpcReply::Stream(watch_stream(self.store.automation_changes()))),
             methods::LIST_AUTOMATIONS | methods::LIST_AUTOMATION_RUNS | methods::PREVIEW_AUTOMATION | methods::MUTATE_AUTOMATION | methods::GET_AUTOMATION_MUTATION_RECEIPT => self.handle_automations(method, params).await,
@@ -10366,42 +10401,6 @@ impl EngineRpc {
             methods::CREATE_CHILD_THREAD => Err(RpcError::Failed(
                 "Child chats are created by the parent agent using create_thread. Use New side chat to fork a conversation yourself.".into(),
             )),
-            methods::EXECUTE_TASK_COMMAND => {
-                let command: TaskCommandParams = parse_params(params)?;
-                // Child lineage, outcomes and delivery marks are engine-owned.
-                // Only the parent-agent tool path creates children; clients cannot forge the outbox.
-                if matches!(
-                    command.intent,
-                    TaskCommandIntent::CreateChildChat { .. }
-                        | TaskCommandIntent::ChildOutcome { .. }
-                        | TaskCommandIntent::ChildOutcomeDelivered { .. }
-                ) {
-                    return Err(RpcError::Failed(
-                        "Child chat creation and outcomes are engine-owned; the parent agent uses create_thread"
-                            .into(),
-                    ));
-                }
-                let stop = matches!(
-                    &command.intent,
-                    TaskCommandIntent::Session {
-                        command: SessionCommandPayload::Interrupt {},
-                        ..
-                    }
-                )
-                .then(|| (command.task_id.clone(), command.command_id.clone()));
-                let receipt = self.execute_task_command(command, false).await?;
-                if let Some((task_id, command_id)) = stop
-                    && matches!(
-                        receipt.status,
-                        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
-                    )
-                {
-                    // Board scope extension: a ticket worker's Stop also stops
-                    // that ticket's owned reviewer chats (same set as board Stop).
-                    self.board_follow_chat_stop(&task_id, &command_id).await;
-                }
-                RpcReply::value(&receipt)
-            }
             methods::GET_TASK_COMMAND_RECEIPT => {
                 let p: TaskCommandReceiptParams = parse_params(params)?;
                 RpcReply::value(
@@ -10914,21 +10913,6 @@ impl EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&commands)
             }
-            methods::QUEUE_COMMAND => {
-                let p: QueueCommandParams = parse_params(params)?;
-                let command = legacy_task_command(
-                    p.chat_id,
-                    TaskCommandIntent::Session {
-                        command: p.command,
-                        transfers: p.transfers,
-                    },
-                );
-                let receipt = self.execute_task_command(command, true).await?;
-                RpcReply::value(&serde_json::json!({
-                    "commandId": receipt.command_id,
-                    "receipt": receipt,
-                }))
-            }
             methods::RETRY_DELIVERY => {
                 let p: ChatParams = parse_params(params)?;
                 self.doc_host
@@ -11033,30 +11017,6 @@ impl EngineRpc {
                     .boxed(),
                 ))
             }
-            methods::QUEUE_MESSAGE => {
-                let p: QueueMessageParams = parse_params(params)?;
-                let id = p
-                    .message_id
-                    .or_else(|| p.command_id.clone())
-                    .unwrap_or_else(crate::new_id);
-                let mut command = legacy_task_command(
-                    p.chat_id,
-                    TaskCommandIntent::QueueMessage {
-                        message_id: id.clone(),
-                        text: p.text,
-                        attachments: p.attachments,
-                        input_items: p.input_items,
-                        hold_for_turn_end: p.hold_for_turn_end,
-                        follow_up_behavior: p.follow_up_behavior,
-                        execution: None,
-                    },
-                );
-                if let Some(command_id) = p.command_id {
-                    command.command_id = command_id;
-                }
-                let receipt = self.execute_task_command(command, true).await?;
-                RpcReply::value(&serde_json::json!({ "id": id, "receipt": receipt }))
-            }
             methods::UPDATE_QUEUED_MESSAGE => {
                 let p: QueuedMessageParams = parse_params(params)?;
                 let changed = self
@@ -11092,81 +11052,6 @@ impl EngineRpc {
                     &serde_json::to_value(outcome).map_err(|e| RpcError::Failed(e.to_string()))?,
                 )
             }
-            methods::FINISH_QUEUED_MESSAGE_EDIT => {
-                let p: FinishQueuedMessageEditParams = parse_params(params)?;
-                if matches!(p.action, FinishQueuedMessageEditAction::Commit) {
-                    let text = p
-                        .text
-                        .clone()
-                        .ok_or_else(|| RpcError::BadParams("commit requires text".into()))?;
-                    let expected_text_hash = p.expected_text_hash.clone().ok_or_else(|| {
-                        RpcError::BadParams("commit requires expectedTextHash".into())
-                    })?;
-                    let revision = match p.expected_queue_revision {
-                        Some(revision) => revision,
-                        None => self
-                            .doc_host
-                            .queued_message(&p.chat_id, &p.id)
-                            .map_err(|error| RpcError::Failed(error.to_string()))?
-                            .map(|item| item.revision)
-                            .unwrap_or(0),
-                    };
-                    let mut command = legacy_task_command(
-                        p.chat_id,
-                        TaskCommandIntent::EditQueuedMessage {
-                            message_id: p.id,
-                            expected_queue_revision: revision,
-                            lease_id: p.lease_id,
-                            text,
-                            expected_text_hash,
-                            attachments: p.attachments.unwrap_or_default(),
-                            input_items: p.input_items,
-                        },
-                    );
-                    if let Some(command_id) = p.command_id {
-                        command.command_id = command_id;
-                    }
-                    let receipt = self.execute_task_command(command, true).await?;
-                    let outcome = match receipt.reason.as_ref().map(|reason| reason.code) {
-                        _ if receipt.status == CommandReceiptStatus::Applied => "committed",
-                        Some(CommandReasonCode::QueueClaimed) => "claimed",
-                        Some(CommandReasonCode::QueueMissing) => "missing",
-                        _ => "conflict",
-                    };
-                    return RpcReply::value(&serde_json::json!({
-                        "outcome": outcome,
-                        "receipt": receipt,
-                    }));
-                }
-                let action = match p.action {
-                    FinishQueuedMessageEditAction::Commit => unreachable!(),
-                    FinishQueuedMessageEditAction::Cancel => {
-                        crate::doc_host::FinishQueueEditAction::Cancel
-                    }
-                    FinishQueuedMessageEditAction::Discard => {
-                        crate::doc_host::FinishQueueEditAction::Discard
-                    }
-                    FinishQueuedMessageEditAction::ReleaseUnchanged => {
-                        crate::doc_host::FinishQueueEditAction::ReleaseUnchanged
-                    }
-                };
-                let outcome = self
-                    .doc_host
-                    .finish_queued_message_edit_with_attachments(
-                        &p.chat_id,
-                        &p.id,
-                        &p.lease_id,
-                        action,
-                        p.text.as_deref(),
-                        p.expected_text_hash.as_deref(),
-                        p.attachments.as_deref(),
-                    )
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(
-                    &serde_json::to_value(outcome).map_err(|e| RpcError::Failed(e.to_string()))?,
-                )
-            }
             methods::MOVE_QUEUED_MESSAGE => {
                 let p: QueuedMessageParams = parse_params(params)?;
                 let changed = self
@@ -11174,69 +11059,6 @@ impl EngineRpc {
                     .move_queued_message(&p.chat_id, &p.id, p.to_index)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "changed": changed }))
-            }
-            methods::REMOVE_QUEUED_MESSAGE => {
-                let p: QueuedMessageParams = parse_params(params)?;
-                let existing = self
-                    .doc_host
-                    .queued_message(&p.chat_id, &p.id)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                let revision = existing.as_ref().map(|item| item.revision).unwrap_or(0);
-                let receipt = self
-                    .execute_task_command(
-                        legacy_task_command(
-                            p.chat_id,
-                            TaskCommandIntent::RemoveQueuedMessage {
-                                message_id: p.id,
-                                expected_queue_revision: revision,
-                            },
-                        ),
-                        true,
-                    )
-                    .await?;
-                RpcReply::value(&serde_json::json!({
-                    "removed": existing.is_some()
-                        && receipt.status == CommandReceiptStatus::Applied,
-                    "receipt": receipt,
-                }))
-            }
-            methods::SEND_QUEUED_MESSAGE_NOW => {
-                let p: QueuedMessageParams = parse_params(params)?;
-                let receipt = self
-                    .execute_task_command(
-                        legacy_task_command(
-                            p.chat_id,
-                            TaskCommandIntent::SendQueuedNow {
-                                message_id: p.id,
-                                expected_queue_revision: None,
-                            },
-                        ),
-                        true,
-                    )
-                    .await?;
-                RpcReply::value(&serde_json::json!({
-                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
-                    "receipt": receipt,
-                }))
-            }
-            methods::STEER_QUEUED_MESSAGE_NOW => {
-                let p: QueuedMessageParams = parse_params(params)?;
-                let receipt = self
-                    .execute_task_command(
-                        legacy_task_command(
-                            p.chat_id,
-                            TaskCommandIntent::SteerQueuedNow {
-                                message_id: p.id,
-                                expected_queue_revision: None,
-                            },
-                        ),
-                        true,
-                    )
-                    .await?;
-                RpcReply::value(&serde_json::json!({
-                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
-                    "receipt": receipt,
-                }))
             }
             methods::PROBE_SYNC => {
                 // Focus probes remain cheap. An explicit Retry may also allow
@@ -12563,6 +12385,232 @@ impl EngineRpc {
                     .mcp_elicitation_url(&p.chat_id, &p.request_id)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "url": url }))
+            }
+            other => Err(RpcError::UnknownMethod(other.to_string())),
+        }
+    }
+
+    /// The methods that run the task command pipeline (see `handle_engine`):
+    /// the typed `executeTaskCommand` and the legacy queue methods that wrap
+    /// an intent in a task command.
+    async fn handle_task_command_method(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
+        match method {
+            methods::EXECUTE_TASK_COMMAND => {
+                let command: TaskCommandParams = parse_params(params)?;
+                // Child lineage, outcomes and delivery marks are engine-owned.
+                // Only the parent-agent tool path creates children; clients cannot forge the outbox.
+                if matches!(
+                    command.intent,
+                    TaskCommandIntent::CreateChildChat { .. }
+                        | TaskCommandIntent::ChildOutcome { .. }
+                        | TaskCommandIntent::ChildOutcomeDelivered { .. }
+                ) {
+                    return Err(RpcError::Failed(
+                        "Child chat creation and outcomes are engine-owned; the parent agent uses create_thread"
+                            .into(),
+                    ));
+                }
+                let stop = matches!(
+                    &command.intent,
+                    TaskCommandIntent::Session {
+                        command: SessionCommandPayload::Interrupt {},
+                        ..
+                    }
+                )
+                .then(|| (command.task_id.clone(), command.command_id.clone()));
+                let receipt = self.execute_task_command(command, false).await?;
+                if let Some((task_id, command_id)) = stop
+                    && matches!(
+                        receipt.status,
+                        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+                    )
+                {
+                    // Board scope extension: a ticket worker's Stop also stops
+                    // that ticket's owned reviewer chats (same set as board Stop).
+                    self.board_follow_chat_stop(&task_id, &command_id).await;
+                }
+                RpcReply::value(&receipt)
+            }
+            methods::QUEUE_COMMAND => {
+                let p: QueueCommandParams = parse_params(params)?;
+                let command = legacy_task_command(
+                    p.chat_id,
+                    TaskCommandIntent::Session {
+                        command: p.command,
+                        transfers: p.transfers,
+                    },
+                );
+                let receipt = self.execute_task_command(command, true).await?;
+                RpcReply::value(&serde_json::json!({
+                    "commandId": receipt.command_id,
+                    "receipt": receipt,
+                }))
+            }
+            methods::QUEUE_MESSAGE => {
+                let p: QueueMessageParams = parse_params(params)?;
+                let id = p
+                    .message_id
+                    .or_else(|| p.command_id.clone())
+                    .unwrap_or_else(crate::new_id);
+                let mut command = legacy_task_command(
+                    p.chat_id,
+                    TaskCommandIntent::QueueMessage {
+                        message_id: id.clone(),
+                        text: p.text,
+                        attachments: p.attachments,
+                        input_items: p.input_items,
+                        hold_for_turn_end: p.hold_for_turn_end,
+                        follow_up_behavior: p.follow_up_behavior,
+                        execution: None,
+                    },
+                );
+                if let Some(command_id) = p.command_id {
+                    command.command_id = command_id;
+                }
+                let receipt = self.execute_task_command(command, true).await?;
+                RpcReply::value(&serde_json::json!({ "id": id, "receipt": receipt }))
+            }
+            methods::FINISH_QUEUED_MESSAGE_EDIT => {
+                let p: FinishQueuedMessageEditParams = parse_params(params)?;
+                if matches!(p.action, FinishQueuedMessageEditAction::Commit) {
+                    let text = p
+                        .text
+                        .clone()
+                        .ok_or_else(|| RpcError::BadParams("commit requires text".into()))?;
+                    let expected_text_hash = p.expected_text_hash.clone().ok_or_else(|| {
+                        RpcError::BadParams("commit requires expectedTextHash".into())
+                    })?;
+                    let revision = match p.expected_queue_revision {
+                        Some(revision) => revision,
+                        None => self
+                            .doc_host
+                            .queued_message(&p.chat_id, &p.id)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?
+                            .map(|item| item.revision)
+                            .unwrap_or(0),
+                    };
+                    let mut command = legacy_task_command(
+                        p.chat_id,
+                        TaskCommandIntent::EditQueuedMessage {
+                            message_id: p.id,
+                            expected_queue_revision: revision,
+                            lease_id: p.lease_id,
+                            text,
+                            expected_text_hash,
+                            attachments: p.attachments.unwrap_or_default(),
+                            input_items: p.input_items,
+                        },
+                    );
+                    if let Some(command_id) = p.command_id {
+                        command.command_id = command_id;
+                    }
+                    let receipt = self.execute_task_command(command, true).await?;
+                    let outcome = match receipt.reason.as_ref().map(|reason| reason.code) {
+                        _ if receipt.status == CommandReceiptStatus::Applied => "committed",
+                        Some(CommandReasonCode::QueueClaimed) => "claimed",
+                        Some(CommandReasonCode::QueueMissing) => "missing",
+                        _ => "conflict",
+                    };
+                    return RpcReply::value(&serde_json::json!({
+                        "outcome": outcome,
+                        "receipt": receipt,
+                    }));
+                }
+                let action = match p.action {
+                    FinishQueuedMessageEditAction::Commit => unreachable!(),
+                    FinishQueuedMessageEditAction::Cancel => {
+                        crate::doc_host::FinishQueueEditAction::Cancel
+                    }
+                    FinishQueuedMessageEditAction::Discard => {
+                        crate::doc_host::FinishQueueEditAction::Discard
+                    }
+                    FinishQueuedMessageEditAction::ReleaseUnchanged => {
+                        crate::doc_host::FinishQueueEditAction::ReleaseUnchanged
+                    }
+                };
+                let outcome = self
+                    .doc_host
+                    .finish_queued_message_edit_with_attachments(
+                        &p.chat_id,
+                        &p.id,
+                        &p.lease_id,
+                        action,
+                        p.text.as_deref(),
+                        p.expected_text_hash.as_deref(),
+                        p.attachments.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(
+                    &serde_json::to_value(outcome).map_err(|e| RpcError::Failed(e.to_string()))?,
+                )
+            }
+            methods::REMOVE_QUEUED_MESSAGE => {
+                let p: QueuedMessageParams = parse_params(params)?;
+                let existing = self
+                    .doc_host
+                    .queued_message(&p.chat_id, &p.id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let revision = existing.as_ref().map(|item| item.revision).unwrap_or(0);
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::RemoveQueuedMessage {
+                                message_id: p.id,
+                                expected_queue_revision: revision,
+                            },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "removed": existing.is_some()
+                        && receipt.status == CommandReceiptStatus::Applied,
+                    "receipt": receipt,
+                }))
+            }
+            methods::SEND_QUEUED_MESSAGE_NOW => {
+                let p: QueuedMessageParams = parse_params(params)?;
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::SendQueuedNow {
+                                message_id: p.id,
+                                expected_queue_revision: None,
+                            },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
+                    "receipt": receipt,
+                }))
+            }
+            methods::STEER_QUEUED_MESSAGE_NOW => {
+                let p: QueuedMessageParams = parse_params(params)?;
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::SteerQueuedNow {
+                                message_id: p.id,
+                                expected_queue_revision: None,
+                            },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
+                    "receipt": receipt,
+                }))
             }
             other => Err(RpcError::UnknownMethod(other.to_string())),
         }

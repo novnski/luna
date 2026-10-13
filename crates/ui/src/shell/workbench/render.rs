@@ -1,18 +1,17 @@
 //! Painting the workbench: the inset canvas, the split tree with each
-//! group's selected chat, the frame's bottom row of tab strips (one per
-//! group, under its own column), the drag ghost and drop preview, dividers,
-//! the empty-group affordances and the tab menu.
+//! group's selected chat, the titlebar's row of tab strips (one per group,
+//! over its own column), the drag ghost and drop preview, dividers, the
+//! empty-group affordances and the tab menu.
 //!
 //! Geometry is measured at paint into [`Geometry`] (window coordinates), so
 //! pointer hit-testing between frames uses exactly what was drawn.
 
 use super::*;
 use crate::motion::AnimationExt as _;
-use crate::popover::TooltipAboveExt as _;
 
-/// Height of the frame's bottom row, where every group's tab strip sits
-/// under its own column, outside the canvas.
-pub(in crate::shell) const STRIP_HEIGHT: f32 = 36.0;
+/// Height of the tab row in the titlebar (below its top pad), where every
+/// group's tab strip sits over its own column.
+pub(in crate::shell) const STRIP_HEIGHT: f32 = Theme::TITLEBAR_HEIGHT - Theme::TITLEBAR_TOP_PAD;
 /// Width of the fade at an overflowing tab strip's edges.
 const TAB_STRIP_EDGE_FADE: f32 = 24.0;
 const TAB_HEIGHT: f32 = 28.0;
@@ -332,9 +331,9 @@ impl Shell {
     }
 
     /// The new-chat canvas (no chat selected) in the same inset frame as
-    /// the workbench: one canvas and an empty bottom row (a new thread has
-    /// no tabs; its target pickers sit above its prompt), so the canvas
-    /// keeps its geometry when the first send opens the chat.
+    /// the workbench: one canvas and no tabs (a new thread has none; its
+    /// target pickers sit above its prompt), so the canvas keeps its
+    /// geometry when the first send opens the chat.
     pub(in crate::shell) fn render_canvas_frame(
         &mut self,
         window: &mut Window,
@@ -347,7 +346,12 @@ impl Shell {
         let canvas_fill = theme.canvas_fill();
         let width = (main_content_width - 2.0 * CANVAS_INSET).max(0.0);
         let body = self.render_main(window, width, transcript_width.min(width), 0.0, cx);
-        let footer = self.render_empty_tab_row();
+        self.workbench.title_tabs = None;
+        {
+            let mut geometry = self.workbench.geometry.borrow_mut();
+            geometry.strips.clear();
+            geometry.tab_row = None;
+        }
         let canvas_geometry = self.workbench.geometry.clone();
         div()
             .id("workbench-frame")
@@ -358,6 +362,7 @@ impl Shell {
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
             .px(px(CANVAS_INSET))
+            .pb(px(CANVAS_INSET))
             .child(
                 div()
                     .id("workbench-canvas")
@@ -381,41 +386,13 @@ impl Shell {
                     )
                     .child(body),
             )
-            .child(footer)
-            .into_any_element()
-    }
-
-    /// The bottom row with no tabs (the new thread): it keeps the row's
-    /// height so the canvas does not move when the first send opens the
-    /// chat and its tabs arrive.
-    fn render_empty_tab_row(&mut self) -> AnyElement {
-        {
-            let mut geometry = self.workbench.geometry.borrow_mut();
-            geometry.strips.clear();
-        }
-        let row_geometry = self.workbench.geometry.clone();
-        div()
-            .id("workbench-footer")
-            .relative()
-            .h(px(STRIP_HEIGHT))
-            .flex_none()
-            .w_full()
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| {
-                        row_geometry.borrow_mut().footer = Some(bounds);
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
             .into_any_element()
     }
 
     /// The center column on the chat route with a selected chat: the inset
-    /// canvas holding the split tree, and the frame's bottom row with each
-    /// group's tabs under its own column.
+    /// canvas holding the split tree. Its tab row is built here too and
+    /// handed to the titlebar ([`WorkbenchState::title_tabs`]), which draws
+    /// it over the canvas's columns.
     pub(in crate::shell) fn render_workbench(
         &mut self,
         window: &mut Window,
@@ -516,7 +493,8 @@ impl Shell {
                     .children(preview),
             )
             .children(notice);
-        let footer = self.render_workbench_tab_row(&frame, window, cx);
+        let tabs = self.render_workbench_tab_row(&frame, window, cx);
+        self.workbench.title_tabs = Some(tabs);
         // Any press anywhere starts a new pointer gesture, so an earlier
         // Escape no longer applies, and a press outside the canvas leaves it
         // (see `workbench_focus_vanished`). A window-level listener, not a
@@ -548,12 +526,13 @@ impl Shell {
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
             .px(px(CANVAS_INSET))
-            // The workbench's keyboard scope: the canvas and its bottom row
-            // of tabs (a focused tab is in the workbench, in its group).
+            .pb(px(CANVAS_INSET))
+            // The canvas's keyboard scope (the titlebar's tab row has its
+            // own, `title_focus`: both are the workbench).
             .track_focus(&self.workbench.focus)
-            // Drops land on the canvas (a group's body) or on the bottom
-            // row (a group's strip): the frame holds both. A drop needs the
-            // pointer over its element; drag moves reach the canvas anyway.
+            // Drops on a group's body (the tab row takes drops on strips).
+            // A drop needs the pointer over its element; drag moves reach
+            // the canvas anyway.
             .on_drop(cx.listener(|this, drag: &WorkbenchTabDrag, window, cx| {
                 this.drop_workbench_tab(drag, window, cx)
             }))
@@ -562,17 +541,17 @@ impl Shell {
             }))
             .child(gesture_reset)
             .child(canvas)
-            .child(footer)
             .into_any_element()
     }
 
-    /// The frame's bottom row: every group's tab strip, laid out as the
-    /// split tree is. Side-by-side groups keep their saved ratio (and the
-    /// seam between them), so each strip sits under its own column; stacked
-    /// groups share their column's slot, the upper group first. The row's
-    /// side padding matches the canvas viewport's inset, so the columns line
-    /// up exactly. It fades in with the docked composer's thread chrome when
-    /// the first send opens the chat.
+    /// The tab row for the titlebar: every group's tab strip, laid out as
+    /// the split tree is. The titlebar places it over the canvas viewport's
+    /// x-range, so side-by-side groups (same ratios, same seam) each get
+    /// their strip over their own column; stacked groups share their
+    /// column's slot, the upper group first. The project name leads the
+    /// first strip ("luna ›"); the first and last strips clear the window
+    /// controls and the right sidebar toggle. It fades in with the docked
+    /// composer's thread chrome when the first send opens the chat.
     fn render_workbench_tab_row(
         &mut self,
         frame: &Frame,
@@ -593,39 +572,59 @@ impl Shell {
         } else {
             1.0
         };
-        let strips = self.render_workbench_strip_node(&layout.root, frame, 1.0, window, cx);
+        let (_, _, lead_pad, trail_pad) = self.workbench_title_row_frame(cx);
+        let crumb = self.render_title_crumb(&frame.theme, true, cx);
+        let strips = self.render_workbench_strip_node(
+            &layout.root,
+            frame,
+            1.0,
+            Some((crumb.unwrap_or_else(|| Empty.into_any_element()), lead_pad)),
+            trail_pad,
+            window,
+            cx,
+        );
         let row_geometry = self.workbench.geometry.clone();
-        div()
-            .id("workbench-footer")
-            .relative()
-            .h(px(STRIP_HEIGHT))
-            .flex_none()
-            .w_full()
-            .px(px(VIEWPORT_INSET))
-            .flex()
-            .flex_row()
-            .opacity(opacity)
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| {
-                        row_geometry.borrow_mut().footer = Some(bounds);
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
+        // Drops on a group's strip (reorder, move or add a tab): the row
+        // takes them where nothing occludes it.
+        accepts_tab_drops(
+            div()
+                .id("workbench-tabs")
+                .relative()
+                .size_full()
+                .flex()
+                .flex_row()
+                .opacity(opacity)
+                // The tab row's keyboard scope: a focused tab is in the
+                // workbench (and, through its strip's scope, in its group).
+                .track_focus(&self.workbench.title_focus),
+            cx,
+        )
+        .child(
+            gpui::canvas(
+                move |bounds, _, _| {
+                    row_geometry.borrow_mut().tab_row = Some(bounds);
+                },
+                |_, _, _, _| {},
             )
-            .child(strips)
-            .into_any_element()
+            .absolute()
+            .inset_0(),
+        )
+        .child(strips)
+        .into_any_element()
     }
 
-    /// One node of the bottom row (see [`Self::render_workbench_tab_row`]).
+    /// One node of the tab row (see [`Self::render_workbench_tab_row`]).
     /// `share` is the node's width share of the row, for the compact strip.
+    /// `lead` (the crumb and the left clearance) goes to the node's first
+    /// (leftmost) strip, `trail` (the right clearance) to its last.
+    #[allow(clippy::too_many_arguments)]
     fn render_workbench_strip_node(
         &mut self,
         node: &model::Node,
         frame: &Frame,
         share: f32,
+        lead: Option<(AnyElement, f32)>,
+        trail: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -633,7 +632,8 @@ impl Shell {
             model::Node::Pane { .. } => match model::as_pane(node) {
                 Some(pane) => {
                     let focused = frame.multi && frame.layout.focused_pane_id == pane.id;
-                    let strip = self.render_workbench_strip(pane, frame, focused, share, cx);
+                    let strip =
+                        self.render_workbench_strip(pane, frame, focused, share, lead, trail, cx);
                     let scope = self.workbench_strip_focus(pane.id, window, cx);
                     let focus_pane = pane.id.to_string();
                     let pane_focused = frame.layout.focused_pane_id == pane.id;
@@ -670,12 +670,21 @@ impl Shell {
                 } else {
                     0.5
                 };
-                let first =
-                    self.render_workbench_strip_node(first, frame, share * ratio, window, cx);
+                let first = self.render_workbench_strip_node(
+                    first,
+                    frame,
+                    share * ratio,
+                    lead,
+                    0.0,
+                    window,
+                    cx,
+                );
                 let second = self.render_workbench_strip_node(
                     second,
                     frame,
                     share * (1.0 - ratio),
+                    None,
+                    trail,
                     window,
                     cx,
                 );
@@ -719,6 +728,31 @@ impl Shell {
                     .into_any_element()
             }
         }
+    }
+
+    /// Where the titlebar's tab row goes and what its ends must clear:
+    /// `(left, width, lead, trail)`, the canvas viewport's x-range in window
+    /// coordinates (so the strips sit over their columns), the first strip's
+    /// clearance for the window controls (the sidebar collapsed) and the
+    /// last strip's for the right sidebar toggle (the right sidebar closed;
+    /// open, its toggle sits over the sidebar).
+    pub(in crate::shell) fn workbench_title_row_frame(&self, cx: &App) -> (f32, f32, f32, f32) {
+        let sidebar_now = self.sidebar_now();
+        let inset = CANVAS_INSET + VIEWPORT_INSET;
+        let left = sidebar_now + inset;
+        let right = self.viewport_width - self.right_now(cx) - inset;
+        let width = (right - left).max(0.0);
+        let content_left = (sidebar_now + Theme::SPACE_LG).max(self.title_bar_content_start());
+        let lead = (content_left - left).max(0.0);
+        let trail = if self.right_pane_open(cx) {
+            0.0
+        } else {
+            let toggle_left = self.viewport_width
+                - self.titlebar_right_pad(TITLEBAR_ACTION_EDGE_INSET)
+                - crate::surface_chrome::CONTROL_M;
+            (right - (toggle_left - Theme::SPACE_SM)).max(0.0)
+        };
+        (left, width, lead, trail)
     }
 
     /// A split's ratio as drawn: the live divider drag's, else the saved
@@ -1045,15 +1079,21 @@ impl Shell {
         }
     }
 
-    /// A group's tab strip in the frame's bottom row: its tabs, then its
-    /// `+`, split and close-group controls (Group actions when narrow).
-    /// `share` is its width share of the row.
+    /// A group's tab strip in the titlebar's tab row: its tabs with `+`
+    /// right after the last one, and (in a split) Close group at the strip's
+    /// end; a narrow strip has Group actions instead. `share` is its width
+    /// share of the row; `lead` (the project crumb and the left clearance)
+    /// and `trail` (the right clearance) belong to the row's first and last
+    /// strips. Splitting is a tab drag (or the tab menu), not a button.
+    #[allow(clippy::too_many_arguments)]
     fn render_workbench_strip(
         &mut self,
         pane: model::PaneRef<'_>,
         frame: &Frame,
         pane_focused: bool,
         share: f32,
+        lead: Option<(AnyElement, f32)>,
+        trail: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = frame.theme.clone();
@@ -1070,7 +1110,13 @@ impl Shell {
         } else {
             TAB_MIN_WIDTH
         };
-        let tab_cap = self.workbench_tab_cap(pane.id, tab_min, TAB_MAX_WIDTH, cx);
+        // `+` and its gap follow the tabs in a wide strip.
+        let reserved = if compact {
+            0.0
+        } else {
+            crate::surface_chrome::CONTROL_M + 4.0
+        };
+        let tab_cap = self.workbench_tab_cap(pane.id, tab_min, TAB_MAX_WIDTH, reserved, cx);
         let mut tabs: Vec<AnyElement> = Vec::with_capacity(pane.tabs.len());
         for (index, tab) in pane.tabs.iter().enumerate() {
             let active = pane.active_chat_id == Some(tab.chat_id.as_str());
@@ -1163,7 +1209,6 @@ impl Shell {
             .is_some_and(|request| request.pane_id == pane.id);
         let can_close_pane = frame.multi && !pane.holds(&frame.layout.main_chat_id);
         let pane_id = pane.id.to_string();
-        let split_pane = pane.id.to_string();
         let close_pane = pane.id.to_string();
         let plus_pane = pane.id.to_string();
         // `+` opens the creation chooser (source, kind, provider, explicit
@@ -1186,6 +1231,7 @@ impl Shell {
                 cx,
             );
         }));
+        let plus = accepts_tab_drops(plus, cx);
         let plus_geometry = self.workbench.geometry.clone();
         let plus_measure = pane.id.to_string();
         let plus = plus.child(
@@ -1223,29 +1269,6 @@ impl Shell {
                 .into_any_element()
         } else {
             plus.into_any_element()
-        };
-        let split = strip_button_titled(
-            SharedString::from(format!("wb-split-right-{}", pane.id)),
-            "Side chat in a split",
-            self.shortcut_badge(crate::settings::ShortcutId::NewThreadSplit),
-            Some(
-                "A fresh side chat from this group's chat, in a new group to the right. Its context is not carried over; nothing starts until you send.",
-            ),
-            icons::SPLIT_COLUMNS,
-            &theme,
-        )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            cx.stop_propagation();
-            this.workbench_new_child_in_split(split_pane.clone(), cx);
-        }));
-        // Opt-in layout probes (slice 6): the strip's controls per group.
-        let split = if crate::perf_counters::probes_enabled() {
-            split.relative().child(crate::perf_counters::probe(format!(
-                "strip:{}:split",
-                pane.id
-            )))
-        } else {
-            split
         };
         let close = can_close_pane.then(|| {
             strip_button(
@@ -1292,6 +1315,8 @@ impl Shell {
                 pane.id
             )))
         });
+        let more = accepts_tab_drops(more, cx);
+        let close = close.map(|close| accepts_tab_drops(close, cx));
         let more_geometry = self.workbench.geometry.clone();
         let more_measure = pane.id.to_string();
         let more = more.relative().child(
@@ -1317,10 +1342,15 @@ impl Shell {
                 geometry.group_actions.remove(pane.id);
             }
         }
-        let available = self.workbench_available();
         let accent = theme.accent;
+        let (lead, lead_pad) = match lead {
+            Some((crumb, pad)) => (Some(crumb), pad),
+            None => (None, 0.0),
+        };
         let view_geometry = self.workbench.geometry.clone();
         let view_pane = pane_id.clone();
+        let slot_geometry = self.workbench.geometry.clone();
+        let slot_pane = pane_id.clone();
         let strip_geometry = self.workbench.geometry.clone();
         let strip_pane = pane_id.clone();
         div()
@@ -1333,8 +1363,17 @@ impl Shell {
             .flex_row()
             .items_center()
             .gap(px(if compact { 2.0 } else { 4.0 }))
-            .pl(px(if compact { 2.0 } else { 4.0 }))
-            .pr(px(if compact { 2.0 } else { 4.0 }))
+            // The first strip's crumb starts where the titlebar's title
+            // always started (`lead_pad` brings it there); the others keep
+            // the strip's own inset.
+            .pl(px(if lead.is_some() {
+                lead_pad
+            } else if compact {
+                2.0
+            } else {
+                4.0
+            }))
+            .pr(px(trail + if compact { 2.0 } else { 4.0 }))
             // The whole strip, for drops on it (window coordinates).
             .child(
                 gpui::canvas(
@@ -1349,55 +1388,83 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             )
+            // A narrow (compact) first strip gives the crumb's room to its
+            // tabs: the project name is the first thing to go.
+            .when(!compact, |el| el.children(lead))
             .child(
-                // The visible tab viewport (measured outside the scrolled
-                // content): tabs scrolled past it are clipped for hits.
+                // The strip's room for its tabs and `+` (measured: it bounds
+                // one tab's width, see `workbench_tab_cap`); the tabs and
+                // `+` sit at its start.
                 div()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .relative()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(if compact { 2.0 } else { 4.0 }))
                     .child(
                         gpui::canvas(
                             move |bounds, _, _| {
-                                view_geometry
+                                slot_geometry
                                     .borrow_mut()
-                                    .tab_view
-                                    .insert(view_pane.clone(), bounds);
+                                    .tab_slot
+                                    .insert(slot_pane.clone(), bounds);
                             },
                             |_, _, _, _| {},
                         )
                         .absolute()
                         .inset_0(),
                     )
-                    // Overflowing tabs dissolve at the strip's edges instead
-                    // of being cut mid-glyph (audit SH-03).
                     .child(
-                        crate::edge_fade::edge_faded(
-                            TAB_STRIP_EDGE_FADE,
-                            false,
-                            false,
-                            div()
-                                .id(SharedString::from(format!("wb-tabs-{}", pane_id)))
-                                .role(gpui::Role::TabList)
-                                .aria_label("Chat tabs")
-                                .size_full()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(2.0))
-                                .overflow_x_scroll()
-                                .track_scroll(&tab_scroll)
-                                .children(tabs),
-                        )
-                        .fade_overflow_x(&tab_scroll),
-                    ),
+                        // The visible tab viewport (measured outside the scrolled
+                        // content): as wide as its tabs, so `+` follows the last
+                        // one, and shrinking (tabs scroll) once they fill the strip.
+                        // Tabs scrolled past it are clipped for hits.
+                        div()
+                            .min_w_0()
+                            .h_full()
+                            .relative()
+                            .child(
+                                gpui::canvas(
+                                    move |bounds, _, _| {
+                                        view_geometry
+                                            .borrow_mut()
+                                            .tab_view
+                                            .insert(view_pane.clone(), bounds);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                            // Overflowing tabs dissolve at the strip's edges instead
+                            // of being cut mid-glyph (audit SH-03).
+                            .child(
+                                crate::edge_fade::edge_faded(
+                                    TAB_STRIP_EDGE_FADE,
+                                    false,
+                                    false,
+                                    div()
+                                        .id(SharedString::from(format!("wb-tabs-{}", pane_id)))
+                                        .role(gpui::Role::TabList)
+                                        .aria_label("Chat tabs")
+                                        .size_full()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(2.0))
+                                        .overflow_x_scroll()
+                                        .track_scroll(&tab_scroll)
+                                        .children(tabs),
+                                )
+                                .fade_overflow_x(&tab_scroll),
+                            ),
+                    )
+                    .when(!compact, |el| el.child(plus)),
             )
-            .when(!compact, |el| {
-                el.child(plus)
-                    .when(available, |el| el.child(split))
-                    .children(close)
-            })
+            .when(!compact, |el| el.children(close))
             .when(compact, |el| el.child(more))
             .when_some(marker, |el, x| {
                 el.child(
@@ -1597,6 +1664,9 @@ impl Shell {
             .track_focus(&tab_focus)
             .tab_index(0)
             .relative()
+            // In the titlebar's drag region: a press or drag on a tab is the
+            // tab's, never a window move; the wheel still scrolls its strip.
+            .block_mouse_except_scroll()
             .h(px(TAB_HEIGHT))
             .min_w(px(TAB_MIN_WIDTH))
             // Never wider than the strip's viewport: the active tab's title
@@ -1624,8 +1694,7 @@ impl Shell {
                 el.hover_wash(format!("wb-tab-{}", tab.chat_id))
             })
             .when(dragging, |el| el.opacity(0.6))
-            // The strip sits at the window's bottom: help opens above it.
-            .tooltip_above(move |_, cx| {
+            .tooltip(move |_, cx| {
                 crate::pickers::ControlTooltip::view(
                     tooltip_title.clone(),
                     Some(tooltip_details.clone()),
@@ -1728,6 +1797,7 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             );
+        let chip = accepts_tab_drops(chip, cx);
         if self.reduced_motion {
             chip.into_any_element()
         } else {
@@ -2359,14 +2429,26 @@ impl Shell {
                 })),
             );
         }
-        // Opened from the bottom row: the menu rises from the pointer.
-        Some(popover::menu_above(
+        Some(popover::menu_at(
             "workbench-tab-menu",
             menu.position,
             card.into_any_element(),
             closing,
         ))
     }
+}
+
+/// Take tab and Related row drops released on `el`: an occluding control in
+/// the tab row (a tab, `+`, Close group) hides the row's own drop listeners,
+/// so each takes them itself. Where the drop lands is resolved from the
+/// pointer (`workbench_drop_target`), never from the element.
+fn accepts_tab_drops<E: InteractiveElement>(el: E, cx: &mut Context<Shell>) -> E {
+    el.on_drop(cx.listener(|this, drag: &WorkbenchTabDrag, window, cx| {
+        this.drop_workbench_tab(drag, window, cx)
+    }))
+    .on_drop(cx.listener(|this, drag: &SidebarChatDrag, window, cx| {
+        this.drop_related_row(drag, window, cx)
+    }))
 }
 
 /// A small icon button for the tab strip's trailing controls.
@@ -2407,7 +2489,7 @@ fn strip_button_titled(
         .cursor_pointer()
         .hover_wash(id)
         .when_some(shortcut.clone(), |el, keys| el.aria_keyshortcuts(keys))
-        .tooltip_above(move |_, cx| {
+        .tooltip(move |_, cx| {
             crate::pickers::ControlTooltip::with_shortcut(
                 label,
                 shortcut.clone(),

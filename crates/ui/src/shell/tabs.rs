@@ -31,6 +31,11 @@ pub(super) fn cycle_target(
     Some(order[next].clone())
 }
 
+/// A side chat's parent as its titlebar crumb names it: the parent's id if
+/// it still exists, its title, whether it is archived, and where the link
+/// came from.
+type ParentCrumb = (Option<String>, SharedString, bool, &'static str);
+
 pub(super) fn right_pane_expand_icon(expanded: bool) -> &'static str {
     if expanded {
         icons::COLLAPSE_ARROWS
@@ -201,7 +206,7 @@ impl Shell {
     /// actual parent. A parent that no longer exists is named, not linked.
     fn render_parent_breadcrumb(
         &self,
-        (parent_id, title, archived, origin): (Option<String>, SharedString, bool, &'static str),
+        (parent_id, title, archived, origin): ParentCrumb,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -274,71 +279,94 @@ impl Shell {
         }
     }
 
-    /// The unified titlebar in chat mode:
-    /// `[new-session +] [harness icon + session title] … [toggle-changes]`.
-    /// Replaces the tab strip; inherits its titlebar duties (drag region,
-    /// animated left inset, the toggle-changes button on git projects).
+    /// The titlebar's crumb for the selected chat: its project, after
+    /// "Side chat of ‹main chat›" when a side chat is opened as its own main
+    /// chat. `chevron` adds the "›" the tabs follow. `None` on the new-chat
+    /// canvas, which titles as nothing.
+    pub(super) fn render_title_crumb(
+        &mut self,
+        theme: &Theme,
+        chevron: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        // A child opened as the main chat names its actual parent (from its
+        // record's lineage, never a placement): `(parent id if it still
+        // exists, title, archived)`.
+        let (parent_crumb, project): (Option<ParentCrumb>, SharedString) = {
+            let state = self.state.read(cx);
+            let chat = state.selected_chat_row()?;
+            let origin = super::related_chats::parent_origin(chat);
+            let parent = super::placement::lineage_parent_id(chat).map(|parent_id| {
+                match state.chats.iter().find(|row| row.id == parent_id) {
+                    Some(parent) => (
+                        Some(parent_id.to_string()),
+                        transcript::single_line(parent.title.as_deref().unwrap_or("Untitled chat"))
+                            .into(),
+                        parent.archived,
+                        origin,
+                    ),
+                    None => (None, "an unavailable chat".into(), false, origin),
+                }
+            });
+            // Project, then the chats (the tabs): the device it runs on is
+            // not a place in this path (a chat on another machine names it
+            // in its checkout row).
+            let project = chat
+                .space_id
+                .as_deref()
+                .and_then(|id| state.space_row(id))
+                .map(|s| s.display_name().to_string())
+                .unwrap_or_else(|| "Unknown project".to_string());
+            (parent, project.into())
+        };
+        let separator = || {
+            div()
+                .flex_none()
+                .text_size(crate::typography::ui_rems(13.0))
+                .text_color(theme.decorative_muted(0.4))
+                .child("›")
+        };
+        Some(
+            div()
+                .flex_none()
+                .min_w_0()
+                .max_w(crate::typography::ui_rems(420.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(crate::typography::ui_rems(6.0))
+                .when_some(parent_crumb, |el, crumb| {
+                    el.child(self.render_parent_breadcrumb(crumb, theme, cx))
+                        .child(separator())
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(crate::typography::ui_rems(200.0))
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text.opacity(0.9))
+                        .child(project),
+                )
+                .when(chevron, |el| {
+                    el.child(separator()).mr(crate::typography::ui_rems(2.0))
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// The unified titlebar in chat mode: the project, then the chat tabs
+    /// (`luna › Main · Side chat · +`, the workbench's tab row placed over
+    /// the canvas's columns), and at the right end the right sidebar's
+    /// controls. Inherits the titlebar's duties (drag region, animated left
+    /// inset).
     pub(super) fn render_session_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         // The canvas titles as NOTHING (user request — a "New session"
         // header over the empty canvas was noise); the bar keeps its height,
-        // drag region, and buttons. A session appends its target as a muted
-        // "project @ device" tag right of the title (the composer footer no
-        // longer carries it).
-        // A child opened as the main chat names its actual parent (from its
-        // record's lineage, never a placement): `(parent id if it still
-        // exists, title, archived)`.
-        let parent_crumb: Option<(Option<String>, SharedString, bool, &'static str)> = {
-            let state = self.state.read(cx);
-            state.selected_chat_row().and_then(|chat| {
-                let origin = super::related_chats::parent_origin(chat);
-                super::placement::lineage_parent_id(chat).map(|parent_id| {
-                    match state.chats.iter().find(|row| row.id == parent_id) {
-                        Some(parent) => (
-                            Some(parent_id.to_string()),
-                            transcript::single_line(
-                                parent.title.as_deref().unwrap_or("Untitled chat"),
-                            )
-                            .into(),
-                            parent.archived,
-                            origin,
-                        ),
-                        None => (None, "an unavailable chat".into(), false, origin),
-                    }
-                })
-            })
-        };
-        let (title, target, _harness, on_canvas): (
-            SharedString,
-            Option<SharedString>,
-            Option<luna_proto::HarnessId>,
-            bool,
-        ) = {
-            let state = self.state.read(cx);
-            match state.selected_chat_row() {
-                Some(chat) => {
-                    let folder = chat
-                        .space_id
-                        .as_deref()
-                        .and_then(|id| state.space_row(id))
-                        .map(|s| s.display_name().to_string())
-                        .unwrap_or_else(|| "Unknown project".to_string());
-                    let device = state
-                        .device_name(&chat.device_id)
-                        .unwrap_or("Unknown device");
-                    // Context only (audit SH-05): the chat title already
-                    // names the tab right below, so the titlebar carries
-                    // where it runs — project, then device.
-                    (
-                        SharedString::from(folder),
-                        Some(SharedString::from(device.to_string())),
-                        chat.config.as_ref().map(|c| c.harness),
-                        false,
-                    )
-                }
-                None => (SharedString::from(""), None, None, true),
-            }
-        };
+        // drag region, and buttons.
+        let on_canvas = self.state.read(cx).selected_chat_row().is_none();
 
         let sidebar_now = self.sidebar_now();
 
@@ -356,6 +384,15 @@ impl Shell {
         // click. Closed, it is just the stable open/close toggle. Hidden on
         // the new-session canvas (user request) — nothing to diff yet.
         let takeover = !on_canvas && self.right_pane_open(cx) && self.right_pane_expanded;
+        // This frame's tab row (built with the canvas), hidden in panel
+        // takeover like the title. Without one (no workbench) the crumb
+        // stands alone.
+        let tabs = self.workbench.title_tabs.take().filter(|_| !takeover);
+        let crumb = if tabs.is_none() {
+            self.render_title_crumb(&theme, false, cx)
+        } else {
+            None
+        };
         // In takeover the title hides and the strip owns the whole band, so
         // the row's left inset pulls back to the sidebar seam — the title
         // inset would push the scope dropdown off the pane's own left gutter
@@ -482,64 +519,34 @@ impl Shell {
             .pr(px(self.titlebar_right_pad(TITLEBAR_ACTION_EDGE_INSET)))
             // In panel takeover the header strip spans the whole band — the
             // title would sit UNDER it (both flex_none, the row overflows and
-            // paint order stacks them), so it hides for the duration.
-            .when(!takeover, |el| {
-                el.child(
-                    div()
-                        .min_w_0()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(crate::typography::ui_rems(6.0))
-                        .when_some(parent_crumb, |el, crumb| {
-                            el.child(self.render_parent_breadcrumb(crumb, &theme, cx))
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(crate::typography::ui_rems(12.0))
-                                        .text_color(theme.decorative_muted(0.4))
-                                        .child("›"),
-                                )
-                        })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(crate::typography::ui_rems(13.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(if on_canvas {
-                                    theme.readable_muted(0.7)
-                                } else {
-                                    theme.text.opacity(0.9)
-                                })
-                                .child(title),
-                        )
-                        .when_some(target, |el, target| {
-                            el.child(
-                                div()
-                                    .flex_none()
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .text_color(theme.decorative_muted(0.4))
-                                    .child("›"),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .text_color(theme.readable_muted(0.6))
-                                    .child(target),
-                            )
-                        }),
-                )
-            })
+            // paint order stacks them), so it hides for the duration. With
+            // the workbench's tab row the crumb leads its first strip.
+            .when(!takeover && tabs.is_none(), |el| el.children(crumb))
             .child(div().flex_1())
             .children(trailing);
 
         // The unified window titlebar: full-width on the glass shell, ABOVE
         // the inset card. No bottom border — the card's own hairline is the
-        // separation; the glass gutter shows between.
-        let bar = div().h(px(Theme::TITLEBAR_HEIGHT)).flex_none().child(inner);
+        // separation; the glass gutter shows between. The tab row paints
+        // first, under the row's controls, over the canvas viewport's
+        // x-range (its strips clear the controls at either end).
+        let (row_left, row_width, _, _) = self.workbench_title_row_frame(cx);
+        let bar = div()
+            .relative()
+            .h(px(Theme::TITLEBAR_HEIGHT))
+            .flex_none()
+            .when_some(tabs, |bar, tabs| {
+                bar.child(
+                    div()
+                        .absolute()
+                        .left(px(row_left))
+                        .top(px(Theme::TITLEBAR_TOP_PAD))
+                        .w(px(row_width))
+                        .h(px(super::workbench::render::STRIP_HEIGHT))
+                        .child(tabs),
+                )
+            })
+            .child(inner);
         self.titlebar_drag_region("chat-titlebar", bar, cx)
             .into_any_element()
     }
