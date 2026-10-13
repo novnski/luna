@@ -278,7 +278,12 @@ scripts/cargo.sh check --locked -p luna-ui
 ```
 
 The native suite needs `python3` on `PATH` (the peer's shebang is
-`/usr/bin/env python3`, as the harness peers use). Retain `$EVIDENCE` with a
+`/usr/bin/env python3`, as the harness peers use). Without
+`LUNA_EXTENSION_HOST`, the portable suite uses the host built into its own
+target directory and prints a `SKIPPED` line when there is none; CI
+(`ui-tests.yml`, "Portable extension host and broker") builds the host and
+runs it for real. Every suite's engine close asserts that the data root's
+instance lock is free after shutdown and drop. Retain `$EVIDENCE` with a
 SHA-256 manifest.
 
 ## Native QA (LUNA Dev, local data only)

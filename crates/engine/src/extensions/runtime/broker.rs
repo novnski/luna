@@ -16,8 +16,8 @@
 //! access regardless; see `ExtensionIsolation`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -172,7 +172,9 @@ impl BrokerError {
 
 #[derive(Clone)]
 pub(super) struct Broker {
-    workspace: Option<WorkspaceHost>,
+    /// Shared by every clone. Released when the runtime shuts down, so no
+    /// instance record or late task keeps the engine's registry alive.
+    workspace: Arc<Mutex<Option<WorkspaceHost>>>,
 }
 
 #[derive(Deserialize)]
@@ -212,13 +214,25 @@ fn strict<T: serde::de::DeserializeOwned>(op: &str, params: Value) -> Result<T, 
 
 impl Broker {
     pub fn new(workspace: Option<WorkspaceHost>) -> Self {
-        Self { workspace }
+        Self {
+            workspace: Arc::new(Mutex::new(workspace)),
+        }
     }
 
-    fn workspace(&self) -> Result<&WorkspaceHost, String> {
+    fn workspace(&self) -> Result<WorkspaceHost, String> {
         self.workspace
-            .as_ref()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
             .ok_or_else(|| "tasks are unavailable on this engine".to_string())
+    }
+
+    /// Drop the registry handle; later task and workspace calls fail.
+    pub fn release(&self) {
+        self.workspace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 
     /// Resolve the owner's chosen task into a target, at start.

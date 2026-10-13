@@ -43,6 +43,35 @@ const CPU_HARD_MARGIN: u64 = 2;
 /// Highest descriptor marked close-on-exec in the child.
 #[cfg(unix)]
 const DESCRIPTOR_SCAN_LIMIT: u64 = 65_536;
+/// Descriptors scanned above the highest one open before the fork, for any
+/// opened concurrently by another thread.
+#[cfg(unix)]
+const DESCRIPTOR_SCAN_MARGIN: libc::c_int = 64;
+
+/// One past the highest descriptor to mark close-on-exec in the child.
+/// Scanning only what is open keeps the window between fork and exec short:
+/// during it the child shares every open file description, including the
+/// engine's `flock`ed instance lock.
+#[cfg(unix)]
+fn descriptor_scan_end(soft_limit: libc::rlim_t) -> libc::c_int {
+    let ceiling = soft_limit.clamp(256, DESCRIPTOR_SCAN_LIMIT as libc::rlim_t) as libc::c_int;
+    let highest = ["/dev/fd", "/proc/self/fd"]
+        .iter()
+        .find_map(|dir| std::fs::read_dir(dir).ok())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().to_str()?.parse::<libc::c_int>().ok())
+                .max()
+                .unwrap_or(2)
+        });
+    match highest {
+        Some(highest) => highest
+            .saturating_add(1 + DESCRIPTOR_SCAN_MARGIN)
+            .min(ceiling),
+        None => ceiling,
+    }
+}
 
 /// The allow-listed subset of this process's environment.
 pub(super) fn worker_environment() -> Vec<(OsString, OsString)> {
@@ -154,7 +183,7 @@ pub(super) fn spawn(
     let (files_soft_now, files_hard_now): (libc::rlim_t, libc::rlim_t) =
         get_limit!(libc::RLIMIT_NOFILE).unwrap_or((1024, 1024));
     let files = (limits.open_files as libc::rlim_t).min(files_hard_now);
-    let scan_to = files_soft_now.clamp(256, DESCRIPTOR_SCAN_LIMIT as libc::rlim_t) as libc::c_int;
+    let scan_to = descriptor_scan_end(files_soft_now);
 
     let mut command = tokio::process::Command::new(program);
     command

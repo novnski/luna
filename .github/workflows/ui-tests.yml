@@ -75,6 +75,13 @@ jobs:
             --test device_routing --test no_keychain --test local_import \
             --test workspace_identity_repair --test codex_login_resolution --test codex_login_resolver \
             --test backup_restore --test remote_access
+      # CORE-07 E09: Wasm packages run in the separate portable host process.
+      - name: Portable extension host and broker (CORE-07)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo build --locked -p luna-extension-host
+          LUNA_EXTENSION_HOST="$PWD/target/debug/luna-extension-host" \
+            cargo test --locked -p luna-engine --test extension_portable -- --nocapture
 
   ui-tests:
     runs-on: ubuntu-24.04

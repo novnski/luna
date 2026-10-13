@@ -836,6 +836,10 @@ impl ExtensionRuntime {
                 .map(|worker| worker.stop(ExtensionExitReason::Shutdown)),
         )
         .await;
+        drop(workers);
+        // No instance record, worker task or RPC service clone keeps the
+        // engine's registry (and through it the data root) past shutdown.
+        self.inner.broker.release();
     }
 }
 

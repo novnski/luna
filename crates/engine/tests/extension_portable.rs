@@ -5,15 +5,17 @@
 //! bytes assembled here from independently written WAT, a real host process
 //! and OS readback.
 //!
-//! Build the host first and point the engine at it:
-//! `LUNA_EXTENSION_HOST=$PWD/target/debug/luna-extension-host`.
+//! Build the host first (`cargo build -p luna-extension-host`). The test
+//! uses `LUNA_EXTENSION_HOST` when it is set, otherwise the host built into
+//! the same target directory as this test binary, and reports SKIPPED when
+//! neither exists.
 #![cfg(unix)]
 
 #[path = "support/extension_runtime_fixture.rs"]
 mod fixture;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -130,12 +132,53 @@ fn code(answer: &Value) -> &str {
 /// the host, a guest reaches another task or an ungranted capability, host
 /// calls continue after cancellation, logs flood the engine, a host crash is
 /// not contained, or the module compiled differs from the one pinned.
-#[tokio::test(flavor = "multi_thread")]
-async fn portable_guests_reach_only_the_broker_within_their_bounds() {
-    let host = std::env::var_os("LUNA_EXTENSION_HOST")
-        .expect("build luna-extension-host and set LUNA_EXTENSION_HOST to its absolute path");
-    assert!(Path::new(&host).is_file(), "{host:?} is not the built host");
+#[test]
+fn portable_guests_reach_only_the_broker_within_their_bounds() {
+    let Some(host) = portable_host() else {
+        eprintln!(
+            "SKIPPED portable_guests_reach_only_the_broker_within_their_bounds: \
+             luna-extension-host is not built in this target directory; run \
+             `cargo build -p luna-extension-host` or set LUNA_EXTENSION_HOST"
+        );
+        return;
+    };
+    if std::env::var_os(HOST_ENV).is_none() {
+        // SAFETY: this binary holds this one test and no runtime exists yet,
+        // so no other thread reads the environment while it changes.
+        unsafe { std::env::set_var(HOST_ENV, &host) };
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(portable_scenario());
+}
 
+const HOST_ENV: &str = "LUNA_EXTENSION_HOST";
+
+/// `LUNA_EXTENSION_HOST` when set (it must name the built host), else the
+/// host in this test binary's target directory (`<target>/<profile>/`).
+fn portable_host() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(HOST_ENV) {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_absolute() && path.is_file(),
+            "{HOST_ENV}={} is not the built host",
+            path.display()
+        );
+        return Some(path);
+    }
+    let name = format!("luna-extension-host{}", std::env::consts::EXE_SUFFIX);
+    let exe = std::env::current_exe().ok()?;
+    // <target>/<profile>/deps/<this test>: look in deps, then the profile.
+    exe.ancestors()
+        .skip(1)
+        .take(2)
+        .map(|dir| dir.join(&name))
+        .find(|candidate| candidate.is_file())
+}
+
+async fn portable_scenario() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let data = root.join("data");

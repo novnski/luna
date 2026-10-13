@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry};
+use luna_engine::{
+    AgentAccountsConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry, InstanceLock,
+};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -28,6 +30,7 @@ pub const TASKS_READ: &str = "luna.capability/tasks.read";
 pub struct Engine {
     pub core: EngineCore,
     pub client: luna_rpc::RpcClient,
+    root: PathBuf,
 }
 
 impl Engine {
@@ -51,7 +54,11 @@ impl Engine {
             )
             .expect("assemble profile");
         let client = luna_rpc::memory_client(core.rpc_service());
-        Self { core, client }
+        Self {
+            core,
+            client,
+            root: root.to_path_buf(),
+        }
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
@@ -210,10 +217,18 @@ impl Engine {
             .expect("create task");
     }
 
+    /// Shut down and drop the engine; its data root must then be free
+    /// (no worker, task or retained handle keeps the instance lock), which
+    /// is what a backup export or a fresh engine checks.
     pub async fn close(self) {
         drop(self.client);
         self.core.shutdown().await;
         drop(self.core);
+        assert_eq!(
+            InstanceLock::holder(&self.root),
+            None,
+            "the data root is still locked after shutdown and drop"
+        );
     }
 }
 
