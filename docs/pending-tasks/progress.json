@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791908480.6890671,
+  "created_at": 1791920306.300174,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 27,
-      "in_progress": 0,
+      "done": 30,
+      "in_progress": 3,
       "paused": 0,
-      "ready": 54,
+      "ready": 48,
       "review": 0
     },
     "groups": [
@@ -58,11 +58,11 @@
         },
         "title": "Extensible core, SDK and plugin platform",
         "tasks": 24,
-        "done": 7,
-        "remaining": 17,
-        "accepted_units": 28,
+        "done": 8,
+        "remaining": 16,
+        "accepted_units": 32,
         "total_units": 96,
-        "acceptance_percent": 29.2,
+        "acceptance_percent": 33.3,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -162,22 +162,22 @@
         "id": "navigation",
         "title": "Find, source navigation and context migration",
         "tasks": 4,
-        "done": 0,
-        "remaining": 4,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 3,
+        "accepted_units": 6,
         "total_units": 15,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 40.0,
         "milestone_status": {}
       },
       {
         "id": "workspace",
         "title": "Workspace performance, settings and run/review UX",
         "tasks": 2,
-        "done": 1,
-        "remaining": 1,
-        "accepted_units": 4,
+        "done": 2,
+        "remaining": 0,
+        "accepted_units": 8,
         "total_units": 8,
-        "acceptance_percent": 50.0,
+        "acceptance_percent": 100.0,
         "milestone_status": {}
       },
       {
@@ -373,22 +373,16 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 77,
-      "done": 22,
-      "remaining": 55,
-      "accepted_units": 88,
+      "done": 25,
+      "remaining": 52,
+      "accepted_units": 102,
       "total_units": 301,
-      "acceptance_percent": 29.2
+      "acceptance_percent": 33.9
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "IOS-00",
-      "SW-13",
-      "IC-5",
-      "ZI-02",
-      "CORE-07",
-      "ZI-03",
-      "ZI-04",
-      "ZI-05"
+      "CORE-08",
+      "CORE-19"
     ]
   },
   "tasks": [
@@ -421,16 +415,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.958591
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-13",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958617
     },
     {
       "attempts": 0,
@@ -496,16 +480,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "IC-5",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958743
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "IC-6",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -516,31 +490,11 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "ZI-02",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958787
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "ZI-04",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.9588149
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "ZI-05",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.95883
     },
     {
       "attempts": 0,
@@ -721,16 +675,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "blocked",
       "updated_at": 1791673834.9594119
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-07",
-      "last_worker": null,
-      "note": "Read the CORE-07 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.3156748
     },
     {
       "attempts": 0,
@@ -1041,16 +985,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "deferred",
       "updated_at": 1791673834.95928
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "IOS-00",
-      "last_worker": null,
-      "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
-      "status": "ready",
-      "updated_at": 1791679477.561812
     },
     {
       "attempts": 0,
@@ -3311,6 +3245,417 @@
       "note": "Certified the Moralis evidence-to-draft journey in Full and Auto on Codex and Claude with live Intercom/admin/infra reads, unsent grounded drafts, restart and fresh follow-up, independent readback and a native call audit (read-only production paths only); disposable fixture proved one effect, honest unknown delivery and no replay. Limits: Codex consent bypassed by the user's saved Executor approve mode; large MCP results must be projected for Codex.",
       "status": "done",
       "updated_at": 1791908474.6939409
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-00",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.248168,
+        "expires_at": 1791923120.248168,
+        "heartbeat_at": 1791908720.248168,
+        "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+        "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5",
+        "expired": false
+      },
+      "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "paused",
+      "updated_at": 1791908720.248188
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "SW-13",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791913202.1555011,
+        "expires_at": 1791927602.1555011,
+        "heartbeat_at": 1791913202.1555011,
+        "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+        "session": "agent-run:45597ac7-d3be-43ee-aba9-c125bc6fa9f5",
+        "expired": false
+      },
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "paused",
+      "updated_at": 1791913202.1555169
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791918117.552622,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+              "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+            },
+            {
+              "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+            }
+          ],
+          "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+        },
+        "delivery": {
+          "at": 1791918117.689455,
+          "evidence": [
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+              "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+              "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+              "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+              "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+            },
+            {
+              "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+            }
+          ],
+          "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+        }
+      },
+      "id": "IC-5",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.653356,
+        "expires_at": 1791923905.449554,
+        "heartbeat_at": 1791920305.449554,
+        "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+        "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90",
+        "expired": false
+      },
+      "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification.",
+      "status": "paused",
+      "updated_at": 1791920305.4495602
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791918116.666943,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+              "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+            },
+            {
+              "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+            }
+          ],
+          "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+        },
+        "delivery": {
+          "at": 1791918116.820124,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-02/20261013/manifest.sha256",
+              "sha256": "ebf08517cf576ca05c0f3ee2b16925dc4d56fb9309aba8206c6a18cd3fd743ed"
+            },
+            {
+              "ref": "target/qa/zi-02/20261013/logs/b2-zi02-doc.log",
+              "sha256": "a59f9ea8ac92b37e0f194cd4ea6bd69bb8022432413f535234c21daf142ef07e"
+            },
+            {
+              "ref": "target/qa/zi-02/20261013/logs/b2-zi02-regress.log",
+              "sha256": "9f082657c78bf179dedff953c1c5fa492a538a267f2dd24ec906c2f4a2a3f30e"
+            },
+            {
+              "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+            }
+          ],
+          "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit)."
+        },
+        "handoff": {
+          "at": 1791920305.5531452,
+          "evidence": [
+            {
+              "ref": "target/qa/handoff-20261013/handoff.txt",
+              "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+            },
+            {
+              "ref": "target/qa/handoff-20261013/manifest.sha256",
+              "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+            },
+            {
+              "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+            }
+          ],
+          "note": "Commands/exit codes/hashes retained (handoff.txt, manifests). Delivered in 1f4512d9 plus CI routing in 3e2fa8c5; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main (pid, port 59777, codesign ok). Limitations in the ZI-02 README (debug-process measurement, no tombstone GC)."
+        },
+        "verification": {
+          "at": 1791918116.9630349,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-02/20261013/registry-growth-e2e.json",
+              "sha256": "636e2bf89c19dc50df171ae023457d71537e1e6943f52507b2b8853ee13a2f20"
+            },
+            {
+              "ref": "target/qa/zi-02/20261013/registry-reconnect-e2e.json",
+              "sha256": "3acd4374b82d451e36f17d6601b9af88344a0fa7461f3ef984f88b05b061fa0d"
+            },
+            {
+              "ref": "target/qa/zi-02/20261013/registry-migration-e2e.json",
+              "sha256": "d11f639b72b682dbe794f6e47899755373194405ddd0748967e9ea24b9aac5e6"
+            },
+            {
+              "ref": "target/qa/zi-02/20261013/logs/zi02-growth.log",
+              "sha256": "20e4de061c2ef12e538010c8e52db89cbb8bf60a5dadf4d81d5f8f40c1985341"
+            }
+          ],
+          "note": "registry_growth_e2e 3/3 (100k writes + restart bounded, offline replica keeps intent through restart/reconnect, older queue migrates once) with canonical state hashes in the retained JSON; debug-process measurement, not app RSS."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+        },
+        {
+          "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+        },
+        {
+          "ref": "target/qa/handoff-20261013/handoff.txt",
+          "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+        }
+      ],
+      "id": "ZI-02",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.519358,
+        "expires_at": 1791921716.036086,
+        "heartbeat_at": 1791918116.036086,
+        "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+        "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+      },
+      "note": "Local registry history bounded without dropping offline intent; registry_growth_e2e 3/3 with canonical hashes, doc/sync/host/regression suites green, CI runs the new E2E. Limits: debug-process (not RSS) measurement; LocalOnly join refusal has no production caller.",
+      "status": "done",
+      "updated_at": 1791920305.691433
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791918117.0990899,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+              "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+            },
+            {
+              "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+            }
+          ],
+          "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+        },
+        "delivery": {
+          "at": 1791918117.25982,
+          "evidence": [
+            {
+              "ref": "target/qa/core07/20261013/manifest.sha256",
+              "sha256": "0ce989ee5789ea38c1d01f185e0a8f5ad0a44db4eb34633b374d19741968aac3"
+            },
+            {
+              "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+            },
+            {
+              "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+            }
+          ],
+          "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan."
+        },
+        "handoff": {
+          "at": 1791920305.794821,
+          "evidence": [
+            {
+              "ref": "target/qa/handoff-20261013/handoff.txt",
+              "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+            },
+            {
+              "ref": "target/qa/handoff-20261013/manifest.sha256",
+              "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+            },
+            {
+              "ref": "commit:3e2fa8c54bb24f13fc76f232e2f1348a25b92c7c"
+            },
+            {
+              "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+            }
+          ],
+          "note": "Focused build/E2E/lint/format/review done; hashed evidence in core07 manifest and handoff.txt; LUNA Dev refreshed with luna-extension-host bundled and signed next to luna (3e2fa8c5); origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b. Limits: release packaging does not bundle the host (JIT entitlement decision), no OS sandbox for native workers."
+        },
+        "verification": {
+          "at": 1791918117.424253,
+          "evidence": [
+            {
+              "ref": "target/qa/core07/20261013/e09-broker.json",
+              "sha256": "c0d67e9c862855f0293abaaf5494220c63abe91ce02321f52c3190e94d0b5486"
+            },
+            {
+              "ref": "target/qa/core07/20261013/e09-bounds.json",
+              "sha256": "e49133db113acd7ba963498cb39124498e3fdcc1e00211b858b50d7a15692fb8"
+            },
+            {
+              "ref": "target/qa/core07/20261013/e09-crash-quarantine.json",
+              "sha256": "b3c9750228ff9be492a1467a99e29f574573bca93ba4a1eea4acf70755ffa3ed"
+            },
+            {
+              "ref": "target/qa/core07/20261013/e09-handshake.json",
+              "sha256": "442dfb29c0be642c76ffb776b0d822fd3bae21765786b1a6866203b86375b123"
+            },
+            {
+              "ref": "target/qa/core07/20261013/e09-portable.json",
+              "sha256": "3e3450b40060a9d60c0eb6543267b52299f7a39abccb4dd57a2774fd5feae5b9"
+            },
+            {
+              "ref": "target/qa/core07/20261013/logs/core07c-suites.log",
+              "sha256": "2ad0c664457d47175b775dc8c806e84aa0d959f63305bbd75935c3920992860f"
+            }
+          ],
+          "note": "E09 denied/forged-target/hang/flood/crash/restart cases with OS process/resource readback: extension_runtime 4/4, extension_portable 1/1 with the real host, packages 4/4, suites 12/12 after the follow-up. Isolation never claims an OS sandbox (native trust limitation documented)."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+        },
+        {
+          "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+        },
+        {
+          "ref": "commit:3e2fa8c54bb24f13fc76f232e2f1348a25b92c7c"
+        },
+        {
+          "ref": "target/qa/handoff-20261013/handoff.txt",
+          "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+        }
+      ],
+      "id": "CORE-07",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.385546,
+        "expires_at": 1791921716.197237,
+        "heartbeat_at": 1791918116.197237,
+        "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+        "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+      },
+      "note": "Supervisor + capability broker for native and portable (Wasm) workers with bounded resources, cancellation, crash quarantine and server-owned principals; E09 suites green; LUNA Dev ships the portable host. Hand-offs: CORE-08 provider profiles, CORE-19 update/removal, CORE-18 authoring, CORE-20 cost.",
+      "status": "done",
+      "updated_at": 1791920305.957591
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791918117.825123,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+              "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+            },
+            {
+              "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+            }
+          ],
+          "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+        },
+        "delivery": {
+          "at": 1791918117.9581811,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-05/20261013/manifest.sha256",
+              "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+              "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/logs/b3-zi05-ui.log",
+              "sha256": "c1fdddc80be72497d2b47224f24a2af8ce6223ed86ea6ae395824f40d70de278"
+            },
+            {
+              "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+            }
+          ],
+          "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11."
+        },
+        "handoff": {
+          "at": 1791920306.059773,
+          "evidence": [
+            {
+              "ref": "target/qa/handoff-20261013/handoff.txt",
+              "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/manifest.sha256",
+              "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+            },
+            {
+              "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+            }
+          ],
+          "note": "Commands/exit codes/hashes retained (zi-05 manifest, handoff.txt); delivered in c5a726b1; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main. Limits in the ZI-05 README."
+        },
+        "verification": {
+          "at": 1791918118.0907269,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-05/20261013/zi05-text-search-results.jpg",
+              "sha256": "5ca57b03b376ca78d220b092aa1fb0ae78c00a42cd542ccfcb453b280d9ca51d"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/zi05-open-line-323.jpg",
+              "sha256": "b49d3f35160ac77daa6dfd6305ad64190312f9208ad8ce58cf6f69d2bb793815"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+              "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+            },
+            {
+              "ref": "target/qa/zi-05/20261013/logs/b3-zi05-routing.log",
+              "sha256": "2d511ad82050a3974a2d071d7c0f34ac4ad66a86f9f28ecd15e11271550f4314"
+            }
+          ],
+          "note": "Independent literal oracle with Unicode/remote/late/cancel/limits/deleted/denied cases in the engine suite; native QA in a scoped app: results for ZI05_TARGET_MARKER, then the editor opened docs/long.md at line 323 with the line selected. Limits: budgets reached through request limits, ASCII-only smart case (README)."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+        },
+        {
+          "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+        },
+        {
+          "ref": "target/qa/handoff-20261013/handoff.txt",
+          "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+        }
+      ],
+      "id": "ZI-05",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.782031,
+        "expires_at": 1791921716.5121632,
+        "heartbeat_at": 1791918116.5121632,
+        "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+        "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+      },
+      "note": "Bounded literal checkout text search on the owning host with Files/palette mode, generation fencing, cancellation and revalidated navigation; native QA opened the exact line. Limits: budgets via request limits, ASCII smart case, no shortcut.",
+      "status": "done",
+      "updated_at": 1791920306.1997252
     }
   ],
   "events": [
@@ -16188,6 +16533,1547 @@
           "heartbeat_at": 1791908038.280041,
           "owner": "claude-orchestrator d19437b2",
           "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+        }
+      }
+    },
+    {
+      "seq": 374,
+      "task": "IOS-00",
+      "at": 1791908720.248272,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791923120.248168,
+          "heartbeat_at": 1791908720.248168,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 375,
+      "task": "CORE-07",
+      "at": 1791908720.385652,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-07 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791923120.385546,
+          "heartbeat_at": 1791908720.385546,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 376,
+      "task": "ZI-02",
+      "at": 1791908720.519457,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791923120.519358,
+          "heartbeat_at": 1791908720.519358,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 377,
+      "task": "IC-5",
+      "at": 1791908720.6534731,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expired": false,
+          "expires_at": 1791923120.653356,
+          "heartbeat_at": 1791908720.653356,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 378,
+      "task": "ZI-05",
+      "at": 1791908720.782123,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791923120.782031,
+          "heartbeat_at": 1791908720.782031,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 379,
+      "task": "SW-13",
+      "at": 1791913202.155604,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791913202.1555011,
+          "expired": false,
+          "expires_at": 1791927602.1555011,
+          "heartbeat_at": 1791913202.1555011,
+          "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+          "session": "agent-run:45597ac7-d3be-43ee-aba9-c125bc6fa9f5"
+        }
+      }
+    },
+    {
+      "seq": 380,
+      "task": "ZI-02",
+      "at": 1791918116.0361862,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 381,
+      "task": "CORE-07",
+      "at": 1791918116.197375,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-07 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 382,
+      "task": "IC-5",
+      "at": 1791918116.356628,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expired": false,
+          "expires_at": 1791921716.356531,
+          "heartbeat_at": 1791918116.356531,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 383,
+      "task": "ZI-05",
+      "at": 1791918116.51228,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 384,
+      "task": "ZI-02",
+      "at": 1791918116.6853251,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918116.666943,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+                "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 385,
+      "task": "ZI-02",
+      "at": 1791918116.838996,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918116.666943,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+                "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+          },
+          "delivery": {
+            "at": 1791918116.820124,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/manifest.sha256",
+                "sha256": "ebf08517cf576ca05c0f3ee2b16925dc4d56fb9309aba8206c6a18cd3fd743ed"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-doc.log",
+                "sha256": "a59f9ea8ac92b37e0f194cd4ea6bd69bb8022432413f535234c21daf142ef07e"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-regress.log",
+                "sha256": "9f082657c78bf179dedff953c1c5fa492a538a267f2dd24ec906c2f4a2a3f30e"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit)."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 386,
+      "task": "ZI-02",
+      "at": 1791918116.96457,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918116.666943,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+                "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+          },
+          "delivery": {
+            "at": 1791918116.820124,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/manifest.sha256",
+                "sha256": "ebf08517cf576ca05c0f3ee2b16925dc4d56fb9309aba8206c6a18cd3fd743ed"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-doc.log",
+                "sha256": "a59f9ea8ac92b37e0f194cd4ea6bd69bb8022432413f535234c21daf142ef07e"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-regress.log",
+                "sha256": "9f082657c78bf179dedff953c1c5fa492a538a267f2dd24ec906c2f4a2a3f30e"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit)."
+          },
+          "verification": {
+            "at": 1791918116.9630349,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/registry-growth-e2e.json",
+                "sha256": "636e2bf89c19dc50df171ae023457d71537e1e6943f52507b2b8853ee13a2f20"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-reconnect-e2e.json",
+                "sha256": "3acd4374b82d451e36f17d6601b9af88344a0fa7461f3ef984f88b05b061fa0d"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-migration-e2e.json",
+                "sha256": "d11f639b72b682dbe794f6e47899755373194405ddd0748967e9ea24b9aac5e6"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/zi02-growth.log",
+                "sha256": "20e4de061c2ef12e538010c8e52db89cbb8bf60a5dadf4d81d5f8f40c1985341"
+              }
+            ],
+            "note": "registry_growth_e2e 3/3 (100k writes + restart bounded, offline replica keeps intent through restart/reconnect, older queue migrates once) with canonical state hashes in the retained JSON; debug-process measurement, not app RSS."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "registry_growth_e2e 3/3 (100k writes + restart bounded, offline replica keeps intent through restart/reconnect, older queue migrates once) with canonical state hashes in the retained JSON; debug-process measurement, not app RSS.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 387,
+      "task": "CORE-07",
+      "at": 1791918117.117856,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.0990899,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+                "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              }
+            ],
+            "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 388,
+      "task": "CORE-07",
+      "at": 1791918117.2920861,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.0990899,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+                "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              }
+            ],
+            "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+          },
+          "delivery": {
+            "at": 1791918117.25982,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/manifest.sha256",
+                "sha256": "0ce989ee5789ea38c1d01f185e0a8f5ad0a44db4eb34633b374d19741968aac3"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              },
+              {
+                "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+              }
+            ],
+            "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 389,
+      "task": "CORE-07",
+      "at": 1791918117.4263418,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.0990899,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+                "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              }
+            ],
+            "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+          },
+          "delivery": {
+            "at": 1791918117.25982,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/manifest.sha256",
+                "sha256": "0ce989ee5789ea38c1d01f185e0a8f5ad0a44db4eb34633b374d19741968aac3"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              },
+              {
+                "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+              }
+            ],
+            "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan."
+          },
+          "verification": {
+            "at": 1791918117.424253,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/e09-broker.json",
+                "sha256": "c0d67e9c862855f0293abaaf5494220c63abe91ce02321f52c3190e94d0b5486"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-bounds.json",
+                "sha256": "e49133db113acd7ba963498cb39124498e3fdcc1e00211b858b50d7a15692fb8"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-crash-quarantine.json",
+                "sha256": "b3c9750228ff9be492a1467a99e29f574573bca93ba4a1eea4acf70755ffa3ed"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-handshake.json",
+                "sha256": "442dfb29c0be642c76ffb776b0d822fd3bae21765786b1a6866203b86375b123"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-portable.json",
+                "sha256": "3e3450b40060a9d60c0eb6543267b52299f7a39abccb4dd57a2774fd5feae5b9"
+              },
+              {
+                "ref": "target/qa/core07/20261013/logs/core07c-suites.log",
+                "sha256": "2ad0c664457d47175b775dc8c806e84aa0d959f63305bbd75935c3920992860f"
+              }
+            ],
+            "note": "E09 denied/forged-target/hang/flood/crash/restart cases with OS process/resource readback: extension_runtime 4/4, extension_portable 1/1 with the real host, packages 4/4, suites 12/12 after the follow-up. Isolation never claims an OS sandbox (native trust limitation documented)."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "E09 denied/forged-target/hang/flood/crash/restart cases with OS process/resource readback: extension_runtime 4/4, extension_portable 1/1 with the real host, packages 4/4, suites 12/12 after the follow-up. Isolation never claims an OS sandbox (native trust limitation documented).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 390,
+      "task": "IC-5",
+      "at": 1791918117.566303,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expired": false,
+          "expires_at": 1791921716.356531,
+          "heartbeat_at": 1791918116.356531,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 391,
+      "task": "IC-5",
+      "at": 1791918117.705055,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expired": false,
+          "expires_at": 1791921716.356531,
+          "heartbeat_at": 1791918116.356531,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 392,
+      "task": "ZI-05",
+      "at": 1791918117.840771,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.825123,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+                "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 393,
+      "task": "ZI-05",
+      "at": 1791918117.972499,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.825123,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+                "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+          },
+          "delivery": {
+            "at": 1791918117.9581811,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-ui.log",
+                "sha256": "c1fdddc80be72497d2b47224f24a2af8ce6223ed86ea6ae395824f40d70de278"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 394,
+      "task": "ZI-05",
+      "at": 1791918118.091708,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.825123,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+                "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+          },
+          "delivery": {
+            "at": 1791918117.9581811,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-ui.log",
+                "sha256": "c1fdddc80be72497d2b47224f24a2af8ce6223ed86ea6ae395824f40d70de278"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11."
+          },
+          "verification": {
+            "at": 1791918118.0907269,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-text-search-results.jpg",
+                "sha256": "5ca57b03b376ca78d220b092aa1fb0ae78c00a42cd542ccfcb453b280d9ca51d"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-open-line-323.jpg",
+                "sha256": "b49d3f35160ac77daa6dfd6305ad64190312f9208ad8ce58cf6f69d2bb793815"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-routing.log",
+                "sha256": "2d511ad82050a3974a2d071d7c0f34ac4ad66a86f9f28ecd15e11271550f4314"
+              }
+            ],
+            "note": "Independent literal oracle with Unicode/remote/late/cancel/limits/deleted/denied cases in the engine suite; native QA in a scoped app: results for ZI05_TARGET_MARKER, then the editor opened docs/long.md at line 323 with the line selected. Limits: budgets reached through request limits, ASCII-only smart case (README)."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "Independent literal oracle with Unicode/remote/late/cancel/limits/deleted/denied cases in the engine suite; native QA in a scoped app: results for ZI05_TARGET_MARKER, then the editor opened docs/long.md at line 323 with the line selected. Limits: budgets reached through request limits, ASCII-only smart case (README).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 395,
+      "task": "IC-5",
+      "at": 1791920305.449677,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expired": false,
+          "expires_at": 1791923905.449554,
+          "heartbeat_at": 1791920305.449554,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 396,
+      "task": "ZI-02",
+      "at": 1791920305.565824,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918116.666943,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+                "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+          },
+          "delivery": {
+            "at": 1791918116.820124,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/manifest.sha256",
+                "sha256": "ebf08517cf576ca05c0f3ee2b16925dc4d56fb9309aba8206c6a18cd3fd743ed"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-doc.log",
+                "sha256": "a59f9ea8ac92b37e0f194cd4ea6bd69bb8022432413f535234c21daf142ef07e"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-regress.log",
+                "sha256": "9f082657c78bf179dedff953c1c5fa492a538a267f2dd24ec906c2f4a2a3f30e"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit)."
+          },
+          "handoff": {
+            "at": 1791920305.5531452,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/manifest.sha256",
+                "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Commands/exit codes/hashes retained (handoff.txt, manifests). Delivered in 1f4512d9 plus CI routing in 3e2fa8c5; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main (pid, port 59777, codesign ok). Limitations in the ZI-02 README (debug-process measurement, no tombstone GC)."
+          },
+          "verification": {
+            "at": 1791918116.9630349,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/registry-growth-e2e.json",
+                "sha256": "636e2bf89c19dc50df171ae023457d71537e1e6943f52507b2b8853ee13a2f20"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-reconnect-e2e.json",
+                "sha256": "3acd4374b82d451e36f17d6601b9af88344a0fa7461f3ef984f88b05b061fa0d"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-migration-e2e.json",
+                "sha256": "d11f639b72b682dbe794f6e47899755373194405ddd0748967e9ea24b9aac5e6"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/zi02-growth.log",
+                "sha256": "20e4de061c2ef12e538010c8e52db89cbb8bf60a5dadf4d81d5f8f40c1985341"
+              }
+            ],
+            "note": "registry_growth_e2e 3/3 (100k writes + restart bounded, offline replica keeps intent through restart/reconnect, older queue migrates once) with canonical state hashes in the retained JSON; debug-process measurement, not app RSS."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes/hashes retained (handoff.txt, manifests). Delivered in 1f4512d9 plus CI routing in 3e2fa8c5; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main (pid, port 59777, codesign ok). Limitations in the ZI-02 README (debug-process measurement, no tombstone GC).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expired": false,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 397,
+      "task": "ZI-02",
+      "at": 1791920305.691682,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918116.666943,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md",
+                "sha256": "0dcf6ac8de1946985a877ad0d10f36c462c630ea0a3498ab68fd3ed32297cbf6"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Local vs offline-sync identity (LocalOnly vs synced replica), one-time guarded migration, ack/notification retention and snapshot failure contracts recorded in the ZI-02 README; reviewed by the orchestrator."
+          },
+          "delivery": {
+            "at": 1791918116.820124,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/manifest.sha256",
+                "sha256": "ebf08517cf576ca05c0f3ee2b16925dc4d56fb9309aba8206c6a18cd3fd743ed"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-doc.log",
+                "sha256": "a59f9ea8ac92b37e0f194cd4ea6bd69bb8022432413f535234c21daf142ef07e"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/b2-zi02-regress.log",
+                "sha256": "9f082657c78bf179dedff953c1c5fa492a538a267f2dd24ec906c2f4a2a3f30e"
+              },
+              {
+                "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+              }
+            ],
+            "note": "Existing registry protocol unchanged; local profile folds same-row history and keeps tombstones; synced replica keeps offline intent; guarded persistence migrates older queues once. luna-doc 28/28, luna-sync mock 11/11, host 22/22, regressions 90/90 (an earlier 27/1 doc failure was fixed before commit)."
+          },
+          "handoff": {
+            "at": 1791920305.5531452,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/manifest.sha256",
+                "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Commands/exit codes/hashes retained (handoff.txt, manifests). Delivered in 1f4512d9 plus CI routing in 3e2fa8c5; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main (pid, port 59777, codesign ok). Limitations in the ZI-02 README (debug-process measurement, no tombstone GC)."
+          },
+          "verification": {
+            "at": 1791918116.9630349,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-02/20261013/registry-growth-e2e.json",
+                "sha256": "636e2bf89c19dc50df171ae023457d71537e1e6943f52507b2b8853ee13a2f20"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-reconnect-e2e.json",
+                "sha256": "3acd4374b82d451e36f17d6601b9af88344a0fa7461f3ef984f88b05b061fa0d"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/registry-migration-e2e.json",
+                "sha256": "d11f639b72b682dbe794f6e47899755373194405ddd0748967e9ea24b9aac5e6"
+              },
+              {
+                "ref": "target/qa/zi-02/20261013/logs/zi02-growth.log",
+                "sha256": "20e4de061c2ef12e538010c8e52db89cbb8bf60a5dadf4d81d5f8f40c1985341"
+              }
+            ],
+            "note": "registry_growth_e2e 3/3 (100k writes + restart bounded, offline replica keeps intent through restart/reconnect, older queue migrates once) with canonical state hashes in the retained JSON; debug-process measurement, not app RSS."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:1f4512d9544d9aa22fdfab110e26110719bc1f16"
+          },
+          {
+            "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+          },
+          {
+            "ref": "target/qa/handoff-20261013/handoff.txt",
+            "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+          }
+        ],
+        "note": "Local registry history bounded without dropping offline intent; registry_growth_e2e 3/3 with canonical hashes, doc/sync/host/regression suites green, CI runs the new E2E. Limits: debug-process (not RSS) measurement; LocalOnly join refusal has no production caller.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.519358,
+          "expires_at": 1791921716.036086,
+          "heartbeat_at": 1791918116.036086,
+          "owner": "claude-team/ZI-02 (orchestrator d19437b2)",
+          "session": "agent-run:6c4e369b-4392-4a41-a5ab-43c83cba7f46"
+        }
+      }
+    },
+    {
+      "seq": 398,
+      "task": "CORE-07",
+      "at": 1791920305.819675,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.0990899,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+                "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              }
+            ],
+            "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+          },
+          "delivery": {
+            "at": 1791918117.25982,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/manifest.sha256",
+                "sha256": "0ce989ee5789ea38c1d01f185e0a8f5ad0a44db4eb34633b374d19741968aac3"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              },
+              {
+                "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+              }
+            ],
+            "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan."
+          },
+          "handoff": {
+            "at": 1791920305.794821,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/manifest.sha256",
+                "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+              },
+              {
+                "ref": "commit:3e2fa8c54bb24f13fc76f232e2f1348a25b92c7c"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Focused build/E2E/lint/format/review done; hashed evidence in core07 manifest and handoff.txt; LUNA Dev refreshed with luna-extension-host bundled and signed next to luna (3e2fa8c5); origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b. Limits: release packaging does not bundle the host (JIT entitlement decision), no OS sandbox for native workers."
+          },
+          "verification": {
+            "at": 1791918117.424253,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/e09-broker.json",
+                "sha256": "c0d67e9c862855f0293abaaf5494220c63abe91ce02321f52c3190e94d0b5486"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-bounds.json",
+                "sha256": "e49133db113acd7ba963498cb39124498e3fdcc1e00211b858b50d7a15692fb8"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-crash-quarantine.json",
+                "sha256": "b3c9750228ff9be492a1467a99e29f574573bca93ba4a1eea4acf70755ffa3ed"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-handshake.json",
+                "sha256": "442dfb29c0be642c76ffb776b0d822fd3bae21765786b1a6866203b86375b123"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-portable.json",
+                "sha256": "3e3450b40060a9d60c0eb6543267b52299f7a39abccb4dd57a2774fd5feae5b9"
+              },
+              {
+                "ref": "target/qa/core07/20261013/logs/core07c-suites.log",
+                "sha256": "2ad0c664457d47175b775dc8c806e84aa0d959f63305bbd75935c3920992860f"
+              }
+            ],
+            "note": "E09 denied/forged-target/hang/flood/crash/restart cases with OS process/resource readback: extension_runtime 4/4, extension_portable 1/1 with the real host, packages 4/4, suites 12/12 after the follow-up. Isolation never claims an OS sandbox (native trust limitation documented)."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Focused build/E2E/lint/format/review done; hashed evidence in core07 manifest and handoff.txt; LUNA Dev refreshed with luna-extension-host bundled and signed next to luna (3e2fa8c5); origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b. Limits: release packaging does not bundle the host (JIT entitlement decision), no OS sandbox for native workers.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expired": false,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 399,
+      "task": "CORE-07",
+      "at": 1791920305.957855,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.0990899,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-07/README.md",
+                "sha256": "dc2f5486e29e3f4767a5ea2c36c35e5b652e7717f980a0c9f3a34d2ab4d2fc23"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              }
+            ],
+            "note": "CORE-00 runtime/trust decision pinned; handshake/protocol version and module sha256 rules; server-owned plugin-instance/target/grant principal in proto extension_runtime.rs; README records it."
+          },
+          "delivery": {
+            "at": 1791918117.25982,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/manifest.sha256",
+                "sha256": "0ce989ee5789ea38c1d01f185e0a8f5ad0a44db4eb34633b374d19741968aac3"
+              },
+              {
+                "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+              },
+              {
+                "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+              }
+            ],
+            "note": "Supervisor + broker with narrow imports, bounded memory/CPU/queues/logs/host calls, cancellation, crash containment and quarantine; owner IPC not exposed to workers; follow-up 20e35f70 releases the broker registry at shutdown and narrows the fd close-on-exec scan."
+          },
+          "handoff": {
+            "at": 1791920305.794821,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/manifest.sha256",
+                "sha256": "a8a8e3625559f2208d1f005c5c602ce6c815b50c3d8ca88ecfb82e13af65c606"
+              },
+              {
+                "ref": "commit:3e2fa8c54bb24f13fc76f232e2f1348a25b92c7c"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Focused build/E2E/lint/format/review done; hashed evidence in core07 manifest and handoff.txt; LUNA Dev refreshed with luna-extension-host bundled and signed next to luna (3e2fa8c5); origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b. Limits: release packaging does not bundle the host (JIT entitlement decision), no OS sandbox for native workers."
+          },
+          "verification": {
+            "at": 1791918117.424253,
+            "evidence": [
+              {
+                "ref": "target/qa/core07/20261013/e09-broker.json",
+                "sha256": "c0d67e9c862855f0293abaaf5494220c63abe91ce02321f52c3190e94d0b5486"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-bounds.json",
+                "sha256": "e49133db113acd7ba963498cb39124498e3fdcc1e00211b858b50d7a15692fb8"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-crash-quarantine.json",
+                "sha256": "b3c9750228ff9be492a1467a99e29f574573bca93ba4a1eea4acf70755ffa3ed"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-handshake.json",
+                "sha256": "442dfb29c0be642c76ffb776b0d822fd3bae21765786b1a6866203b86375b123"
+              },
+              {
+                "ref": "target/qa/core07/20261013/e09-portable.json",
+                "sha256": "3e3450b40060a9d60c0eb6543267b52299f7a39abccb4dd57a2774fd5feae5b9"
+              },
+              {
+                "ref": "target/qa/core07/20261013/logs/core07c-suites.log",
+                "sha256": "2ad0c664457d47175b775dc8c806e84aa0d959f63305bbd75935c3920992860f"
+              }
+            ],
+            "note": "E09 denied/forged-target/hang/flood/crash/restart cases with OS process/resource readback: extension_runtime 4/4, extension_portable 1/1 with the real host, packages 4/4, suites 12/12 after the follow-up. Isolation never claims an OS sandbox (native trust limitation documented)."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:ca47120f2c0e98b82c5d028e3e228e544ab33929"
+          },
+          {
+            "ref": "commit:20e35f7006bf6a79792994bb420c6adfbbd4f562"
+          },
+          {
+            "ref": "commit:3e2fa8c54bb24f13fc76f232e2f1348a25b92c7c"
+          },
+          {
+            "ref": "target/qa/handoff-20261013/handoff.txt",
+            "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+          }
+        ],
+        "note": "Supervisor + capability broker for native and portable (Wasm) workers with bounded resources, cancellation, crash quarantine and server-owned principals; E09 suites green; LUNA Dev ships the portable host. Hand-offs: CORE-08 provider profiles, CORE-19 update/removal, CORE-18 authoring, CORE-20 cost.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.385546,
+          "expires_at": 1791921716.197237,
+          "heartbeat_at": 1791918116.197237,
+          "owner": "claude-team/CORE-07 (orchestrator d19437b2)",
+          "session": "agent-run:76487339-3c57-474b-8fa8-349921a476b4"
+        }
+      }
+    },
+    {
+      "seq": 400,
+      "task": "ZI-05",
+      "at": 1791920306.073023,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.825123,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+                "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+          },
+          "delivery": {
+            "at": 1791918117.9581811,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-ui.log",
+                "sha256": "c1fdddc80be72497d2b47224f24a2af8ce6223ed86ea6ae395824f40d70de278"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11."
+          },
+          "handoff": {
+            "at": 1791920306.059773,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Commands/exit codes/hashes retained (zi-05 manifest, handoff.txt); delivered in c5a726b1; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main. Limits in the ZI-05 README."
+          },
+          "verification": {
+            "at": 1791918118.0907269,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-text-search-results.jpg",
+                "sha256": "5ca57b03b376ca78d220b092aa1fb0ae78c00a42cd542ccfcb453b280d9ca51d"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-open-line-323.jpg",
+                "sha256": "b49d3f35160ac77daa6dfd6305ad64190312f9208ad8ce58cf6f69d2bb793815"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-routing.log",
+                "sha256": "2d511ad82050a3974a2d071d7c0f34ac4ad66a86f9f28ecd15e11271550f4314"
+              }
+            ],
+            "note": "Independent literal oracle with Unicode/remote/late/cancel/limits/deleted/denied cases in the engine suite; native QA in a scoped app: results for ZI05_TARGET_MARKER, then the editor opened docs/long.md at line 323 with the line selected. Limits: budgets reached through request limits, ASCII-only smart case (README)."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commands/exit codes/hashes retained (zi-05 manifest, handoff.txt); delivered in c5a726b1; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main. Limits in the ZI-05 README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expired": false,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 401,
+      "task": "ZI-05",
+      "at": 1791920306.199934,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.825123,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-05/README.md",
+                "sha256": "ff11bf48142fa53c10b9180d36439913e7b2fd95e3518179449d94ca57819f6e"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "Authorization/ignore/symlink, literal-query, byte/range and elapsed/result budgets specified against representative repos in the ZI-05 README."
+          },
+          "delivery": {
+            "at": 1791918117.9581811,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-ui.log",
+                "sha256": "c1fdddc80be72497d2b47224f24a2af8ce6223ed86ea6ae395824f40d70de278"
+              },
+              {
+                "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+              }
+            ],
+            "note": "SearchWorkspaceText on the existing host service; Files text-search mode and palette entry fence query/root/host generations, cancel superseded scans and revalidate the match before opening. engine 7/7, routing 3/3, UI files 89/89, palette 11/11."
+          },
+          "handoff": {
+            "at": 1791920306.059773,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/manifest.sha256",
+                "sha256": "732e779c9bd25e3965ca97fa3a34ac9f27c120f6d9b966fc1a125dfa3bf8422e"
+              },
+              {
+                "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+              }
+            ],
+            "note": "Commands/exit codes/hashes retained (zi-05 manifest, handoff.txt); delivered in c5a726b1; origin/main verified at 56113bc88bbe256abca026d6650cf0722c51d74b; LUNA Dev refreshed from main. Limits in the ZI-05 README."
+          },
+          "verification": {
+            "at": 1791918118.0907269,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-text-search-results.jpg",
+                "sha256": "5ca57b03b376ca78d220b092aa1fb0ae78c00a42cd542ccfcb453b280d9ca51d"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/zi05-open-line-323.jpg",
+                "sha256": "b49d3f35160ac77daa6dfd6305ad64190312f9208ad8ce58cf6f69d2bb793815"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-engine.log",
+                "sha256": "c7efdddd97a181db3fe5c81056a68851766e0315a17d191fd65484bcc43ed449"
+              },
+              {
+                "ref": "target/qa/zi-05/20261013/logs/b3-zi05-routing.log",
+                "sha256": "2d511ad82050a3974a2d071d7c0f34ac4ad66a86f9f28ecd15e11271550f4314"
+              }
+            ],
+            "note": "Independent literal oracle with Unicode/remote/late/cancel/limits/deleted/denied cases in the engine suite; native QA in a scoped app: results for ZI05_TARGET_MARKER, then the editor opened docs/long.md at line 323 with the line selected. Limits: budgets reached through request limits, ASCII-only smart case (README)."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:c5a726b1f3b1c2a62cd948cfcc97acd70af822b2"
+          },
+          {
+            "ref": "commit:56113bc88bbe256abca026d6650cf0722c51d74b"
+          },
+          {
+            "ref": "target/qa/handoff-20261013/handoff.txt",
+            "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+          }
+        ],
+        "note": "Bounded literal checkout text search on the owning host with Files/palette mode, generation fencing, cancellation and revalidated navigation; native QA opened the exact line. Limits: budgets via request limits, ASCII smart case, no shortcut.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.782031,
+          "expires_at": 1791921716.5121632,
+          "heartbeat_at": 1791918116.5121632,
+          "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
+          "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
         }
       }
     }
