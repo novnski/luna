@@ -1,9 +1,9 @@
 # Pending task checkpoint
 
-Generated 2026-10-14T01:48:10+03:00.
+Generated 2026-10-14T02:03:42+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **42.0% accepted**, **27/81 Done**.
+Active scope: **46.3% accepted**, **36/79 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
 Next eligible: none
@@ -14,10 +14,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [CORE-09 — Extract Codex into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
-| [CORE-10 — Extract Claude Code into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
-| [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
-| [CORE-12 — Introduce native UI contribution and view-model contracts](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-13 — Ship independent theme and alternate-sidebar examples](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-14 — Add durable extension content and renderer registration](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-15 — Prove a plugin video renderer on unchanged app bytes](extensible-core/README.md) | ready | 0.0% | — |
@@ -36,8 +32,12 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | done | 100.0% | claude-team/CORE-05 (orchestrator d19437b2) |
 | [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | done | 100.0% | claude-team/CORE-06 (orchestrator d19437b2) |
 | [CORE-07 — Implement extension supervision and capability broker](extensible-core/README.md) | done | 100.0% | claude-team/CORE-07 (orchestrator d19437b2) |
-| [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | in_progress | 50.0% | claude-team/CORE-08 (orchestrator d19437b2) |
-| [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | in_progress | 75.0% | claude-team/CORE-19 (orchestrator d19437b2) |
+| [CORE-09 — Extract Codex into a first-party provider package](extensible-core/README.md) | deferred | 0.0% | — |
+| [CORE-10 — Extract Claude Code into a first-party provider package](extensible-core/README.md) | deferred | 0.0% | — |
+| [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | done | 100.0% | claude-team/CORE-08 (orchestrator d19437b2) |
+| [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | done | 100.0% | claude-team/CORE-19 (orchestrator d19437b2) |
+| [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-11 (orchestrator d19437b2) |
+| [CORE-12 — Introduce native UI contribution and view-model contracts](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-12 (orchestrator d19437b2) |
 
 ## Provider access, effective tools and skills
 
@@ -81,8 +81,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-01 — Searchable scoped settings, provenance and reset](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [ZI-05 — Search checkout text and open the exact matching line](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-05 (orchestrator d19437b2) |
 | [IC-5 — Find and highlight text throughout selected conversation](interactive-chat-surfaces/README.md) | done | 100.0% | claude-team/IC-5 (orchestrator d19437b2) |
-| [SW-11 — Migrate skills, history and general-work context](luna-only-workflows/README.md) | in_progress | 75.0% | claude-team/SW-11 (orchestrator d19437b2) |
-| [ZI-04 — Open typed tool files in the owning Files surface](zeron-upstream-improvements/README.md) | in_progress | 66.7% | claude-team/ZI-04 (orchestrator d19437b2) |
+| [SW-11 — Migrate skills, history and general-work context](luna-only-workflows/README.md) | done | 100.0% | claude-team/SW-11 (orchestrator d19437b2) |
+| [ZI-04 — Open typed tool files in the owning Files surface](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-04 (orchestrator d19437b2) |
 
 ## Workspace performance, settings and run/review UX
 
@@ -96,8 +96,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-15 — Optional floating task companion](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [ZI-01 — Isolate and bound Latest turn snapshots](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-01 (orchestrator d19437b2) |
 | [ZI-02 — Bound workspace registry history without losing offline intent](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-02 (orchestrator d19437b2) |
-| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | in_progress | 75.0% | claude-team/AW-09 (orchestrator d19437b2) |
-| [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | in_progress | 75.0% | claude-team/AW-11 (orchestrator d19437b2) |
+| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | done | 100.0% | claude-team/AW-09 (orchestrator d19437b2) |
+| [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | done | 100.0% | claude-team/AW-11 (orchestrator d19437b2) |
 
 ## Board, helper supervision and future workflows
 
@@ -114,15 +114,14 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
 | [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | done | 100.0% | claude-team/SW-10 (orchestrator d19437b2) |
-| [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | in_progress | 75.0% | claude-team/PB-4A (orchestrator d19437b2) |
-| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | in_progress | 75.0% | claude-team/AW-10 (orchestrator d19437b2) |
+| [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | done | 100.0% | claude-team/AW-10 (orchestrator d19437b2) |
+| [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | done | 100.0% | claude-team/PB-4A (orchestrator d19437b2) |
 
 ## One direct paired-Mac product
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-16 — Decide optional voice, paired phone and offline requirements](luna-only-workflows/README.md) | deferred | 0.0% | — |
-| [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-05 — Expose actual provider policy, questions and approvals on phone](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-06 — Add task-owned phone attachments, files and checkout diffs](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-07 — Accept the complete native direct-Mac first release](control-this-mac/README.md) | ready | 0.0% | — |
@@ -135,14 +134,14 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | done | 100.0% | codex |
 | [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | done | 100.0% | codex |
-| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | in_progress | 75.0% | claude-team/RM-03 (orchestrator d19437b2) |
+| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | done | 100.0% | claude-team/RM-03 (orchestrator d19437b2) |
+| [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | in_progress | 0.0% | claude-team/RM-04 (orchestrator d19437b2) |
 
 ## Native iOS parity and release
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [IOS-01 — Deliver the shared native iOS transcript pipeline](ios-parity/README.md) | ready | 0.0% | — |
-| [IOS-02 — Build adaptive phone and iPad shell and appearance](ios-parity/README.md) | ready | 0.0% | — |
 | [IOS-03 — Complete native composer, context and queue interactions](ios-parity/README.md) | ready | 0.0% | — |
 | [IOS-04 — Expose actual host providers, permissions and interactions](ios-parity/README.md) | ready | 0.0% | — |
 | [IOS-05 — Add native Board, Side chats and helper supervision](ios-parity/README.md) | ready | 0.0% | — |
@@ -156,6 +155,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [IOS-13 — Select and deliver owned push, Live Activities and widgets](ios-parity/README.md) | deferred | 0.0% | — |
 | [IOS-14 — Assess expanded iOS parity and release readiness](ios-parity/README.md) | ready | 0.0% | — |
 | [IOS-00 — Establish the owned iOS SDK facade and migration build](ios-parity/README.md) | done | 100.0% | claude-team/IOS-00 (orchestrator d19437b2) |
+| [IOS-02 — Build adaptive phone and iPad shell and appearance](ios-parity/README.md) | in_progress | 0.0% | claude-team/IOS-02 (orchestrator d19437b2) |
 
 ## Real operations and local recurrence
 

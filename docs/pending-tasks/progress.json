@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791931690.199511,
+  "created_at": 1791932622.457916,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
-      "deferred": 21,
-      "done": 32,
-      "in_progress": 10,
+      "deferred": 23,
+      "done": 41,
+      "in_progress": 5,
       "paused": 0,
-      "ready": 43,
+      "ready": 37,
       "review": 0
     },
     "groups": [
@@ -57,12 +57,12 @@
           ]
         },
         "title": "Extensible core, SDK and plugin platform",
-        "tasks": 24,
-        "done": 8,
-        "remaining": 16,
-        "accepted_units": 37,
-        "total_units": 96,
-        "acceptance_percent": 38.5,
+        "tasks": 22,
+        "done": 10,
+        "remaining": 12,
+        "accepted_units": 40,
+        "total_units": 88,
+        "acceptance_percent": 45.5,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -96,7 +96,7 @@
             ]
           },
           "First independent provider": {
-            "done": false,
+            "done": true,
             "members": [
               "CORE-06",
               "CORE-07",
@@ -162,33 +162,33 @@
         "id": "navigation",
         "title": "Find, source navigation and context migration",
         "tasks": 4,
-        "done": 2,
-        "remaining": 2,
-        "accepted_units": 13,
+        "done": 4,
+        "remaining": 0,
+        "accepted_units": 15,
         "total_units": 15,
-        "acceptance_percent": 86.7,
+        "acceptance_percent": 100.0,
         "milestone_status": {}
       },
       {
         "id": "workspace",
         "title": "Workspace performance, settings and run/review UX",
         "tasks": 4,
-        "done": 2,
-        "remaining": 2,
-        "accepted_units": 14,
+        "done": 4,
+        "remaining": 0,
+        "accepted_units": 16,
         "total_units": 16,
-        "acceptance_percent": 87.5,
+        "acceptance_percent": 100.0,
         "milestone_status": {}
       },
       {
         "id": "orchestration",
         "title": "Board, helper supervision and future workflows",
         "tasks": 4,
-        "done": 2,
-        "remaining": 2,
-        "accepted_units": 14,
+        "done": 4,
+        "remaining": 0,
+        "accepted_units": 16,
         "total_units": 16,
-        "acceptance_percent": 87.5,
+        "acceptance_percent": 100.0,
         "milestone_status": {}
       },
       {
@@ -215,11 +215,11 @@
         },
         "title": "One direct paired-Mac product",
         "tasks": 11,
-        "done": 3,
-        "remaining": 8,
-        "accepted_units": 14,
+        "done": 4,
+        "remaining": 7,
+        "accepted_units": 15,
         "total_units": 40,
-        "acceptance_percent": 35.0,
+        "acceptance_percent": 37.5,
         "milestone_status": {
           "M0": {
             "done": true,
@@ -235,7 +235,7 @@
             ]
           },
           "M2": {
-            "done": false,
+            "done": true,
             "members": [
               "RM-03"
             ]
@@ -324,7 +324,7 @@
             ]
           },
           "Native foundation": {
-            "done": false,
+            "done": true,
             "members": [
               "IOS-00",
               "RM-03"
@@ -372,12 +372,12 @@
     ],
     "expired_claims": [],
     "active_scope": {
-      "tasks": 81,
-      "done": 27,
-      "remaining": 54,
-      "accepted_units": 133,
-      "total_units": 317,
-      "acceptance_percent": 42.0
+      "tasks": 79,
+      "done": 36,
+      "remaining": 43,
+      "accepted_units": 143,
+      "total_units": 309,
+      "acceptance_percent": 46.3
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": []
@@ -637,46 +637,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "CORE-09",
-      "last_worker": null,
-      "note": "Read the CORE-09 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.4789991
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-10",
-      "last_worker": null,
-      "note": "Read the CORE-10 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.5600991
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-11",
-      "last_worker": null,
-      "note": "Read the CORE-11 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.642012
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-12",
-      "last_worker": null,
-      "note": "Read the CORE-12 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.725337
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "CORE-13",
       "last_worker": null,
       "note": "Read the CORE-13 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
@@ -917,16 +877,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "IOS-02",
-      "last_worker": null,
-      "note": "Read the IOS-02 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
-      "status": "ready",
-      "updated_at": 1791679477.746384
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "IOS-03",
       "last_worker": null,
       "note": "Read the IOS-03 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
@@ -1042,16 +992,6 @@
       "note": "Read the IOS-14 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
       "status": "ready",
       "updated_at": 1791679478.911985
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-04",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958909
     },
     {
       "attempts": 0,
@@ -3712,8 +3652,8 @@
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930536.544066,
-        "expires_at": 1791944936.544066,
-        "heartbeat_at": 1791930536.544066,
+        "expires_at": 1791946103.588722,
+        "heartbeat_at": 1791931703.588722,
         "owner": "claude-team/SW-13 (orchestrator d19437b2)",
         "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-13",
         "expired": false
@@ -3725,7 +3665,27 @@
         }
       ],
       "status": "paused",
-      "updated_at": 1791930536.544108
+      "updated_at": 1791931703.5887291
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-09",
+      "last_worker": null,
+      "note": "User decision 2026-10-14: Codex and Claude Code stay built-in default providers; only OpenCode (CORE-11) moves to a provider package, and it supplies CORE-08's real-provider proof. CORE-22 depends on this ticket and needs its dependency list re-scoped before it can start.",
+      "status": "deferred",
+      "updated_at": 1791932170.188142
+    },
+    {
+      "attempts": 0,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-10",
+      "last_worker": null,
+      "note": "User decision 2026-10-14: Codex and Claude Code stay built-in default providers; only OpenCode (CORE-11) moves to a provider package, and it supplies CORE-08's real-provider proof. CORE-22 depends on this ticket and needs its dependency list re-scoped before it can start.",
+      "status": "deferred",
+      "updated_at": 1791932170.298902
     },
     {
       "attempts": 2,
@@ -3760,31 +3720,148 @@
             }
           ],
           "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+        },
+        "handoff": {
+          "at": 1791932432.8101492,
+          "evidence": [
+            {
+              "ref": "target/qa/core08/20261013/native/SHA256SUMS",
+              "sha256": "e3239abdc6058c601f030b6cc9016e833b2d1bcb76b81813c5622ecbebe1229d"
+            }
+          ],
+          "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
+        "verification": {
+          "at": 1791932058.4224079,
+          "evidence": [
+            {
+              "ref": "target/qa/core08/20261013/native/results.md",
+              "sha256": "0245dbaea96610862089561daee7a20ca61176c121ef923c540cd0a36a5ec865"
+            }
+          ],
+          "note": "Closed without a real Gemini run by user decision (2026-10-14: LUNA will not add Gemini). E10 on LUNA QA Batch3 (62da9b65): package installed through the normal path with only @luna/sdk/provider; picker showed six real Gemini models without restart; disable/enable removed and restored the rail; app bundle digest and every file hash identical before/after, codesign strict passes; the real run surfaced Gemini's IneligibleTierError as a failure before any model call. Stop/continuity/crash are covered by extension_providers E2E with a scripted CLI (stop_and_crash.json, conformance_failures.json). Real-provider turn/Stop through a package moves to CORE-09..11. README Limitations records this."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/core08/20261013/native/SHA256SUMS",
+          "sha256": "e3239abdc6058c601f030b6cc9016e833b2d1bcb76b81813c5622ecbebe1229d"
+        }
+      ],
       "id": "CORE-08",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930537.479383,
-        "expires_at": 1791944937.479383,
-        "heartbeat_at": 1791930537.479383,
+        "expires_at": 1791946102.2539399,
+        "heartbeat_at": 1791931702.2539399,
         "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
       },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930537.479415
+      "status": "done",
+      "updated_at": 1791932432.911911
     },
     {
       "attempts": 2,
       "blocker": null,
       "checks": {
+        "contract": {
+          "at": 1791926805.220405,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+              "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+        },
+        "delivery": {
+          "at": 1791926805.339604,
+          "evidence": [
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+        },
+        "handoff": {
+          "at": 1791932433.013163,
+          "evidence": [
+            {
+              "ref": "target/qa/core19/manifest.sha256",
+              "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+            }
+          ],
+          "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
+        "verification": {
+          "at": 1791929336.678725,
+          "evidence": [
+            {
+              "ref": "target/qa/core19/native/results.md",
+              "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+            },
+            {
+              "ref": "target/qa/core19/manifest.sha256",
+              "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/core19/manifest.sha256",
+          "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+        }
+      ],
+      "id": "CORE-19",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930538.3128378,
+        "expires_at": 1791946102.537964,
+        "heartbeat_at": 1791931702.537963,
+        "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19"
+      },
+      "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "done",
+      "updated_at": 1791932433.115826
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "handoff": {
+          "at": 1791932433.219042,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-09/20261013/manifest.sha256",
+              "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+            }
+          ],
+          "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
         "rebase": {
           "at": 1791926805.460993,
           "evidence": [
@@ -3833,29 +3910,113 @@
           "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/aw-09/20261013/manifest.sha256",
+          "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+        }
+      ],
       "id": "AW-09",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930537.7587452,
-        "expires_at": 1791944937.7587452,
-        "heartbeat_at": 1791930537.7587452,
+        "expires_at": 1791946102.791285,
+        "heartbeat_at": 1791931702.791285,
         "owner": "claude-team/AW-09 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09"
       },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930537.75876
+      "status": "done",
+      "updated_at": 1791932433.324482
     },
     {
       "attempts": 2,
       "blocker": null,
       "checks": {
+        "handoff": {
+          "at": 1791932433.429599,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-10/20261014/manifest.sha256",
+              "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+            }
+          ],
+          "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
+        "rebase": {
+          "at": 1791931629.225079,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-10/20261014/results.md",
+              "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+            }
+          ],
+          "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+        },
+        "scope": {
+          "at": 1791931629.331607,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+              "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+            }
+          ],
+          "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+        },
+        "verification": {
+          "at": 1791931629.441123,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-10/20261014/manifest.sha256",
+              "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+            }
+          ],
+          "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/aw-10/20261014/manifest.sha256",
+          "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+        }
+      ],
+      "id": "AW-10",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791930536.9167092,
+        "expires_at": 1791946102.982877,
+        "heartbeat_at": 1791931702.982877,
+        "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+      },
+      "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+      "recovery_evidence": [
+        {
+          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+        }
+      ],
+      "status": "done",
+      "updated_at": 1791932433.53229
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "handoff": {
+          "at": 1791932433.634347,
+          "evidence": [
+            {
+              "ref": "target/qa/aw-11/manifest.sha256",
+              "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+            }
+          ],
+          "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
         "rebase": {
           "at": 1791926805.7106109,
           "evidence": [
@@ -3904,171 +4065,44 @@
           "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/aw-11/manifest.sha256",
+          "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+        }
+      ],
       "id": "AW-11",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930538.037899,
-        "expires_at": 1791944938.037899,
-        "heartbeat_at": 1791930538.037899,
+        "expires_at": 1791946103.187967,
+        "heartbeat_at": 1791931703.187967,
         "owner": "claude-team/AW-11 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11"
       },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930538.03792
+      "status": "done",
+      "updated_at": 1791932433.735323
     },
     {
       "attempts": 2,
       "blocker": null,
       "checks": {
-        "contract": {
-          "at": 1791926805.220405,
+        "handoff": {
+          "at": 1791932433.8375301,
           "evidence": [
             {
-              "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
-              "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
-            },
-            {
-              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              "ref": "target/qa/sw11/manifest.sha256",
+              "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
             }
           ],
-          "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
         },
-        "delivery": {
-          "at": 1791926805.339604,
-          "evidence": [
-            {
-              "ref": "target/qa/batch3-20261014/manifest.sha256",
-              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
-            },
-            {
-              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
-            }
-          ],
-          "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
-        },
-        "verification": {
-          "at": 1791929336.678725,
-          "evidence": [
-            {
-              "ref": "target/qa/core19/native/results.md",
-              "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
-            },
-            {
-              "ref": "target/qa/core19/manifest.sha256",
-              "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
-            },
-            {
-              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
-            }
-          ],
-          "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
-        }
-      },
-      "id": "CORE-19",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791930538.3128378,
-        "expires_at": 1791944938.3128378,
-        "heartbeat_at": 1791930538.3128378,
-        "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19",
-        "expired": false
-      },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
-      "recovery_evidence": [
-        {
-          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
-        }
-      ],
-      "status": "paused",
-      "updated_at": 1791930538.3128629
-    },
-    {
-      "attempts": 2,
-      "blocker": null,
-      "checks": {
-        "client": {
-          "at": 1791929719.153385,
-          "evidence": [
-            {
-              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
-              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
-            },
-            {
-              "ref": "target/qa/rm-03/20261014/manifest.sha256",
-              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
-            },
-            {
-              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
-            }
-          ],
-          "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
-        },
-        "projections": {
-          "at": 1791929719.029908,
-          "evidence": [
-            {
-              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
-              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
-            },
-            {
-              "ref": "target/qa/rm-03/20261014/manifest.sha256",
-              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
-            },
-            {
-              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
-            }
-          ],
-          "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
-        },
-        "verification": {
-          "at": 1791929719.2827342,
-          "evidence": [
-            {
-              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
-              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
-            },
-            {
-              "ref": "target/qa/rm-03/20261014/manifest.sha256",
-              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
-            },
-            {
-              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
-            }
-          ],
-          "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
-        }
-      },
-      "id": "RM-03",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791930538.588902,
-        "expires_at": 1791944938.588902,
-        "heartbeat_at": 1791930538.588902,
-        "owner": "claude-team/RM-03 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03",
-        "expired": false
-      },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
-      "recovery_evidence": [
-        {
-          "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
-        }
-      ],
-      "status": "paused",
-      "updated_at": 1791930538.588924
-    },
-    {
-      "attempts": 2,
-      "blocker": null,
-      "checks": {
         "journey": {
           "at": 1791930320.05384,
           "evidence": [
@@ -4121,24 +4155,29 @@
           "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/sw11/manifest.sha256",
+          "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+        }
+      ],
       "id": "SW-11",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930538.870007,
-        "expires_at": 1791944938.870007,
-        "heartbeat_at": 1791930538.870007,
+        "expires_at": 1791946103.4251719,
+        "heartbeat_at": 1791931703.4251719,
         "owner": "claude-team/SW-11 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11"
       },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930538.870029
+      "status": "done",
+      "updated_at": 1791932433.9402828
     },
     {
       "attempts": 2,
@@ -4156,6 +4195,16 @@
             }
           ],
           "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+        },
+        "handoff": {
+          "at": 1791932434.0410938,
+          "evidence": [
+            {
+              "ref": "target/qa/zi-04/20261014/manifest.sha256",
+              "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+            }
+          ],
+          "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
         },
         "verification": {
           "at": 1791930401.932312,
@@ -4175,24 +4224,29 @@
           "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/zi-04/20261014/manifest.sha256",
+          "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+        }
+      ],
       "id": "ZI-04",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930539.145974,
-        "expires_at": 1791944939.145974,
-        "heartbeat_at": 1791930539.145974,
+        "expires_at": 1791946103.7871912,
+        "heartbeat_at": 1791931703.7871912,
         "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04"
       },
-      "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+      "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930539.145994
+      "status": "done",
+      "updated_at": 1791932434.140586
     },
     {
       "attempts": 2,
@@ -4232,6 +4286,16 @@
           ],
           "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
         },
+        "handoff": {
+          "at": 1791932434.241888,
+          "evidence": [
+            {
+              "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+              "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+            }
+          ],
+          "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
         "verification": {
           "at": 1791930552.136013,
           "evidence": [
@@ -4250,78 +4314,191 @@
           "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
         }
       },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+          "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+        }
+      ],
       "id": "PB-4A",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
         "claimed_at": 1791930537.201347,
-        "expires_at": 1791944937.201347,
-        "heartbeat_at": 1791930537.201347,
+        "expires_at": 1791946104.077217,
+        "heartbeat_at": 1791931704.077217,
         "owner": "claude-team/PB-4A (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A",
-        "expired": false
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
       },
-      "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done.",
+      "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
-      "status": "paused",
-      "updated_at": 1791930552.151477
+      "status": "done",
+      "updated_at": 1791932434.345324
     },
     {
       "attempts": 2,
       "blocker": null,
       "checks": {
-        "rebase": {
-          "at": 1791931629.225079,
+        "client": {
+          "at": 1791929719.153385,
           "evidence": [
             {
-              "ref": "target/qa/aw-10/20261014/results.md",
-              "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+            },
+            {
+              "ref": "target/qa/rm-03/20261014/manifest.sha256",
+              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
             }
           ],
-          "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
         },
-        "scope": {
-          "at": 1791931629.331607,
+        "handoff": {
+          "at": 1791932434.4478562,
           "evidence": [
             {
-              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
-              "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              "ref": "target/qa/rm-03/20261014/manifest.sha256",
+              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
             }
           ],
-          "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+        },
+        "projections": {
+          "at": 1791929719.029908,
+          "evidence": [
+            {
+              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+            },
+            {
+              "ref": "target/qa/rm-03/20261014/manifest.sha256",
+              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+            }
+          ],
+          "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
         },
         "verification": {
-          "at": 1791931629.441123,
+          "at": 1791929719.2827342,
           "evidence": [
             {
-              "ref": "target/qa/aw-10/20261014/manifest.sha256",
-              "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+              "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+            },
+            {
+              "ref": "target/qa/rm-03/20261014/manifest.sha256",
+              "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+            },
+            {
+              "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
             }
           ],
-          "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+          "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
         }
       },
-      "id": "AW-10",
+      "completion_evidence": [
+        {
+          "ref": "target/qa/rm-03/20261014/manifest.sha256",
+          "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+        }
+      ],
+      "id": "RM-03",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791930536.9167092,
-        "expires_at": 1791946021.199054,
-        "heartbeat_at": 1791931621.199053,
-        "owner": "claude-team/AW-10 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10",
-        "expired": false
+        "claimed_at": 1791930538.588902,
+        "expires_at": 1791946104.417474,
+        "heartbeat_at": 1791931704.417474,
+        "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03"
       },
-      "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32.",
+      "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
       "recovery_evidence": [
         {
           "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
         }
       ],
+      "status": "done",
+      "updated_at": 1791932434.553729
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-11",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791932464.436633,
+        "expires_at": 1791946864.436633,
+        "heartbeat_at": 1791932464.436633,
+        "owner": "claude-team/CORE-11 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-11",
+        "expired": false
+      },
+      "note": "Read the CORE-11 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
       "status": "paused",
-      "updated_at": 1791931629.441268
+      "updated_at": 1791932464.4366531
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-04",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791932464.570091,
+        "expires_at": 1791946864.570091,
+        "heartbeat_at": 1791932464.570091,
+        "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04",
+        "expired": false
+      },
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "paused",
+      "updated_at": 1791932464.5701141
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-12",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791932464.700881,
+        "expires_at": 1791946864.700881,
+        "heartbeat_at": 1791932464.700881,
+        "owner": "claude-team/CORE-12 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-12",
+        "expired": false
+      },
+      "note": "Read the CORE-12 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "status": "paused",
+      "updated_at": 1791932464.700907
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "IOS-02",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791932464.8316522,
+        "expires_at": 1791946864.8316522,
+        "heartbeat_at": 1791932464.8316522,
+        "owner": "claude-team/IOS-02 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#IOS-02",
+        "expired": false
+      },
+      "note": "Read the IOS-02 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+      "status": "paused",
+      "updated_at": 1791932464.831666
     }
   ],
   "events": [
@@ -22975,6 +23152,2319 @@
           "heartbeat_at": 1791931621.199053,
           "owner": "claude-team/AW-10 (orchestrator d19437b2)",
           "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 484,
+      "task": "CORE-08",
+      "at": 1791931702.2542248,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.479383,
+          "expired": false,
+          "expires_at": 1791946102.2539399,
+          "heartbeat_at": 1791931702.2539399,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
+        }
+      }
+    },
+    {
+      "seq": 485,
+      "task": "CORE-19",
+      "at": 1791931702.538132,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          },
+          "verification": {
+            "at": 1791929336.678725,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/native/results.md",
+                "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+              },
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.3128378,
+          "expired": false,
+          "expires_at": 1791946102.537964,
+          "heartbeat_at": 1791931702.537963,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19"
+        }
+      }
+    },
+    {
+      "seq": 486,
+      "task": "AW-09",
+      "at": 1791931702.7914188,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          },
+          "verification": {
+            "at": 1791928096.923012,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/native/results.md",
+                "sha256": "aeac4fc96fcd976957fe5cacaeeeb98c56d5ca5ce20e276e9622b42ba112ddca"
+              },
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.7587452,
+          "expired": false,
+          "expires_at": 1791946102.791285,
+          "heartbeat_at": 1791931702.791285,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09"
+        }
+      }
+    },
+    {
+      "seq": 487,
+      "task": "AW-10",
+      "at": 1791931702.983019,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          },
+          "scope": {
+            "at": 1791931629.331607,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+                "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              }
+            ],
+            "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          },
+          "verification": {
+            "at": 1791931629.441123,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946102.982877,
+          "heartbeat_at": 1791931702.982877,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 488,
+      "task": "AW-11",
+      "at": 1791931703.1880991,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          },
+          "verification": {
+            "at": 1791928097.057185,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/native/results.md",
+                "sha256": "8c237ad5af235c1f8bee0729ce8b3d6fd44df9b9b1629d6e5ae3af38b5b61f8a"
+              },
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.037899,
+          "expired": false,
+          "expires_at": 1791946103.187967,
+          "heartbeat_at": 1791931703.187967,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11"
+        }
+      }
+    },
+    {
+      "seq": 489,
+      "task": "SW-11",
+      "at": 1791931703.425324,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.870007,
+          "expired": false,
+          "expires_at": 1791946103.4251719,
+          "heartbeat_at": 1791931703.4251719,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11"
+        }
+      }
+    },
+    {
+      "seq": 490,
+      "task": "SW-13",
+      "at": 1791931703.589072,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.544066,
+          "expired": false,
+          "expires_at": 1791946103.588722,
+          "heartbeat_at": 1791931703.588722,
+          "owner": "claude-team/SW-13 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-13"
+        }
+      }
+    },
+    {
+      "seq": 491,
+      "task": "ZI-04",
+      "at": 1791931703.7873259,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930539.145974,
+          "expired": false,
+          "expires_at": 1791946103.7871912,
+          "heartbeat_at": 1791931703.7871912,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04"
+        }
+      }
+    },
+    {
+      "seq": 492,
+      "task": "PB-4A",
+      "at": 1791931704.077653,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791930552.001793,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+          },
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          },
+          "verification": {
+            "at": 1791930552.136013,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791946104.077217,
+          "heartbeat_at": 1791931704.077217,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 493,
+      "task": "RM-03",
+      "at": 1791931704.4176269,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "client": {
+            "at": 1791929719.153385,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
+          },
+          "projections": {
+            "at": 1791929719.029908,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
+          },
+          "verification": {
+            "at": 1791929719.2827342,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Lease lapsed because the orchestrator's heartbeat used the default lease; the same orchestrator (d19437b2) still owns the work, its code-writer agent is idle, and no other worker exists. Reclaiming.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.588902,
+          "expired": false,
+          "expires_at": 1791946104.417474,
+          "heartbeat_at": 1791931704.417474,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03"
+        }
+      }
+    },
+    {
+      "seq": 494,
+      "task": "CORE-08",
+      "at": 1791932058.422731,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          },
+          "verification": {
+            "at": 1791932058.4224079,
+            "evidence": [
+              {
+                "ref": "target/qa/core08/20261013/native/results.md",
+                "sha256": "0245dbaea96610862089561daee7a20ca61176c121ef923c540cd0a36a5ec865"
+              }
+            ],
+            "note": "Closed without a real Gemini run by user decision (2026-10-14: LUNA will not add Gemini). E10 on LUNA QA Batch3 (62da9b65): package installed through the normal path with only @luna/sdk/provider; picker showed six real Gemini models without restart; disable/enable removed and restored the rail; app bundle digest and every file hash identical before/after, codesign strict passes; the real run surfaced Gemini's IneligibleTierError as a failure before any model call. Stop/continuity/crash are covered by extension_providers E2E with a scripted CLI (stop_and_crash.json, conformance_failures.json). Real-provider turn/Stop through a package moves to CORE-09..11. README Limitations records this."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Closed without a real Gemini run by user decision (2026-10-14: LUNA will not add Gemini). E10 on LUNA QA Batch3 (62da9b65): package installed through the normal path with only @luna/sdk/provider; picker showed six real Gemini models without restart; disable/enable removed and restored the rail; app bundle digest and every file hash identical before/after, codesign strict passes; the real run surfaced Gemini's IneligibleTierError as a failure before any model call. Stop/continuity/crash are covered by extension_providers E2E with a scripted CLI (stop_and_crash.json, conformance_failures.json). Real-provider turn/Stop through a package moves to CORE-09..11. README Limitations records this.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.479383,
+          "expired": false,
+          "expires_at": 1791946102.2539399,
+          "heartbeat_at": 1791931702.2539399,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
+        }
+      }
+    },
+    {
+      "seq": 495,
+      "task": "CORE-09",
+      "at": 1791932170.1882508,
+      "action": "defer",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "User decision 2026-10-14: Codex and Claude Code stay built-in default providers; only OpenCode (CORE-11) moves to a provider package, and it supplies CORE-08's real-provider proof. CORE-22 depends on this ticket and needs its dependency list re-scoped before it can start.",
+        "status": "deferred",
+        "worker": null
+      }
+    },
+    {
+      "seq": 496,
+      "task": "CORE-10",
+      "at": 1791932170.299038,
+      "action": "defer",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "User decision 2026-10-14: Codex and Claude Code stay built-in default providers; only OpenCode (CORE-11) moves to a provider package, and it supplies CORE-08's real-provider proof. CORE-22 depends on this ticket and needs its dependency list re-scoped before it can start.",
+        "status": "deferred",
+        "worker": null
+      }
+    },
+    {
+      "seq": 497,
+      "task": "CORE-08",
+      "at": 1791932432.810577,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          },
+          "handoff": {
+            "at": 1791932432.8101492,
+            "evidence": [
+              {
+                "ref": "target/qa/core08/20261013/native/SHA256SUMS",
+                "sha256": "e3239abdc6058c601f030b6cc9016e833b2d1bcb76b81813c5622ecbebe1229d"
+              }
+            ],
+            "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791932058.4224079,
+            "evidence": [
+              {
+                "ref": "target/qa/core08/20261013/native/results.md",
+                "sha256": "0245dbaea96610862089561daee7a20ca61176c121ef923c540cd0a36a5ec865"
+              }
+            ],
+            "note": "Closed without a real Gemini run by user decision (2026-10-14: LUNA will not add Gemini). E10 on LUNA QA Batch3 (62da9b65): package installed through the normal path with only @luna/sdk/provider; picker showed six real Gemini models without restart; disable/enable removed and restored the rail; app bundle digest and every file hash identical before/after, codesign strict passes; the real run surfaced Gemini's IneligibleTierError as a failure before any model call. Stop/continuity/crash are covered by extension_providers E2E with a scripted CLI (stop_and_crash.json, conformance_failures.json). Real-provider turn/Stop through a package moves to CORE-09..11. README Limitations records this."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.479383,
+          "expired": false,
+          "expires_at": 1791946102.2539399,
+          "heartbeat_at": 1791931702.2539399,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
+        }
+      }
+    },
+    {
+      "seq": 498,
+      "task": "CORE-08",
+      "at": 1791932432.912013,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          },
+          "handoff": {
+            "at": 1791932432.8101492,
+            "evidence": [
+              {
+                "ref": "target/qa/core08/20261013/native/SHA256SUMS",
+                "sha256": "e3239abdc6058c601f030b6cc9016e833b2d1bcb76b81813c5622ecbebe1229d"
+              }
+            ],
+            "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791932058.4224079,
+            "evidence": [
+              {
+                "ref": "target/qa/core08/20261013/native/results.md",
+                "sha256": "0245dbaea96610862089561daee7a20ca61176c121ef923c540cd0a36a5ec865"
+              }
+            ],
+            "note": "Closed without a real Gemini run by user decision (2026-10-14: LUNA will not add Gemini). E10 on LUNA QA Batch3 (62da9b65): package installed through the normal path with only @luna/sdk/provider; picker showed six real Gemini models without restart; disable/enable removed and restored the rail; app bundle digest and every file hash identical before/after, codesign strict passes; the real run surfaced Gemini's IneligibleTierError as a failure before any model call. Stop/continuity/crash are covered by extension_providers E2E with a scripted CLI (stop_and_crash.json, conformance_failures.json). Real-provider turn/Stop through a package moves to CORE-09..11. README Limitations records this."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/core08/20261013/native/SHA256SUMS",
+            "sha256": "e3239abdc6058c601f030b6cc9016e833b2d1bcb76b81813c5622ecbebe1229d"
+          }
+        ],
+        "note": "Delivered in 62da9b65 + 11b97743. Engine E2E extension_providers 4/4 (conformance failures, Stop/crash, unsupported optional, join/run/leave). Limitations: no real Gemini run (user decision, 2026-10-14; real provider proof moves to CORE-11 OpenCode package); native workers are not OS-sandboxed. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.479383,
+          "expires_at": 1791946102.2539399,
+          "heartbeat_at": 1791931702.2539399,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-08"
+        }
+      }
+    },
+    {
+      "seq": 499,
+      "task": "CORE-19",
+      "at": 1791932433.0142028,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          },
+          "handoff": {
+            "at": 1791932433.013163,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              }
+            ],
+            "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791929336.678725,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/native/results.md",
+                "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+              },
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.3128378,
+          "expired": false,
+          "expires_at": 1791946102.537964,
+          "heartbeat_at": 1791931702.537963,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19"
+        }
+      }
+    },
+    {
+      "seq": 500,
+      "task": "CORE-19",
+      "at": 1791932433.115956,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          },
+          "handoff": {
+            "at": 1791932433.013163,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              }
+            ],
+            "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791929336.678725,
+            "evidence": [
+              {
+                "ref": "target/qa/core19/native/results.md",
+                "sha256": "9bc619712d5f5979c53c5bac1c1b042317764e8f12bc7505381f766f8f28b008"
+              },
+              {
+                "ref": "target/qa/core19/manifest.sha256",
+                "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "E2E extension_lifecycle 5/5 (failed install/update, kill at each durable step, active run reconcile, crash quarantine release on removal, migration rollback, safe mode) with independent package/process/state/grant readback; native in a clean QA bundle: failed migration leaves 1.0.0 and data byte-identical, expanded grants shown and exact, rollback restores the exact schema-1 copy, safe mode refuses starts."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/core19/manifest.sha256",
+            "sha256": "b699364896bed53aa51ae46f138ccc2efddbf218afdbeed1ebef9ca8c6e9d65c"
+          }
+        ],
+        "note": "Delivered in 62da9b65. extension_lifecycle E2E 5/5; native update/rollback/failed-migration/safe-mode steps 1-4, 6 pass; steps 5, 7+ covered by E2E only. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.3128378,
+          "expires_at": 1791946102.537964,
+          "heartbeat_at": 1791931702.537963,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-19"
+        }
+      }
+    },
+    {
+      "seq": 501,
+      "task": "AW-09",
+      "at": 1791932433.219568,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.219042,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              }
+            ],
+            "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          },
+          "verification": {
+            "at": 1791928096.923012,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/native/results.md",
+                "sha256": "aeac4fc96fcd976957fe5cacaeeeb98c56d5ca5ce20e276e9622b42ba112ddca"
+              },
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.7587452,
+          "expired": false,
+          "expires_at": 1791946102.791285,
+          "heartbeat_at": 1791931702.791285,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09"
+        }
+      }
+    },
+    {
+      "seq": 502,
+      "task": "AW-09",
+      "at": 1791932433.324588,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.219042,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              }
+            ],
+            "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          },
+          "verification": {
+            "at": 1791928096.923012,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-09/20261013/native/results.md",
+                "sha256": "aeac4fc96fcd976957fe5cacaeeeb98c56d5ca5ce20e276e9622b42ba112ddca"
+              },
+              {
+                "ref": "target/qa/aw-09/20261013/manifest.sha256",
+                "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine diagnostics_storage 2/2 + UI 3/3; native in a clean QA bundle: pid matches pgrep, providers/extensions/problems shown, two refreshes leave the data folder identical, sizes match an independent walk (KiB labeled KB), no cleanup/delete control."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/aw-09/20261013/manifest.sha256",
+            "sha256": "a7df3f316d0b0795231d7986caed933c65a163f8ca0f0351afc1c3c1616c98e6"
+          }
+        ],
+        "note": "Delivered in 62da9b65. Diagnostics read-only (no writes), sizes match an independent walk. Limitation: the page labels KiB as \"KB\". LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.7587452,
+          "expires_at": 1791946102.791285,
+          "heartbeat_at": 1791931702.791285,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-09"
+        }
+      }
+    },
+    {
+      "seq": 503,
+      "task": "AW-10",
+      "at": 1791932433.430656,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.429599,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          },
+          "scope": {
+            "at": 1791931629.331607,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+                "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              }
+            ],
+            "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          },
+          "verification": {
+            "at": 1791931629.441123,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expired": false,
+          "expires_at": 1791946102.982877,
+          "heartbeat_at": 1791931702.982877,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 504,
+      "task": "AW-10",
+      "at": 1791932433.5323892,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.429599,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791931629.225079,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/results.md",
+                "sha256": "10f5cb672105bfc57e1cdc22d7b375c13e749f2fe2f3d721034a076ea0215779"
+              }
+            ],
+            "note": "Triaged against main 8081ea30: capacity lives in the run-table owner (TurnCapacity in sessions_runs.rs) with additive gates in drain_commands/drain_queue/execute_automatic_recovery; Activity section reuses the Activity view; no duplicate subsystem. Native behaviour before: every start ran immediately and nothing showed host load."
+          },
+          "scope": {
+            "at": 1791931629.331607,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-10/README.md",
+                "sha256": "7ce32fa3cad09936fead0904b4bafaefd7f6d6594b0f50f1d70c446f2f29d31a"
+              }
+            ],
+            "note": "Contract and failure table in docs/pending-tasks/agent-workspace-app-research/aw-10/README.md (limit None default, held start never written/sent, never-held overrides, lowering never stops turns, restart behaviour); required vs follow-ups listed under Limitations."
+          },
+          "verification": {
+            "at": 1791931629.441123,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-10/20261014/manifest.sha256",
+                "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+              }
+            ],
+            "note": "Suites: contract 3, remote_auth 2, host_capacity 4 (evidence JSON), regressions 119 (recovery, message_queue, queue_preflight, automations_e2e, board_lifecycle_e2e, restart_resume), UI capacity 2; all exit 0. Native QA 1-8 pass on LUNA QA Batch3 with real Claude Code (step 6 adapted: Stop freezes the queue by design; rerun with a natural turn end showed Queued message waiting + Open, follow-up ran once). Limit persisted across restart; no resend, no delivery-unknown. manifest.sha256 b27706a10c610f32."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/aw-10/20261014/manifest.sha256",
+            "sha256": "b27706a10c610f3281f6e9dbc7863fbc5c4a93bdcb18c0d2859a321b1c939b7b"
+          }
+        ],
+        "note": "Delivered in 742eb2bd + 67d07dc8. host_capacity 4/4, regressions 119/119, UI 2/2, native 1-8 pass (step 6 doc corrected). Limitations: held send keeps the composer pending bubble; \"Unsent message saved\" card stays after resend. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930536.9167092,
+          "expires_at": 1791946102.982877,
+          "heartbeat_at": 1791931702.982877,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-10"
+        }
+      }
+    },
+    {
+      "seq": 505,
+      "task": "AW-11",
+      "at": 1791932433.634947,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.634347,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              }
+            ],
+            "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          },
+          "verification": {
+            "at": 1791928097.057185,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/native/results.md",
+                "sha256": "8c237ad5af235c1f8bee0729ce8b3d6fd44df9b9b1629d6e5ae3af38b5b61f8a"
+              },
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.037899,
+          "expired": false,
+          "expires_at": 1791946103.187967,
+          "heartbeat_at": 1791931703.187967,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11"
+        }
+      }
+    },
+    {
+      "seq": 506,
+      "task": "AW-11",
+      "at": 1791932433.735423,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.634347,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              }
+            ],
+            "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          },
+          "verification": {
+            "at": 1791928097.057185,
+            "evidence": [
+              {
+                "ref": "target/qa/aw-11/native/results.md",
+                "sha256": "8c237ad5af235c1f8bee0729ce8b3d6fd44df9b9b1629d6e5ae3af38b5b61f8a"
+              },
+              {
+                "ref": "target/qa/aw-11/manifest.sha256",
+                "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Engine/sync/UI suites green; native steps 1-4 and 6-8 pass in a clean QA bundle (unaccepted -> accept runs nothing -> run writes marker -> in-place change revokes and Retry refused -> version 2 and outside symlink refused -> trust persists across restart, nothing runs on launch). Step 5 Override covered by UI test."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/aw-11/manifest.sha256",
+            "sha256": "e8ab74f77c20def27cfc766bb84a03fafd7296d3acf458831a232e1c66b1e5e5"
+          }
+        ],
+        "note": "Delivered in 62da9b65. .luna/project.toml (migration v21) native steps 1-4, 6-8 pass; step 5 (override editor) covered by the settings-repository-trust UI test. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.037899,
+          "expires_at": 1791946103.187967,
+          "heartbeat_at": 1791931703.187967,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#AW-11"
+        }
+      }
+    },
+    {
+      "seq": 507,
+      "task": "SW-11",
+      "at": 1791932433.838552,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.8375301,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              }
+            ],
+            "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.870007,
+          "expired": false,
+          "expires_at": 1791946103.4251719,
+          "heartbeat_at": 1791931703.4251719,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11"
+        }
+      }
+    },
+    {
+      "seq": 508,
+      "task": "SW-11",
+      "at": 1791932433.940383,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "handoff": {
+            "at": 1791932433.8375301,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              }
+            ],
+            "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "journey": {
+            "at": 1791930320.05384,
+            "evidence": [
+              {
+                "ref": "target/qa/sw11/native/results.md",
+                "sha256": "3f1501b99ee6ba298c0e83bf4a56744b8087ba2c6fea0af7c1bf5ddb675453b4"
+              },
+              {
+                "ref": "target/qa/sw11/manifest.sha256",
+                "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+              },
+              {
+                "ref": "commit:a2dba9fde6d20510db644c3884049a4c2513d2b1"
+              }
+            ],
+            "note": "Native E03/E14 in a clean QA bundle with real Codex and Claude chats: global past-work search finds the archived task with provider/model/date/Done/Archived (after the a2dba9fd index fix), Enter opens it, IC-5 Find reveals the off-screen line-120 token and Escape restores, Start new task with context names Codex · gpt-6.1-sol · Full access and sends nothing; imported Codex task shows History unavailable and its notice; no prompts or grants."
+          },
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/sw11/manifest.sha256",
+            "sha256": "b7de5a758a39d638449053cf82a299228be416b51144478809198073ddd7e7be"
+          }
+        ],
+        "note": "Delivered in 62da9b65 + a2dba9fd. session_history E2E incl. real_run_rows_carry_the_provider_and_model_their_runs_reported; native N2-N6, N8 pass (N3 after the a2dba9fd fix + RebuildSessionHistory); N7 covered by skill_library_e2e M3. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.870007,
+          "expires_at": 1791946103.4251719,
+          "heartbeat_at": 1791931703.4251719,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-11"
+        }
+      }
+    },
+    {
+      "seq": 509,
+      "task": "ZI-04",
+      "at": 1791932434.041484,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "handoff": {
+            "at": 1791932434.0410938,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930539.145974,
+          "expired": false,
+          "expires_at": 1791946103.7871912,
+          "heartbeat_at": 1791931703.7871912,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04"
+        }
+      }
+    },
+    {
+      "seq": 510,
+      "task": "ZI-04",
+      "at": 1791932434.14067,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791930401.805984,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/zeron-upstream-improvements/zi-04/README.md",
+                "sha256": "a258c43aa1223678aa330c78c3be9fdac1b9db01c99e83defc3e6ddc93dcf3ed"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One labeled click/keyboard activation per badge reuses the shell's root resolver, tab dedup and unsaved-editor handling; side chat panes route links again; raw :12 paths open only as written. Delivered in 742eb2bd."
+          },
+          "handoff": {
+            "at": 1791932434.0410938,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791930401.932312,
+            "evidence": [
+              {
+                "ref": "target/qa/zi-04/20261014/native/results.md",
+                "sha256": "67c316afed97ea7eaf77c08407606ebe01580012af12680d245c9889b12f419b"
+              },
+              {
+                "ref": "target/qa/zi-04/20261014/manifest.sha256",
+                "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "file_badges 2/2, tool_file_open_e2e 3/3 (main/side/remote with exact SHA-256s, deleted/symlink/outside refused, /etc/hosts never read), transcript 88, files 89, link suites; native: a real Codex read badge opens the exact file once without toggling the card."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/zi-04/20261014/manifest.sha256",
+            "sha256": "48f62bebe0aa65e74423a59d9ef59697333a5cd3da9db0c0f475650551cc3849"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Badge opens the exact file in one tab without toggling the card; deleted/outside/symlink/remote/side-chat covered by tool_file_open_e2e 3/3 and file_badges 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930539.145974,
+          "expires_at": 1791946103.7871912,
+          "heartbeat_at": 1791931703.7871912,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#ZI-04"
+        }
+      }
+    },
+    {
+      "seq": 511,
+      "task": "PB-4A",
+      "at": 1791932434.242888,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791930552.001793,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+          },
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          },
+          "handoff": {
+            "at": 1791932434.241888,
+            "evidence": [
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791930552.136013,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expired": false,
+          "expires_at": 1791946104.077217,
+          "heartbeat_at": 1791931704.077217,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 512,
+      "task": "PB-4A",
+      "at": 1791932434.345432,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791930552.001793,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Accept refused with nothing written unless the unmet list is empty; gate results and acceptance bound to member column/execution generation (reopen makes them stale); idempotent requests with expected revision; group only reads members."
+          },
+          "decision": {
+            "at": 1791930551.869523,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Decision record in pb-4a/README.md: a local feature group owned by one home Space on its host; related-repo tickets join only by explicit link; own acceptance (criteria, gates, explicit Accept); no new Space identity, no migration, no cross-repo grants or implicit worktrees; alternatives rejected with reasons. Pre-approved by the user ('i approve anything'), relayed for overrule."
+          },
+          "handoff": {
+            "at": 1791932434.241888,
+            "evidence": [
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "verification": {
+            "at": 1791930552.136013,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/devin-project-board/pb-4a/README.md",
+                "sha256": "7b3ee813338ebef8553899c148a9fb7c4f47689ee42cddf7677400a2b536d549"
+              },
+              {
+                "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+                "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "board_feature_groups_e2e 2/2 (two disposable repos on different branches, restart, review runs), Board regressions 22/22, board-page fixture pass; native: group panel shows per-repo status/branch and unmet gates, gate Passed still refuses acceptance while the member is not Done."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/pb-4a/20261014/manifest.sha256",
+            "sha256": "48a5836eaa63c52e454cd08779da3c83df12f8ba0c9d0595053291ef30560535"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Feature-group panel, unmet reasons, gate Passed but not accepted until members are Done; board_feature_groups_e2e 2/2. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930537.201347,
+          "expires_at": 1791946104.077217,
+          "heartbeat_at": 1791931704.077217,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#PB-4A"
+        }
+      }
+    },
+    {
+      "seq": 513,
+      "task": "RM-03",
+      "at": 1791932434.448861,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "client": {
+            "at": 1791929719.153385,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
+          },
+          "handoff": {
+            "at": 1791932434.4478562,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "projections": {
+            "at": 1791929719.029908,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
+          },
+          "verification": {
+            "at": 1791929719.2827342,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:8081ea30c4708ab24298bb5f5196dfa16041e9d3"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.588902,
+          "expired": false,
+          "expires_at": 1791946104.417474,
+          "heartbeat_at": 1791931704.417474,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03"
+        }
+      }
+    },
+    {
+      "seq": 514,
+      "task": "RM-03",
+      "at": 1791932434.5538309,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "client": {
+            "at": 1791929719.153385,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "One owned runtime in luna-sdk (ProjectionStore: host-keyed, bounded, ordered, stale-generation/foreign-host refusal) and luna-mobile RemoteSession::following (backoff reconnect, suspend/resume, network wait, cache save/restore) with Swift transport/lifecycle adapters; sdk 5/5, mobile check, bindings regenerated."
+          },
+          "handoff": {
+            "at": 1791932434.4478562,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              }
+            ],
+            "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test)."
+          },
+          "projections": {
+            "at": 1791929719.029908,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "WatchRemoteTasks/WatchRemoteTask with host/profile/task revisions and a generation+revision cursor; registry vs detailed history (last 150 entries, size-capped), capabilities (remote-projections-v1) and freshness; contract tests and gateway E2E 6/6."
+          },
+          "verification": {
+            "at": 1791929719.2827342,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-03/20261013T221002Z/native/summary.json",
+                "sha256": "896f79424558023976830e516d39e79e2d54c4c9a3fd003ed715ec3c2119ef91"
+              },
+              {
+                "ref": "target/qa/rm-03/20261014/manifest.sha256",
+                "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+              },
+              {
+                "ref": "commit:742eb2bdab2a7df0e10a59e323464aa8236ed23f"
+              }
+            ],
+            "note": "Native campaign on a disposable simulator against the engine host: RemoteTasksRuntimeTests 1/1, coordinator exit 0, all 13 observations true (paired from link, live deltas, waiting without network, repaired after foreground and Mac restart with two generations, cached after restart, cache removed on Forget, same task identities), no secret keys in preferences. Visible-slice screenshots pending."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/rm-03/20261014/manifest.sha256",
+            "sha256": "90f8e67cbe160a9a55ef4399c1e42f92f1d1bfa2bd5531a31a08819b8e3d6fe7"
+          }
+        ],
+        "note": "Delivered in 742eb2bd. Remote projections native campaign: 13 flags true over 2 generations; iOS RemoteTasksView with regenerated luna_core.swift. LUNA Dev refreshed from main 67d07dc8 (scripts/run-macos-dev.sh --refresh exit 0; process target/luna-macos-dev/LUNA Dev.app/Contents/MacOS/luna, IPC 59777 listening, codesign --verify --deep --strict ok; target/qa/handoff-20261014/luna-dev-refresh.txt); origin/main 11b97743 (doc-only after the refresh). Each staged commit was verified in the clean verify-b3 worktree first (cargo fmt, workspace all-targets check, rpc contract test).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791930538.588902,
+          "expires_at": 1791946104.417474,
+          "heartbeat_at": 1791931704.417474,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-03"
+        }
+      }
+    },
+    {
+      "seq": 515,
+      "task": "CORE-11",
+      "at": 1791932464.4367309,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-11 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791932464.436633,
+          "expired": false,
+          "expires_at": 1791946864.436633,
+          "heartbeat_at": 1791932464.436633,
+          "owner": "claude-team/CORE-11 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-11"
+        }
+      }
+    },
+    {
+      "seq": 516,
+      "task": "RM-04",
+      "at": 1791932464.5702,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791932464.570091,
+          "expired": false,
+          "expires_at": 1791946864.570091,
+          "heartbeat_at": 1791932464.570091,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+        }
+      }
+    },
+    {
+      "seq": 517,
+      "task": "CORE-12",
+      "at": 1791932464.701088,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-12 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791932464.700881,
+          "expired": false,
+          "expires_at": 1791946864.700881,
+          "heartbeat_at": 1791932464.700881,
+          "owner": "claude-team/CORE-12 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#CORE-12"
+        }
+      }
+    },
+    {
+      "seq": 518,
+      "task": "IOS-02",
+      "at": 1791932464.831745,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the IOS-02 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791932464.8316522,
+          "expired": false,
+          "expires_at": 1791946864.8316522,
+          "heartbeat_at": 1791932464.8316522,
+          "owner": "claude-team/IOS-02 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#IOS-02"
         }
       }
     }
