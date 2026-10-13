@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791920306.300174,
+  "created_at": 1791923266.3613591,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
-      "deferred": 25,
-      "done": 30,
-      "in_progress": 3,
+      "deferred": 23,
+      "done": 32,
+      "in_progress": 6,
       "paused": 0,
-      "ready": 48,
+      "ready": 45,
       "review": 0
     },
     "groups": [
@@ -162,22 +162,22 @@
         "id": "navigation",
         "title": "Find, source navigation and context migration",
         "tasks": 4,
-        "done": 1,
-        "remaining": 3,
-        "accepted_units": 6,
+        "done": 2,
+        "remaining": 2,
+        "accepted_units": 8,
         "total_units": 15,
-        "acceptance_percent": 40.0,
+        "acceptance_percent": 53.3,
         "milestone_status": {}
       },
       {
         "id": "workspace",
         "title": "Workspace performance, settings and run/review UX",
-        "tasks": 2,
+        "tasks": 4,
         "done": 2,
-        "remaining": 0,
+        "remaining": 2,
         "accepted_units": 8,
-        "total_units": 8,
-        "acceptance_percent": 100.0,
+        "total_units": 16,
+        "acceptance_percent": 50.0,
         "milestone_status": {}
       },
       {
@@ -293,11 +293,11 @@
         },
         "title": "Native iOS parity and release",
         "tasks": 12,
-        "done": 0,
-        "remaining": 12,
-        "accepted_units": 0,
+        "done": 1,
+        "remaining": 11,
+        "accepted_units": 4,
         "total_units": 48,
-        "acceptance_percent": 0.0,
+        "acceptance_percent": 8.3,
         "milestone_status": {
           "Complete direct V1": {
             "done": false,
@@ -372,17 +372,17 @@
     ],
     "expired_claims": [],
     "active_scope": {
-      "tasks": 77,
-      "done": 25,
+      "tasks": 79,
+      "done": 27,
       "remaining": 52,
-      "accepted_units": 102,
-      "total_units": 301,
-      "acceptance_percent": 33.9
+      "accepted_units": 108,
+      "total_units": 309,
+      "acceptance_percent": 35.0
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "CORE-08",
-      "CORE-19"
+      "SW-11",
+      "ZI-04"
     ]
   },
   "tasks": [
@@ -495,16 +495,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.9588149
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "AW-09",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.9591858
     },
     {
       "attempts": 0,
@@ -680,16 +670,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "CORE-08",
-      "last_worker": null,
-      "note": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676597.396956
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "CORE-09",
       "last_worker": null,
       "note": "Read the CORE-09 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
@@ -785,16 +765,6 @@
       "note": "Read the CORE-18 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
       "status": "ready",
       "updated_at": 1791676598.240586
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-19",
-      "last_worker": null,
-      "note": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "ready",
-      "updated_at": 1791676598.326078
     },
     {
       "attempts": 0,
@@ -960,16 +930,6 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "AW-11",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959218
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "AW-15",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
@@ -1125,16 +1085,6 @@
       "note": "Read the IOS-14 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
       "status": "ready",
       "updated_at": 1791679478.911985
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-03",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958892
     },
     {
       "attempts": 0,
@@ -3250,24 +3200,6 @@
       "attempts": 1,
       "blocker": null,
       "checks": {},
-      "id": "IOS-00",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791908720.248168,
-        "expires_at": 1791923120.248168,
-        "heartbeat_at": 1791908720.248168,
-        "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
-        "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5",
-        "expired": false
-      },
-      "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
-      "status": "paused",
-      "updated_at": 1791908720.248188
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
       "id": "SW-13",
       "last_worker": {
         "checkout": "/Users/iulian/workspace/code/personal/luna",
@@ -3281,63 +3213,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "paused",
       "updated_at": 1791913202.1555169
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {
-        "contract": {
-          "at": 1791918117.552622,
-          "evidence": [
-            {
-              "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
-              "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
-            },
-            {
-              "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
-            }
-          ],
-          "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
-        },
-        "delivery": {
-          "at": 1791918117.689455,
-          "evidence": [
-            {
-              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
-              "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
-            },
-            {
-              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
-              "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
-            },
-            {
-              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
-              "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
-            },
-            {
-              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
-              "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
-            },
-            {
-              "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
-            }
-          ],
-          "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
-        }
-      },
-      "id": "IC-5",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791908720.653356,
-        "expires_at": 1791923905.449554,
-        "heartbeat_at": 1791920305.449554,
-        "owner": "claude-team/IC-5 (orchestrator d19437b2)",
-        "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90",
-        "expired": false
-      },
-      "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification.",
-      "status": "paused",
-      "updated_at": 1791920305.4495602
     },
     {
       "attempts": 1,
@@ -3656,6 +3531,329 @@
       "note": "Bounded literal checkout text search on the owning host with Files/palette mode, generation fencing, cancellation and revalidated navigation; native QA opened the exact line. Limits: budgets via request limits, ASCII smart case, no shortcut.",
       "status": "done",
       "updated_at": 1791920306.1997252
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-08",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791920321.818603,
+        "expires_at": 1791934721.818603,
+        "heartbeat_at": 1791920321.818603,
+        "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+        "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934",
+        "expired": false
+      },
+      "note": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "status": "paused",
+      "updated_at": 1791920321.8186219
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "CORE-19",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791920321.951952,
+        "expires_at": 1791934721.951952,
+        "heartbeat_at": 1791920321.951952,
+        "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+        "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611",
+        "expired": false
+      },
+      "note": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+      "status": "paused",
+      "updated_at": 1791920321.9519732
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-09",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791922412.898318,
+        "expires_at": 1791936812.898318,
+        "heartbeat_at": 1791922412.898318,
+        "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+        "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f",
+        "expired": false
+      },
+      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+      "status": "paused",
+      "updated_at": 1791922412.8983371
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-11",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791922413.135981,
+        "expires_at": 1791936813.135981,
+        "heartbeat_at": 1791922413.135981,
+        "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+        "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a",
+        "expired": false
+      },
+      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+      "status": "paused",
+      "updated_at": 1791922413.136001
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791923009.853238,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/ios-parity/ios-00/README.md",
+              "sha256": "a4f7a833a9ee7f7accc9e587ad95a28972e282402ba150933c3b3ff9a5524fa2"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/release-settings.txt",
+              "sha256": "b24b8f45aaa18a8373a5b22eeeb4b7c0c0097b0bf18f2b7c63cc232d08037c18"
+            },
+            {
+              "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+            }
+          ],
+          "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt)."
+        },
+        "delivery": {
+          "at": 1791923009.7267609,
+          "evidence": [
+            {
+              "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+              "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+              "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/bindings.sha256",
+              "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+              "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+            },
+            {
+              "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+            }
+          ],
+          "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+        },
+        "handoff": {
+          "at": 1791923002.4473732,
+          "evidence": [
+            {
+              "ref": "target/qa/ios-00/20261013/manifest.sha256",
+              "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+              "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+            },
+            {
+              "ref": "target/qa/handoff-20261013/handoff.txt",
+              "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+            },
+            {
+              "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+            }
+          ],
+          "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+        },
+        "verification": {
+          "at": 1791923002.341569,
+          "evidence": [
+            {
+              "ref": "target/qa/ios-00/20261013/session/summary.json",
+              "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/ui/summary.json",
+              "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+              "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+              "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+              "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+            },
+            {
+              "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+              "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+            }
+          ],
+          "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+        },
+        {
+          "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+          "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+        },
+        {
+          "ref": "target/qa/ios-00/20261013/manifest.sha256",
+          "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+        }
+      ],
+      "id": "IOS-00",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791908720.248168,
+        "expires_at": 1791926609.496777,
+        "heartbeat_at": 1791923009.496777,
+        "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+        "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+      },
+      "note": "Owned iOS SDK session facade and config-aware core build delivered and certified, including upgrade/downgrade continuity on a disposable simulator. Unlocks RM-03.",
+      "status": "done",
+      "updated_at": 1791923009.992904
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-03",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791923018.936496,
+        "expires_at": 1791937418.936496,
+        "heartbeat_at": 1791923018.936496,
+        "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+        "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74",
+        "expired": false
+      },
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "paused",
+      "updated_at": 1791923018.9365141
+    },
+    {
+      "attempts": 2,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791918117.552622,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+              "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+            },
+            {
+              "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+            }
+          ],
+          "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+        },
+        "delivery": {
+          "at": 1791918117.689455,
+          "evidence": [
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+              "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+              "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+              "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+              "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+            },
+            {
+              "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+            }
+          ],
+          "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+        },
+        "handoff": {
+          "at": 1791923266.0966651,
+          "evidence": [
+            {
+              "ref": "target/qa/handoff-20261013/handoff.txt",
+              "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+            },
+            {
+              "ref": "commit:e86bb46e2cf27f31a5ba590a6f3166233caef48f"
+            },
+            {
+              "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+            }
+          ],
+          "note": "Commits d0e4b229, cc1074a4, e86bb46e on origin/main; find/rail/ui suites and clippy/fmt clean; LUNA Dev refreshed from main with IC-5 included (pid/port/codesign in handoff.txt); evidence hashed."
+        },
+        "verification": {
+          "at": 1791923265.9929972,
+          "evidence": [
+            {
+              "ref": "target/qa/ic5-native-20261013/native/results.md",
+              "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+            },
+            {
+              "ref": "target/qa/ic5-native-20261013/manifest.sha256",
+              "sha256": "ed1ba5708975d7dbe554a24a6bcb194b9bf3886edaabb4cf8c4c121fe703a318"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2/result.json",
+              "sha256": "9e6ab70ef69237a3894e7f736864f10b98712530f845ef91b4220a3691c84514"
+            },
+            {
+              "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+              "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+            }
+          ],
+          "note": "Native S01-S05 by hand in a clean QA bundle (results.md, 27 screenshots): composer/Board/menu routing, oldest/folded match reveal and restore, bold/link label vs URL/code/table/case, streaming keeps the active match while the total grows; light and dark. Release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms). Limits: S06 partial history not observable natively at this size (owner test covers it); rewind/editor/terminal/browser routing covered by tests, not native."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+        },
+        {
+          "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+        },
+        {
+          "ref": "commit:e86bb46e2cf27f31a5ba590a6f3166233caef48f"
+        },
+        {
+          "ref": "target/qa/ic5-native-20261013/native/results.md",
+          "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+        }
+      ],
+      "id": "IC-5",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791923265.8557382,
+        "expires_at": 1791930465.8557382,
+        "heartbeat_at": 1791923265.8557382,
+        "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+      },
+      "note": "Find in Conversation: off-thread complete-history search with stable navigation, fold reveal/restore, Partial history, composer-safe Cmd+F routing and frame-budget performance (the message rail no longer rebuilds per frame).",
+      "status": "done",
+      "updated_at": 1791923266.262475
     }
   ],
   "events": [
@@ -18074,6 +18272,1401 @@
           "heartbeat_at": 1791918116.5121632,
           "owner": "claude-team/ZI-05 (orchestrator d19437b2)",
           "session": "agent-run:8ab5d228-0b54-499c-8543-f94a48cf3208"
+        }
+      }
+    },
+    {
+      "seq": 402,
+      "task": "CORE-08",
+      "at": 1791920321.818712,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.818603,
+          "expired": false,
+          "expires_at": 1791934721.818603,
+          "heartbeat_at": 1791920321.818603,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934"
+        }
+      }
+    },
+    {
+      "seq": 403,
+      "task": "CORE-19",
+      "at": 1791920321.952074,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.951952,
+          "expired": false,
+          "expires_at": 1791934721.951952,
+          "heartbeat_at": 1791920321.951952,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611"
+        }
+      }
+    },
+    {
+      "seq": 404,
+      "task": "IC-5",
+      "at": 1791922181.7875562,
+      "action": "pause",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Code complete, committed and pushed (d0e4b229 Find, cc1074a4 Cmd+F focus, e86bb46e rail/Find perf). Verified: find 6/6, rail 24/24, ui lib 1103/1103, release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms; target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2). Contract and delivery checked. Remaining: verification + handoff need the README's native S01-S06 by hand. Next: open target/luna-macos-dev/'LUNA QA iOS Host.app' (clean bundle of the e86bb46e tree, port 59871, data target/luna-qa-data/ios00-migration-20261013), use chats 'IC-5 Long' and 'IC-5 Second' from target/qa/ic5-native-20261013/seed.json, record screenshots per step, then check verification/handoff and finish. Paused only to release ui/transcript for ZI-04; blocked on the user's computer-use approval for the QA app.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.653356,
+          "expires_at": 1791923905.449554,
+          "heartbeat_at": 1791920305.449554,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "agent-run:c0e5a59d-379f-4d37-840c-55ca59bdab90"
+        }
+      }
+    },
+    {
+      "seq": 405,
+      "task": "AW-09",
+      "at": 1791922412.788856,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 406,
+      "task": "AW-09",
+      "at": 1791922412.898416,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922412.898318,
+          "expired": false,
+          "expires_at": 1791936812.898318,
+          "heartbeat_at": 1791922412.898318,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f"
+        }
+      }
+    },
+    {
+      "seq": 407,
+      "task": "AW-11",
+      "at": 1791922413.027355,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 408,
+      "task": "AW-11",
+      "at": 1791922413.1361222,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922413.135981,
+          "expired": false,
+          "expires_at": 1791936813.135981,
+          "heartbeat_at": 1791922413.135981,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a"
+        }
+      }
+    },
+    {
+      "seq": 409,
+      "task": "IOS-00",
+      "at": 1791923001.982701,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the IOS-00 implementation section, parity row and owned failure gates. Rebase current host/SDK/native code and retained work; preserve app identity/data and direct-only V1. Record exact commands, device/provider evidence and the next step before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926601.982604,
+          "heartbeat_at": 1791923001.982604,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 410,
+      "task": "IOS-00",
+      "at": 1791923002.228163,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791923002.211597,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926601.982604,
+          "heartbeat_at": 1791923001.982604,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 411,
+      "task": "IOS-00",
+      "at": 1791923002.3420532,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791923002.211597,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926601.982604,
+          "heartbeat_at": 1791923001.982604,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 412,
+      "task": "IOS-00",
+      "at": 1791923002.465203,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791923002.211597,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926601.982604,
+          "heartbeat_at": 1791923001.982604,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 413,
+      "task": "IOS-00",
+      "at": 1791923009.496901,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "delivery": {
+            "at": 1791923002.211597,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926609.496777,
+          "heartbeat_at": 1791923009.496777,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 414,
+      "task": "IOS-00",
+      "at": 1791923009.6158662,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791923009.600333,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/ios-parity/ios-00/README.md",
+                "sha256": "a4f7a833a9ee7f7accc9e587ad95a28972e282402ba150933c3b3ff9a5524fa2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/release-settings.txt",
+                "sha256": "b24b8f45aaa18a8373a5b22eeeb4b7c0c0097b0bf18f2b7c63cc232d08037c18"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt)."
+          },
+          "delivery": {
+            "at": 1791923002.211597,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926609.496777,
+          "heartbeat_at": 1791923009.496777,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 415,
+      "task": "IOS-00",
+      "at": 1791923009.74243,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791923009.600333,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/ios-parity/ios-00/README.md",
+                "sha256": "a4f7a833a9ee7f7accc9e587ad95a28972e282402ba150933c3b3ff9a5524fa2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/release-settings.txt",
+                "sha256": "b24b8f45aaa18a8373a5b22eeeb4b7c0c0097b0bf18f2b7c63cc232d08037c18"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt)."
+          },
+          "delivery": {
+            "at": 1791923009.7267609,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926609.496777,
+          "heartbeat_at": 1791923009.496777,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 416,
+      "task": "IOS-00",
+      "at": 1791923009.867929,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791923009.853238,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/ios-parity/ios-00/README.md",
+                "sha256": "a4f7a833a9ee7f7accc9e587ad95a28972e282402ba150933c3b3ff9a5524fa2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/release-settings.txt",
+                "sha256": "b24b8f45aaa18a8373a5b22eeeb4b7c0c0097b0bf18f2b7c63cc232d08037c18"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt)."
+          },
+          "delivery": {
+            "at": 1791923009.7267609,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expired": false,
+          "expires_at": 1791926609.496777,
+          "heartbeat_at": 1791923009.496777,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 417,
+      "task": "IOS-00",
+      "at": 1791923009.993234,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791923009.853238,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/ios-parity/ios-00/README.md",
+                "sha256": "a4f7a833a9ee7f7accc9e587ad95a28972e282402ba150933c3b3ff9a5524fa2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/release-settings.txt",
+                "sha256": "b24b8f45aaa18a8373a5b22eeeb4b7c0c0097b0bf18f2b7c63cc232d08037c18"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "SDK/ABI/actor/cancellation, old-edge and direct-profile migration contracts recorded in the IOS-00 README with bundle id, signing and the iOS 26.0 floor unchanged (release-settings.txt)."
+          },
+          "delivery": {
+            "at": 1791923009.7267609,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphonesimulator-debug.json",
+                "sha256": "e97be47251bff5ca2506df9dbdcc799b6c773a94869c2761849599c4d969414a"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/identity-iphoneos-release.json",
+                "sha256": "fdfff395cdf9c33d5bf3e9517c0a3960aa15513dd1111152f6f677d4ffda56d2"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/bindings.sha256",
+                "sha256": "246bde4637833fcb753ac041a9f0074b0cdecdcfbdbfc59182469def59a8c146"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/lipo-iphonesimulator.txt",
+                "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+              },
+              {
+                "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+              }
+            ],
+            "note": "luna-mobile session over luna_sdk with Swift transport; config-aware build-mobile-core.sh through scripts/cargo.sh; regenerated bindings with drift check; simulator Debug and device Debug/Release builds; one real typed descriptor read and cancellation through the engine gateway with no test-only API or second runtime."
+          },
+          "handoff": {
+            "at": 1791923002.4473732,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/manifest.sha256",
+                "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/host-cleanup.json",
+                "sha256": "7f23d543629acbf69c8c0b14db6122906494749b961fc620f554b5d845c8bbe9"
+              },
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Rust checks, gateway E2E, Xcode sim/device builds, native session + UI tests and migration retained with hashes (manifest.sha256); QA grant revoked and remote access disabled on the QA host; disposable sims deleted; LUNA Dev refreshed after the Mac-side changes; delivered on origin/main. Limits: no physical-device run (RM-07/IOS-09); license inventory follow-up in README."
+          },
+          "verification": {
+            "at": 1791923002.341569,
+            "evidence": [
+              {
+                "ref": "target/qa/ios-00/20261013/session/summary.json",
+                "sha256": "4656315b3bd591be29e03f8a76c112e7df6e9812c590cef6247cdb8183c5995d"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/ui/summary.json",
+                "sha256": "75d41726da2352afa641ef263a21e0e755d74c772ba0a3dc5adfee32f280b2b3"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-upgrade.txt",
+                "sha256": "7d03d6a4aea4f78d7fb0a3b29b2b305085c2c1ca5ba4f64220cadb816e73d155"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-connect.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/compare-downgrade.txt",
+                "sha256": "676750814f2721d2af029b361d60fe34f80b54a015b1bf79890563b5c3689d04"
+              },
+              {
+                "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+                "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+              }
+            ],
+            "note": "P01 native RemoteSessionTests vs the real gateway (host exit 0; typed identity core 0.2.73/SDK 0.1.0/API 1, 40 watch cycles, re-pair after revoke); RM-02 pairing UI campaign (host exit 0); migration on a disposable sim: signed baseline 8758745a paired Connected, upgrade compare 0 changes, Connect shows Live host line (Keychain survived), downgrade Connected, every compare 0 unexpected. License/provenance decision in README."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:223e7c38c8c6dd05541c1007df86981f258b7cb9"
+          },
+          {
+            "ref": "target/qa/ios-00/20261013/migration/manifest.sha256",
+            "sha256": "e7e382508164b198f22e3406a55948a4887db3325c4a12bf59d162585ed2550f"
+          },
+          {
+            "ref": "target/qa/ios-00/20261013/manifest.sha256",
+            "sha256": "9079b22be501823a40faefff10316f53f0c73b77c4d6f88658234085ee772ff8"
+          }
+        ],
+        "note": "Owned iOS SDK session facade and config-aware core build delivered and certified, including upgrade/downgrade continuity on a disposable simulator. Unlocks RM-03.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791908720.248168,
+          "expires_at": 1791926609.496777,
+          "heartbeat_at": 1791923009.496777,
+          "owner": "claude-team/IOS-00 (orchestrator d19437b2)",
+          "session": "agent-run:60ff7191-4a51-46e1-89ca-dd13524002e5"
+        }
+      }
+    },
+    {
+      "seq": 418,
+      "task": "RM-03",
+      "at": 1791923018.936594,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923018.936496,
+          "expired": false,
+          "expires_at": 1791937418.936496,
+          "heartbeat_at": 1791923018.936496,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74"
+        }
+      }
+    },
+    {
+      "seq": 419,
+      "task": "IC-5",
+      "at": 1791923265.855885,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          }
+        },
+        "criterion": null,
+        "evidence": null,
+        "note": "Code complete, committed and pushed (d0e4b229 Find, cc1074a4 Cmd+F focus, e86bb46e rail/Find perf). Verified: find 6/6, rail 24/24, ui lib 1103/1103, release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms; target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2). Contract and delivery checked. Remaining: verification + handoff need the README's native S01-S06 by hand. Next: open target/luna-macos-dev/'LUNA QA iOS Host.app' (clean bundle of the e86bb46e tree, port 59871, data target/luna-qa-data/ios00-migration-20261013), use chats 'IC-5 Long' and 'IC-5 Second' from target/qa/ic5-native-20261013/seed.json, record screenshots per step, then check verification/handoff and finish. Paused only to release ui/transcript for ZI-04; blocked on the user's computer-use approval for the QA app.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923265.8557382,
+          "expired": false,
+          "expires_at": 1791930465.8557382,
+          "heartbeat_at": 1791923265.8557382,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+        }
+      }
+    },
+    {
+      "seq": 420,
+      "task": "IC-5",
+      "at": 1791923265.994564,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          },
+          "verification": {
+            "at": 1791923265.9929972,
+            "evidence": [
+              {
+                "ref": "target/qa/ic5-native-20261013/native/results.md",
+                "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+              },
+              {
+                "ref": "target/qa/ic5-native-20261013/manifest.sha256",
+                "sha256": "ed1ba5708975d7dbe554a24a6bcb194b9bf3886edaabb4cf8c4c121fe703a318"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2/result.json",
+                "sha256": "9e6ab70ef69237a3894e7f736864f10b98712530f845ef91b4220a3691c84514"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              }
+            ],
+            "note": "Native S01-S05 by hand in a clean QA bundle (results.md, 27 screenshots): composer/Board/menu routing, oldest/folded match reveal and restore, bold/link label vs URL/code/table/case, streaming keeps the active match while the total grows; light and dark. Release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms). Limits: S06 partial history not observable natively at this size (owner test covers it); rewind/editor/terminal/browser routing covered by tests, not native."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "Native S01-S05 by hand in a clean QA bundle (results.md, 27 screenshots): composer/Board/menu routing, oldest/folded match reveal and restore, bold/link label vs URL/code/table/case, streaming keeps the active match while the total grows; light and dark. Release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms). Limits: S06 partial history not observable natively at this size (owner test covers it); rewind/editor/terminal/browser routing covered by tests, not native.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923265.8557382,
+          "expired": false,
+          "expires_at": 1791930465.8557382,
+          "heartbeat_at": 1791923265.8557382,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+        }
+      }
+    },
+    {
+      "seq": 421,
+      "task": "IC-5",
+      "at": 1791923266.124697,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          },
+          "handoff": {
+            "at": 1791923266.0966651,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:e86bb46e2cf27f31a5ba590a6f3166233caef48f"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Commits d0e4b229, cc1074a4, e86bb46e on origin/main; find/rail/ui suites and clippy/fmt clean; LUNA Dev refreshed from main with IC-5 included (pid/port/codesign in handoff.txt); evidence hashed."
+          },
+          "verification": {
+            "at": 1791923265.9929972,
+            "evidence": [
+              {
+                "ref": "target/qa/ic5-native-20261013/native/results.md",
+                "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+              },
+              {
+                "ref": "target/qa/ic5-native-20261013/manifest.sha256",
+                "sha256": "ed1ba5708975d7dbe554a24a6bcb194b9bf3886edaabb4cf8c4c121fe703a318"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2/result.json",
+                "sha256": "9e6ab70ef69237a3894e7f736864f10b98712530f845ef91b4220a3691c84514"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              }
+            ],
+            "note": "Native S01-S05 by hand in a clean QA bundle (results.md, 27 screenshots): composer/Board/menu routing, oldest/folded match reveal and restore, bold/link label vs URL/code/table/case, streaming keeps the active match while the total grows; light and dark. Release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms). Limits: S06 partial history not observable natively at this size (owner test covers it); rewind/editor/terminal/browser routing covered by tests, not native."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Commits d0e4b229, cc1074a4, e86bb46e on origin/main; find/rail/ui suites and clippy/fmt clean; LUNA Dev refreshed from main with IC-5 included (pid/port/codesign in handoff.txt); evidence hashed.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923265.8557382,
+          "expired": false,
+          "expires_at": 1791930465.8557382,
+          "heartbeat_at": 1791923265.8557382,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+        }
+      }
+    },
+    {
+      "seq": 422,
+      "task": "IC-5",
+      "at": 1791923266.262683,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791918117.552622,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/interactive-chat-surfaces/ic-5/README.md",
+                "sha256": "93fdbff71dfbd673263b6f09120adcfa7b69cd57f13dbe66e6c38085102a9344"
+              },
+              {
+                "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+              }
+            ],
+            "note": "Focused Find routing table (Main/pane chat vs file editor/browser/terminal/Board/palette/settings/diff) and display-text/range maps excluding secret/private/app DOM; README C1-C13."
+          },
+          "delivery": {
+            "at": 1791918117.689455,
+            "evidence": [
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/ic5-cmdf-focus-fixed.jpg",
+                "sha256": "6309c2597b575640021bb92754c0dbe9b457683ca5c6bd310ff020b60e749f9c"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-find.log",
+                "sha256": "0f8ff38473b00c19814d900343874650d10842a571551a12e26e555891808331"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/logs/ic5c-ui.log",
+                "sha256": "821999ccae7e654468e7935d7b2a05167dbc0225ed47eaa33c00f627bb141953"
+              },
+              {
+                "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+              }
+            ],
+            "note": "Off-thread complete-history search, stable navigation, fold reveal/restore, cancellation and Partial history; Cmd+F from the composer now types into the bar (cc1074a4, native recheck ic5-cmdf-focus-fixed.jpg). find 6/6, ui lib 1103/1103. Performance budget still open under verification."
+          },
+          "handoff": {
+            "at": 1791923266.0966651,
+            "evidence": [
+              {
+                "ref": "target/qa/handoff-20261013/handoff.txt",
+                "sha256": "03e295fff9d22fb3fe3718bb62f4095c838f93cecd76e48bbd3c18de647a7ab4"
+              },
+              {
+                "ref": "commit:e86bb46e2cf27f31a5ba590a6f3166233caef48f"
+              },
+              {
+                "ref": "commit:6a0ad25c0a5dc1b87dff93ce12851899c037e8f1"
+              }
+            ],
+            "note": "Commits d0e4b229, cc1074a4, e86bb46e on origin/main; find/rail/ui suites and clippy/fmt clean; LUNA Dev refreshed from main with IC-5 included (pid/port/codesign in handoff.txt); evidence hashed."
+          },
+          "verification": {
+            "at": 1791923265.9929972,
+            "evidence": [
+              {
+                "ref": "target/qa/ic5-native-20261013/native/results.md",
+                "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+              },
+              {
+                "ref": "target/qa/ic5-native-20261013/manifest.sha256",
+                "sha256": "ed1ba5708975d7dbe554a24a6bcb194b9bf3886edaabb4cf8c4c121fe703a318"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/fixture-perf2/result.json",
+                "sha256": "9e6ab70ef69237a3894e7f736864f10b98712530f845ef91b4220a3691c84514"
+              },
+              {
+                "ref": "target/qa/interactive-chat-surfaces/ic5-20261013/manifest.sha256",
+                "sha256": "56991b72793ca92e35d5f50f138e8130d7dd340df3f041b47d17d6e6e0f66795"
+              }
+            ],
+            "note": "Native S01-S05 by hand in a clean QA bundle (results.md, 27 screenshots): composer/Board/menu routing, oldest/folded match reveal and restore, bold/link label vs URL/code/table/case, streaming keeps the active match while the total grows; light and dark. Release P01 fixture withinProvisionalBudget=true (first match 33.6 ms, worst frame 1.87 ms). Limits: S06 partial history not observable natively at this size (owner test covers it); rewind/editor/terminal/browser routing covered by tests, not native."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:d0e4b229a0671abcdaa10e2d036bb7b8dff32699"
+          },
+          {
+            "ref": "commit:cc1074a4e905c9ef48988ca10e7282119a452289"
+          },
+          {
+            "ref": "commit:e86bb46e2cf27f31a5ba590a6f3166233caef48f"
+          },
+          {
+            "ref": "target/qa/ic5-native-20261013/native/results.md",
+            "sha256": "527624d645816ba4dd5d716031f0f5d3091aa296478ed5ff68e4adb1248afb22"
+          }
+        ],
+        "note": "Find in Conversation: off-thread complete-history search with stable navigation, fold reveal/restore, Partial history, composer-safe Cmd+F routing and frame-budget performance (the message rail no longer rebuilds per frame).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923265.8557382,
+          "expires_at": 1791930465.8557382,
+          "heartbeat_at": 1791923265.8557382,
+          "owner": "claude-team/IC-5 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
         }
       }
     }

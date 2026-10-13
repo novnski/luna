@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-13T22:38:26+03:00.
+Generated 2026-10-13T23:27:46+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **33.9% accepted**, **25/77 Done**.
+Active scope: **35.0% accepted**, **27/79 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: CORE-08, CORE-19
+Next eligible: SW-11, ZI-04
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -14,7 +14,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-09 — Extract Codex into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-10 — Extract Claude Code into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
@@ -25,7 +24,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-16 — Extract browser product behavior into a feature package](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-17 — Extract diff and Git workbench behavior into a feature package](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-18 — Build and validate plugins from inside LUNA](extensible-core/README.md) | ready | 0.0% | — |
-| [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-21 — Verify platform, host and client compatibility](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-22 — Retire replaced internals and enforce dependency boundaries](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-20 — Certify performance and bounded resource lifetime](extensible-core/README.md) | ready | 0.0% | — |
@@ -38,6 +36,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | done | 100.0% | claude-team/CORE-05 (orchestrator d19437b2) |
 | [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | done | 100.0% | claude-team/CORE-06 (orchestrator d19437b2) |
 | [CORE-07 — Implement extension supervision and capability broker](extensible-core/README.md) | done | 100.0% | claude-team/CORE-07 (orchestrator d19437b2) |
+| [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-08 (orchestrator d19437b2) |
+| [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-19 (orchestrator d19437b2) |
 
 ## Provider access, effective tools and skills
 
@@ -81,23 +81,23 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [SW-11 — Migrate skills, history and general-work context](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [ZI-04 — Open typed tool files in the owning Files surface](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
 | [AW-01 — Searchable scoped settings, provenance and reset](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
-| [IC-5 — Find and highlight text throughout selected conversation](interactive-chat-surfaces/README.md) | in_progress | 50.0% | claude-team/IC-5 (orchestrator d19437b2) |
 | [ZI-05 — Search checkout text and open the exact matching line](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-05 (orchestrator d19437b2) |
+| [IC-5 — Find and highlight text throughout selected conversation](interactive-chat-surfaces/README.md) | done | 100.0% | claude-team/IC-5 (orchestrator d19437b2) |
 
 ## Workspace performance, settings and run/review UX
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-02 — Task context header and useful startup/empty state](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-04 — Visible project commands, run state and actual service URLs](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-05 — Small model loadout and action-class routes](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-06 — Named Focus, Build and Review layout presets](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-07 — Fresh next Git/review action with a reason](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
-| [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-15 — Optional floating task companion](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [ZI-01 — Isolate and bound Latest turn snapshots](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-01 (orchestrator d19437b2) |
 | [ZI-02 — Bound workspace registry history without losing offline intent](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-02 (orchestrator d19437b2) |
+| [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | in_progress | 0.0% | claude-team/AW-09 (orchestrator d19437b2) |
+| [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | in_progress | 0.0% | claude-team/AW-11 (orchestrator d19437b2) |
 
 ## Board, helper supervision and future workflows
 
@@ -122,7 +122,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
 | [SW-16 — Decide optional voice, paired phone and offline requirements](luna-only-workflows/README.md) | deferred | 0.0% | — |
-| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-05 — Expose actual provider policy, questions and approvals on phone](control-this-mac/README.md) | ready | 0.0% | — |
 | [RM-06 — Add task-owned phone attachments, files and checkout diffs](control-this-mac/README.md) | ready | 0.0% | — |
@@ -136,6 +135,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-00 — Prove direct host boundary and physical native vertical slice](control-this-mac/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | done | 100.0% | codex |
 | [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | done | 100.0% | codex |
+| [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | in_progress | 0.0% | claude-team/RM-03 (orchestrator d19437b2) |
 
 ## Native iOS parity and release
 
@@ -155,7 +155,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [IOS-12 — Select and deliver host-owned live conversational voice](ios-parity/README.md) | deferred | 0.0% | — |
 | [IOS-13 — Select and deliver owned push, Live Activities and widgets](ios-parity/README.md) | deferred | 0.0% | — |
 | [IOS-14 — Assess expanded iOS parity and release readiness](ios-parity/README.md) | ready | 0.0% | — |
-| [IOS-00 — Establish the owned iOS SDK facade and migration build](ios-parity/README.md) | in_progress | 0.0% | claude-team/IOS-00 (orchestrator d19437b2) |
+| [IOS-00 — Establish the owned iOS SDK facade and migration build](ios-parity/README.md) | done | 100.0% | claude-team/IOS-00 (orchestrator d19437b2) |
 
 ## Real operations and local recurrence
 
