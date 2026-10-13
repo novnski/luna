@@ -504,13 +504,16 @@ impl PaneChatView {
             .flex()
             .flex_col()
             .text_color(theme.text)
-            // IC-5: Cmd+F with focus in this pane finds in THIS chat.
+            // IC-5: Cmd+F from this pane's composer finds in THIS chat.
             .on_action(cx.listener(
                 |this, _: &crate::transcript::FindInConversation, window, cx| {
-                    if !this
-                        .transcript
-                        .update(cx, |transcript, cx| transcript.open_find(window, cx))
-                    {
+                    let composer = gpui::Focusable::focus_handle(this.composer.read(cx), cx);
+                    if !crate::transcript::open_find_from_composer(
+                        &this.transcript,
+                        &composer,
+                        window,
+                        cx,
+                    ) {
                         cx.propagate();
                     }
                 },

@@ -63,6 +63,20 @@ pub(crate) fn bind_keys(cx: &mut gpui::App, keymap: &crate::settings::KeymapConf
     }
 }
 
+/// The chat surfaces' Cmd+F (and menu) route: open `transcript`'s Find when
+/// the keyboard is in that chat's composer or nowhere. False lets the action
+/// continue, so a focused file editor, browser, terminal or Board keeps its
+/// own Find.
+pub(crate) fn open_find_from_composer(
+    transcript: &Entity<Transcript>,
+    composer: &gpui::FocusHandle,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> bool {
+    let from_chat = window.focused(cx).is_none() || composer.contains_focused(window, cx);
+    from_chat && transcript.update(cx, |transcript, cx| transcript.open_find(window, cx))
+}
+
 // ---------------------------------------------------------------------------
 // Matching (pure; runs on the background executor)
 // ---------------------------------------------------------------------------
@@ -462,6 +476,9 @@ pub(super) struct FindState {
     /// The running full pass picks (and reveals) the first match it finds.
     pick_first: bool,
     return_focus: Option<gpui::FocusHandle>,
+    /// The bar claims keyboard focus (and selects its query) in the frame
+    /// that mounts it.
+    focus_pending: bool,
     opened_viewport: Option<SavedViewport>,
     /// Find moved the viewport, and the user has not scrolled since.
     moved_viewport: bool,
@@ -528,13 +545,20 @@ impl Transcript {
             input.update(cx, |input, cx| input.set_text(text, cx));
         }
         window.focus(&focus, cx);
-        // Select the query once the bar is in the dispatch tree, so typing
-        // replaces a reopened query.
-        window.on_next_frame(move |window, cx| {
-            if focus.is_focused(window) {
-                window.dispatch_action(Box::new(crate::composer::SelectAll), cx);
+        // The shell recovers focus against the last *rendered* frame after
+        // every render, and GPUI redraws a dirty window before dispatching a
+        // key, so that recovery runs right after this shortcut and, seeing
+        // the bar not yet mounted, hands the keyboard back to the composer.
+        // Claim it again once those deferred recoveries have run (same
+        // update), and once more as the bar mounts (`render_find_bar`).
+        let this = cx.weak_entity();
+        let claim = focus.clone();
+        window.defer(cx, move |window, cx| {
+            if this.upgrade().is_some_and(|this| this.read(cx).find.open) {
+                window.focus(&claim, cx);
             }
         });
+        self.find.focus_pending = true;
         cx.notify();
         true
     }
@@ -580,6 +604,7 @@ impl Transcript {
         self.find.active = None;
         self.find.active_rect.set(None);
         self.find.reveal_frames = 0;
+        self.find.focus_pending = false;
         let saved = self.find.opened_viewport.take();
         if restore {
             self.restore_search_folds(None);
@@ -1322,11 +1347,30 @@ impl Transcript {
         text.into()
     }
 
-    pub(super) fn render_find_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_find_bar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.find.open {
             return None;
         }
         let input = self.find.input.clone()?;
+        if std::mem::take(&mut self.find.focus_pending) {
+            // Focus set while rendering the frame that mounts the bar is in
+            // that frame's focus path, so no recovery can undo it.
+            let focus = input.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            // Select the query once it is mounted, so typing replaces a
+            // reopened query; never over text typed in the meantime.
+            let seeded = input.read(cx).text().to_owned();
+            let select = input.clone();
+            window.on_next_frame(move |window, cx| {
+                if focus.is_focused(window) && select.read(cx).text() == seeded {
+                    window.dispatch_action(Box::new(crate::composer::SelectAll), cx);
+                }
+            });
+        }
         let theme = Theme::of(cx).clone();
         let status = self.find_status();
         let has_matches = self.find.total > 0;
@@ -1653,19 +1697,25 @@ mod tests {
         window: TestAppWindow<FindRoot>,
     }
 
+    /// The app's globals and keymap (the composer's and Find's bindings).
+    fn test_app(dir: &std::path::Path) -> TestApp {
+        let mut app = TestApp::new();
+        app.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir, cx);
+            crate::composer::init(cx, crate::settings::ComposerSendBehavior::default());
+            bind_keys(cx, &crate::settings::KeymapConfig::default());
+        });
+        app
+    }
+
     impl Harness {
         /// `None` leaves the chat selected but its replay not yet arrived.
         fn new(entries: Option<Vec<SessionMessageEntry>>) -> Self {
             let selection = crate::markdown::selection::test_state_lock();
             let dir = tempfile::tempdir().unwrap();
-            let mut app = TestApp::new();
-            app.update(|cx| {
-                gpui_base::init(cx);
-                cx.set_global(Theme::dark());
-                crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
-                crate::composer::init(cx, crate::settings::ComposerSendBehavior::default());
-                bind_keys(cx, &crate::settings::KeymapConfig::default());
-            });
+            let mut app = test_app(dir.path());
             let window = app.open_window(|_, cx| {
                 let state = cx.new(|_| {
                     let mut state = AppState::new();
@@ -2124,6 +2174,134 @@ mod tests {
         assert_eq!(
             harness.active(),
             Some(("early".into(), "HISTORY-MARKER".into()))
+        );
+    }
+
+    /// Main's chat column as the shell hosts it: Cmd+F routed through the
+    /// shell's own predicate, and the shell's per-render focus recovery
+    /// against the last rendered frame (`restore_mounted_focus`), which
+    /// returns the keyboard to the composer while a just-opened bar is
+    /// still unmounted.
+    struct ChatColumn {
+        root: gpui::FocusHandle,
+        unfocused: gpui::FocusHandle,
+        state: Entity<AppState>,
+        composer: Entity<ComposerInput>,
+        transcript: Entity<Transcript>,
+    }
+
+    impl Render for ChatColumn {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let root = self.root.clone();
+            let unfocused = self.unfocused.clone();
+            let preferred = self.composer.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| {
+                crate::shell::restore_mounted_focus(&root, &preferred, &unfocused, window, cx);
+            });
+            div()
+                .track_focus(&self.root)
+                .size_full()
+                .flex()
+                .flex_col()
+                .on_action(cx.listener(|this, _: &FindInConversation, window, cx| {
+                    let composer = this.composer.read(cx).focus_handle(cx);
+                    if !open_find_from_composer(&this.transcript, &composer, window, cx) {
+                        cx.propagate();
+                    }
+                }))
+                .child(div().h(px(40.0)).child(self.composer.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .relative()
+                        .child(self.transcript.clone()),
+                )
+        }
+    }
+
+    /// S05, Main's route. Regression caught: Cmd+F from the composer shows
+    /// the bar but leaves the keyboard in the composer, so the next typed
+    /// text lands in the draft (and Enter would send it to the agent).
+    #[test]
+    fn find_shortcut_from_the_composer_moves_typing_into_the_bar() {
+        let _selection = crate::markdown::selection::test_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        let mut window = app.open_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_chat = Some(CHAT.into());
+                state
+            });
+            ChatColumn {
+                root: cx.focus_handle(),
+                unfocused: cx.focus_handle(),
+                transcript: cx.new(|cx| Transcript::new(state.clone(), cx)),
+                composer: cx.new(|cx| ComposerInput::new("Message", cx)),
+                state,
+            }
+        });
+        window.update(|root, window, cx| {
+            root.state.update(cx, |state, cx| {
+                let entries = [assistant("reply", "The **amber** lantern glows.")];
+                state
+                    .apply_transcript_frame(TranscriptFrame::reset(&entries))
+                    .expect("frame applies");
+                cx.notify();
+            });
+            root.composer
+                .update(cx, |input, cx| input.set_text("my draft", cx));
+            window.focus(&root.composer.read(cx).focus_handle(cx), cx);
+        });
+        window.draw();
+        let keyboard = |window: &mut TestAppWindow<ChatColumn>| {
+            window.update(|root, window, cx| {
+                let input = root.transcript.read(cx).find.input.clone();
+                (
+                    input.is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window)),
+                    root.composer.read(cx).focus_handle(cx).is_focused(window),
+                )
+            })
+        };
+        assert_eq!(keyboard(&mut window), (false, true));
+
+        // GPUI redraws a dirty window before dispatching a key; that draw's
+        // focus recovery then runs right after the shortcut, as in the app.
+        window.update(|_, window, _| window.refresh());
+        window.simulate_keystrokes(&crate::settings::platform_combo("mod-f"));
+        assert_eq!(
+            keyboard(&mut window),
+            (true, false),
+            "the bar owns the keyboard right after the shortcut"
+        );
+
+        // Typed key by key (keystroke syntax has no bare space or '-').
+        window.simulate_input("amber");
+        let (query, draft, status) = window.update(|root, _, cx| {
+            let query = root
+                .transcript
+                .read(cx)
+                .find
+                .input
+                .as_ref()
+                .map(|input| input.read(cx).text().to_owned());
+            let draft = root.composer.read(cx).text().to_owned();
+            let status = root
+                .transcript
+                .update(cx, |transcript, _| transcript.find_status().to_string());
+            (query, draft, status)
+        });
+        assert_eq!(query.as_deref(), Some("amber"));
+        assert_eq!(draft, "my draft", "typing never reaches the composer");
+        assert_eq!(status, "1 of 1");
+        assert_eq!(keyboard(&mut window), (true, false));
+
+        window.simulate_keystrokes("escape");
+        assert_eq!(
+            keyboard(&mut window),
+            (false, true),
+            "Escape returns the keyboard to the composer"
         );
     }
 }

@@ -147,7 +147,7 @@ pub(crate) fn restore_focus_if_empty_on_next_frame<T: 'static>(
 
 /// Check the completed dispatch tree, not just the lifetime of the focused
 /// handle: a hidden editor can stay alive after its element has unmounted.
-fn restore_mounted_focus(
+pub(crate) fn restore_mounted_focus(
     root: &FocusHandle,
     preferred: &FocusHandle,
     unfocused: &FocusHandle,
@@ -16105,13 +16105,13 @@ impl Render for Shell {
             .on_action(cx.listener(
                 |this, _: &crate::transcript::FindInConversation, window, cx| {
                     let composer = this.composer.read(cx).focus_handle(cx);
-                    let from_main =
-                        window.focused(cx).is_none() || composer.contains_focused(window, cx);
                     let opened = matches!(this.route, Route::Chat)
-                        && from_main
-                        && this
-                            .transcript
-                            .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                        && crate::transcript::open_find_from_composer(
+                            &this.transcript,
+                            &composer,
+                            window,
+                            cx,
+                        );
                     if !opened {
                         cx.propagate();
                     }

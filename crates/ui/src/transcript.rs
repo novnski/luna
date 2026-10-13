@@ -65,7 +65,7 @@ mod diagrams;
 mod find;
 
 pub use find::FindInConversation;
-pub(crate) use find::bind_keys as bind_find_keys;
+pub(crate) use find::{bind_keys as bind_find_keys, open_find_from_composer};
 
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
@@ -11527,7 +11527,7 @@ impl Render for Transcript {
             list_el.into_any_element()
         };
         let measured_width = self.measured_width.clone();
-        let find_bar = self.render_find_bar(cx);
+        let find_bar = self.render_find_bar(window, cx);
         self.schedule_find_reveal(window, cx);
         let root = div()
             .relative()

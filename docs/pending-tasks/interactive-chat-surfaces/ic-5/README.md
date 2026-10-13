@@ -39,6 +39,7 @@ opening replay has not arrived yet, which Find reports as *Partial history*.
 | C9 | A collapsed prompt clips its match; Enter/Shift+Enter do not wrap; Escape leaves Find's fold or viewport, drops the composer focus/draft, or undoes the user's own fold/scroll. | `…::find_reveals_folded_matches_and_restores_only_its_own_changes` | Typed query; fold opens and closes as Find moves; wrap both ways; Escape restores the tail-following viewport, refocuses the composer with its draft; after a manual toggle and wheel scroll, closing keeps both. |
 | C10 | A not-yet-replayed history reports a complete zero; the late replay is never searched. | `…::find_reports_partial_history_until_the_replay_lands` | `Partial history` before the reset, then `1 of 2` with the first match active. |
 | C11 | Cmd+F steals the file editor's, browser's, terminal's or Board's Find; it opens on a hidden chat; a pane chat's Cmd+F searches Main. | Native QA (S05 below) | See the routing table. |
+| C13 | Cmd+F from the composer shows the bar but the shell's focus recovery (against the last rendered frame) hands the keyboard back to the composer, so typed text lands in the draft. | `…::find_shortcut_from_the_composer_moves_typing_into_the_bar` | With the shell's real `restore_mounted_focus` and routing predicate, the Find input is focused right after the shortcut, typed text lands in the query (`1 of 1`), the draft is unchanged, Escape returns the keyboard to the composer. |
 | C12 | Search blocks GPUI, or the projection cost repeats on every keystroke or stream commit. | Native fixture (P01) | First match, slowest merge and slowest frame recorded against 150 ms / 16 ms on representative history. |
 
 ## Delivered design
@@ -98,6 +99,10 @@ opening replay has not arrived yet, which Find reports as *Partial history*.
   | Browser, terminal, Board, palette, settings, diff | Propagates to that surface's own handling. |
 
   The **Edit → Find in Conversation** menu item dispatches the same action.
+  Opening claims keyboard focus twice: once in the same update, after the
+  shell's deferred focus recovery has run, and once in the frame that mounts
+  the bar (the shell dialogs' `focus_pending` pattern); the query is then
+  selected unless text was typed in between.
 
 ## Criteria mapping
 
@@ -128,7 +133,9 @@ Owned (`ui/transcript`, `ui/markdown`):
 Shared, additive hunks:
 
 - `crates/ui/src/shell.rs`: `bind_find_keys` in `apply_keymap`; one root
-  `on_action` for Main.
+  `on_action` for Main (through `transcript::open_find_from_composer`);
+  `restore_mounted_focus` made `pub(crate)` so the focus test drives the real
+  recovery.
 - `crates/ui/src/shell/pane_chat.rs`: one `on_action` on `pane-chat-view`.
 - `crates/ui/src/app_menus.rs`: Edit-menu item.
 - `crates/ui/Cargo.toml`: one `[[example]]` entry.
