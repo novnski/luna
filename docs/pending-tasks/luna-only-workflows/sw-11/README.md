@@ -46,6 +46,20 @@ command below is for the orchestrator; nothing here is evidence until it runs.
    the task keeps the source's `permission_mode`; an old Full-access task's
    mode was carried without being named.
 
+5. **Real chats' rows carried no provider or model (native QA N3, found on
+   `62da9b65`).** The index joined journaled `SessionStarted` metadata to
+   transcript entries by `assistant_message_id`, but the run loop mints its
+   own entry ids (`entry_id = new_id()` in `sessions.rs`); the provider's id
+   names an entry only after a steer adopts it. Every real reply and prompt
+   therefore indexed `harness`/`model` as absent, and the palette correctly
+   omitted them. The J1 fixture and the older `session_history` case had set
+   entry ids to the provider's id by hand, which hid the gap. Fix in
+   `activity_history.rs`: an entry the task wrote itself (`created_at` not
+   before the task) takes the provider every journaled run of the task
+   reported, and that model only if the runs also agree. Mixed providers, a
+   configured provider no journaled run reports, and copied history older
+   than the task stay unknown; current settings are never used as history.
+
 Verified without code change: local import already keeps rows verbatim and
 publishes them after their docs and journals, so the index ingests imported
 Codex/Claude history with journaled provider/model; skill install already
@@ -60,6 +74,7 @@ Native Claude session import is unsupported and refused explicitly.
 | --- | --- | --- | --- |
 | M1 | Local import keeps Codex/Claude provider settings, created/last-message times, project, host, archive state and run-start context; global search finds each passage with its journaled provider/model and recorded time | Rows published before journals (provider/model lost), archive/time/context dropped, imported content unsearchable | `local_import::imported_codex_and_claude_history_stays_attributed_and_hands_off_fresh` |
 | M2 | A Codex provider import is found through exactly one boundary row (Withheld, provider, import time, project, "not copied into LUNA" reason, no message id); no transcript entry or other row is invented; archive kept; a provider-owned import binds no resume session; a Claude native import is refused before any task exists | Zero rows (invisible), a fabricated message, duplicate boundary rows, a resume session for a read-only import, a silent Claude task | `task_identity::provider_import_is_found_with_explicit_unavailable_history_and_no_session` |
+| M4 | A real run's prompt and reply rows carry the provider and model its journaled runs reported; once runs disagree on the model, the provider stays and the model is unknown | Real chats' rows without provider/model (N3), or a later model guessed onto older rows | `session_history::real_run_rows_carry_the_provider_and_model_their_runs_reported` |
 | M3 | Installing a reviewed skill to another provider keeps its tree revision | Install rewrites bytes, so a reviewed selection no longer names the destination's content | `skill_library_e2e::file_backed_provider_skill_lifecycle` (one added assertion) |
 | J1 | A recorded-content row names project, provider and model only when recorded, the date and the task's archive state; a boundary row reads "History unavailable" | "Unknown model", no provider/date/archive, a boundary indistinguishable from content | `shell::exit_regressions::past_work_search_opens_imported_task_truthfully_and_hands_off_fresh` |
 | J2 | A boundary row opens its task (no navigation target) and states the reason; a content row opens without that claim | Boundary refuses to open, opens silently, or a content row claims missing history | same |
@@ -87,8 +102,10 @@ provider, date or archive state.
   keyed by the immutable first import binding (`import:{task}:{binding}`), at
   the import time, `harness` = the provider that owns the history, no model,
   title, path or provider content, `message_id` empty and an explicit
-  `unavailable_reason`. Remote tasks keep the existing remote reason. The
-  live bootstrap, rebuild and backup projection all use this builder.
+  `unavailable_reason`. Remote tasks keep the existing remote reason.
+  `uniform_run_metadata` attributes a task's own entries to the single
+  provider (and model) its journaled runs reported (gap 5). The live
+  bootstrap, rebuild and backup projection all use this builder.
 - `crates/ui/src/shell/command_palette.rs` (owned, ui/history):
   `history_result_attribution` / `Shell::command_history_attribution` render
   `Recorded content | History unavailable · project · provider · model ·
@@ -105,7 +122,8 @@ provider, date or archive state.
   config line adds `execution_view::permission_title(config.permission_mode)`.
 - Tests: `crates/engine/tests/local_import.rs` (M1, hermetic assembly),
   `crates/engine/tests/task_identity.rs` (M2), one assertion in
-  `crates/engine/tests/skill_library_e2e.rs` (M3).
+  `crates/engine/tests/skill_library_e2e.rs` (M3),
+  `crates/engine/tests/session_history.rs` (M4, a real scripted run).
 
 No dependency, RPC method, operation catalog, document schema, persistence,
 proto or `Cargo.lock` change. `crates/ui/src/transcript/*` is untouched (IC-5

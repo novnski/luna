@@ -4,12 +4,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use luna_doc::{
+    MessagePart, MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry,
+};
 use luna_engine::{EngineCore, HarnessRegistry, RunJournal};
 use luna_harness::mock::MockHarness;
 use luna_proto::{
-    ActivityRedaction, AgentEvent, ChatConfig, HarnessId, HistoryProjectPolicy,
-    HistoryRebuildResult, HistorySearchPage, PermissionMode, SandboxLevel, ToolCall,
+    ActivityKind, ActivityRedaction, AgentEvent, ChatConfig, DoneStatus, HarnessId,
+    HistoryProjectPolicy, HistoryRebuildResult, HistorySearchPage, PermissionMode, RunRequest,
+    SandboxLevel, ToolCall,
 };
 use luna_rpc::methods;
 
@@ -631,4 +634,169 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
     .await;
     assert_eq!(persisted_recorded.events.len(), 1);
     reopened.shutdown().await;
+}
+
+fn real_run_request(prompt: &str) -> RunRequest {
+    RunRequest {
+        review: None,
+        goal: None,
+        input_items: Vec::new(),
+        prompt: prompt.into(),
+        harness: Some(HarnessId::Mock),
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: "/tmp".into(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        auto_approve: false,
+        permission_mode: PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        resume: None,
+        attachments: Vec::new(),
+        worktree: None,
+    }
+}
+
+/// SW-11 N3 regression at the real run -> journal -> index -> RPC boundary.
+///
+/// Behavior: rows for a task's own prompt and reply carry the provider and
+/// model its journaled runs reported, although the run loop mints the
+/// transcript entry ids itself and the provider's `assistant_message_id`
+/// never names them; once its runs disagree on the model, the provider
+/// stays known and the model becomes unknown rather than guessed.
+/// Regression caught: past-work results for every real chat with no provider
+/// or model (the old exact join only matched synthetic entries whose ids had
+/// been set to the provider's), and a later model guessed onto older rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_run_rows_carry_the_provider_and_model_their_runs_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(MockHarness {
+        script: vec![
+            AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "Recorded-Run-Model".into(),
+                tools: Vec::new(),
+                cwd: "/tmp".into(),
+                session_id: "recorded-run-session".into(),
+                // The provider's id for its message; the transcript entry
+                // the run loop writes has an id of its own.
+                assistant_message_id: "provider-side-assistant".into(),
+            },
+            AgentEvent::TextDelta {
+                text: "real run reply sentinel".into(),
+            },
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some("recorded-run-session".into()),
+            },
+        ],
+    }));
+    let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Mock, None).unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space(
+            "project-run",
+            &core.device_id,
+            "/tmp",
+            Some("Runs".into()),
+            false,
+        )
+        .unwrap();
+    let task = uuid::Uuid::new_v4().to_string();
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({"op": "createChat", "chatId": &task, "spaceId": "project-run"}),
+        )
+        .await
+        .unwrap();
+    let (_, mut published) = core.sessions.subscribe(&task, 0).unwrap();
+    core.doc_host
+        .queue_command(
+            &task,
+            SessionCommandPayload::Run {
+                request: real_run_request("real run prompt sentinel"),
+                message_id: "real-run-prompt".into(),
+            },
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                published.recv().await.unwrap().event,
+                AgentEvent::Done { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the real run completed");
+
+    let reply = wait_for_search(&client, "real run reply sentinel", "project-run").await;
+    let reply = reply
+        .events
+        .iter()
+        .find(|event| event.kind == ActivityKind::Answer)
+        .expect("indexed reply");
+    assert_eq!(reply.harness, Some(HarnessId::Mock));
+    assert_eq!(reply.model.as_deref(), Some("Recorded-Run-Model"));
+    let prompt = wait_for_search(&client, "real run prompt sentinel", "project-run").await;
+    let prompt = prompt
+        .events
+        .iter()
+        .find(|event| event.kind == ActivityKind::Prompt)
+        .expect("indexed prompt");
+    assert_eq!(prompt.source.message_id, "real-run-prompt");
+    assert_eq!(prompt.harness, Some(HarnessId::Mock));
+    assert_eq!(prompt.model.as_deref(), Some("Recorded-Run-Model"));
+
+    // A later run of the same provider reported another model.
+    let journal = RunJournal::open(profile_root(dir.path()).join("journals")).unwrap();
+    journal
+        .append(
+            &task,
+            &AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "Another-Run-Model".into(),
+                tools: Vec::new(),
+                cwd: "/tmp".into(),
+                session_id: "recorded-run-session-2".into(),
+                assistant_message_id: "provider-side-second".into(),
+            },
+        )
+        .unwrap();
+    drop(journal);
+    client
+        .call(
+            methods::REBUILD_SESSION_HISTORY,
+            serde_json::json!({"taskIds": [&task]}),
+        )
+        .await
+        .unwrap();
+    let mixed = search(
+        &client,
+        "real run reply sentinel",
+        Some("project-run"),
+        false,
+        serde_json::json!({}),
+    )
+    .await;
+    let mixed = mixed
+        .events
+        .iter()
+        .find(|event| event.kind == ActivityKind::Answer)
+        .expect("reindexed reply");
+    assert_eq!(mixed.harness, Some(HarnessId::Mock));
+    assert_eq!(
+        mixed.model, None,
+        "disagreeing runs leave the model unknown"
+    );
+    core.shutdown().await;
 }

@@ -152,14 +152,28 @@ pub(crate) fn build_activity_envelopes(
         available_here,
         unavailable_reason.clone(),
     ));
+    let uniform = uniform_run_metadata(chat, run_metadata);
+    let task_created_ms = chat.created_at.timestamp_millis();
     for (message_index, entry) in entries.iter().enumerate() {
+        // The exact join holds only where the provider's id became the entry
+        // id. Otherwise an entry this task wrote itself (not history copied
+        // in before the task existed) belongs to the one provider/model that
+        // every journaled run of this task reported, when there is one.
+        let entry_metadata =
+            run_metadata
+                .get(&entry.id)
+                .or(if entry.created_at >= task_created_ms {
+                    uniform.as_ref()
+                } else {
+                    None
+                });
         for (part_index, part) in entry.parts.iter().enumerate() {
             let sequence = (message_index as u64)
                 .saturating_mul(1_000)
                 .saturating_add(part_index as u64);
             if let Some(event) = part_event(
                 chat,
-                run_metadata.get(&entry.id),
+                entry_metadata,
                 &environment_id,
                 workspace_id.as_deref(),
                 entry,
@@ -175,7 +189,7 @@ pub(crate) fn build_activity_envelopes(
         if entry.role == MessageRole::Assistant {
             events.push(base_event(
                 chat,
-                run_metadata.get(&entry.id),
+                entry_metadata,
                 &environment_id,
                 workspace_id.as_deref(),
                 entry,
@@ -376,6 +390,38 @@ fn import_boundary_event(
             available_here,
             unavailable_reason: Some(reason),
         },
+    })
+}
+
+/// The run loop mints its own transcript entry ids; a journaled
+/// `SessionStarted.assistant_message_id` is the provider's id, so it joins an
+/// entry only where a steer adopted it. A task's runs are serialized and all
+/// journaled, so when every one of them reported the same provider, that
+/// provider wrote each entry the task produced; the model is known only if
+/// the runs also agree on it. Runs that disagree, or a configured provider no
+/// journaled run reports (work the journal does not cover), stay unknown:
+/// current settings are never history.
+fn uniform_run_metadata(
+    chat: &Chat,
+    runs: &HashMap<String, ActivityRunMetadata>,
+) -> Option<ActivityRunMetadata> {
+    let first = runs.values().next()?;
+    let harness = first.harness?;
+    if runs.values().any(|run| run.harness != Some(harness))
+        || chat
+            .config
+            .as_ref()
+            .is_some_and(|config| config.harness != harness)
+    {
+        return None;
+    }
+    let model = first
+        .model
+        .clone()
+        .filter(|_| runs.values().all(|run| run.model == first.model));
+    Some(ActivityRunMetadata {
+        harness: Some(harness),
+        model,
     })
 }
 
