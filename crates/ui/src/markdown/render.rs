@@ -100,6 +100,9 @@ pub struct RenderOptions {
     /// scroll state, keyed by the same element discriminator passed to
     /// [`render_block`]. `None` keeps non-chat Markdown surfaces unchanged.
     pub code: Option<HashMap<usize, CodeUi>>,
+    /// Conversation Find highlights for this row's elements (paint-only;
+    /// never part of the flatten cache or layout).
+    pub find: Option<Rc<super::find::FindPaint>>,
 }
 
 #[derive(Clone)]
@@ -349,6 +352,7 @@ impl RenderOptions {
             link: None,
             workspace_root: None,
             code: None,
+            find: None,
         }
     }
 }
@@ -464,12 +468,18 @@ pub fn render_tree(
         .into_any_element()
 }
 
-fn quote_child_ix(ix: usize, child_ix: usize) -> usize {
+pub(super) fn quote_child_ix(ix: usize, child_ix: usize) -> usize {
     ix * 100 + child_ix
 }
 
-fn list_child_ix(ix: usize, item_ix: usize, child_ix: usize) -> usize {
+pub(super) fn list_child_ix(ix: usize, item_ix: usize, child_ix: usize) -> usize {
     ix * 100 + item_ix * 10 + child_ix
+}
+
+/// Element discriminator for line `line_ix` of a paragraph painted as a
+/// list of workspace files ([`plain_file_reference_lines`]).
+pub(super) fn file_line_ix(ix: usize, line_ix: usize) -> usize {
+    ix.wrapping_mul(4099).wrapping_add(line_ix + 2000)
 }
 
 /// Element discriminators for every code block below `block`. Transcript rows
@@ -774,7 +784,7 @@ pub fn table_columns(content_widths: &[f32]) -> TableColumns {
 }
 
 /// Element/cache discriminator for a table cell (row-major under the block ix).
-fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
+pub(super) fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
     ix * 100_000 + r * 100 + c
 }
 
@@ -1173,6 +1183,8 @@ pub(super) fn flat_text_presented_element(
         .map(|original| original.offsets.clone());
     let wash = inline_code_wash(theme);
     let sel_wash = selection_wash(theme);
+    let find = opts.find.clone();
+    let find_element = super::find::ElementKey::text(ix);
     let underlay = canvas(
         |_, _, _| (),
         move |_, _, window, _| {
@@ -1187,6 +1199,11 @@ pub(super) fn flat_text_presented_element(
                         BorderStyle::default(),
                     ));
                 }
+            }
+            // Find ranges are in original (flattened) offsets, like the
+            // selection; a width-shortened link label maps through `offsets`.
+            if let Some(find) = &find {
+                find.paint_mapped(window, &layout, find.ranges(find_element), offsets.as_ref());
             }
             if let Some(range) = super::selection::wash_range(&sel_key) {
                 let range = offsets
@@ -1317,12 +1334,16 @@ fn selectable_text_element(
     text: SharedString,
     runs: Vec<TextRun>,
     wash: Hsla,
+    find: Option<(Rc<super::find::FindPaint>, Vec<super::find::FindRange>)>,
 ) -> AnyElement {
     let styled = StyledText::new(text.clone()).with_runs(runs);
     let layout = styled.layout().clone();
     let underlay = canvas(
         |_, _, _| (),
         move |_, _, window, _| {
+            if let Some((paint, ranges)) = &find {
+                paint.paint(window, &layout, ranges);
+            }
             paint_text_selection_with_wash(window, &key, &text, &layout, wash);
         },
     )
@@ -1738,7 +1759,7 @@ fn text_element(
                     line_height,
                     bold_default,
                     top_ix,
-                    ix.wrapping_mul(4099).wrapping_add(line_ix + 2000),
+                    file_line_ix(ix, line_ix),
                     opts,
                     theme,
                 )
@@ -1843,7 +1864,10 @@ fn sole_plain_file_reference(runs: &[InlineRun], workspace_root: &str) -> Option
 /// Preserve hard-break file lists as one compact paragraph while giving each
 /// line its own icon. Limiting this path to one uniformly styled run avoids
 /// rewriting mixed inline formatting or ordinary wrapped prose.
-fn plain_file_reference_lines(runs: &[InlineRun], workspace_root: &str) -> Option<Vec<String>> {
+pub(super) fn plain_file_reference_lines(
+    runs: &[InlineRun],
+    workspace_root: &str,
+) -> Option<Vec<String>> {
     let [run] = runs else { return None };
     if run.style.link.is_some()
         || run.style.image.is_some()
@@ -2228,6 +2252,7 @@ fn render_code_block_source_with_actions(
     };
     let scroll_id: SharedString = format!("{}-code{ix}", opts.row_key).into();
     let sel_wash = selection_wash(theme);
+    let find = opts.find.clone();
     let code_ui = opts.code.as_ref().and_then(|code| code.get(&ix)).cloned();
     let fit_content = code_ui.as_ref().is_some_and(|ui| ui.fit_content);
 
@@ -2299,6 +2324,16 @@ fn render_code_block_source_with_actions(
             let local = slice_spans(&veil_spans, start, start + line.len());
             let runs = apply_veil(runs.clone(), &local);
             let key = code_line_selection_key(&opts.row_key, ix, li);
+            // A match may span lines; each line paints its own part of it.
+            let line_find = find
+                .as_ref()
+                .map(|paint| {
+                    (
+                        paint.clone(),
+                        paint.line_ranges(ix, start..start + line.len()),
+                    )
+                })
+                .filter(|(_, ranges)| !ranges.is_empty());
             Some(
                 div()
                     .map(|el| {
@@ -2311,7 +2346,13 @@ fn render_code_block_source_with_actions(
                                 .flex_none()
                         }
                     })
-                    .child(selectable_text_element(key, line.clone(), runs, sel_wash)),
+                    .child(selectable_text_element(
+                        key,
+                        line.clone(),
+                        runs,
+                        sel_wash,
+                        line_find,
+                    )),
             )
         }));
 

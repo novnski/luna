@@ -240,6 +240,10 @@ required-features = ["appshots-fixture"]
 name = "child-activity-fixture"
 required-features = ["appshots-fixture"]
 
+[[example]]
+name = "ic5-conversation-find-fixture"
+required-features = ["appshots-fixture"]
+
 [dependencies]
 url = "2"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }

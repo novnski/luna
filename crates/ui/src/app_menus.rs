@@ -201,6 +201,13 @@ pub fn app_menus() -> Vec<Menu> {
             MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
             MenuItem::separator(),
             MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            // Dispatched to the focused surface like ⌘F; the chat surfaces
+            // route it to their conversation (IC-5).
+            MenuItem::action(
+                "Find in Conversation",
+                crate::transcript::FindInConversation,
+            ),
         ]),
     ];
     // Appearance lives under View on every platform — it is the only View verb

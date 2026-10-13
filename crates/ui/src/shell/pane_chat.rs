@@ -504,6 +504,17 @@ impl PaneChatView {
             .flex()
             .flex_col()
             .text_color(theme.text)
+            // IC-5: Cmd+F with focus in this pane finds in THIS chat.
+            .on_action(cx.listener(
+                |this, _: &crate::transcript::FindInConversation, window, cx| {
+                    if !this
+                        .transcript
+                        .update(cx, |transcript, cx| transcript.open_find(window, cx))
+                    {
+                        cx.propagate();
+                    }
+                },
+            ))
             // Drops are owned by the pointer: whatever lands on this pane is
             // staged in THIS pane's composer (never Main's, never by keyboard
             // focus), with Main's dropzone semantics. Archived panes have no

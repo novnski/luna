@@ -500,6 +500,8 @@ pub fn apply_keymap(
         }
     }
     crate::browser::bind_keys(cx, keymap);
+    // Find in Conversation (IC-5); routed by focus, see the root handler.
+    crate::transcript::bind_find_keys(cx, keymap);
     // ⌘1..⌘9 open the sidebar's first nine rows. A slot left unbound (an empty
     // combo in a hand-edited file) binds nothing rather than falling back —
     // the user cleared it on purpose.
@@ -16096,6 +16098,25 @@ impl Render for Shell {
             .on_modifiers_changed(
                 cx.listener(|this, event, _, cx| this.on_modifiers_changed(event, cx)),
             )
+            // IC-5: Find in Conversation for Main, only from Main's own
+            // surface (its composer, or nothing focused). Files and diffs,
+            // the browser, the terminal and the Board keep their own Find;
+            // pane chats route theirs before this; Main's bar handles its own.
+            .on_action(cx.listener(
+                |this, _: &crate::transcript::FindInConversation, window, cx| {
+                    let composer = this.composer.read(cx).focus_handle(cx);
+                    let from_main =
+                        window.focused(cx).is_none() || composer.contains_focused(window, cx);
+                    let opened = matches!(this.route, Route::Chat)
+                        && from_main
+                        && this
+                            .transcript
+                            .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                    if !opened {
+                        cx.propagate();
+                    }
+                },
+            ))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx);
             }))

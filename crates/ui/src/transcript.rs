@@ -62,6 +62,10 @@ use luna_syntax::LanguageId as Lang;
 mod agent_cards;
 mod child_notices;
 mod diagrams;
+mod find;
+
+pub use find::FindInConversation;
+pub(crate) use find::bind_keys as bind_find_keys;
 
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
@@ -4142,6 +4146,9 @@ pub struct Transcript {
     /// recently (click "Show full output" after a diff → see the output).
     blob_fetch_order: HashMap<SharedString, u64>,
     blob_fetch_counter: u64,
+    /// Find in Conversation (IC-5): bar, query, results and active match.
+    /// View-local; never part of the document or the row fingerprints.
+    find: find::FindState,
     _observe: Subscription,
     _text_changes: Subscription,
     /// Inline automation cards repaint when their records land or change.
@@ -4408,6 +4415,7 @@ impl Transcript {
             blob_details: HashMap::new(),
             blob_fetch_order: HashMap::new(),
             blob_fetch_counter: 0,
+            find: Default::default(),
             _observe: observe,
             _text_changes: text_changes,
             _automation_cards: automation_cards,
@@ -4703,6 +4711,8 @@ impl Transcript {
         // Cancel synchronously, before a queued animation frame can undo the
         // wheel/touch input. Neither operation reads the borrowed ListState.
         self.user_collapse_scroll = None;
+        // The reader now owns the viewport Find may have moved.
+        self.find.note_user_scroll();
         self.cancel_user_hold();
         let released_own_turn = self.own_turn.as_ref().is_some_and(|anchor| anchor.held);
         self.release_own_turn_hold();
@@ -5592,6 +5602,9 @@ impl Transcript {
             self.veil_attach_pending = true;
         }
         if attached {
+            // Find is chat-local: the departing chat's bar closes (keeping
+            // its query for a later reopen) before its rows are dropped.
+            self.detach_find(cx);
             self.agent_cards.clear();
             // Read the incoming snapshot before inserting the outgoing one:
             // a full bounded cache may evict its oldest entry, which can be
@@ -6044,6 +6057,8 @@ impl Transcript {
                 }
                 self.promote_materialized_queued_turn(attached, cx);
                 self.apply_history_target(cx);
+                // Replay readiness alone can complete Find's coverage.
+                self.refresh_find(cx);
                 return;
             }
             Some((old_range, count)) => {
@@ -6152,6 +6167,9 @@ impl Transcript {
             }
         }
         self.apply_history_target(cx);
+        // Re-match only the rows whose content changed (streaming, edits,
+        // prepended history, rollback); the active match keeps its identity.
+        self.refresh_find(cx);
         cx.notify();
     }
 
@@ -6808,6 +6826,7 @@ impl Transcript {
                 measured_h.clone(),
                 cx.entity_id(),
                 self.state.clone(),
+                self.find_paint_for(row_id, theme),
             ));
         // Height motion uses the same ease-out curve as sidebars, tool folds,
         // and pane transitions, with duration scaled to travel distance. The
@@ -7814,6 +7833,18 @@ impl Transcript {
         )
     }
 
+    /// The root this chat's rows resolve workspace-file links against (the
+    /// renderer's file decorations and Find's projection must agree on it).
+    fn row_workspace_root(&self, cx: &gpui::App) -> Option<SharedString> {
+        let state = self.state.read(cx);
+        self.chat_id
+            .as_deref()
+            .and_then(|chat_id| state.chats.iter().find(|chat| chat.id == chat_id))
+            .or_else(|| state.selected_chat_row())
+            .and_then(|chat| chat.cwd.as_deref())
+            .map(SharedString::from)
+    }
+
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.rows.get(ix).cloned() else {
             return gpui::Empty.into_any_element();
@@ -7830,15 +7861,7 @@ impl Transcript {
         };
         self.rendered_rows.insert(row.id.clone());
         let theme = Theme::of(cx).clone();
-        let workspace_root = {
-            let state = self.state.read(cx);
-            self.chat_id
-                .as_deref()
-                .and_then(|chat_id| state.chats.iter().find(|chat| chat.id == chat_id))
-                .or_else(|| state.selected_chat_row())
-                .and_then(|chat| chat.cwd.as_deref())
-                .map(SharedString::from)
-        };
+        let workspace_root = self.row_workspace_root(cx);
         // The viewport spans the full window (under the titlebar): the first
         // row's gap adds the titlebar's height so a top-scrolled transcript
         // rests below the chrome it fades under. The right pane already pads
@@ -7995,6 +8018,7 @@ impl Transcript {
                         link: self.link_ui(),
                         workspace_root: workspace_root.clone(),
                         code,
+                        find: self.find_paint_for(&row.id, &theme),
                     };
                     let highlight = self.code_highlight_for(&row.id, tree, Some(*block_ix), cx);
                     render::render_block(
@@ -8046,6 +8070,7 @@ impl Transcript {
                         link: self.link_ui(),
                         workspace_root: workspace_root.clone(),
                         code,
+                        find: self.find_paint_for(&row.id, &theme),
                     };
                     if seed_history && let Some(veil) = &veil {
                         let historical = &self.historical_markdown[&row.id];
@@ -8057,6 +8082,7 @@ impl Transcript {
                             let seed_opts = RenderOptions {
                                 cache: None,
                                 link: None,
+                                find: None,
                                 ..opts.clone()
                             };
                             let _ = render::render_block(
@@ -8139,7 +8165,11 @@ impl Transcript {
                 } => {
                     self.render_generated_image(&row.id, owner, path, name, mime_type, *viewed, cx)
                 }
-                RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
+                RowKind::ErrorChip { message } => error_chip(
+                    message.clone(),
+                    self.find_paint_for(&row.id, &theme),
+                    &theme,
+                ),
                 RowKind::GoalAchieved { label } => goal_achieved_row(label.clone(), &theme),
                 RowKind::AutomationCard { automation_id } => {
                     let state = self.state.clone();
@@ -9397,6 +9427,7 @@ impl Transcript {
 /// run when there are none), with the same selection machinery as rendered
 /// markdown — the element registers into the frame's document-ordered
 /// registry, so drags select, span into adjacent rows, and Cmd+C copies.
+#[allow(clippy::too_many_arguments)]
 fn user_bubble_text(
     row_id: &SharedString,
     text: SharedString,
@@ -9405,6 +9436,7 @@ fn user_bubble_text(
     measured_h: Rc<Cell<f32>>,
     entity_id: gpui::EntityId,
     state: Entity<AppState>,
+    find: Option<Rc<crate::markdown::find::FindPaint>>,
 ) -> AnyElement {
     let (visible, chips) = crate::composer::sent_chip_visual(text.as_ref(), &mentions)
         .unwrap_or_else(|| (text.to_string(), Vec::new()));
@@ -9475,6 +9507,11 @@ fn user_bubble_text(
                         BorderStyle::default(),
                     ));
                 }
+            }
+            // Find ranges index this visible (chip-decorated) text.
+            if let Some(find) = &find {
+                let element = crate::markdown::find::ElementKey::text(0);
+                find.paint(window, &layout, find.ranges(element));
             }
             render::paint_text_selection(window, &sel_key, &text, &layout, &sel_theme);
             for span in &chips {
@@ -9550,7 +9587,11 @@ fn user_bubble_text(
 /// A provider error is a durable transcript event, not a current app alert.
 /// Keep its full detail and copy affordance, but use the timeline's neutral
 /// palette so old failures do not look like unresolved errors on every visit.
-fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
+fn error_chip(
+    message: SharedString,
+    find: Option<Rc<crate::markdown::find::FindPaint>>,
+    theme: &Theme,
+) -> AnyElement {
     let copy_message = message.clone();
     let fade_key = "tl-transcript-error-copy".to_string();
     let ring = theme.focus_ring();
@@ -9583,17 +9624,36 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
                 .text_color(theme.content_muted),
         )
         .into_any_element();
+    // With Find matches the detail paints its highlights; otherwise it stays
+    // the plain string child every other notice uses.
+    let (detail, highlighted) = match find {
+        Some(find) => (
+            None,
+            Some(notice_detail(
+                crate::markdown::find::highlighted_text(
+                    message,
+                    find,
+                    crate::markdown::find::ElementKey::text(0),
+                ),
+                theme,
+            )),
+        ),
+        None => (Some(message), None),
+    };
     div()
         .py(crate::typography::ui_rems(4.0))
         .w_full()
-        .child(transcript_notice(
-            theme.danger,
-            crate::icons::DANGER_TRIANGLE,
-            "Run error".into(),
-            Some(message),
-            vec![copy],
-            theme,
-        ))
+        .child(
+            transcript_notice(
+                theme.danger,
+                crate::icons::DANGER_TRIANGLE,
+                "Run error".into(),
+                detail,
+                vec![copy],
+                theme,
+            )
+            .children(highlighted),
+        )
         .into_any_element()
 }
 
@@ -11230,16 +11290,19 @@ fn transcript_notice(
                 .children(actions),
         )
         .when_some(detail, |card, detail| {
-            card.child(
-                div()
-                    .pl(crate::typography::ui_rems(22.0))
-                    .max_w(crate::typography::ui_rems(680.0))
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .line_height(crate::typography::ui_rems(17.0))
-                    .text_color(theme.content_muted)
-                    .child(detail),
-            )
+            card.child(notice_detail(detail, theme))
         })
+}
+
+/// A notice's secondary detail line, aligned under its title.
+fn notice_detail(detail: impl IntoElement, theme: &Theme) -> gpui::Div {
+    div()
+        .pl(crate::typography::ui_rems(22.0))
+        .max_w(crate::typography::ui_rems(680.0))
+        .text_size(crate::typography::ui_rems(12.0))
+        .line_height(crate::typography::ui_rems(17.0))
+        .text_color(theme.content_muted)
+        .child(detail)
 }
 
 impl Render for Transcript {
@@ -11464,10 +11527,19 @@ impl Render for Transcript {
             list_el.into_any_element()
         };
         let measured_width = self.measured_width.clone();
+        let find_bar = self.render_find_bar(cx);
+        self.schedule_find_reveal(window, cx);
         let root = div()
             .relative()
             .size_full()
             .min_h_0()
+            // Cmd+F with focus inside this view (its Find bar included).
+            // The shell routes it here from this chat's composer.
+            .on_action(cx.listener(|this, _: &FindInConversation, window, cx| {
+                if !this.open_find(window, cx) {
+                    cx.propagate();
+                }
+            }))
             .child(
                 gpui::canvas(
                     move |bounds, window, _| {
@@ -11505,7 +11577,8 @@ impl Render for Transcript {
             // (document paint order = selection order; see markdown/render.rs).
             .child(crate::markdown::render::selection_frame_reset())
             .child(content)
-            .child(rail);
+            .child(rail)
+            .children(find_bar);
         // Full-size viewer for a clicked user-bubble thumbnail
         // (AttachmentPreviewDialog: bare lightbox, click closes).
         if let Some(preview) = self.attachment_preview.clone() {
