@@ -684,6 +684,11 @@ impl EngineRpc {
                     // host line has provably not been sent.
                     && !self.sessions.turn_start_pending(worker)
                     && crate::now_ms() - receipt.accepted_at_ms > DELIVERY_GRACE_MS
+                    // The startup has not ended while the session-doc
+                    // executor still owns this exact launch command.
+                    && !self
+                        .doc_host
+                        .command_still_starting(&receipt.task_id, &receipt.command_id)
                 {
                     LaunchOutcome::Unknown(
                         "The run ended without confirming acceptance of this instruction.".into(),

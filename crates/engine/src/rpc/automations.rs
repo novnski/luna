@@ -423,24 +423,6 @@ impl EngineRpc {
         Ok(())
     }
 
-    /// The session-doc executor still owns this exact Run command: queued, or
-    /// preparing and starting its provider turn. The doc entry stays Pending
-    /// until `execute` has registered that turn or refused it, so no turn can
-    /// have ended yet. An unreadable task proves nothing and reports false.
-    fn automation_run_still_starting(&self, task: &str, command: &str) -> bool {
-        self.workspace.chat(task).ok().flatten().is_some()
-            && self
-                .doc_host
-                .open(task)
-                .ok()
-                .and_then(|handle| handle.doc().read_commands().ok())
-                .is_some_and(|commands| {
-                    commands.iter().any(|entry| {
-                        entry.id == command && entry.status == SessionCommandStatus::Pending
-                    })
-                })
-    }
-
     fn automation_target_idle(&self, task: &str) -> Result<(), RpcError> {
         if self.sessions.turn_in_flight(task)
             || crate::recovery::RecoveryStore::new(self.store.clone())
@@ -1335,7 +1317,9 @@ impl EngineRpc {
                             && crate::now_ms().saturating_sub(r.accepted_at_ms) > 5_000
                             // SW-13 G3: the startup has not ended while the
                             // session-doc executor still owns this exact Run.
-                            && !self.automation_run_still_starting(&run.task_id, &run.command_id) =>
+                            && !self
+                                .doc_host
+                                .command_still_starting(&run.task_id, &run.command_id) =>
                     {
                         // As with Board delivery, give an admitted startup a
                         // brief grace period. Once it has ended without an

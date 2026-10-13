@@ -87,6 +87,9 @@ whose send is waiting in the line, or was admitted from it less than 5 s
 ago, as still pending (`SessionsEngine::turn_start_pending`), so a held
 send is never reported as an unconfirmed delivery while a start that hangs
 after admission still becomes Unknown under their unchanged rule.
+Since SW-13 G3, neither reader does so while the session-doc executor still
+holds that exact command as Pending (`DocHost::command_still_starting`; Board:
+`board_lifecycle_e2e::a_launch_still_starting_after_the_delivery_grace_is_not_unknown`).
 
 **Activity** (`crates/ui/src/shell/activity_capacity.rs`, owned by the
 Activity view): a *Host capacity* section that reads `GetHostCapacity` with

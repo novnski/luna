@@ -66,6 +66,10 @@
 //!     ticket without a fresh Start, including after restart (PB-4 is not
 //!     enabled). An unresolved delivery omits Retry from the engine's UI
 //!     actions, leaving the only recovery tool inaccessible in the app.
+//! 18. A launch the working chat is still starting (queued or preparing in
+//!     its session executor, no provider turn yet) when the delivery grace
+//!     passes is recorded Unknown with Needs attention (DeliveryUnknown),
+//!     although it provably has not been sent.
 //!
 //! Scenarios that create workers depend on the chat-model slice (A3:
 //! `board_create_main_chat` / `board_create_side_chat` with a ticket
@@ -1064,6 +1068,57 @@ async fn unknown_first_delivery_is_reconciled_not_resent() {
         json!({"effect":"continue","retries":1,"firstStarts":1,"prompts":2,"firstPrompt":"delivered"}),
         json!({"effect":retry["effect"]["kind"],"retries":f.peer.count(&key,"retry"),"firstStarts":f.peer.count(&key,"first start"),"prompts":f.peer.for_key(&key).len(),"firstPrompt":retried["intent"]["firstPrompt"]["kind"]}),
         Some(&retried),
+    );
+    ev.write();
+    stop(b).await;
+}
+
+/// Case 18: a first launch can wait in the working chat's session executor
+/// before any provider turn exists (here behind a real account change; live,
+/// behind a slow startup). Past the delivery grace it is still provably
+/// unsent, so it stays Starting with no Needs attention, then is delivered
+/// exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_launch_still_starting_after_the_delivery_grace_is_not_unknown() {
+    let f = fixture();
+    let b = boot(&f);
+    let mut ev = Evidence::new("launch-still-starting");
+    space(&b, &f, "project-orbit", "orbit").await;
+    let (id, key) = ticket(&b, "ticket-a", "project-orbit", "Slow provider start").await;
+    // Every dispatch takes this lock before it starts a provider.
+    let account = b
+        .core
+        .sessions
+        .prepare_provider_account_change(HarnessId::Mock)
+        .await
+        .unwrap();
+    mv(&b, "ready-1", &id, "ready").await;
+    let issued = wait_for(&b, &id, "the launch command", |detail| {
+        detail["intent"]["launchState"] == "pending"
+    })
+    .await;
+    let task = worker(&issued).expect("a working chat");
+    let command = issued["intent"]["activeCommandId"].clone();
+    // The delivery grace is wall-clock time; outlast it while held.
+    tokio::time::sleep(Duration::from_millis(6_000)).await;
+    for _ in 0..3 {
+        b.rpc.board_lifecycle_tick().await.unwrap();
+    }
+    let held = read(&b, &id).await;
+    let receipt = ok(&b.c, "GetTaskCommandReceipt", json!({"commandId":command})).await;
+    ev.step(
+        "past the grace, a launch its chat is still starting stays pending",
+        json!({"receipt":"pending","phase":"starting","launchState":"pending","firstPrompt":"pending","attention":[],"launchUnknown":0,"prompts":0,"live":false}),
+        json!({"receipt":receipt["status"],"phase":phase(&held),"launchState":held["intent"]["launchState"],"firstPrompt":held["intent"]["firstPrompt"]["kind"],"attention":attention_kinds(&held),"launchUnknown":count(&event_kinds(&b,&id).await,"launchUnknown"),"prompts":f.peer.for_key(&key).len(),"live":b.core.sessions.turn_in_flight(&task)}),
+        Some(&held),
+    );
+    drop(account);
+    let idle = wait_phase(&b, &id, "idle").await;
+    ev.step(
+        "once startup proceeds the instruction is delivered exactly once",
+        json!({"launchState":"delivered","firstPrompt":"delivered","firstStarts":1,"prompts":1,"launchUnknown":0}),
+        json!({"launchState":idle["intent"]["launchState"],"firstPrompt":idle["intent"]["firstPrompt"]["kind"],"firstStarts":f.peer.count(&key,"first start"),"prompts":f.peer.for_key(&key).len(),"launchUnknown":count(&event_kinds(&b,&id).await,"launchUnknown")}),
+        Some(&idle),
     );
     ev.write();
     stop(b).await;

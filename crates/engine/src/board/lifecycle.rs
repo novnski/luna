@@ -62,8 +62,8 @@ pub(crate) const BOARD_PROVIDER_CAPACITY: u32 = 4;
 /// A run that outlives Stop by this much is shown as Unknown (never as
 /// stopped) until its end is observed.
 const STOP_UNKNOWN_AFTER_MS: i64 = 60_000;
-/// A pending send whose run is no longer live after this long could not be
-/// proven accepted.
+/// A pending send whose run is no longer live after this long, and that the
+/// session-doc executor no longer holds, could not be proven accepted.
 const DELIVERY_GRACE_MS: i64 = 5_000;
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
 /// Runtime status pings to Board watchers are coalesced over this window

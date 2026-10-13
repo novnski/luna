@@ -3969,6 +3969,28 @@ impl DocHost {
         Ok(())
     }
 
+    /// The session-doc executor still owns this exact command: queued, or
+    /// preparing and starting its provider turn. The entry stays Pending
+    /// until `execute` has registered that turn or refused it, so no turn of
+    /// it can have ended yet. Readers that turn a pending receipt without a
+    /// live turn into "delivery unknown" after a grace (Automations, Board)
+    /// treat this as still pending. A chat without a registry row is never
+    /// opened fresh, and an unreadable one proves nothing: both report false.
+    pub(crate) fn command_still_starting(&self, chat_id: &str, command_id: &str) -> bool {
+        self.workspace()
+            .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
+            .is_some()
+            && self
+                .open(chat_id)
+                .ok()
+                .and_then(|handle| handle.doc.read_commands().ok())
+                .is_some_and(|commands| {
+                    commands.iter().any(|entry| {
+                        entry.id == command_id && entry.status == SessionCommandStatus::Pending
+                    })
+                })
+    }
+
     /// A send revives an archived chat on every device (best-effort).
     fn unarchive_on_send(&self, chat_id: &str) {
         let Some(workspace) = self.workspace() else {
