@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-13T16:12:07+03:00.
+Generated 2026-10-13T19:21:20+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **19.9% accepted**, **15/76 Done**.
+Active scope: **29.2% accepted**, **22/77 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: SW-04, CORE-05, SW-10, IC-0, ZI-01, CORE-06, ZI-03, ZI-04
+Next eligible: IOS-00, SW-13, IC-5, ZI-02, CORE-07, ZI-03, ZI-04, ZI-05
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -14,8 +14,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | ready | 0.0% | — |
-| [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-07 — Implement extension supervision and capability broker](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | ready | 0.0% | — |
 | [CORE-09 — Extract Codex into a first-party provider package](extensible-core/README.md) | ready | 0.0% | — |
@@ -38,6 +36,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-02 — Reorganize tests around retained public contract owners](extensible-core/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [CORE-03 — Extract cohesive engine services and supervised lifetimes](extensible-core/README.md) | done | 100.0% | claude-code-opus-5.5 |
 | [CORE-04 — Make provider IDs, capabilities and discovery dynamic](extensible-core/README.md) | done | 100.0% | codex |
+| [CORE-05 — Deliver public typed SDKs and unified CLI operations](extensible-core/README.md) | done | 100.0% | claude-team/CORE-05 (orchestrator d19437b2) |
+| [CORE-06 — Add extension manifests, local packages and explicit grants](extensible-core/README.md) | done | 100.0% | claude-team/CORE-06 (orchestrator d19437b2) |
 
 ## Provider access, effective tools and skills
 
@@ -47,6 +47,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [SW-01 — Expose effective per-chat tool and skill inventory](luna-only-workflows/README.md) | done | 100.0% | codex |
 | [SW-02 — Deliver scoped Claude MCP access in Ask/Auto](luna-only-workflows/README.md) | done | 100.0% | codex |
 | [SW-03 — Deliver approved skills in intended permission modes](luna-only-workflows/README.md) | done | 100.0% | codex |
+| [PM-01 — Auto and Full never ask for tool approval on any provider](permission-modes/README.md) | done | 100.0% | claude-team/PM-01 (orchestrator d19437b2) |
 
 ## Transcript trust, recovery and current checklist
 
@@ -69,9 +70,9 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [IC-6 — Complete HTML, MCP Apps and Find integrated acceptance](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [AW-12 — Selected-element visual feedback and annotation attachments](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [SW-09 — Present authorized visual tool results through shared references](luna-only-workflows/README.md) | ready | 0.0% | — |
-| [IC-0 — Prove shared artifacts, provider and Find contracts](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [IC-1 — Build one immutable artifact service and isolated renderer](interactive-chat-surfaces/README.md) | ready | 0.0% | — |
 | [ART-01 — Collect generated deliverables in a per-chat Artifacts panel](chat-artifacts/README.md) | ready | 0.0% | — |
+| [IC-0 — Prove shared artifacts, provider and Find contracts](interactive-chat-surfaces/README.md) | done | 100.0% | claude-team/IC-0 (orchestrator d19437b2) |
 
 ## Find, source navigation and context migration
 
@@ -87,7 +88,6 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [ZI-01 — Isolate and bound Latest turn snapshots](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
 | [ZI-02 — Bound workspace registry history without losing offline intent](zeron-upstream-improvements/README.md) | ready | 0.0% | — |
 | [AW-09 — Read-only diagnostics and owned storage accounting](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-02 — Task context header and useful startup/empty state](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
@@ -97,12 +97,12 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-07 — Fresh next Git/review action with a reason](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-11 — Portable project configuration with personal overrides](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [AW-15 — Optional floating task companion](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
+| [ZI-01 — Isolate and bound Latest turn snapshots](zeron-upstream-improvements/README.md) | done | 100.0% | claude-team/ZI-01 (orchestrator d19437b2) |
 
 ## Board, helper supervision and future workflows
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [PB-4A — Feature groups and related-repository acceptance](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4C — Reusable ticket and action templates](devin-project-board/README.md) | deferred | 0.0% | — |
 | [PB-4D — Bounded dependency dispatch and durable workflow stages](devin-project-board/README.md) | deferred | 0.0% | — |
@@ -115,6 +115,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [AW-10 — Host capacity and recovery controls](agent-workspace-app-research/README.md) | deferred | 0.0% | — |
 | [PB-4B — Add only selected extra tracker integrations](devin-project-board/README.md) | deferred | 0.0% | — |
 | [SW-12 — Verify shipped Board and automation corrections](luna-only-workflows/README.md) | done | 100.0% | claude-code-opus-5.5 |
+| [SW-10 — Complete scoped helper supervision](luna-only-workflows/README.md) | done | 100.0% | claude-team/SW-10 (orchestrator d19437b2) |
 
 ## One direct paired-Mac product
 
@@ -160,9 +161,9 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 
 | Ticket | Status | Accepted | Owner / last worker |
 | --- | --- | --- | --- |
-| [SW-04 — Certify Moralis evidence-to-draft and guarded action journey](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-08 — Bind browser/native computer use to exact targets](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-13 — Certify local recurrence and host lifecycle](luna-only-workflows/README.md) | ready | 0.0% | — |
+| [SW-04 — Certify Moralis evidence-to-draft and guarded action journey](luna-only-workflows/README.md) | done | 100.0% | claude-orchestrator d19437b2 |
 
 ## Integrated acceptance and release verification
 
