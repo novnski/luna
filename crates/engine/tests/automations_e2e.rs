@@ -881,9 +881,49 @@ async fn held_user_queue_and_pause_at_admission_prevent_scheduled_delivery() {
     drop(lane);
     job.await.unwrap().unwrap();
     assert!(seen.lock().unwrap().is_empty());
+    // The fence refused before any command receipt began, so this occurrence
+    // was provably not sent. It must not pose as uncertain delivery, which
+    // would hold every later slot until a manual Resolve (SW-13 G1).
+    let paused = runs(&c, "pause-fence").await;
+    let refused = &paused["items"][0];
+    assert_eq!(refused["state"], "skipped", "{paused}");
+    assert_eq!(
+        call(
+            &c,
+            "GetTaskCommandReceipt",
+            json!({"commandId":refused["commandId"]})
+        )
+        .await,
+        Value::Null
+    );
+    mutate(&c,json!({"requestId":"resume-after-fence","automationId":"pause-fence","ownerHostId":e.device_id,"expectedRevision":2,"operation":{"kind":"resume"}})).await;
+    rpc.automation_tick_at(NOW + 2000).await.unwrap();
+    let resumed = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let ledger = runs(&c, "pause-fence").await;
+            if ledger["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|run| run["automationRevision"] == 3 && run["state"] == "completed")
+                && !e.sessions.turn_in_flight(CHAT)
+            {
+                break ledger;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        resumed.is_ok(),
+        "resumed slot was not delivered: {}",
+        runs(&c, "pause-fence").await
+    );
+    let resumed = resumed.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
     evidence(
         "queue-and-pause",
-        json!({"held":skipped,"paused":runs(&c,"pause-fence").await}),
+        json!({"held":skipped,"paused":paused,"resumed":resumed}),
     );
     e.shutdown().await;
 }

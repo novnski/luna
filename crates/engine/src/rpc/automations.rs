@@ -1409,14 +1409,8 @@ impl EngineRpc {
                 continue;
             }
             if let Err(error) = self.dispatch_automation(&record, &mut run, now).await {
-                // If dispatch admission was crossed, only reconciliation can classify it.
                 let prior = run.state;
-                run.state = if prior == State::Claimed {
-                    State::Skipped
-                } else {
-                    State::Unknown
-                };
-                run.detail = error.to_string();
+                (run.state, run.detail) = self.dispatch_failure(&run, &error);
                 run.updated_at_ms = now;
                 let permit = self.automation_permit()?;
                 self.store
@@ -1425,6 +1419,29 @@ impl EngineRpc {
             }
         }
         Ok(())
+    }
+    /// Before admission a dispatch error is an explicit skip. After admission,
+    /// the task-command fence (pause, edit, delete, busy target or checkout,
+    /// rechecked under the task gate) refuses before `begin_task_command`, so
+    /// no receipt for the exact Run command proves the message was not sent.
+    /// A begun Run command or an unconfirmed creation stays Unknown for
+    /// reconciliation. A store read failure also stays Unknown.
+    fn dispatch_failure(&self, run: &AutomationRun, error: &RpcError) -> (State, String) {
+        let detail = error.to_string();
+        if run.state == State::Claimed {
+            return (State::Skipped, detail);
+        }
+        let receipt = |id: &str| self.store.task_command_receipt(id).map_err(|_| ());
+        let sent = receipt(&run.command_id);
+        let created = receipt(&format!("{}:create", run.command_id));
+        match (sent, created) {
+            (Ok(None), Ok(None)) => (State::Skipped, format!("Not sent: {detail}")),
+            (Ok(None), Ok(Some(c))) if c.status == CommandReceiptStatus::Applied => (
+                State::Skipped,
+                format!("Not sent: {detail}. Its new conversation has no scheduled message."),
+            ),
+            _ => (State::Unknown, detail),
+        }
     }
     async fn dispatch_automation(
         &self,
@@ -1832,12 +1849,7 @@ impl EngineRpc {
             .push_str(&note.chars().take(24_000).collect::<String>());
         if let Err(error) = self.dispatch_automation(&delivery, &mut run, now).await {
             let prior = run.state;
-            run.state = if prior == State::Claimed {
-                State::Skipped
-            } else {
-                State::Unknown
-            };
-            run.detail = error.to_string();
+            (run.state, run.detail) = self.dispatch_failure(&run, &error);
             let permit = self.automation_permit()?;
             self.store
                 .update_automation_run(&run, prior, false, permit.as_ref().map(|p| p.ticket()))
