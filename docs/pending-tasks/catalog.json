@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 45,
+  "revision": 46,
   "inventory_date": "2026-10-11",
   "baseline_commit": "c72a444a3cc9a4e7a91785c5b34d7b947b7ffec9",
   "groups": [
@@ -5272,6 +5272,53 @@
           "id": "handoff",
           "weight": 1,
           "text": "Complete applicable focused builds/E2Es/lint/format/review, refresh and verify LUNA Dev after runtime changes, deliver verified origin/main and checkpoint exact accepted criteria and limitations."
+        }
+      ]
+    },
+    {
+      "id": "PM-01",
+      "title": "Auto and Full never ask for tool approval on any provider",
+      "group": "integration",
+      "priority": 0,
+      "order": 4,
+      "status": "ready",
+      "aliases": [],
+      "depends_on": [],
+      "resources": [
+        "harness/permissions",
+        "ui/pickers"
+      ],
+      "sources": [
+        "docs/pending-tasks/permission-modes/README.md",
+        "docs/pending-tasks/permission-modes/ticket-review.md"
+      ],
+      "outcome": "In Full every Codex, Claude Code and OpenCode tool call (shell, files, network, MCP and app tools, computer use) runs with no approval question; in Auto the provider's own reviewer decides, and anything it declines or hands back to a person has no effect and shows its reason; legacy Ask chats keep their approval cards.",
+      "resume": "Read the permission-modes README (evidence, gaps G1-G8, design, failure contract F1-F12) and ticket-review.md, then inspect current main for the harness changes in crates/harness/src/codex/{approvals,mod,elicitation}.rs and crates/harness/src/claude/controls.rs. Run the README's commands first; implement only a gap they or native QA demonstrate.",
+      "criteria": [
+        {
+          "id": "contract",
+          "text": "The README records the source-cited comparison of Codex, Claude Code, OpenCode, T3, BB and Zeron Auto/Full behavior, LUNA's gaps, the chosen deny-with-reason rule for Auto escalations and the failure contract.",
+          "weight": 1
+        },
+        {
+          "id": "behavior",
+          "text": "Codex and Claude adapters settle every approval request by mode: Full answers once without a card or saved rule; Auto declines what the provider's reviewer hands back, with a visible reason, and shows Codex reviewer denials and timeouts; legacy Ask still parks cards; content questions and data forms still reach the user.",
+          "weight": 1
+        },
+        {
+          "id": "verification",
+          "text": "permission_modes and claude_permissions E2Es (scripted peers with each provider's frame shapes) pass with retained receipts, and native QA on the QA app shows zero approval cards in Codex and Claude Auto and Full, with fixture effect counts matching the transcript.",
+          "weight": 1
+        },
+        {
+          "id": "copy",
+          "text": "The picker no longer says Auto may ask, and the engine's Auto limitation, mapping and escalation fields say escalations are denied (applied with or after CORE-06's engine/permissions reservation).",
+          "weight": 1
+        },
+        {
+          "id": "handoff",
+          "text": "Complete applicable build, lint/format, review, app handoff and verified main delivery; checkpoint the exact result and limitations, and apply the ticket-review catalog proposals.",
+          "weight": 1
         }
       ]
     }

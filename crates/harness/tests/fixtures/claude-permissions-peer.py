@@ -279,6 +279,70 @@ def full_mode(session):
     )
     r12 = expect_success("cc03-r12", "ask rule in full")
     check(r12.get("behavior") == "allow", f"r12 {r12}")
+    # Full asks about nothing: an MCP tool call and an MCP server's own
+    # message-only approval form (Executor's `require_approval` shape).
+    can_use_tool("cc03-r24", "mcp__executor__execute", EXECUTOR_INPUT, "toolu_r24",
+                 display_name="execute", mcp_server={"name": "executor", "source": "user"})
+    r24 = expect_success("cc03-r24", "mcp tool in full")
+    check(r24.get("behavior") == "allow" and r24.get("updatedInput") == EXECUTOR_INPUT, f"r24 {r24}")
+    check("updatedPermissions" not in r24 and "decisionClassification" not in r24, f"r24 grants {r24}")
+    control("cc03-r25", SERVER_APPROVAL)
+    r25 = expect_success("cc03-r25", "server approval in full")
+    check(r25 == {"action": "accept", "content": {}}, f"r25 {r25}")
+
+
+EXECUTOR_INPUT = {"code": "return await tools.executor.coreTools.policies.list({})"}
+SERVER_APPROVAL = {"subtype": "elicitation", "mcp_server_name": "executor", "mode": "form",
+                   "message": "Approve executor.coreTools.policies.list? (matched policy: executor.*)",
+                   "requested_schema": {"type": "object", "properties": {}}}
+
+
+def auto_mode(session):
+    """Claude 2.1.293 auto mode escalates to the host what its classifier does
+    not decide (`decision_reason_type` and `classifier_approvable` in the
+    control schema). LUNA Auto has no person to ask: each is denied with
+    Claude's reason, never classified as a user decision, never interrupting
+    the turn. A question is content and still reaches the user."""
+    check(arg_after("--permission-mode") == "auto", f"Auto argv {ARGS}")
+    escalations = [
+        ("cc03-a1", "Bash", {"command": "rm -rf ~/Library/Caches"}, "toolu_a1",
+         {"decision_reason": "Recursive delete in the home directory", "decision_reason_type": "safetyCheck",
+          "classifier_approvable": False,
+          "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash"}],
+                                      "behavior": "allow", "destination": "localSettings"}]},
+         ["safetyCheck", "Recursive delete in the home directory", "manual approval"]),
+        ("cc03-a2", "mcp__executor__execute", EXECUTOR_INPUT, "toolu_a2",
+         {"display_name": "execute", "mcp_server": {"name": "executor", "source": "user"},
+          "decision_reason": "Auto mode classifier transcript too long", "decision_reason_type": "other"},
+         ["execute", "transcript too long"]),
+        ("cc03-a3", "Edit", EDIT_INPUT, "toolu_a3",
+         {"blocked_path": "/etc/hosts", "decision_reason_type": "workingDir",
+          "permission_suggestions": [{"type": "addDirectories", "directories": ["/etc"],
+                                      "destination": "session"}]},
+         ["workingDir", "/etc/hosts"]),
+        ("cc03-a4", "Bash", {"command": "git push --force"}, "toolu_a4",
+         {"decision_reason_type": "classifier", "decision_reason": "Auto mode denial limit reached"},
+         ["classifier", "denial limit"]),
+    ]
+    for rid, tool, tool_input, tool_use_id, extra, reasons in escalations:
+        can_use_tool(rid, tool, tool_input, tool_use_id, **extra)
+        response = expect_success(rid, f"auto escalation {tool}")
+        message = response.get("message", "")
+        check(response.get("behavior") == "deny", f"{rid} not denied: {response}")
+        check(response.get("toolUseID") == tool_use_id, f"{rid} toolUseID {response}")
+        for key in ("interrupt", "decisionClassification", "updatedPermissions", "updatedInput"):
+            check(key not in response, f"{rid} carries {key}: {response}")
+        check("Auto" in message and "Full access" in message, f"{rid} message {message!r}")
+        for reason in reasons:
+            check(reason in message, f"{rid} message lacks {reason!r}: {message!r}")
+    single = {"questions": [{"question": "Proceed?", "header": "Go", "options": [
+        {"label": "Yes", "description": ""}, {"label": "No", "description": ""}], "multiSelect": False}]}
+    can_use_tool("cc03-a5", "AskUserQuestion", single, "toolu_a5", requires_user_interaction=True)
+    a5 = expect_success("cc03-a5", "question in auto")
+    check(a5.get("behavior") == "deny" and "dismissed" in a5.get("message", ""), f"a5 {a5}")
+    control("cc03-a6", dict(SERVER_APPROVAL))
+    a6 = expect_success("cc03-a6", "server approval in auto")
+    check(a6 == {"action": "decline"}, f"a6 {a6}")
 
 
 QUESTIONS = {"questions": [
@@ -388,6 +452,7 @@ SCENARIOS = {
     "duplicate-concurrent": duplicate_concurrent,
     "subagent-mcp": subagent_mcp,
     "full-mode": full_mode,
+    "auto-mode": auto_mode,
     "ask-user": ask_user,
     "elicitation": elicitation,
     "unknown-controls": unknown_controls,

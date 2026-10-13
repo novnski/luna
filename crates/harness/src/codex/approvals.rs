@@ -1,13 +1,26 @@
 //! Exact native decision tables: client labels never manufacture a grant.
+//!
+//! Who settles a request that reached LUNA follows the engine-resolved mode
+//! (`docs/pending-tasks/permission-modes/README.md`):
+//! - Full answers it once, without a card and without a saved rule.
+//! - Auto declines it. Codex's own reviewer (`approvalsReviewer:
+//!   "auto_review"`) already judged everything it could; a request still
+//!   reaching the client is one it handed back to a person (the reviewer's
+//!   `None` fallback, a connector the user's config reviews as `user`, or a
+//!   server's own approval prompt). Auto has no person to ask, so it fails
+//!   closed with the reason shown — the outcome Codex gives a failed review.
+//! - Legacy Ask parks the card for the user.
 use super::{RequestInputFn, ServerRequestContext, new_message_id};
+use crate::HarnessError;
 use crate::jsonrpc::RpcClient;
 use luna_proto::{
-    ApprovalActionKind, ApprovalChoice, ApprovalDetails, ApprovalNetworkContext, ApprovalRequest,
-    HarnessId, UserInputAnswer, UserInputQuestion,
+    AgentEvent, ApprovalActionKind, ApprovalChoice, ApprovalDetails, ApprovalNetworkContext,
+    ApprovalRequest, HarnessId, PermissionMode, UserInputAnswer, UserInputQuestion,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) type PendingApprovals = HashMap<String, CancellationToken>;
@@ -507,13 +520,28 @@ pub(super) fn handle(
     } else {
         command_choices(params)
     };
-    // Full never parks a permission prompt. Additional permissions are scoped
-    // to this exact turn; ordinary requests remain once-only, never a rule.
-    if context.permission_policy.effective_mode == luna_proto::PermissionMode::Full && permissions {
+    // Full never parks a prompt. Additional permissions are scoped to this
+    // exact turn; ordinary requests remain once-only, never a rule.
+    let full = context.permission_policy.effective_mode == PermissionMode::Full;
+    if full && permissions {
         client.respond(&id, choices[1].response.clone());
         return;
     }
-    if context.auto_approve && !permissions {
+    // Auto: Codex's reviewer handed this back to a person (see the module
+    // docs). Checked before the legacy `auto_approve` bit: Auto is a review,
+    // never a blanket approval.
+    if context.permission_policy.effective_mode == PermissionMode::Auto {
+        decline_without_review(
+            client,
+            &id,
+            denied,
+            context.events,
+            &request_subject(method, params),
+            context.subagent.as_ref().map(|child| child.label.as_str()),
+        );
+        return;
+    }
+    if (context.auto_approve || full) && !permissions {
         client.respond(
             &id,
             choices
@@ -615,8 +643,27 @@ pub(super) fn handle_tool_approval(
     };
     // The caller already validated the live thread/turn and duplicate ID.
     // Full authorizes this invocation only, without changing connector policy.
-    if context.permission_policy.effective_mode == luna_proto::PermissionMode::Full {
+    if context.permission_policy.effective_mode == PermissionMode::Full {
         client.respond(&id, accept(None));
+        return;
+    }
+    // Auto: the reviewer handed this tool call back to a person. The user's
+    // saved connector policy is left exactly as configured.
+    if context.permission_policy.effective_mode == PermissionMode::Auto {
+        let actor = approval
+            .context
+            .connector
+            .as_deref()
+            .unwrap_or(approval.context.server.as_str());
+        let tool = approval.context.tool.as_deref().unwrap_or("a tool");
+        decline_without_review(
+            client,
+            &id,
+            declined,
+            context.events,
+            &format!("{actor}'s {tool} call"),
+            context.subagent.as_ref().map(|child| child.label.as_str()),
+        );
         return;
     }
     let mut choices = vec![choice(
@@ -715,6 +762,139 @@ pub(super) fn handle_tool_approval(
         turn_cancel(context),
         pending,
     );
+}
+
+/// Auto's answer to a request Codex handed back to a person: `response` (the
+/// native decline) goes out at once, never a parked card, and the reason
+/// becomes a visible transcript error. The user's saved provider policy is
+/// not touched.
+pub(super) fn decline_without_review(
+    client: &RpcClient,
+    id: &Value,
+    response: Value,
+    events: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    subject: &str,
+    subagent: Option<&str>,
+) {
+    client.respond(id, response);
+    let by = subagent
+        .map(|label| format!(" for sub-agent {}", bounded(label, 128)))
+        .unwrap_or_default();
+    let message = format!(
+        "Auto access declined {}{by}. It needed a person's approval, and Auto never asks, \
+         so it did not run. Switch this chat to Full access to allow it.",
+        bounded(subject, 512)
+    );
+    send_event(events, AgentEvent::Error { message });
+}
+
+/// Deliver an event from a synchronous request handler without reordering it
+/// behind later frames; only a full channel defers it to a task.
+fn send_event(events: &mpsc::Sender<Result<AgentEvent, HarnessError>>, event: AgentEvent) {
+    if let Err(mpsc::error::TrySendError::Full(event)) = events.try_send(Ok(event)) {
+        let events = events.clone();
+        tokio::spawn(async move {
+            let _ = events.send(event).await;
+        });
+    }
+}
+
+/// What a command/file/permissions request asks for, in words.
+fn request_subject(method: &str, params: &Value) -> String {
+    let details = details(params);
+    match method {
+        "item/permissions/requestApproval" => "a request for additional permissions".into(),
+        "item/fileChange/requestApproval" => "a file change".into(),
+        _ if details.kind.as_deref() == Some("writeStdin") => "terminal input".into(),
+        _ => details
+            .command
+            .filter(|command| !command.trim().is_empty())
+            .map(|command| format!("the command `{}`", bounded(&command, 256)))
+            .unwrap_or_else(|| "a command".into()),
+    }
+}
+
+/// Codex's `item/autoApprovalReview/completed` (app-server v2
+/// `ItemGuardianApprovalReviewCompletedNotification`): the reviewer's final
+/// decision on one approval. A denial or timeout is fail-closed in Codex
+/// already (the model receives the rationale); this is its visible reason.
+/// Approvals and aborted reviews (Stop, a cancelled turn) add nothing.
+pub(super) fn auto_review_outcome(params: &Value, root_thread: &str) -> Option<AgentEvent> {
+    let review = params.get("review")?;
+    let status = review.get("status")?.as_str()?;
+    if !matches!(status, "denied" | "timedOut") {
+        return None;
+    }
+    let subject = review_action_subject(params.get("action"));
+    let by = params
+        .get("threadId")
+        .and_then(Value::as_str)
+        .filter(|thread| !thread.is_empty() && *thread != root_thread)
+        .map(|_| " for a sub-agent")
+        .unwrap_or("");
+    let rationale = review
+        .get("rationale")
+        .and_then(Value::as_str)
+        .map(|rationale| bounded(rationale.trim().trim_end_matches('.'), 1024))
+        .filter(|rationale| !rationale.is_empty());
+    let outcome = match (status, rationale) {
+        ("timedOut", _) => format!("timed out on {subject}{by}"),
+        (_, Some(rationale)) => format!("denied {subject}{by}: {rationale}"),
+        (_, None) => format!("denied {subject}{by}"),
+    };
+    Some(AgentEvent::Error {
+        message: format!("Codex's automatic reviewer {outcome}. It did not run."),
+    })
+}
+
+/// The reviewed action (`GuardianApprovalReviewAction`, tagged by `type`).
+fn review_action_subject(action: Option<&Value>) -> String {
+    let field = |key: &str| {
+        action
+            .and_then(|action| action.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| bounded(value, 256))
+    };
+    let subject = match action
+        .and_then(|action| action.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("command") => field("command").map(|command| format!("the command `{command}`")),
+        Some("execve") => field("program").map(|program| format!("running `{program}`")),
+        Some("writeStdin") => Some("terminal input".into()),
+        Some("applyPatch") => Some("a file change".into()),
+        Some("networkAccess") => field("host").map(|host| format!("network access to {host}")),
+        Some("mcpToolCall") => {
+            let tool = field("toolTitle").or_else(|| field("toolName"));
+            let server = field("connectorName").or_else(|| field("server"));
+            match (tool, server) {
+                (Some(tool), Some(server)) => Some(format!("{server}'s {tool} call")),
+                (Some(tool), None) => Some(format!("the {tool} call")),
+                (None, Some(server)) => Some(format!("a {server} tool call")),
+                (None, None) => Some("an MCP tool call".into()),
+            }
+        }
+        Some("requestPermissions") => Some("a request for additional permissions".into()),
+        _ => None,
+    };
+    subject.unwrap_or_else(|| "an action".into())
+}
+
+/// Provider text for a visible message: control characters dropped, bounded.
+fn bounded(text: &str, max_chars: usize) -> String {
+    let cleaned: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.chars().count() <= max_chars {
+        return cleaned.to_owned();
+    }
+    let mut out: String = cleaned.chars().take(max_chars).collect();
+    out.push('…');
+    out
 }
 
 fn exact_answer<'a>(

@@ -15,7 +15,7 @@ Every refusal scenario first demonstrates a healthy allowed operation, then veri
 | Risk | Existing strongest owner to inspect first | Missing evidence to add only if needed |
 | --- | --- | --- |
 | Configured server falsely shown callable; mode/identity drift | `claude_mcp_inventory`, provider MCP suites, integration picker | Real active-session calls and native UI readback after relevant generation changes |
-| Restricted-mode permission/config escape | Engine `claude_permissions`, harness permission/MCP startup suites | Selected external tool call through actual CLI with required approval and denied upstream counter |
+| Restricted-mode permission/config escape | Engine `claude_permissions`, harness permission/MCP startup suites | Selected external tool call through actual CLI with the mode's decision (legacy Ask approval; Auto native reviewer, escalations declined; Full once) and denied upstream counter |
 | Skill scope/revision mismatch | Existing managed-skill lifecycle/extension input tests | The chosen real mode actually receives and uses the approved skill |
 | Duplicate/unknown external side effect | Bridge approval/call fences, `cross_task_tools`, recovery | Disposable service counter across a transport-loss/restart boundary |
 | Text/tool/child ordering or duplicate parts | `timeline_order_e2e`, provider result and subagent owners | Uncovered late-child native frame or actual viewport lifecycle; preserve covered cases |
@@ -38,7 +38,7 @@ Create fresh and resumed Codex/Claude chats in each selected mode using an exist
 
 ### E02 — scoped external MCP permissions (SW-02)
 
-In Claude Ask, execute a permitted fixture read, decline a write, then allow one exact staged write; expect read data, zero declined mutations and one approved mutation. Repeat on eligible Auto and the selected Codex mode with their actual reviewer/grant semantics. Confirm user/project permission overrides and a harmless hook sentinel were not loaded/executed in the restricted run. Wrong parent/machine/session scope and a stale call must be refused for the intended guard. No hidden Full/admin process may service a call. **Primary owner:** permission/bridge boundary; live CLI capture adds native enforcement evidence. Ineligible Auto is blocked for that variant, never recorded as passed.
+In a legacy Claude Ask chat, execute a permitted fixture read, decline a write, then allow one exact staged write; expect read data, zero declined mutations and one approved mutation. Repeat on eligible Auto and the selected Codex mode under the [permission-modes contract](../permission-modes/README.md): the provider's own reviewer decides, no LUNA approval card appears, and a write it declines or escalates leaves zero mutations with its reason visible; in Full the staged write runs once without a prompt. Confirm user/project permission overrides and a harmless hook sentinel were not loaded/executed in the restricted run. Wrong parent/machine/session scope and a stale call must be refused for the intended guard. No hidden Full/admin process may service a call. **Primary owner:** permission/bridge boundary; live CLI capture adds native enforcement evidence. Ineligible Auto is blocked for that variant, never recorded as passed.
 
 ### E03 — approved skill behavior and migration (SW-03/SW-11)
 
@@ -98,7 +98,7 @@ Observe two real scheduled runs in an existing chat and a fresh-chat destination
 
 ### E17 — additional interactive app (SW-14)
 
-Consume IC A01–A07 on one actual required app: original-session capture, real data read, one confirmed fixture mutation, declined mutation with no effect, stale/rebound-session refusal and persisted readable snapshot. Capture resource digest/handshake/receipts. Claude/OpenCode fallback may pass its honesty contract, but cannot certify an unavailable app operation. No duplicate provider/MCP registration or admin-process execution. **Owner:** IC-4/IC-6; this plan adds only the chosen user journey and its required/optional decision.
+Consume IC A01–A07 on one actual required app: original-session capture, real data read, one fixture mutation settled by the chat's mode (Full once without a prompt; Auto by the provider's reviewer), a declined or escalated mutation with no effect and a visible reason, stale/rebound-session refusal and persisted readable snapshot. Capture resource digest/handshake/receipts. Claude/OpenCode fallback may pass its honesty contract, but cannot certify an unavailable app operation. No duplicate provider/MCP registration or admin-process execution. **Owner:** IC-4/IC-6; this plan adds only the chosen user journey and its required/optional decision.
 
 ### E18 — conditional requirement decision (SW-16)
 

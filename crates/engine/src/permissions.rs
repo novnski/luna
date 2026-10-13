@@ -28,6 +28,8 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                     .into(),
                 "Automatic review can be unavailable when account or organization policy disables it; provider startup then fails closed."
                     .into(),
+                "Auto never asks: a request Codex's automatic review hands back to a person is declined and its reason shown; Full access runs it."
+                    .into(),
             ],
         },
         luna_proto::BuiltinHarnessId::ClaudeCode => ProviderPermissionCapabilities {
@@ -39,7 +41,8 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
             network_control: "Claude permission mode and restricted workspace rules".into(),
             known_limitations: vec![
-                "Escalations returned by native auto review still require the user.".into(),
+                "Auto never asks: a call Claude's auto review escalates instead of deciding is denied with Claude's reason; Full access runs it."
+                    .into(),
                 "Ask and Auto run Claude Code restricted: user, project and local settings files are not loaded, so their custom commands, output styles and hooks are unavailable there (the command list shows only what loads). Full loads them."
                     .into(),
                 "Ask and Auto grant the built-in tools of Claude Code 2.1.286 by name, including Bash and WebFetch; Workflow and CronCreate stay unavailable, and tools added by newer CLI versions need an updated grant."
@@ -220,7 +223,7 @@ fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
                 .into()
         }
         (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Auto) => {
-            "auto + restricted workspace + named command/web tools + user escalation".into()
+            "auto + restricted workspace + named command/web tools + escalations denied".into()
         }
         (luna_proto::BuiltinHarnessId::ClaudeCode, PermissionMode::Full) => {
             "bypassPermissions + dangerously-skip-permissions".into()
@@ -294,10 +297,12 @@ pub fn resolve_run_policy(harness: HarnessId, request: &mut RunRequest) -> Permi
             ApprovalReviewer::User,
             PermissionEscalation::Ask,
         ),
+        // Auto never asks: what the native reviewer escalates is declined
+        // (docs/pending-tasks/permission-modes).
         PermissionMode::Auto => (
             PermissionScope::Workspace,
             ApprovalReviewer::Automatic,
-            PermissionEscalation::Ask,
+            PermissionEscalation::Deny,
         ),
         PermissionMode::Full => (
             PermissionScope::Full,

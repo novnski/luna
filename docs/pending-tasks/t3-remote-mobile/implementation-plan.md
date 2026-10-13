@@ -90,9 +90,9 @@ protocol. IOS-03 owns the complete native composer/queue UX over this contract.
 
 Use the Mac's actual harness/account/model/options catalog. Phone static fallbacks cannot masquerade as host capability. Show requested and effective permissions where they differ, locked provider ownership, supported steer/restart/fork options and unavailable features. Provider credentials remain on the execution host.
 
-Add approval projection and native approve/deny/action UI; current iOS question controls do not supply approval parity. Carry exact outstanding request ID/revision, command context, allowed decisions and target task. Reject stale, revoked, replayed and changed-command responses. Preserve question options/free text and continuation behavior through reconnect. Resolve the phone's legacy sandbox/autoApprove model against canonical host permissionMode before shipping.
+Add approval projection and native approve/deny/action UI for the requests that still reach a person — legacy Ask chats and LUNA ceiling grants; Auto and Full never produce one ([permission modes](../permission-modes/README.md)). Current iOS question controls do not supply approval parity. Carry exact outstanding request ID/revision, command context, allowed decisions and target task. Reject stale, revoked, replayed and changed-command responses. Preserve question options/free text and continuation behavior through reconnect. Resolve the phone's legacy sandbox/autoApprove model against canonical host permissionMode before shipping.
 
-Completion: RP-16–RP-18 exercise actual provider-facing question and approval flows with a controlled permitted action, refusal and stale-response rejection. Preserve final command/request/decision trace; a generic dialog fixture is insufficient.
+Completion: RP-16–RP-18 exercise actual provider-facing question and approval flows (approvals from a legacy Ask chat or ceiling grant) with a controlled permitted action, refusal and stale-response rejection, plus an Auto/Full task whose phone view shows no approval card. Preserve final command/request/decision trace; a generic dialog fixture is insufficient.
 
 RM-05 owns host capability/request/decision admission and its native/SDK probe;
 IOS-04 owns the complete picker/question/approval presentation. Static fallback

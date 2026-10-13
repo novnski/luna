@@ -173,7 +173,9 @@ Retain exact native input/result identity. Verify the installed app hash never
 changed while the new provider was added.
 
 **Failure focus:** only a model row appears; execution still needs a compiled
-provider ID; the generic bridge invents acceptance, authority or completion.
+provider ID; the generic bridge invents acceptance, authority or completion; an
+Auto or Full run parks a human approval card instead of following the
+[permission-modes contract](../permission-modes/README.md).
 **Gate:** E10's full no-app-update journey plus conformance failures and native
 evidence. This is the first plugin milestone, before extracting all providers.
 
@@ -183,9 +185,11 @@ evidence. This is the first plugin milestone, before extracting all providers.
 catalog/account/update/policy facts and retained Codex E2Es.
 
 Move its implementation into an independently packaged worker using the public
-provider/broker contract. Preserve app-server wire behavior, approvals, exact
-steer delivery, history/fork/rewind, accounting, tool/media/native child identity
-and existing permission limitations. Keep native credentials/settings ownership.
+provider/broker contract. Preserve app-server wire behavior, the per-mode
+approval settlement of [permission modes](../permission-modes/README.md) (Full
+and Auto never ask; legacy Ask cards stay), exact steer delivery,
+history/fork/rewind, accounting, tool/media/native child identity and existing
+permission limitations. Keep native credentials/settings ownership.
 Port retained provider-specific peers to the real worker transport and prove
 native fresh/resumed tasks. Remove the old registration only after parity passes.
 
@@ -197,7 +201,9 @@ proof; no provider-only private shortcut remains in the core or picker.
 **P1; CORE-08, CORE-02. Owners:** Claude harness, native extensions, login/account
 facts, MCP/tool delivery and retained Claude E2Es.
 
-Preserve stream-json event correlation, Ask/Auto/Full ceilings, real account
+Preserve stream-json event correlation, Ask/Auto/Full ceilings and the
+[permission-modes](../permission-modes/README.md) settlement (Auto denies what
+Claude's classifier escalates, with its reason; Full never asks), real account
 eligibility, exact writer/resume ownership, questions, goals, history, images
 and native extension scope. Consume SW-02/03 fixes/evidence when available;
 otherwise retain their visible limitations as open work, never certify missing
@@ -214,7 +220,8 @@ workflow remains explicit rather than weakening confinement.
 delivery reconciliation and retained OpenCode peers.
 
 Preserve actual OpenCode 2 protocol, account/model variant source, session
-permission readback, SSE ordering, child ownership and uncertain delivery rules.
+permission readback (Full answers stray asks once; Auto stays unavailable without
+a native reviewer), SSE ordering, child ownership and uncertain delivery rules.
 Do not bring back retired OpenCode 1 or ACP behavior. Native server lifecycle,
 port ownership, restart and package update belong to the supervised worker;
 engine command acceptance remains core-owned.

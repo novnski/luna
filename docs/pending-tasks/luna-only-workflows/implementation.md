@@ -165,7 +165,7 @@ CORE-02 assigned two unconsumed provider observations to this ticket: the Claude
 
 **P2; SW-02/SW-09/IC-4. Owners:** IC app bridge/renderer and native provider-owned app catalog/capabilities.
 
-Choose one actually needed document/sheet/slide/app operation. Reuse IC A01–A07 for real resource render, live reads, confirmed/declined writes, stale-session rejection and original-connection ownership. Record which native app selections and operations are available per provider; unsupported native-only apps keep a precise fallback. Any new integration follows normal Executor discovery/reuse/setup without copying credentials. No plugin marketplace, duplicate bridge or Office UI clone.
+Choose one actually needed document/sheet/slide/app operation. Reuse IC A01–A07 for real resource render, live reads, writes settled by the chat's permission mode (Full once, Auto by the provider's reviewer with visible declines; no LUNA approval card), stale-session rejection and original-connection ownership. Record which native app selections and operations are available per provider; unsupported native-only apps keep a precise fallback. Any new integration follows normal Executor discovery/reuse/setup without copying credentials. No plugin marketplace, duplicate bridge or Office UI clone.
 
 **Gate:** E17 and the existing IC contracts. Promote this task to the required switching set only when the selected real workflow requires it.
 

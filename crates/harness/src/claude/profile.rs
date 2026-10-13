@@ -18,7 +18,7 @@
 //!   unless `--tools` NAMES them. The `default` preset does not count as naming them.
 //!   Ask/Auto therefore pass an explicit grant: the restricted 2.1.286 tool set plus
 //!   Bash and WebFetch. Those escalate through the stdio permission channel (Ask:
-//!   the user; Auto: the native reviewer, then the user).
+//!   the user; Auto: the native reviewer, and LUNA denies what it escalates).
 //!   Workflow and CronCreate stay ungranted until their own lanes certify them.
 //! - Full runs unrestricted (bypassPermissions) and loads every settings source.
 

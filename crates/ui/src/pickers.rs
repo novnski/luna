@@ -315,7 +315,7 @@ const PERMISSION_OPTIONS: [(PermissionMode, &str, &str); 2] = [
     (
         PermissionMode::Auto,
         "Approve for me",
-        "Keep workspace limits and use the provider's native reviewer; it may still ask you.",
+        "Keep workspace limits and let the provider's native reviewer decide; anything it won't approve is declined, never asked.",
     ),
     (
         PermissionMode::Full,

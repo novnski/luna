@@ -99,6 +99,25 @@ pub(super) fn tool_approval(params: &Value) -> Option<ToolApproval> {
     })
 }
 
+/// A form that asks for nothing but a decision: an MCP server's own approval
+/// prompt (Executor's `require_approval` policy sends `Approve <tool>?` with
+/// `{"type":"object","properties":{}}`). Same test as `codex-mcp`
+/// `can_auto_accept_elicitation`: an absent/null schema or an object schema
+/// with no properties. Shared with the Claude control bridge, whose keys are
+/// mapped to these spellings first.
+pub(crate) fn message_only_form(params: &Value) -> bool {
+    if params.get("mode").and_then(Value::as_str) != Some("form") {
+        return false;
+    }
+    let schema = params.get("requestedSchema").unwrap_or(&Value::Null);
+    schema.is_null()
+        || (schema.get("type").and_then(Value::as_str) == Some("object")
+            && schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(serde_json::Map::is_empty))
+}
+
 /// `turn_id` is the request's turn, or the active turn the adapter bound a
 /// null `turnId` to (the protocol field is nullable, `v2/mcp.rs:422-428`).
 pub(crate) fn questions(

@@ -372,10 +372,45 @@ async fn subagent_requests_reach_the_user_and_mcp_context_is_kept() {
 #[tokio::test]
 async fn full_mode_allows_once_but_never_plan_or_interactive_tools() {
     let run = start("full-mode", PermissionMode::Full, "").await;
-    // Full resolves ordinary and matched-ask-rule permission requests once.
-    // finish() rejects any question reaching the UI bridge.
+    // Full resolves ordinary, matched-ask-rule and MCP tool permission
+    // requests once and accepts an MCP server's message-only approval form
+    // (the peer checks no rule is saved). finish() rejects any question
+    // reaching the UI bridge: a Full prompt fails here.
     let (events, log) = run.finish().await;
     assert_verified(&events, &log, "full-mode");
+}
+
+/// Permission-modes contract (`docs/pending-tasks/permission-modes`): Claude's
+/// auto-mode classifier decides first, and what it escalates to the host (a
+/// safety check, an MCP call it could not classify, a path outside the
+/// workspace, its denial limit) is denied with Claude's own reason, because
+/// Auto has no person to ask. The peer checks each denial carries the reason,
+/// no user classification, no grant and no interrupt. Regressions caught: an
+/// Auto MCP/tool escalation surfacing a human card (finish() rejects any extra
+/// question), an escalation silently allowed, a denial without its reason, a
+/// declined server approval left invisible, and the question tool (content,
+/// not an approval) blocked in Auto.
+#[tokio::test]
+async fn auto_mode_denies_escalations_with_claudes_reason_and_never_asks_for_approval() {
+    let mut run = start("auto-mode", PermissionMode::Auto, "").await;
+    let (questions, tx) = run.next().await;
+    assert!(
+        questions.iter().all(|question| question.approval.is_none()),
+        "Auto parked an approval card: {questions:?}"
+    );
+    assert_eq!(questions[0].question, "Proceed?");
+    drop(tx);
+    let (events, log) = run.finish().await;
+    assert_verified(&events, &log, "auto-mode");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Error { message }
+                if message.contains("approval request from executor")
+                    && message.contains("Full access")
+        )),
+        "the declined server approval has no visible reason: {events:?}"
+    );
 }
 
 #[tokio::test]

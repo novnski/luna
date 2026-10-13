@@ -17,6 +17,11 @@
 //!   card is the interaction surface is never one-tap approved.
 //! - The native permission mode Claude reports is checked against the mode
 //!   LUNA launched (`profile::mode_args`, owned by the G1 baseline).
+//! - Only legacy Ask parks a permission card
+//!   (`docs/pending-tasks/permission-modes/README.md`). Full allows the call
+//!   once. Auto denies a call Claude's auto-mode classifier escalated instead
+//!   of deciding, with Claude's own reason: Auto has no person to ask.
+//!   Questions and forms asking for values reach the user in every mode.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -26,13 +31,14 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use luna_proto::{
-    APPROVAL_NO_EXPIRY, ApprovalActionKind, ApprovalChoice, ApprovalDetails, ApprovalRequest,
-    ApprovalToolContext, HarnessId, PermissionMode, PermissionPolicy, UserInputAnswer,
-    UserInputDetails, UserInputQuestion,
+    APPROVAL_NO_EXPIRY, AgentEvent, ApprovalActionKind, ApprovalChoice, ApprovalDetails,
+    ApprovalRequest, ApprovalToolContext, HarnessId, PermissionMode, PermissionPolicy,
+    UserInputAnswer, UserInputDetails, UserInputQuestion,
 };
 
 use super::wire::control_response_line;
 use super::{RequestInputFn, StdinMsg};
+use crate::HarnessError;
 
 /// Display bound for any provider-authored text placed on a synced card.
 const MAX_DISPLAY: usize = 4096;
@@ -61,6 +67,9 @@ struct Inner {
     policy: PermissionPolicy,
     request_input: Arc<RequestInputFn>,
     stdin_tx: mpsc::UnboundedSender<StdinMsg>,
+    /// The run's event stream, for a decline whose reason Claude does not
+    /// show itself (an MCP server's approval prompt declined in Auto).
+    events: Option<mpsc::Sender<Result<AgentEvent, HarnessError>>>,
     state: Mutex<State>,
 }
 
@@ -120,9 +129,20 @@ impl Controls {
                 policy,
                 request_input,
                 stdin_tx,
+                events: None,
                 state: Mutex::new(State::default()),
             }),
         }
+    }
+
+    pub(super) fn with_events(
+        mut self,
+        events: mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    ) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("new controls are uniquely owned")
+            .events = Some(events);
+        self
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -174,6 +194,22 @@ impl Controls {
         })
         .to_string();
         self.settle(id, line)
+    }
+
+    /// A visible transcript note for a decline whose reason Claude does not
+    /// report itself. Sent in order; only a full channel defers it to a task.
+    fn notify(&self, message: String) {
+        let Some(events) = self.inner.events.as_ref() else {
+            return;
+        };
+        if let Err(mpsc::error::TrySendError::Full(event)) =
+            events.try_send(Ok(AgentEvent::Error { message }))
+        {
+            let events = events.clone();
+            tokio::spawn(async move {
+                let _ = events.send(event).await;
+            });
+        }
     }
 
     /// The CLI withdrew `id`: stop waiting and never answer it.
@@ -350,6 +386,17 @@ impl Controls {
             );
             return;
         }
+        // Auto: Claude's auto-mode classifier reviews every call first and
+        // denies what it blocks on its own. A call that still reaches the host
+        // is one it escalated to a person (a safety check, its denial limit,
+        // an ask rule, a path outside the workspace, a transcript too long to
+        // classify). Auto has no person to ask: deny it with Claude's reason,
+        // as Claude itself does when no prompt can be shown. No user
+        // classification and no interrupt, so Claude continues another way.
+        if self.inner.mode == PermissionMode::Auto {
+            self.answer(id, deny(&auto_escalation_denial(&tool, request)));
+            return;
+        }
         let state = self.state();
         let context = CardContext {
             session_id: state.session_id.clone(),
@@ -440,6 +487,30 @@ impl Controls {
             "elicitationId": request.get("elicitation_id"),
             "requestedSchema": request.get("requested_schema"),
         });
+        // A form asking only for a decision is the MCP server's own approval
+        // prompt (Executor's `require_approval` policy). Full accepts it, as
+        // Codex does under full access; Auto has no person to ask and declines
+        // it with the reason shown. Forms asking for values reach the user.
+        if crate::codex::elicitation::message_only_form(&params) {
+            match self.inner.mode {
+                PermissionMode::Full => {
+                    self.answer(id, json!({"action": "accept", "content": {}}));
+                    return;
+                }
+                PermissionMode::Auto => {
+                    self.answer(id, json!({"action": "decline"}));
+                    let server = text(request, "mcp_server_name", 128)
+                        .unwrap_or_else(|| "an MCP server".into());
+                    self.notify(format!(
+                        "Auto access declined an approval request from {server}. It needed a \
+                         person's approval, and Auto never asks, so the tool did not run. Switch \
+                         this chat to Full access to allow it."
+                    ));
+                    return;
+                }
+                PermissionMode::Ask => {}
+            }
+        }
         let questions = match crate::codex::elicitation::questions(
             &params,
             &Value::String(id.into()),
@@ -527,6 +598,48 @@ fn mode_label(mode: PermissionMode) -> &'static str {
         PermissionMode::Auto => "Auto",
         PermissionMode::Full => "Full access",
     }
+}
+
+/// The model- and user-visible reason for denying a call Claude's auto mode
+/// escalated (see `can_use_tool`). Claude's own escalation fields name why:
+/// `decision_reason_type` ("safetyCheck", "classifier", "rule", "workingDir",
+/// …), `decision_reason`, `classifier_approvable`, `blocked_path` and a
+/// `matched_ask_rule` (2.1.293 control schema).
+fn auto_escalation_denial(tool: &str, request: &Value) -> String {
+    let display = text(request, "display_name", 256).unwrap_or_else(|| tool.to_owned());
+    let mut reasons = Vec::new();
+    if let Some(reason) = text(request, "decision_reason", 1024) {
+        reasons.push(reason);
+    }
+    if request
+        .get("classifier_approvable")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        reasons.push("a safety check requires manual approval".to_owned());
+    }
+    if let Some(path) = text(request, "blocked_path", 1024) {
+        reasons.push(format!("{path} is outside the allowed directories"));
+    }
+    if let Some(rule) = request.get("matched_ask_rule") {
+        let tool = text(rule, "tool_name", 256).unwrap_or_default();
+        reasons.push(match text(rule, "rule_content", 1024) {
+            Some(content) => format!("an ask rule matched {tool}({content})"),
+            None => format!("an ask rule matched {tool}"),
+        });
+    }
+    let kind = text(request, "decision_reason_type", 64);
+    let why = match (reasons.is_empty(), kind) {
+        (false, Some(kind)) => format!(" ({kind}: {})", reasons.join("; ")),
+        (false, None) => format!(" ({})", reasons.join("; ")),
+        (true, Some(kind)) => format!(" ({kind})"),
+        (true, None) => String::new(),
+    };
+    format!(
+        "LUNA Auto access denied this {display} call: Claude's auto mode sent it to a person for \
+         approval{why}, and Auto never asks. It did not run. Do not retry it; continue another \
+         way, or tell the user it needs Full access."
+    )
 }
 
 /// An automatic host denial (no user decision, so no classification).

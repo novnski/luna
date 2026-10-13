@@ -98,14 +98,20 @@ Use the current target host's actual provider/model/account/options/capability
 projection. Unknown installed provider plugins must appear without an iOS enum
 or static catalog update. Stale/offline data is labeled; fallback names cannot
 authorize a run. Map canonical permissions and exact request/revision/decision
-IDs into native question and approve/deny flows. Preserve secret-input handling,
-free text, changed requests, continued sessions and host-side settlement.
+IDs into native question flows, and into approve/deny flows for the requests
+that still reach a person: legacy Ask chats and LUNA ceiling grants. Auto and
+Full chats never show an approval card; an Auto decline appears as its
+transcript reason ([permission modes](../permission-modes/README.md)). Preserve
+secret-input handling, free text, changed requests, continued sessions and
+host-side settlement.
 
 **Failure focus:** legacy sandbox/autoApprove broadens policy, wrong account or
 host after navigation, unsupported model/reasoning offered as executable, or
 old approval authorizes a new operation.
-**Gate:** P06 actual allowed/denied provider-facing flows, new/missing plugin,
-account/mode changes and stale/revoked/replayed decisions with native evidence.
+**Gate:** P06 actual allowed/denied provider-facing flows (from a legacy Ask chat
+or a LUNA ceiling grant) plus an Auto/Full task that shows no approval card,
+new/missing plugin, account/mode changes and stale/revoked/replayed decisions
+with native evidence.
 The phone does not install desktop provider binaries or receive their secrets.
 
 ## IOS-05 — Add native Board, Side chats and helper supervision
@@ -144,8 +150,9 @@ binary is not downloaded and executed on the phone.
 **Failure focus:** media appears without authorized bytes, hidden WebView keeps
 playing, native view overlays dialogs, stale app session writes, secret fallback
 text, or renderer removal destroys a conversation.
-**Gate:** P08 real phone interaction/playback/scroll/restart and declined/allowed
-fixture app actions with hashes, pixels and denied asset readback. Core renderer
+**Gate:** P08 real phone interaction/playback/scroll/restart and mode-settled
+fixture app actions (Full once; Auto declined with its reason) with hashes,
+pixels and denied asset readback. Core renderer
 acceptance alone does not prove iOS presentation.
 
 ## IOS-07 — Add native conversation and workspace search/navigation

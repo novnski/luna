@@ -12,7 +12,9 @@
 //!   allow/deny responses are honored). The alternative channel — an MCP
 //!   permission tool — needs a server process and was rejected. Native
 //!   acceptEdits/auto/bypassPermissions modes are selected from the resolved
-//!   policy; escalations in Ask/Auto round-trip through the typed input bridge.
+//!   policy. Only legacy Ask escalations round-trip through the typed input
+//!   bridge; Auto denies what Claude's classifier escalated, with its reason
+//!   (`docs/pending-tasks/permission-modes`), and Full allows it once.
 //! - DONE is the CLI's own `result` frame, eagerly: background work (a
 //!   spawned subagent) never holds the turn. The CLI natively runs a second
 //!   wake turn when a background task finishes — a fresh `init` (same
@@ -1127,7 +1129,8 @@ async fn run_session(session: Session) {
         Arc::new(request_input),
         stdin_tx.clone(),
     )
-    .with_mcp_guard(mcp_guard);
+    .with_mcp_guard(mcp_guard)
+    .with_events(event_tx.clone());
     // Stop, or LUNA failing closed on a weaker native permission mode.
     let stop = interrupt.child_token();
 

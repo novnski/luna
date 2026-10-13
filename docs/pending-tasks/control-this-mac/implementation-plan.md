@@ -105,7 +105,7 @@ The current method policy denies task mutations remotely. Do not enable `Execute
 
 Remote admission must produce the same durable engine command receipt as local actions and the exact admission record used by the task drain. The session's principal, scope, source device, command ID, target, and payload must be bound before execution. A phone cannot obtain authority by editing `issuedBy` or pushing a command row into a doc.
 
-Preserve existing sandbox and provider permission prompts. A phone's grant to operate a task does not approve every command that task requests. Approval responses must match the outstanding request ID, request revision/content, task identity, and valid session; a stale approval cannot authorize a new command. Define persistent approval choices through the same owned policy used locally.
+Preserve existing sandbox and provider permission behavior: Full and Auto never prompt ([permission modes](../permission-modes/README.md)); only legacy Ask chats and LUNA ceiling grants ask. A phone's grant to operate a task does not approve every command that task requests. Approval responses must match the outstanding request ID, request revision/content, task identity, and valid session; a stale approval cannot authorize a new command. Define persistent approval choices through the same owned policy used locally.
 
 For files and uploads, authorize the task's actual workspace plus explicitly granted artifacts. Check traversal, symlink resolution, canonical target, size, and staged upload ownership. Do not copy T3's broader environment-file semantics without choosing that policy for LUNA. No file endpoint returns host credential-store contents by default.
 

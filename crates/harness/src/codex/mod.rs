@@ -17,10 +17,12 @@
 //!   `thread/tokenUsage/updated` → Usage, turn/completed|failed|aborted → Done.
 //! - Approvals + sandbox follow the engine-resolved Ask / Auto / Full policy:
 //!   workspace-write + user review, workspace-write + `auto_review`, or
-//!   danger-full-access + `never`. Stray
-//!   `item/commandExecution/requestApproval` +
-//!   `item/fileChange/requestApproval` still round-trip through
-//!   [`RunControls::request_input`] as a typed, machine-scoped approval.
+//!   danger-full-access + `never`. Only legacy Ask round-trips a stray
+//!   approval request (command, file, permissions, MCP tool, computer use,
+//!   message-only MCP form) through [`RunControls::request_input`] as a
+//!   typed, machine-scoped approval. Full answers it once; Auto declines
+//!   whatever Codex's reviewer handed back to a person and shows why, and
+//!   surfaces the reviewer's own denials (`docs/pending-tasks/permission-modes`).
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
 //!   A registered child's notifications route through an EXPLICIT table
@@ -2331,6 +2333,17 @@ async fn run_session(session: Session) {
                         }
                     }
 
+                    // Auto: Codex's own reviewer decided an approval. A denial
+                    // or timeout is already fail-closed in Codex (the model
+                    // gets the rationale); this makes its reason visible.
+                    "item/autoApprovalReview/completed" => {
+                        if let Some(event) = approvals::auto_review_outcome(&params, &thread_id)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
+                    }
+
                     // thread/status, mcpServer startup, account noise, … —
                     // unknown notification methods are tolerated by design.
                     _ => {}
@@ -2365,6 +2378,7 @@ async fn run_session(session: Session) {
                             pending_approvals: &mut pending_approvals,
                             subagent,
                             luna_calls_closed: &luna_calls_closed,
+                            events: &event_tx,
                         },
                     );
                 }
@@ -2858,10 +2872,15 @@ struct ServerRequestContext<'a> {
     subagent: Option<approvals::SubagentRequest>,
     /// Cancelled when this session ends: abandons in-flight LUNA tool calls.
     luna_calls_closed: &'a CancellationToken,
+    /// The run's event stream. Auto's fail-closed answers report their reason
+    /// here ([`approvals::decline_without_review`]).
+    events: &'a mpsc::Sender<Result<AgentEvent, HarnessError>>,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
-/// input bridge; dynamic LUNA tools go to the engine's scoped registry.
+/// input bridge in Ask only: Full answers them once and Auto declines what
+/// Codex's own reviewer handed back (`docs/pending-tasks/permission-modes`).
+/// Dynamic LUNA tools go to the engine's scoped registry.
 fn handle_server_request(
     client: &RpcClient,
     id: Value,
@@ -2900,6 +2919,7 @@ fn handle_server_request(
         pending_approvals: _,
         subagent: _,
         luna_calls_closed,
+        events,
     } = context;
     if method == "mcpServer/elicitation/request" {
         let matching_context = !interrupt.is_cancelled()
@@ -2926,6 +2946,17 @@ fn handle_server_request(
             let mut content = serde_json::Map::new();
             content.insert(field, once.into());
             client.respond(&id, json!({ "action": "accept", "content": content }));
+            return;
+        }
+        if permission_policy.effective_mode == luna_proto::PermissionMode::Auto {
+            approvals::decline_without_review(
+                client,
+                &id,
+                json!({ "action": "decline" }),
+                events,
+                &format!("computer use of {app}"),
+                None,
+            );
             return;
         }
         let task_id = runtime_contract
@@ -3108,6 +3139,38 @@ fn handle_elicitation(
         );
         *context.pending_approvals = pending;
         return;
+    }
+    // A form that asks only for a decision is a server's own approval prompt
+    // (Executor's `require_approval` policy sends `Approve <tool>?` with an
+    // empty schema). Full accepts it, as Codex itself does under full access
+    // (`codex-mcp` `can_auto_accept_elicitation`); Auto has no person to ask
+    // and declines it with the reason shown. Forms asking for values stay the
+    // user's to fill in every mode.
+    if elicitation::message_only_form(params) {
+        match context.permission_policy.effective_mode {
+            luna_proto::PermissionMode::Full => {
+                context.call_ids.mcp_seen.insert(wire_id);
+                client.respond(&id, json!({ "action": "accept", "content": {} }));
+                return;
+            }
+            luna_proto::PermissionMode::Auto => {
+                context.call_ids.mcp_seen.insert(wire_id);
+                let server = params
+                    .get("serverName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("an MCP server");
+                approvals::decline_without_review(
+                    client,
+                    &id,
+                    declined,
+                    context.events,
+                    &format!("an approval request from {server}"),
+                    context.subagent.as_ref().map(|child| child.label.as_str()),
+                );
+                return;
+            }
+            luna_proto::PermissionMode::Ask => {}
+        }
     }
     let Ok(questions) = elicitation::questions(params, &id, &turn) else {
         client.respond(&id, declined);

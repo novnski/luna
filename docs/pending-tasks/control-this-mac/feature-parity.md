@@ -29,7 +29,7 @@ M0–M4 define the first release. Later rows remain part of the desired product 
 | RC07 | Send follow-up messages | Idempotent admission, optimistic echo settled by exact host receipt. | M3 |
 | RC08 | Queue, edit, remove and reorder | Host leases/revisions and acknowledgement; preserve attachment ownership and blocked-head policy. | M3 |
 | RC09 | Steer or interrupt/stop | Provider capability and active-turn checks; explicit stale-turn behavior. | M3 |
-| RC10 | Answer questions and approvals | Exact outstanding request/revision and host permission policy; reject replay. | M3 |
+| RC10 | Answer questions and approvals | Exact outstanding request/revision and host permission policy; reject replay. Approvals exist only for legacy Ask chats and LUNA ceiling grants; Auto/Full tasks never raise one. | M3 |
 | RC11 | Model, effort and permission choices | Host-advertised provider catalogs and allowed task config; preserve account-specific model identity. | M3–M4 |
 | RC12 | Photos and file attachments | Native picker, bounded task-bound upload, hashes, retry and cancellation. | M3–M4 |
 | RC13 | Files, images and artifacts | Workspace/explicit-artifact grants, path checks, lazy download and native preview. | M4 |
