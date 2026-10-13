@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791923266.3613591,
+  "created_at": 1791926818.857085,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
-      "deferred": 23,
+      "deferred": 21,
       "done": 32,
-      "in_progress": 6,
+      "in_progress": 10,
       "paused": 0,
-      "ready": 45,
+      "ready": 43,
       "review": 0
     },
     "groups": [
@@ -60,9 +60,9 @@
         "tasks": 24,
         "done": 8,
         "remaining": 16,
-        "accepted_units": 32,
+        "accepted_units": 36,
         "total_units": 96,
-        "acceptance_percent": 33.3,
+        "acceptance_percent": 37.5,
         "milestone_status": {
           "Authoring and lifecycle": {
             "done": false,
@@ -164,9 +164,9 @@
         "tasks": 4,
         "done": 2,
         "remaining": 2,
-        "accepted_units": 8,
+        "accepted_units": 10,
         "total_units": 15,
-        "acceptance_percent": 53.3,
+        "acceptance_percent": 66.7,
         "milestone_status": {}
       },
       {
@@ -175,20 +175,20 @@
         "tasks": 4,
         "done": 2,
         "remaining": 2,
-        "accepted_units": 8,
+        "accepted_units": 12,
         "total_units": 16,
-        "acceptance_percent": 50.0,
+        "acceptance_percent": 75.0,
         "milestone_status": {}
       },
       {
         "id": "orchestration",
         "title": "Board, helper supervision and future workflows",
-        "tasks": 2,
+        "tasks": 4,
         "done": 2,
-        "remaining": 0,
+        "remaining": 2,
         "accepted_units": 8,
-        "total_units": 8,
-        "acceptance_percent": 100.0,
+        "total_units": 16,
+        "acceptance_percent": 50.0,
         "milestone_status": {}
       },
       {
@@ -372,18 +372,15 @@
     ],
     "expired_claims": [],
     "active_scope": {
-      "tasks": 79,
+      "tasks": 81,
       "done": 27,
-      "remaining": 52,
-      "accepted_units": 108,
-      "total_units": 309,
-      "acceptance_percent": 35.0
+      "remaining": 54,
+      "accepted_units": 118,
+      "total_units": 317,
+      "acceptance_percent": 37.2
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
-    "next": [
-      "SW-11",
-      "ZI-04"
-    ]
+    "next": []
   },
   "tasks": [
     {
@@ -405,16 +402,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "ready",
       "updated_at": 1791673834.958542
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-11",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958591
     },
     {
       "attempts": 0,
@@ -490,31 +477,11 @@
       "attempts": 0,
       "blocker": null,
       "checks": {},
-      "id": "ZI-04",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.9588149
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
       "id": "AW-12",
       "last_worker": null,
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "deferred",
       "updated_at": 1791673834.959233
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "PB-4A",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959265
     },
     {
       "attempts": 0,
@@ -915,16 +882,6 @@
       "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
       "status": "deferred",
       "updated_at": 1791673834.959168
-    },
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "AW-10",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "deferred",
-      "updated_at": 1791673834.959202
     },
     {
       "attempts": 0,
@@ -3535,78 +3492,6 @@
     {
       "attempts": 1,
       "blocker": null,
-      "checks": {},
-      "id": "CORE-08",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791920321.818603,
-        "expires_at": 1791934721.818603,
-        "heartbeat_at": 1791920321.818603,
-        "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
-        "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934",
-        "expired": false
-      },
-      "note": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "paused",
-      "updated_at": 1791920321.8186219
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "CORE-19",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791920321.951952,
-        "expires_at": 1791934721.951952,
-        "heartbeat_at": 1791920321.951952,
-        "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
-        "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611",
-        "expired": false
-      },
-      "note": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
-      "status": "paused",
-      "updated_at": 1791920321.9519732
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "AW-09",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791922412.898318,
-        "expires_at": 1791936812.898318,
-        "heartbeat_at": 1791922412.898318,
-        "owner": "claude-team/AW-09 (orchestrator d19437b2)",
-        "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f",
-        "expired": false
-      },
-      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
-      "status": "paused",
-      "updated_at": 1791922412.8983371
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "AW-11",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791922413.135981,
-        "expires_at": 1791936813.135981,
-        "heartbeat_at": 1791922413.135981,
-        "owner": "claude-team/AW-11 (orchestrator d19437b2)",
-        "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a",
-        "expired": false
-      },
-      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
-      "status": "paused",
-      "updated_at": 1791922413.136001
-    },
-    {
-      "attempts": 1,
-      "blocker": null,
       "checks": {
         "contract": {
           "at": 1791923009.853238,
@@ -3729,24 +3614,6 @@
       "updated_at": 1791923009.992904
     },
     {
-      "attempts": 1,
-      "blocker": null,
-      "checks": {},
-      "id": "RM-03",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791923018.936496,
-        "expires_at": 1791937418.936496,
-        "heartbeat_at": 1791923018.936496,
-        "owner": "claude-team/RM-03 (orchestrator d19437b2)",
-        "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74",
-        "expired": false
-      },
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "paused",
-      "updated_at": 1791923018.9365141
-    },
-    {
       "attempts": 2,
       "blocker": null,
       "checks": {
@@ -3854,6 +3721,323 @@
       "note": "Find in Conversation: off-thread complete-history search with stable navigation, fold reveal/restore, Partial history, composer-safe Cmd+F routing and frame-budget performance (the message rail no longer rebuilds per frame).",
       "status": "done",
       "updated_at": 1791923266.262475
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "RM-03",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791923018.936496,
+        "expires_at": 1791930404.5381382,
+        "heartbeat_at": 1791926804.5381382,
+        "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+        "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74",
+        "expired": false
+      },
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "paused",
+      "updated_at": 1791926804.538145
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "ZI-04",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791924087.5774348,
+        "expires_at": 1791930404.6446521,
+        "heartbeat_at": 1791926804.6446521,
+        "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+        "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764",
+        "expired": false
+      },
+      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+      "status": "paused",
+      "updated_at": 1791926804.6446562
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "AW-10",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791924823.193419,
+        "expires_at": 1791930404.761236,
+        "heartbeat_at": 1791926804.761236,
+        "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+        "session": "agent-run:21fd2603-f714-4db0-8730-ae747fe5ef35",
+        "expired": false
+      },
+      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; dependency CORE-03 done, no conflicting reservation.",
+      "status": "paused",
+      "updated_at": 1791926804.7612412
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {},
+      "id": "PB-4A",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791925113.744284,
+        "expires_at": 1791930404.870958,
+        "heartbeat_at": 1791926804.870958,
+        "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+        "session": "agent-run:ee103c33-6778-47fb-9d79-6377db49a352",
+        "expired": false
+      },
+      "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; no dependencies or conflicting reservations.",
+      "status": "paused",
+      "updated_at": 1791926804.8709629
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791926804.979717,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+              "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+        },
+        "delivery": {
+          "at": 1791926805.099116,
+          "evidence": [
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+        }
+      },
+      "id": "CORE-08",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791920321.818603,
+        "expires_at": 1791930403.9970508,
+        "heartbeat_at": 1791926803.9970508,
+        "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+        "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934",
+        "expired": false
+      },
+      "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending.",
+      "status": "paused",
+      "updated_at": 1791926805.112194
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791926805.220405,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+              "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+        },
+        "delivery": {
+          "at": 1791926805.339604,
+          "evidence": [
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+        }
+      },
+      "id": "CORE-19",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791920321.951952,
+        "expires_at": 1791930404.1034749,
+        "heartbeat_at": 1791926804.1034749,
+        "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+        "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611",
+        "expired": false
+      },
+      "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65.",
+      "status": "paused",
+      "updated_at": 1791926805.3525429
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "rebase": {
+          "at": 1791926805.460993,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+              "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+        },
+        "scope": {
+          "at": 1791926805.5877929,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+              "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+        }
+      },
+      "id": "AW-09",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791922412.898318,
+        "expires_at": 1791930404.2132852,
+        "heartbeat_at": 1791926804.2132852,
+        "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+        "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f",
+        "expired": false
+      },
+      "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3.",
+      "status": "paused",
+      "updated_at": 1791926805.602048
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "rebase": {
+          "at": 1791926805.7106109,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+              "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+        },
+        "scope": {
+          "at": 1791926805.836083,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+              "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+        }
+      },
+      "id": "AW-11",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791922413.135981,
+        "expires_at": 1791930404.322728,
+        "heartbeat_at": 1791926804.322728,
+        "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+        "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a",
+        "expired": false
+      },
+      "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24.",
+      "status": "paused",
+      "updated_at": 1791926805.850857
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "migration": {
+          "at": 1791926805.958988,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+        },
+        "scope": {
+          "at": 1791926806.08353,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+              "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+            },
+            {
+              "ref": "target/qa/batch3-20261014/manifest.sha256",
+              "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+            },
+            {
+              "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+            }
+          ],
+          "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+        }
+      },
+      "id": "SW-11",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791923603.3959,
+        "expires_at": 1791930404.4301991,
+        "heartbeat_at": 1791926804.4301991,
+        "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+        "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db",
+        "expired": false
+      },
+      "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6.",
+      "status": "paused",
+      "updated_at": 1791926806.09791
     }
   ],
   "events": [
@@ -19667,6 +19851,798 @@
           "heartbeat_at": 1791923265.8557382,
           "owner": "claude-team/IC-5 (orchestrator d19437b2)",
           "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0"
+        }
+      }
+    },
+    {
+      "seq": 423,
+      "task": "SW-11",
+      "at": 1791923603.396034,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expired": false,
+          "expires_at": 1791938003.3959,
+          "heartbeat_at": 1791923603.3959,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
+        }
+      }
+    },
+    {
+      "seq": 424,
+      "task": "ZI-04",
+      "at": 1791924087.577554,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924087.5774348,
+          "expired": false,
+          "expires_at": 1791938487.5774348,
+          "heartbeat_at": 1791924087.5774348,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764"
+        }
+      }
+    },
+    {
+      "seq": 425,
+      "task": "AW-10",
+      "at": 1791924823.07203,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; dependency CORE-03 done, no conflicting reservation.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 426,
+      "task": "AW-10",
+      "at": 1791924823.193553,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; dependency CORE-03 done, no conflicting reservation.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924823.193419,
+          "expired": false,
+          "expires_at": 1791939223.193419,
+          "heartbeat_at": 1791924823.193419,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "agent-run:21fd2603-f714-4db0-8730-ae747fe5ef35"
+        }
+      }
+    },
+    {
+      "seq": 427,
+      "task": "PB-4A",
+      "at": 1791925113.578135,
+      "action": "activate",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; no dependencies or conflicting reservations.",
+        "status": "ready",
+        "worker": null
+      }
+    },
+    {
+      "seq": 428,
+      "task": "PB-4A",
+      "at": 1791925113.7444491,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; no dependencies or conflicting reservations.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791925113.744284,
+          "expired": false,
+          "expires_at": 1791939513.744284,
+          "heartbeat_at": 1791925113.744284,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "agent-run:ee103c33-6778-47fb-9d79-6377db49a352"
+        }
+      }
+    },
+    {
+      "seq": 429,
+      "task": "CORE-08",
+      "at": 1791926803.997174,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-08 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.818603,
+          "expired": false,
+          "expires_at": 1791930403.9970508,
+          "heartbeat_at": 1791926803.9970508,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934"
+        }
+      }
+    },
+    {
+      "seq": 430,
+      "task": "CORE-19",
+      "at": 1791926804.103584,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read the CORE-19 section in implementation.md and the owned failure/acceptance contracts. Rebase the pinned source evidence and current queue; inspect existing tests and partial work before editing. Preserve current data and native behavior, and record exact evidence and the next command before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.951952,
+          "expired": false,
+          "expires_at": 1791930404.1034749,
+          "heartbeat_at": 1791926804.1034749,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611"
+        }
+      }
+    },
+    {
+      "seq": 431,
+      "task": "AW-09",
+      "at": 1791926804.213394,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922412.898318,
+          "expired": false,
+          "expires_at": 1791930404.2132852,
+          "heartbeat_at": 1791926804.2132852,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f"
+        }
+      }
+    },
+    {
+      "seq": 432,
+      "task": "AW-11",
+      "at": 1791926804.3228202,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13: 'i approve anything just do it') to run five tickets concurrently; no conflicting reservations or open dependencies.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922413.135981,
+          "expired": false,
+          "expires_at": 1791930404.322728,
+          "heartbeat_at": 1791926804.322728,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a"
+        }
+      }
+    },
+    {
+      "seq": 433,
+      "task": "SW-11",
+      "at": 1791926804.4302888,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expired": false,
+          "expires_at": 1791930404.4301991,
+          "heartbeat_at": 1791926804.4301991,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
+        }
+      }
+    },
+    {
+      "seq": 434,
+      "task": "RM-03",
+      "at": 1791926804.5382369,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923018.936496,
+          "expired": false,
+          "expires_at": 1791930404.5381382,
+          "heartbeat_at": 1791926804.5381382,
+          "owner": "claude-team/RM-03 (orchestrator d19437b2)",
+          "session": "agent-run:d7fb97ee-8702-4ba1-b94f-4d94d8677c74"
+        }
+      }
+    },
+    {
+      "seq": 435,
+      "task": "ZI-04",
+      "at": 1791926804.6447392,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924087.5774348,
+          "expired": false,
+          "expires_at": 1791930404.6446521,
+          "heartbeat_at": 1791926804.6446521,
+          "owner": "claude-team/ZI-04 (orchestrator d19437b2)",
+          "session": "agent-run:f80fb88a-b010-451e-86e2-fc1477cb5764"
+        }
+      }
+    },
+    {
+      "seq": 436,
+      "task": "AW-10",
+      "at": 1791926804.7613492,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; dependency CORE-03 done, no conflicting reservation.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791924823.193419,
+          "expired": false,
+          "expires_at": 1791930404.761236,
+          "heartbeat_at": 1791926804.761236,
+          "owner": "claude-team/AW-10 (orchestrator d19437b2)",
+          "session": "agent-run:21fd2603-f714-4db0-8730-ae747fe5ef35"
+        }
+      }
+    },
+    {
+      "seq": 437,
+      "task": "PB-4A",
+      "at": 1791926804.871059,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Activated by the orchestrator on the user's explicit approval (2026-10-13) to keep five tickets running; no dependencies or conflicting reservations.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791925113.744284,
+          "expired": false,
+          "expires_at": 1791930404.870958,
+          "heartbeat_at": 1791926804.870958,
+          "owner": "claude-team/PB-4A (orchestrator d19437b2)",
+          "session": "agent-run:ee103c33-6778-47fb-9d79-6377db49a352"
+        }
+      }
+    },
+    {
+      "seq": 438,
+      "task": "CORE-08",
+      "at": 1791926804.993797,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.818603,
+          "expired": false,
+          "expires_at": 1791930403.9970508,
+          "heartbeat_at": 1791926803.9970508,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934"
+        }
+      }
+    },
+    {
+      "seq": 439,
+      "task": "CORE-08",
+      "at": 1791926805.1125162,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926804.979717,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-08/README.md",
+                "sha256": "9b70f490cb910c8521248523e86a8d713936cfe895d911ed57229e5dba426298"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Provider profile 1.0 (mandatory/optional ops, exact run/input/approval/Stop/continuity and refusal semantics) in the CORE-08 README; conformance E2E 4/4."
+          },
+          "delivery": {
+            "at": 1791926805.099116,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "SDK-only Gemini CLI package (examples/extensions/gemini-cli) packs, compiles and passes smoke; enable/disable registers in the ordinary registry/picker; delivered in 62da9b65. Native E10 run pending.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.818603,
+          "expired": false,
+          "expires_at": 1791930403.9970508,
+          "heartbeat_at": 1791926803.9970508,
+          "owner": "claude-team/CORE-08 (orchestrator d19437b2)",
+          "session": "agent-run:4482592a-9613-41c0-9ab5-e79a46839934"
+        }
+      }
+    },
+    {
+      "seq": 440,
+      "task": "CORE-19",
+      "at": 1791926805.2337139,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.951952,
+          "expired": false,
+          "expires_at": 1791930404.1034749,
+          "heartbeat_at": 1791926804.1034749,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611"
+        }
+      }
+    },
+    {
+      "seq": 441,
+      "task": "CORE-19",
+      "at": 1791926805.3528051,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791926805.220405,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/extensible-core/core-19/README.md",
+                "sha256": "b1003ef7c0a52b3f7adf4ee84e4fb022e17d980579f138801da863975d0d9f9f"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Pins, drain/stop, unknown-delivery ledger, dependency/API compatibility, exact grants and data migrations specified (22 failure cases) in the CORE-19 README."
+          },
+          "delivery": {
+            "at": 1791926805.339604,
+            "evidence": [
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Atomic staged update/rollback, activation, quarantine release on removal, separate erase and safe mode; extension_lifecycle 5/5, packages/runtime 8/8, portable 1/1, UI lifecycle 1/1; delivered in 62da9b65.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791920321.951952,
+          "expired": false,
+          "expires_at": 1791930404.1034749,
+          "heartbeat_at": 1791926804.1034749,
+          "owner": "claude-team/CORE-19 (orchestrator d19437b2)",
+          "session": "agent-run:0e30466b-af37-42eb-9cc7-78382f84c611"
+        }
+      }
+    },
+    {
+      "seq": 442,
+      "task": "AW-09",
+      "at": 1791926805.47541,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          }
+        },
+        "criterion": "rebase",
+        "evidence": null,
+        "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922412.898318,
+          "expired": false,
+          "expires_at": 1791930404.2132852,
+          "heartbeat_at": 1791926804.2132852,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f"
+        }
+      }
+    },
+    {
+      "seq": 443,
+      "task": "AW-09",
+      "at": 1791926805.60239,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.460993,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged against main: reused EngineInfo/updates/harness/connection/extension/cleanup owners; gaps were process readback and storage accounting."
+          },
+          "scope": {
+            "at": 1791926805.5877929,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-09/README.md",
+                "sha256": "4f3bc36a376ea0f8b65d9db855cc5958a748d65b0aaf2dfccf94b6cb5c07ba8d"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3."
+          }
+        },
+        "criterion": "scope",
+        "evidence": null,
+        "note": "Bounded read-only contract; cleanup is an explicit follow-up; diagnostics_storage 2/2 (independent walk, no writes, remote denied), UI 3/3.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922412.898318,
+          "expired": false,
+          "expires_at": 1791930404.2132852,
+          "heartbeat_at": 1791926804.2132852,
+          "owner": "claude-team/AW-09 (orchestrator d19437b2)",
+          "session": "agent-run:7b564535-9a06-4136-be38-a5901172522f"
+        }
+      }
+    },
+    {
+      "seq": 444,
+      "task": "AW-11",
+      "at": 1791926805.72559,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          }
+        },
+        "criterion": "rebase",
+        "evidence": null,
+        "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922413.135981,
+          "expired": false,
+          "expires_at": 1791930404.322728,
+          "heartbeat_at": 1791926804.322728,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a"
+        }
+      }
+    },
+    {
+      "seq": 445,
+      "task": "AW-11",
+      "at": 1791926805.851147,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "rebase": {
+            "at": 1791926805.7106109,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Rows triaged: existing ProjectCommands/receipts/Settings card reused; gap was repository discovery and trust."
+          },
+          "scope": {
+            "at": 1791926805.836083,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/agent-workspace-app-research/aw-11/README.md",
+                "sha256": "217b9df1e2511f6dbc50ec3149424851a68a0e09c0e7fb93602b37e055e16d91"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24."
+          }
+        },
+        "criterion": "scope",
+        "evidence": null,
+        "note": "Schema/precedence/ownership/trust contract; changed commands never autoexecute; project_config 2/2, sync 4/4, regressions 41/41, UI 24/24.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791922413.135981,
+          "expired": false,
+          "expires_at": 1791930404.322728,
+          "heartbeat_at": 1791926804.322728,
+          "owner": "claude-team/AW-11 (orchestrator d19437b2)",
+          "session": "agent-run:3f69eea9-080a-45bf-b0eb-e9b91788dc3a"
+        }
+      }
+    },
+    {
+      "seq": 446,
+      "task": "SW-11",
+      "at": 1791926805.97261,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          }
+        },
+        "criterion": "migration",
+        "evidence": null,
+        "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expired": false,
+          "expires_at": 1791930404.4301991,
+          "heartbeat_at": 1791926804.4301991,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
+        }
+      }
+    },
+    {
+      "seq": 447,
+      "task": "SW-11",
+      "at": 1791926806.098163,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "migration": {
+            "at": 1791926805.958988,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Imports keep revision/provider/source/time/archive attribution; provider imports get an explicit History unavailable boundary row; engine suites 56/56 + 5/5."
+          },
+          "scope": {
+            "at": 1791926806.08353,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-11/README.md",
+                "sha256": "5f5b7d097c0efc818d67b166cf020cff6c4a920cb67e40077fb771fd8619bcd0"
+              },
+              {
+                "ref": "target/qa/batch3-20261014/manifest.sha256",
+                "sha256": "ca0a160f05aba9548e7e888f3e56c77a056459b75e09c93e5afc3df50a29448b"
+              },
+              {
+                "ref": "commit:62da9b659d80e2dcd802cf192e1b0fa2620982e2"
+              }
+            ],
+            "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6."
+          }
+        },
+        "criterion": "scope",
+        "evidence": null,
+        "note": "Fresh handoff carries no old branch context and names its access level; no new grants or persistence; UI 9/9, Find 6/6.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791923603.3959,
+          "expired": false,
+          "expires_at": 1791930404.4301991,
+          "heartbeat_at": 1791926804.4301991,
+          "owner": "claude-team/SW-11 (orchestrator d19437b2)",
+          "session": "agent-run:dc17ab69-00c2-4f47-a967-925f8c8b31db"
         }
       }
     }
