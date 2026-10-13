@@ -78,3 +78,29 @@ restores the original enabled state after the stale-grant proof.
 
 Haiku Auto is rejected by LUNA's model eligibility contract without a hidden
 Ask fallback. The eligible Auto case uses the advertised Opus 5.5 model.
+
+## Repeat and inspect the retained native QA
+
+The final QA build includes latest `origin/main` (`bfb3dfab`) and SW-02.
+Use the worktree's retained evidence directory as `qa` below. The service
+source and independent oracle are retained in the main checkout's matching
+evidence directory. Recreate only that disposable user fixture connection
+through Executor before repeating calls; the completed run removes it.
+
+```sh
+qa=target/qa/luna-only-workflows/sw02-20261013
+CARGO_INCREMENTAL=0 LUNA_DEV_APP_NAME='LUNA QA Scoped MCP' \
+LUNA_DEV_BUNDLE_ID=com.novnski.luna.qa.scoped-mcp \
+LUNA_DEV_IPC_PORT=59846 \
+LUNA_DEV_DATA_DIR="$PWD/target/luna-qa-data/sw02-scoped" \
+LUNA_DEV_QA_MCP_SERVERS=executor scripts/run-macos-dev.sh --refresh
+agent-python "$qa/native_cases.py" queue --index 2 --case read
+agent-python "$qa/native_cases.py" snapshot --index 2 --case read
+agent-python "$qa/native_cases.py" answer --index 2 --case read --choice 'Allow once'
+agent-python "$qa/native_cases.py" snapshot --index 2 --case read
+```
+
+Inspect the actual pending request before answering it. The final snapshot
+must contain the service nonce and a current verified connection; the service
+log independently proves which request reached it. `verification.json`
+records commands, exit codes, scoped cases, limits and artifact hashes.

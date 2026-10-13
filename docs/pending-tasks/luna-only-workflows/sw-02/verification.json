@@ -92,21 +92,42 @@
     {
       "command": "bash -n scripts/run-macos-dev.sh",
       "exitCode": 0
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test claude_permissions --test claude_mcp_inventory --test claude_luna_tools",
+      "exitCode": 0,
+      "passed": 4,
+      "log": "engine-latest-tests.log",
+      "sourceCommit": "dcebc1d2"
+    },
+    {
+      "command": "CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-engine -p luna-harness --all-targets",
+      "exitCode": 0,
+      "log": "clippy-latest.log",
+      "sourceCommit": "dcebc1d2"
+    },
+    {
+      "command": "scripts/cargo.sh fmt --all --check",
+      "exitCode": 0,
+      "log": "format-latest.log",
+      "sourceCommit": "dcebc1d2"
     }
   ],
   "qaApp": {
     "name": "LUNA QA Scoped MCP",
-    "pid": 39669,
+    "pid": 47166,
     "ipcPort": 59846,
     "buildSeconds": [
       96,
-      109
+      109,
+      98
     ],
     "signatureVerified": true,
     "ambientIsolation": true,
     "explicitSavedServers": [
       "executor"
-    ]
+    ],
+    "stoppedAndBundleRemoved": true
   },
   "limits": [
     "Scoped restricted delivery supports saved HTTP/SSE connections; stdio servers are not added by this lane.",
@@ -118,6 +139,8 @@
     "baselineAndOracle": "/Users/iulian/workspace/code/personal/luna/target/qa/luna-only-workflows/sw02-20261013"
   },
   "artifactHashes": {
+    "LUNA-QA-MCP-bundle-hashes.json": "e084d0620535ee3273e908a4dbf4e73334e2af655e205eda467d3915e4792abe",
+    "LUNA-QA-Scoped-MCP-bundle-hashes.json": "53f15e9bbe4a16a2b53d496416753aed69e11c6bc35aafb0b8c32a09c39b391d",
     "ask-progress.log": "2546f913bfa1cea08eef2fa140d8ab4dec5b7b6aa3667faa1613634a380cb221",
     "ask-read-approved.json": "4b21e1fcd35a25c76132f46b28a6a524cb1c3e683d036e3c1df5cf4e7af4d2f9",
     "ask-read-proof.json": "20a6ebddd684df11137e9f533b5bf2e8820206cb4af2578bc05c4bced5db320e",
@@ -140,9 +163,9 @@
     "case-2-mislabeled-approval.json": "ee97ac570c4bbe0ce045aa1e453389102d05ac1e730d4503b76a12a9898433e3",
     "case-2-mislabeled-request.json": "5c0bda8a517fcf515e6393062056488bed252c080db75520dde3df7039486af9",
     "case-2-mislabeled-result.json": "0433eba5cafbe87a3a7abfbb561b65a1d2fd3becf447a2f747d5b2b67f695645",
-    "case-2-read-approval.json": "f6120e5a83b78bb22d091eb9e994afcd658480fb662f98c685c9d713f3e1a8ab",
-    "case-2-read-request.json": "9cd909dbc6d23de0db9a07ecdf16e59be6b6e1ecfe258d49bd94c6dd2af48ba4",
-    "case-2-read-result.json": "5c4293ecb62774a5ad559ad14e6d5f038204492ffbfc1755623f2d8ea051712c",
+    "case-2-read-approval.json": "4cc44b55491b6aa5edbf0a1a5e25d6bec977cc1b0b7ff3672cd4f11769387b1f",
+    "case-2-read-request.json": "195d1e401b56bfe4f9c5cba0f1d2871fa8bb22fe68bf050881f5bcbf7e81345a",
+    "case-2-read-result.json": "6e920a3613a8b471f514e687c37ffb2d037811367d39499b72f384439ae534d0",
     "case-2-stale-approval.json": "a4e6b2a7227a44553ad64f128595c845c65fafceedf6e0c6796756106086feb0",
     "case-2-stale-request.json": "a7c5e2e387cce1309ebe6d824423d823d4e4b5cee14c1440ff60aac3e1c0f0cc",
     "case-2-stale-result.json": "0792dfa08907bd727be05ee77e91458fd5f00ec54381f8fe02d59e7ef345916a",
@@ -159,20 +182,29 @@
     "case-4-read-result.json": "01be7610f7668975d4ad0c081bf719b23285760d22173270b87b4a9274edbb21",
     "check.log": "f410863fced0f833da61b463dc17e163c9c8344099ce1d4c638d68412a1ca9a2",
     "claude-models.json": "d8520ca8f699d77e9ee4a531ed21dd6227a3ab065d761ccdf09d67d8721e5020",
+    "cleanup-executor.json": "adb15fd2edfb43b438cf7f1a966edf40c4b5750dae412ee63c646916891115b4",
     "clippy-final.log": "51a8fc065e5144a678ad7707c7c93ea2aef785f9d1e9dfc7cea6eb66b9e45f9b",
+    "clippy-latest.log": "eeecc2847d3fbdffe94ed57f4e4234e56d73dda8d9344765bbc85d72642a377d",
     "clippy.log": "4452998f8436661a4c0012a6b97fbb124d9aa8fbec0be3f553ce06ff0d33be32",
+    "engine-latest-tests.log": "86e10e2f6d8b68761f925a0f4e65e33987f6dbfa91a2b2a7a3e80615998e34b9",
     "engine-tests.log": "3a6ae4f3a73db9a4edacaaf6a5dc600f5818882b28f9d70e210b9d63c4a960af",
     "format-edit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "format-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "format-latest.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "haiku-auto-blocked.json": "f04743480a5160a25509dd0f0df5558317ae15271a2a018c295c8414433fbbd2",
     "harness-tests.log": "087717d1fe3261e0dbb9c37538fd8af3c7b8db7be994b9ef68f6608b0648ff07",
     "isolation-final.log": "bf1317f8be5e5a385b3976c76e61992531e9d1866f784153459d7761c532d6e0",
     "manifest.json": "5424ee5c5a1006219949671d8948c5c13d13d40bffa38d0bbaca9c72694653ff",
     "native-2-snapshot.json": "17ac425208f1ed9ffdcea8b46b8153a8a2a5ff3adff5b904f86acb25900f0f2b",
+    "native-ask-inventory.png": "6ca0ae13cd0dc3d9187295112aaed76c42dd7a88e9f0bcfa8dc5a8113dc0c22a",
+    "native-latest-titlebar.png": "d8e1d4c6e0c881fa0f4ca8b67477aecbb778edd2d5e4d6d4f8993fb968bca1a6",
     "native_cases.py": "d0153d0da8821fbc71fe32f340d2c902567b2766367d38438bf5c3449f12a807",
     "native_inventory.py": "9033e3a0e5f7a2f40f85e79698ee7c0899db27b516ec229ca17156182207c3a8",
+    "project-fixture.tar.gz": "da1221ae2d09827f21e5e8f5b65e3fbc1d06676e2b6bb7d4edae44c4a984c0a2",
     "qa-final-refresh.log": "0abf38b7248ba4ff044fc7789785b3d061680de5be70527264397cd9bb18d103",
     "qa-final-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "qa-latest-refresh.log": "38d69a501255fb3c19c4fa38eade338a942a9dd829f3a643d24cbe79d572b767",
+    "qa-latest-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "qa-project-restored.json": "f83607cb18d7591ce28d8d9147fa013c8e84179e28892161b4468ea070016051",
     "qa-project-toggle-false.json": "d2fa879c9f42063843a5fc73777082bb52117b2da8f398762dc4fea1adb6a8af",
     "qa-project-toggle-true.json": "a9017b7d4bbbd6a190d49b065137491e2ee8102596a388abfbd8880d50ad00c0",
@@ -202,11 +234,31 @@
     "native_inventory.py": "b2ae838fc43e605ab5f2b5140875112d64d25ee9bc57814b1fbd2d2f54835504",
     "native_permissions_probe.py": "2a77034a6778fd1eced9d28728ece72d920b3dd20c80d8be78f8e3c2713de443",
     "qa_rpc.py": "52c873a124f6b57953ec5a3b0ce4525c363472ac8919f795bc3502189c689bac",
-    "service.py": "bee77e92ddcbd53a24b0ae23fa2dfe6ea7c20aa67a8fa822d796752cfbb1499e"
+    "service.py": "bee77e92ddcbd53a24b0ae23fa2dfe6ea7c20aa67a8fa822d796752cfbb1499e",
+    "project-fixture.tar.gz": "3f0cda529769afe8c753921f876c32c520cafee543bf77266cd6a365d5cd9d8b"
   },
   "oracleHashes": {
     "effects.jsonl": "23dd8ae05cf5da92f9db25cea43b5261ec097af68e71a3fa1e16a93741bd0b38",
-    "requests.jsonl": "1cd1fec2b35f23f17017b87dea5cf43db07fc31f7c765bc78728981f8842287f",
+    "requests.jsonl": "c36d071c162aaf93b401c3fba765f435097dfb953683e5bc50078890b37d8a41",
     "service.json": "77e8d5ece0014f1cea17f464f2d717fc88f2f826fc9124cf521c5c6c2d4337fd"
+  },
+  "latestMainBase": "bfb3dfab",
+  "verifiedSourceCommit": "dcebc1d2",
+  "latestMergedBuildRead": {
+    "nonceMatched": true,
+    "approvalRequired": true,
+    "scopeCurrent": true,
+    "lastCallSucceeded": true,
+    "artifact": "case-2-read-result.json"
+  },
+  "cleanup": {
+    "executorFixtureRemoved": true,
+    "temporaryPolicyRemoved": true,
+    "existingConnectionsAndPoliciesPreserved": true,
+    "serviceStopped": true,
+    "qaBundlesHashedThenRemoved": true,
+    "fixturesArchivedThenRemoved": true,
+    "dataAndCachesPreserved": true,
+    "artifact": "cleanup-executor.json"
   }
 }
