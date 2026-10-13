@@ -141,6 +141,13 @@ pub mod methods {
     pub const LIST_MODELS: &str = "ListModels";
     pub const GET_PROVIDER_DEFAULTS: &str = "GetProviderDefaults";
     pub const SET_PROVIDER_DEFAULTS: &str = "SetProviderDefaults";
+    /// CORE-06 local extension packages (owner only). Installing verifies
+    /// and stores a disabled package and never runs its code; enabling names
+    /// the exact package hash and capability grants for this profile.
+    pub const LIST_EXTENSIONS: &str = "ListExtensions";
+    pub const INSPECT_EXTENSION: &str = "InspectExtension";
+    pub const INSTALL_EXTENSION: &str = "InstallExtension";
+    pub const SET_EXTENSION_ENABLED: &str = "SetExtensionEnabled";
     pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
@@ -566,6 +573,10 @@ pub mod methods {
         LIST_MODELS,
         GET_PROVIDER_DEFAULTS,
         SET_PROVIDER_DEFAULTS,
+        LIST_EXTENSIONS,
+        INSPECT_EXTENSION,
+        INSTALL_EXTENSION,
+        SET_EXTENSION_ENABLED,
         LIST_COMMANDS,
         LIST_COMPOSER_CATALOG,
         GET_PROJECT_COMMANDS,

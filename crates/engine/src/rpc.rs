@@ -1236,6 +1236,7 @@ mod board;
 mod claude_goals;
 mod claude_history;
 mod context_transfer;
+mod extensions;
 mod native_extensions;
 mod prompt_stash;
 mod provider_defaults;
@@ -1246,6 +1247,8 @@ pub struct EngineRpc {
     /// The owning engine's command gate, shared by all of its services.
     admission: crate::engine_lifetime::CommandAdmission,
     provider_defaults: Option<crate::provider_defaults::ProviderDefaults>,
+    /// CORE-06 package store and grants; only on the engine's local service.
+    extensions: Option<crate::extensions::ExtensionManager>,
     work_writes: Option<crate::device_write::DeviceWriteHandle>,
     chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
     composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
@@ -1389,6 +1392,13 @@ impl EngineRpc {
         self.provider_defaults = Some(defaults);
         self
     }
+    pub(crate) fn with_extensions(
+        mut self,
+        extensions: crate::extensions::ExtensionManager,
+    ) -> Self {
+        self.extensions = Some(extensions);
+        self
+    }
     fn usage_providers_for(harnesses: &[HarnessId]) -> Vec<luna_proto::UsageProvider> {
         [
             (HarnessId::Codex, luna_proto::UsageProvider::Codex),
@@ -1464,6 +1474,7 @@ impl EngineRpc {
             work_writes: None,
             chat_workbenches: None,
             provider_defaults: None,
+            extensions: None,
             composer_catalog: std::sync::Mutex::new(
                 crate::composer_catalog::CatalogCache::default(),
             ),
@@ -9346,6 +9357,9 @@ impl EngineRpc {
             methods::GET_PROVIDER_DEFAULTS | methods::SET_PROVIDER_DEFAULTS
         ) {
             return self.handle_provider_defaults(method, params).await;
+        }
+        if extensions::handles(method) {
+            return self.handle_extensions(method, params).await;
         }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;

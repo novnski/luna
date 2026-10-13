@@ -47,6 +47,7 @@ use crate::settings::archived::ArchivedPage;
 use crate::settings::backup::BackupsPage;
 use crate::settings::connections::{ConnectionsPage, HostingChanged};
 use crate::settings::devices::DevicesPage;
+use crate::settings::extensions::ExtensionsPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::general::{GeneralEvent, GeneralPage};
 use crate::settings::notifications::{
@@ -525,6 +526,8 @@ pub enum SettingsSection {
     Connections,
     /// Per-device providers, CLI enablement, accounts, and usage.
     Providers,
+    /// Local extension packages and this profile's grants (CORE-06).
+    Extensions,
     Appearance,
     Files,
     Backups,
@@ -539,10 +542,11 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 15] = [
+    pub const ALL: [SettingsSection; 16] = [
         SettingsSection::General,
         SettingsSection::Projects,
         SettingsSection::Providers,
+        SettingsSection::Extensions,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
@@ -567,6 +571,7 @@ impl SettingsSection {
             "settings/devices" => Self::Devices,
             "settings/connections" => Self::Connections,
             "settings/harnesses" | "settings/agents" | "settings/providers" => Self::Providers,
+            "settings/extensions" => Self::Extensions,
             "settings/appearance" => Self::Appearance,
             "settings/files" => Self::Files,
             "settings/backups" => Self::Backups,
@@ -590,6 +595,7 @@ impl SettingsSection {
             SettingsSection::Devices => "Devices",
             SettingsSection::Connections => "Connections",
             SettingsSection::Providers => "Providers",
+            SettingsSection::Extensions => "Extensions",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Backups => "Backups",
@@ -2540,6 +2546,7 @@ pub struct Shell {
     general_page: Option<Entity<GeneralPage>>,
     projects_page: Option<Entity<ProjectsPage>>,
     devices_page: Option<Entity<DevicesPage>>,
+    extensions_page: Option<Entity<ExtensionsPage>>,
     connections_page: Option<Entity<ConnectionsPage>>,
     connections_sub: Option<Subscription>,
     remote_host_ready: bool,
@@ -3116,6 +3123,7 @@ impl Shell {
             general_page: None,
             projects_page: None,
             devices_page: None,
+            extensions_page: None,
             connections_page: Some(connections_page),
             connections_sub: Some(connections_sub),
             remote_host_ready: false,
@@ -5539,6 +5547,11 @@ impl Shell {
         {
             page.update(cx, |page, cx| page.refresh_on_visit(cx));
         }
+        if section == SettingsSection::Extensions
+            && let Some(page) = &self.extensions_page
+        {
+            page.update(cx, |page, cx| page.refresh(cx));
+        }
         if section == SettingsSection::Backups {
             self.backups_page = None;
         }
@@ -5772,6 +5785,16 @@ impl Shell {
                     self.accounts_page = Some(cx.new(|cx| AccountsPage::new(state, cx)));
                 }
                 match &self.accounts_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Extensions => {
+                if self.extensions_page.is_none() {
+                    let state = self.state.clone();
+                    self.extensions_page = Some(cx.new(|cx| ExtensionsPage::new(state, cx)));
+                }
+                match &self.extensions_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -8884,6 +8907,7 @@ impl Shell {
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Connections => icons::GLOBAL,
             SettingsSection::Providers => icons::SERVER_2,
+            SettingsSection::Extensions => icons::WIDGET,
             SettingsSection::Appearance => icons::PAINT_BRUSH,
             SettingsSection::Files => icons::FOLDER,
             SettingsSection::Backups => icons::DATABASE,

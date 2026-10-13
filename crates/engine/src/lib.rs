@@ -136,6 +136,7 @@ mod device_write;
 pub mod diff_sync;
 pub mod doc_host;
 mod engine_lifetime;
+mod extensions;
 pub mod git_actions;
 pub mod git_checkpoints;
 pub mod history_operations;
@@ -316,6 +317,8 @@ const MAINTENANCE_STOP: std::time::Duration = std::time::Duration::from_secs(10)
 /// and the in-process (headed) mode.
 pub struct EngineCore {
     provider_defaults: provider_defaults::ProviderDefaults,
+    /// CORE-06 device package store and this profile's grants.
+    extensions: extensions::ExtensionManager,
     chat_workbenches: chat_workbench::ChatWorkbenches,
     github_pr: source_control::pull_requests::GitHubPullRequests,
     backup_control: Option<backup_control::BackupControl>,
@@ -742,11 +745,19 @@ impl EngineCore {
             chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
         let provider_defaults =
             provider_defaults::ProviderDefaults::open(profile.store_root(), device_write.handle())?;
+        // Never fails assembly: the core starts with extensions unavailable.
+        let extensions = extensions::ExtensionManager::open(
+            data_dir,
+            profile.store_root(),
+            workspace.profile_id(profile.scope()),
+            device_write.handle(),
+        );
         let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
         let remote_access =
             remote_access::RemoteAccess::new(profile.store_root(), remote_auth.clone());
         Ok(Self {
             provider_defaults,
+            extensions,
             chat_workbenches,
             github_pr,
             side_chats,
@@ -1000,6 +1011,8 @@ impl EngineCore {
             // Saved shell commands are a local desktop workflow, never relay RPCs.
             rpc = rpc.with_project_commands(self.project_commands.clone());
             rpc = rpc.with_chat_workbenches(self.chat_workbenches.clone());
+            // Packages and grants are managed only by the owning device.
+            rpc = rpc.with_extensions(self.extensions.clone());
         }
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());
