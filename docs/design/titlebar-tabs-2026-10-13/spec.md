@@ -49,9 +49,11 @@ LUNA Dev check, not a fixture case.
   row in the titlebar, strips over their columns, `+` after the last tab,
   drops on a strip, Balance panes from the tab menu) and the rewritten 18
   and 25 (`evidence/chat-workbench.pass`). It ran with
-  `RUST_MIN_STACK=16777216`: on current `main` the in-process engine's
-  tokio worker overflows its default stack late in the run (after w20l),
-  in engine code this change does not touch.
+  `RUST_MIN_STACK=16777216`: at the time the in-process engine's tokio
+  worker overflowed its default stack late in the run (after w20l), in
+  engine code this change does not touch. The next commit fixed that (task
+  commands no longer run under the RPC method table's frame), and the
+  fixture passes on default stacks again.
 - `new-thread-target-fixture` passed all twelve combinations, including
   the new case 11 (a chat on another machine names it first in its
   checkout row) (`evidence/new-thread-target.pass`).
