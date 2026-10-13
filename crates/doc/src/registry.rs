@@ -9,6 +9,13 @@
 //!   reconnect (idempotent by strict-`>` clock compare);
 //! - an HLC clock stamping every local write.
 //!
+//! The engine profile fixes a [`RegistryMode`] when the host opens the doc
+//! (docs/pending-tasks/zeron-upstream-improvements/zi-02/README.md). A
+//! permanently local profile has no server to ack anything: its writes fold
+//! straight into the rows and `pending` stays empty. A sync-capable replica —
+//! online, offline or edge-less — keeps every write's intent queued; only an
+//! unsent same-row update that a later write fully supersedes is retired.
+//!
 //! The merge function [`apply_op`] mirrors `edge/src/registry-core.ts` 1:1 —
 //! the shared test vectors live in both files; change them together. The
 //! typed API mirrors the old `WorkspaceDoc` surface so `WorkspaceHost` is a
@@ -297,6 +304,92 @@ pub struct PendingBatch {
     pub in_flight: bool,
 }
 
+// ── profile mode ────────────────────────────────────────────────────────────
+
+/// How a replica retains its own writes. The engine profile supplies it when
+/// the host opens the registry; connectivity never infers it — an edge-less
+/// synced or development profile is still a replica whose queued intent
+/// must reach a server later.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RegistryMode {
+    /// Sync-capable: every local write stays a pending batch until a registry
+    /// server acknowledges it, however long the replica is offline.
+    #[default]
+    Replica,
+    /// A permanently local profile: no registry server can ever acknowledge a
+    /// batch, so writes fold straight into the rows and `pending` stays empty.
+    LocalOnly,
+}
+
+impl RegistryMode {
+    fn is_replica(&self) -> bool {
+        *self == Self::Replica
+    }
+}
+
+/// What [`RegistryDoc::from_bytes_in_mode`] changed so a persisted snapshot
+/// matches the opening profile's mode. All zero: the bytes already matched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SnapshotReconciliation {
+    /// Queued ops folded into rows (an older permanently local snapshot).
+    pub folded_ops: usize,
+    /// Unsent replica updates retired because a later queued write rewrites
+    /// every field they set (a queue persisted before coalescing existed).
+    pub coalesced_ops: usize,
+    /// Rows re-queued with their original clocks (a local-only snapshot
+    /// opened by a sync-capable profile).
+    pub requeued_rows: usize,
+}
+
+impl SnapshotReconciliation {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Fields whose only meaning is their latest value: no peer, Board or
+/// notification path reacts to an intermediate one. Lifecycle fields
+/// (`archived`, `settlementOverride`, `removedAt`, `spaceId`, `roomGen`,
+/// ownership and lineage) and every `sessions` row stay one op per write, so
+/// working → needs-input → working/completed transitions and archive/restore
+/// survive an offline queue intact.
+const LATEST_VALUE_FIELDS: &[&str] = &[
+    "branch",
+    "checkoutId",
+    "config",
+    "cwd",
+    "executionDefaults",
+    "gitCheckedAt",
+    "gitDetected",
+    "harnessSessionCwd",
+    "harnessSessionId",
+    "lastMessageAt",
+    "lastMessagePreview",
+    "lastSeenAt",
+    "manuallyUnread",
+    "name",
+    "pinnedOrder",
+    "sourceContext",
+    "title",
+];
+
+/// A local field write that a later write of a superset of its fields may
+/// replace while both are unsent: an `update` (never creates or revives)
+/// stamped with one clock, touching only latest-value fields of a
+/// non-session row.
+fn coalescable(op: &RowOp) -> bool {
+    op.op == OpKind::Update
+        && op.clocks.is_none()
+        && op.kind != KIND_SESSIONS
+        && op.set.as_ref().is_some_and(|set| {
+            !set.is_empty()
+                && set
+                    .keys()
+                    .all(|key| LATEST_VALUE_FIELDS.contains(&key.as_str()))
+        })
+}
+
 // ── the doc ─────────────────────────────────────────────────────────────────
 
 /// What [`RegistryDoc::apply_state`] decided about a `state` frame.
@@ -326,6 +419,12 @@ struct PersistedState {
     /// pre-epoch snapshots default to 0.
     #[serde(default)]
     resync_epoch: u32,
+    /// Retention mode, restored by every reconstruction (rollback included).
+    /// Additive and omitted for replicas, so a replica snapshot keeps its
+    /// exact earlier bytes and an older build reads a local-only snapshot as
+    /// rows with an empty queue.
+    #[serde(default, skip_serializing_if = "RegistryMode::is_replica")]
+    mode: RegistryMode,
     device_id: String,
     server_seq: u64,
     gc_floor: u64,
@@ -344,6 +443,9 @@ pub struct RegistryDoc {
     gc_floor: u64,
     clock: HlcClock,
     pending: Vec<PendingBatch>,
+    /// Fixed at construction: the profile's capability on open, or the
+    /// persisted marker on an exact reconstruction. See [`RegistryMode`].
+    mode: RegistryMode,
     /// Bumped on every mutation (local or applied) — the engine host converts
     /// this into watch-channel publishes and snapshot debounces.
     generation: u64,
@@ -358,8 +460,20 @@ impl RegistryDoc {
             gc_floor: 0,
             clock: HlcClock::default(),
             pending: Vec::new(),
+            mode: RegistryMode::Replica,
             generation: 0,
         }
+    }
+
+    /// An empty doc in the profile's `mode` (first boot, legacy seed).
+    pub fn new_in_mode(device_id: impl Into<String>, mode: RegistryMode) -> Self {
+        let mut doc = Self::new(device_id);
+        doc.mode = mode;
+        doc
+    }
+
+    pub fn mode(&self) -> RegistryMode {
+        self.mode
     }
 
     pub fn device_id(&self) -> &str {
@@ -393,6 +507,7 @@ impl RegistryDoc {
         let state = PersistedState {
             v: 1,
             resync_epoch: CURRENT_RESYNC_EPOCH,
+            mode: self.mode,
             device_id: self.device_id.clone(),
             server_seq: self.server_seq,
             gc_floor: self.gc_floor,
@@ -403,7 +518,66 @@ impl RegistryDoc {
         Ok(serde_json::to_vec(&state)?)
     }
 
+    /// Exact reconstruction (restart readers, guarded rollback, backup and
+    /// import). The persisted mode comes back with the rows, so a rolled-back
+    /// permanently local doc keeps folding instead of queueing again.
     pub fn from_bytes(bytes: &[u8], device_id: &str) -> Result<Self, DocError> {
+        let mut doc = Self::decode(bytes, device_id)?;
+        // A local-only snapshot never persists a queue. Fold a foreign one at
+        // once: a folded write must never be replayed under an older op.
+        if doc.mode == RegistryMode::LocalOnly {
+            doc.fold_pending();
+        }
+        Ok(doc)
+    }
+
+    /// Open a persisted snapshot for a profile whose `mode` the engine
+    /// supplies, reconciling the bytes with it once:
+    /// - a permanently local profile folds any queued ops into the rows in
+    ///   their original order (same merge, HLCs and tombstones as the
+    ///   overlay it replaces);
+    /// - a replica retires unsent updates a later queued write supersedes
+    ///   (the write-time rule, see `drop_superseded_unsent`);
+    /// - a replica opening a local-only snapshot re-queues every row with its
+    ///   original clocks, so a server merges that intent instead of
+    ///   replacing it.
+    ///
+    /// Pure: the caller persists the result through its guarded save. Until
+    /// that commits the stored bytes are unchanged and the next open repeats
+    /// the same deterministic reconciliation.
+    pub fn from_bytes_in_mode(
+        bytes: &[u8],
+        device_id: &str,
+        mode: RegistryMode,
+    ) -> Result<(Self, SnapshotReconciliation), DocError> {
+        let mut doc = Self::decode(bytes, device_id)?;
+        let mut report = SnapshotReconciliation::default();
+        match (doc.mode, mode) {
+            (_, RegistryMode::LocalOnly) => {
+                doc.mode = RegistryMode::LocalOnly;
+                report.folded_ops = doc.fold_pending();
+            }
+            (RegistryMode::LocalOnly, RegistryMode::Replica) => {
+                // No server has seen these folded writes (the server-behind
+                // recovery of `apply_state`).
+                doc.mode = RegistryMode::Replica;
+                let seed: Vec<RowOp> = doc
+                    .authoritative
+                    .values()
+                    .flat_map(|rows| rows.values())
+                    .map(row_to_seed_op)
+                    .collect();
+                report.requeued_rows = seed.len();
+                doc.enqueue_ops(seed);
+            }
+            (RegistryMode::Replica, RegistryMode::Replica) => {
+                report.coalesced_ops = doc.compact_unsent();
+            }
+        }
+        Ok((doc, report))
+    }
+
+    fn decode(bytes: &[u8], device_id: &str) -> Result<Self, DocError> {
         let state: PersistedState = serde_json::from_slice(bytes)?;
         if state.v != 1 {
             return Err(DocError::Schema(format!(
@@ -425,6 +599,7 @@ impl RegistryDoc {
         }
         doc.gc_floor = state.gc_floor;
         doc.clock = state.clock;
+        doc.mode = state.mode;
         doc.pending = state.pending;
         for row in state.rows {
             doc.authoritative
@@ -587,6 +762,14 @@ impl RegistryDoc {
         if ops.is_empty() {
             return;
         }
+        if self.mode == RegistryMode::LocalOnly {
+            // No server will ever ack these: the rows ARE the local truth.
+            self.generation += 1;
+            for op in &ops {
+                self.fold_op(op);
+            }
+            return;
+        }
         // The registry room rejects any batch over its op cap (500), and a
         // rejected batch is a PERMANENT wedge: error frames carry no batch
         // id, so the client can never retire it — it replays and fails on
@@ -617,14 +800,123 @@ impl RegistryDoc {
 
     fn write(&mut self, kind: &str, id: &str, op: OpKind, set: BTreeMap<String, Value>) {
         let hlc = self.next_hlc();
-        self.enqueue_ops(vec![RowOp {
+        let op = RowOp {
             kind: kind.to_string(),
             id: id.to_string(),
             op,
             set: Some(set),
             hlc,
             clocks: None,
-        }]);
+        };
+        self.drop_superseded_unsent(&op);
+        self.enqueue_ops(vec![op]);
+    }
+
+    /// Apply one op straight to its authoritative row — the step the overlay
+    /// replays, made permanent (permanently local profiles only).
+    fn fold_op(&mut self, op: &RowOp) {
+        let row = self
+            .authoritative
+            .get(&op.kind)
+            .and_then(|rows| rows.get(&op.id));
+        if let (Some(next), true) = apply_op(row, op) {
+            self.put_authoritative(next);
+        }
+    }
+
+    /// Fold the whole queue in its original order; returns the ops folded.
+    fn fold_pending(&mut self) -> usize {
+        let pending = std::mem::take(&mut self.pending);
+        let mut folded = 0;
+        for batch in &pending {
+            for op in &batch.ops {
+                self.fold_op(op);
+                folded += 1;
+            }
+        }
+        if folded > 0 {
+            self.generation += 1;
+        }
+        folded
+    }
+
+    /// Retire unsent single-op updates that `next` makes redundant, before
+    /// `next` is queued (sync-capable replicas only). Returns how many.
+    ///
+    /// Only the contiguous run of unsent single-op [`coalescable`] updates to
+    /// `next`'s own row at the tail of the queue is examined, and only
+    /// batches whose every field `next` rewrites with a strictly newer clock
+    /// are dropped. So:
+    /// - for any server row state (live, tombstoned, missing, concurrently
+    ///   edited) the merged row is unchanged: per field, the newer write wins
+    ///   wherever the older one would have, and an update never decides
+    ///   existence;
+    /// - no op moves across another row or across a session, lifecycle,
+    ///   deletion or multi-op batch, so chat labels stay ordered against
+    ///   session transitions and cascades stay whole;
+    /// - in-flight batches keep their ids and content, so an ack always
+    ///   retires exactly what was pushed. A dropped batch that a dead
+    ///   connection already delivered is harmless: `next` supersedes it on
+    ///   the server too, and `next` is queued as a fresh batch.
+    ///
+    /// Retaining an op is always safe; anything outside these rules stays.
+    fn drop_superseded_unsent(&mut self, next: &RowOp) -> usize {
+        if self.mode != RegistryMode::Replica || !coalescable(next) {
+            return 0;
+        }
+        let Some(fields) = next.set.as_ref() else {
+            return 0;
+        };
+        let same_row = |batch: &PendingBatch| {
+            !batch.in_flight
+                && matches!(
+                    batch.ops.as_slice(),
+                    [op] if op.kind == next.kind && op.id == next.id && coalescable(op)
+                )
+        };
+        let start = self
+            .pending
+            .iter()
+            .rposition(|batch| !same_row(batch))
+            .map_or(0, |index| index + 1);
+        if start == self.pending.len() {
+            return 0;
+        }
+        let before = self.pending.len();
+        let run = self.pending.split_off(start);
+        self.pending.extend(run.into_iter().filter(|batch| {
+            let op = &batch.ops[0];
+            let superseded = hlc_newer(&next.hlc, Some(op.hlc.as_str()))
+                && op
+                    .set
+                    .as_ref()
+                    .is_some_and(|set| set.keys().all(|key| fields.contains_key(key)));
+            !superseded
+        }));
+        let dropped = before - self.pending.len();
+        if dropped > 0 {
+            self.generation += 1;
+        }
+        dropped
+    }
+
+    /// The write-time rule replayed over a loaded queue (nothing is in flight
+    /// after a load): shrinks queues persisted before coalescing existed and
+    /// is a no-op on queues it already maintained. Kept batches keep their
+    /// ids. Returns the ops dropped.
+    fn compact_unsent(&mut self) -> usize {
+        let queued = std::mem::take(&mut self.pending);
+        let mut dropped = 0;
+        for batch in queued {
+            if !batch.in_flight
+                && let [op] = batch.ops.as_slice()
+            {
+                let op = op.clone();
+                dropped += self.drop_superseded_unsent(&op);
+            }
+            self.pending.push(batch);
+        }
+        dropped
     }
 
     fn delete_row_ops(&mut self, keys: &[(&str, &str)]) {

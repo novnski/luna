@@ -590,7 +590,7 @@ impl EngineCore {
                 edge: edge.clone(),
             },
         );
-        let workspace = WorkspaceHost::open_with_registry_write_handle(
+        let workspace = WorkspaceHost::open_with_registry_write_handle_and_mode(
             store.clone(),
             WorkspaceHostConfig {
                 device_id: device_id.clone(),
@@ -601,6 +601,7 @@ impl EngineCore {
                 edge: edge.clone(),
             },
             device_write.handle(),
+            profile.registry_mode(),
         )?;
         let agent_accounts_config =
             agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));

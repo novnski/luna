@@ -73,6 +73,16 @@ impl EngineProfile {
         self.scope
     }
 
+    /// The registry retention capability this profile grants (ZI-02). Only
+    /// the permanently local scope folds writes into rows; synced and
+    /// development profiles stay replicas even when no edge is configured.
+    pub(crate) fn registry_mode(&self) -> luna_doc::RegistryMode {
+        match self.scope {
+            WorkspaceScope::Local => luna_doc::RegistryMode::LocalOnly,
+            WorkspaceScope::Synced | WorkspaceScope::Development => luna_doc::RegistryMode::Replica,
+        }
+    }
+
     pub fn device_root(&self) -> &Path {
         &self.device_root
     }

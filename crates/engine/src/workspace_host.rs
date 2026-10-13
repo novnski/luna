@@ -28,7 +28,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use luna_doc::{DeletedSpace, DocError, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
+use luna_doc::{DeletedSpace, DocError, REGISTRY_DOC_ID, RegistryDoc, RegistryMode, WorkspaceDoc};
 use luna_proto::{
     Chat, ChatConfig, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, Device, Session,
     Space,
@@ -161,6 +161,8 @@ pub struct WorkspaceHostConfig {
     pub user_id: String,
     /// When present, the host joins `/registry/{orgId}/ws`. `None` = fully offline
     /// (local snapshots only; the registry still drives everything device-side).
+    /// Offline is not local-only: only the profile's [`RegistryMode`] decides
+    /// whether queued writes may fold into rows.
     pub edge: Option<EdgeConfig>,
 }
 
@@ -169,6 +171,9 @@ struct WorkspaceHostInner {
     config: WorkspaceHostConfig,
     registry_admission: Option<RegistryAdmission>,
     snapshot_write_handle: Option<DeviceWriteHandle>,
+    /// The profile's immutable retention capability (ZI-02). A permanently
+    /// local registry never joins a room; every other profile stays a replica.
+    registry_mode: RegistryMode,
     reg: Arc<Mutex<RegistryDoc>>,
     /// Serialize every registry snapshot's byte capture through SQLite
     /// commit, including task projections and the delayed worker. Otherwise
@@ -283,7 +288,7 @@ impl WorkspaceHost {
     /// Load (or migrate, or init) the registry, upsert this device's row, start
     /// the change-driven task, and join the edge registry room when configured.
     pub fn open(store: Arc<DocsStore>, config: WorkspaceHostConfig) -> Result<Self, EngineError> {
-        Self::open_registry_mode(store, config, None, None, None)
+        Self::open_registry_mode(store, config, None, None, None, RegistryMode::Replica)
     }
 
     /// Guard RegistryClient-owned mutations plus this host's boot and snapshot
@@ -293,6 +298,18 @@ impl WorkspaceHost {
         store: Arc<DocsStore>,
         config: WorkspaceHostConfig,
         handle: DeviceWriteHandle,
+    ) -> Result<Self, EngineError> {
+        Self::open_with_registry_write_handle_and_mode(store, config, handle, RegistryMode::Replica)
+    }
+
+    /// Engine assembly form: the resolved profile supplies the registry's
+    /// immutable retention mode (`EngineProfile::registry_mode`). Callers that
+    /// do not know it keep the replica default, which never folds intent.
+    pub(crate) fn open_with_registry_write_handle_and_mode(
+        store: Arc<DocsStore>,
+        config: WorkspaceHostConfig,
+        handle: DeviceWriteHandle,
+        mode: RegistryMode,
     ) -> Result<Self, EngineError> {
         // Admission precedes migration, legacy-row deletion, and device upsert.
         // Keep this ticket through the first durable registry snapshot even if
@@ -312,6 +329,7 @@ impl WorkspaceHost {
             Some(admission),
             Some(handle),
             Some(boot_permit),
+            mode,
         )
     }
 
@@ -321,18 +339,43 @@ impl WorkspaceHost {
         registry_admission: Option<RegistryAdmission>,
         snapshot_write_handle: Option<DeviceWriteHandle>,
         boot_permit: Option<DeviceWritePermit>,
+        mode: RegistryMode,
     ) -> Result<Self, EngineError> {
+        if mode == RegistryMode::LocalOnly && config.edge.is_some() {
+            return Err(EngineError::Other(
+                "a permanently local registry cannot be given an edge connection".into(),
+            ));
+        }
         let mut doc = match store.load_snapshot(REGISTRY_DOC_ID)? {
-            Some(bytes) => RegistryDoc::from_bytes(&bytes, &config.device_id)
-                .map_err(|e| EngineError::Other(format!("registry snapshot load failed: {e}")))?,
+            Some(bytes) => {
+                // Reconcile the stored bytes with the profile's mode in memory
+                // only. Nothing is published, and the stored queue stays on
+                // disk, until the guarded boot save below commits; a failed
+                // save fails the open and the next boot repeats the same
+                // deterministic reconciliation.
+                let (doc, reconciled) =
+                    RegistryDoc::from_bytes_in_mode(&bytes, &config.device_id, mode).map_err(
+                        |e| EngineError::Other(format!("registry snapshot load failed: {e}")),
+                    )?;
+                if !reconciled.is_empty() {
+                    tracing::info!(
+                        folded_ops = reconciled.folded_ops,
+                        coalesced_ops = reconciled.coalesced_ops,
+                        requeued_rows = reconciled.requeued_rows,
+                        "reconciled the registry snapshot with the profile's retention mode"
+                    );
+                }
+                doc
+            }
             None => {
                 // MIGRATION (instant, one-time): seed from the legacy Loro
                 // workspace snapshot when one exists. Seeds are pending upserts
                 // with historical HLCs — the overlay serves the full sidebar
                 // immediately, the room converges on first join, and any live
                 // write beats a migrated value. The legacy snapshot stays on
-                // disk for rollback.
-                let mut doc = RegistryDoc::new(&config.device_id);
+                // disk for rollback. A permanently local profile folds the
+                // same seeds straight into its rows.
+                let mut doc = RegistryDoc::new_in_mode(&config.device_id, mode);
                 match store.load_snapshot(WORKSPACE_DOC_ID) {
                     Ok(Some(bytes)) => {
                         let raw = loro::LoroDoc::new();
@@ -412,6 +455,7 @@ impl WorkspaceHost {
                 config,
                 registry_admission,
                 snapshot_write_handle,
+                registry_mode: mode,
                 reg: Arc::new(Mutex::new(doc)),
                 snapshot_persist: Mutex::new(()),
                 #[cfg(debug_assertions)]
@@ -489,6 +533,12 @@ impl WorkspaceHost {
         mut token_changes: Option<tokio::sync::watch::Receiver<u64>>,
         token: Option<Arc<dyn luna_rpc::TokenSource>>,
     ) {
+        if self.inner.registry_mode == RegistryMode::LocalOnly {
+            // Its rows hold folded writes no server has seen; a room must
+            // never apply server frames over them.
+            tracing::warn!("refusing a registry room join for a permanently local profile");
+            return;
+        }
         let org_id = self.inner.config.org_id.clone();
         let reg = self.inner.reg.clone();
         let device_id = self.inner.config.device_id.clone();

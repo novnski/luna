@@ -870,3 +870,399 @@ fn completion_marker_replicates_and_survives_next_turn() {
     server_round(&mut server, &mut seq, &mut [&mut source, &mut viewer]);
     assert_eq!(viewer.read_sessions().unwrap(), vec![row]);
 }
+
+// ── ZI-02 retention (docs/pending-tasks/zeron-upstream-improvements/zi-02) ──
+// Host-level growth, migration, rollback, restart and reconnect are owned by
+// `crates/engine/tests/registry_growth_e2e.rs`; these two pin the doc's merge
+// equivalences over an op-shape space that suite cannot enumerate cheaply.
+
+type ServerRows = HashMap<(String, String), RegistryRow>;
+
+/// Apply every pushable batch to a server table with the shared merge fn,
+/// without acking: pushed batches stay in flight, so nothing after them can
+/// coalesce with them.
+fn push_unacked(doc: &mut RegistryDoc, server: &mut ServerRows) {
+    for batch in doc.take_pushable() {
+        for op in &batch.ops {
+            let key = (op.kind.clone(), op.id.clone());
+            if let (Some(next), true) = apply_op(server.get(&key), op) {
+                server.insert(key, next);
+            }
+        }
+    }
+}
+
+/// What a server table shows, clocks aside (two docs stamp different HLCs).
+fn server_outcome(
+    server: &ServerRows,
+) -> BTreeMap<(String, String), (bool, BTreeMap<String, Value>)> {
+    server
+        .iter()
+        .map(|(key, row)| (key.clone(), (row.deleted, row.fields.clone())))
+        .collect()
+}
+
+fn op_count(doc: &RegistryDoc) -> usize {
+    doc.pending.iter().map(|batch| batch.ops.len()).sum()
+}
+
+/// F1/F4/F5: a permanently local doc folds every write shape into its rows
+/// with exactly the outcome the replica overlay shows for the same writes,
+/// keeps no queue, and keeps that mode through its bytes. An older queued
+/// snapshot folds to the same state, and a local-only snapshot opened by a
+/// sync-capable profile re-queues its rows so a server converges on them
+/// instead of replacing them.
+#[test]
+fn local_only_fold_matches_the_replica_overlay() {
+    fn script(doc: &mut RegistryDoc) {
+        doc.upsert_device(&device("dev-a", "laptop")).unwrap();
+        doc.upsert_space(&space("sp-1", "dev-a", "/tmp/one"))
+            .unwrap();
+        doc.upsert_space(&space("sp-2", "dev-a", "/tmp/two"))
+            .unwrap();
+        for (id, space_id) in [("chat-1", "sp-1"), ("chat-2", "sp-1"), ("chat-3", "sp-2")] {
+            let mut row = chat(id, "dev-a");
+            row.space_id = Some(space_id.into());
+            doc.upsert_chat(&row).unwrap();
+            doc.upsert_session(&session(id, "dev-a", SessionStatus::Working))
+                .unwrap();
+        }
+        assert!(doc.rename_chat("chat-1", "renamed").unwrap());
+        assert!(doc.set_chat_archived("chat-1", true).unwrap());
+        assert!(doc.set_chat_archived("chat-1", false).unwrap());
+        assert!(doc.set_chat_seen("chat-1", ts(9_000)).unwrap());
+        assert!(doc.set_chat_pinned_order("chat-1", Some("a0")).unwrap());
+        let mut done = session("chat-1", "dev-a", SessionStatus::Idle);
+        done.last_completed_turn = Some("turn-1".into());
+        doc.upsert_session(&done).unwrap();
+        assert!(doc.delete_chat("chat-2").unwrap());
+        assert!(
+            !doc.rename_chat("chat-2", "ghost").unwrap(),
+            "an update never revives a tombstone"
+        );
+        // A newer upsert revives with only its own fields.
+        doc.upsert_chat(&chat("chat-2", "dev-a")).unwrap();
+        assert!(doc.delete_space("sp-2").unwrap().existed);
+        assert!(doc.rename_space("sp-1", Some("Kept")).unwrap());
+        assert!(doc.set_space_removed("sp-1", Some(ts(10_000))).unwrap());
+        assert!(doc.set_space_removed("sp-1", None).unwrap());
+    }
+    let mut replica = RegistryDoc::new("dev-a");
+    let mut local = RegistryDoc::new_in_mode("dev-a", RegistryMode::LocalOnly);
+    script(&mut replica);
+    script(&mut local);
+
+    assert!(
+        op_count(&replica) > 20,
+        "the replica keeps every write's intent"
+    );
+    assert_eq!(local.pending_len(), 0, "nothing can ever ack a local write");
+    let state = local.read_all().unwrap();
+    assert_eq!(state, replica.read_all().unwrap());
+    let revived = local.chat("chat-2").unwrap().expect("newer upsert revives");
+    assert_eq!(revived.title.as_deref(), Some("First chat"));
+    assert_eq!(
+        revived.space_id, None,
+        "revival keeps only the upsert's fields"
+    );
+    assert!(local.chat("chat-3").unwrap().is_none());
+    assert!(local.space("sp-2").unwrap().is_none());
+    assert_eq!(
+        state.sessions.len(),
+        1,
+        "cascade and delete tombstone sessions"
+    );
+    assert_eq!(state.sessions[0].status, SessionStatus::Idle);
+    assert_eq!(
+        state.sessions[0].last_completed_turn.as_deref(),
+        Some("turn-1")
+    );
+
+    // Bytes: the replica format is unchanged; the local marker round-trips.
+    let replica_bytes = replica.to_bytes().unwrap();
+    let raw: Value = serde_json::from_slice(&replica_bytes).unwrap();
+    assert!(
+        raw.get("mode").is_none(),
+        "replica snapshots keep their old shape"
+    );
+    let local_bytes = local.to_bytes().unwrap();
+    let raw: Value = serde_json::from_slice(&local_bytes).unwrap();
+    assert_eq!(raw["mode"], json!("localOnly"));
+    assert_eq!(raw["pending"], json!([]));
+    let mut restored = RegistryDoc::from_bytes(&local_bytes, "dev-a").unwrap();
+    assert_eq!(restored.mode(), RegistryMode::LocalOnly);
+    assert!(restored.rename_chat("chat-1", "after restore").unwrap());
+    assert_eq!(restored.pending_len(), 0, "a reconstruction keeps folding");
+
+    // An older queued snapshot folds once, in order, to the overlay's state.
+    let (folded, report) =
+        RegistryDoc::from_bytes_in_mode(&replica_bytes, "dev-a", RegistryMode::LocalOnly).unwrap();
+    assert_eq!(report.folded_ops, op_count(&replica));
+    assert_eq!(folded.pending_len(), 0);
+    assert_eq!(folded.read_all().unwrap(), state);
+
+    // Misuse: a sync-capable profile opening local-only bytes re-queues every
+    // row (tombstones included) with its original clocks, and a fresh server
+    // converges on exactly that state.
+    let rows = local
+        .authoritative
+        .values()
+        .map(HashMap::len)
+        .sum::<usize>();
+    let (mut requeued, report) =
+        RegistryDoc::from_bytes_in_mode(&local_bytes, "dev-a", RegistryMode::Replica).unwrap();
+    assert_eq!(requeued.mode(), RegistryMode::Replica);
+    assert_eq!(report.requeued_rows, rows);
+    assert_eq!(requeued.read_all().unwrap(), state);
+    let mut peer = RegistryDoc::new("dev-b");
+    let mut server = HashMap::new();
+    let mut seq = 0u64;
+    server_round(&mut server, &mut seq, &mut [&mut requeued, &mut peer]);
+    assert_eq!(requeued.pending_len(), 0);
+    assert_eq!(peer.read_all().unwrap(), state);
+    assert!(
+        server
+            .get(&("chats".to_string(), "chat-3".to_string()))
+            .is_some_and(|row| row.deleted)
+    );
+}
+
+/// F2/F3: an offline replica retires only unsent same-row updates that a
+/// later write fully supersedes. Pushing that queue gives a server exactly
+/// the rows that pushing every write separately gives — over a base with a
+/// peer tombstone and a newer peer edit the replica never saw — while
+/// session transitions, lifecycle writes and the cascade keep one batch each,
+/// in order, and nothing moves across another row. A queue persisted before
+/// coalescing compacts on open to the same queue; exact reconstruction never
+/// compacts.
+#[test]
+fn replica_coalescing_keeps_the_server_outcome_and_status_transitions() {
+    let mut seed = RegistryDoc::new("dev-seed");
+    seed.upsert_space(&space("sp-1", "dev-seed", "/tmp/one"))
+        .unwrap();
+    seed.upsert_space(&space("sp-2", "dev-seed", "/tmp/two"))
+        .unwrap();
+    for (id, space_id) in [
+        ("chat-1", "sp-1"),
+        ("chat-2", "sp-1"),
+        ("chat-3", "sp-2"),
+        ("chat-peer", "sp-1"),
+        ("chat-gone", "sp-1"),
+    ] {
+        let mut row = chat(id, "dev-seed");
+        row.space_id = Some(space_id.into());
+        seed.upsert_chat(&row).unwrap();
+    }
+    seed.upsert_session(&session("chat-1", "dev-seed", SessionStatus::Idle))
+        .unwrap();
+    let mut base: ServerRows = HashMap::new();
+    let mut base_seq = 0u64;
+    server_round(&mut base, &mut base_seq, &mut [&mut seed]);
+    let base_rows: Vec<RegistryRow> = base.values().cloned().collect();
+
+    // Peer edits the offline replica never observes, from a later clock.
+    let peer_hlc = encode_hlc(9_000_000_000_000, 0, "dev-b");
+    let peer_ops = [
+        RowOp {
+            kind: KIND_CHATS.into(),
+            id: "chat-gone".into(),
+            op: OpKind::Delete,
+            set: None,
+            hlc: peer_hlc.clone(),
+            clocks: None,
+        },
+        RowOp {
+            kind: KIND_CHATS.into(),
+            id: "chat-peer".into(),
+            op: OpKind::Update,
+            set: Some([("title".to_string(), json!("from the peer"))].into()),
+            hlc: peer_hlc,
+            clocks: None,
+        },
+    ];
+    for op in &peer_ops {
+        let key = (op.kind.clone(), op.id.clone());
+        let (next, changed) = apply_op(base.get(&key), op);
+        assert!(changed);
+        base.insert(key, next.unwrap());
+    }
+
+    type Write = Box<dyn Fn(&mut RegistryDoc)>;
+    fn writes() -> Vec<Write> {
+        let mut writes: Vec<Write> = Vec::new();
+        for title in ["a", "b", "c"] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                assert!(doc.rename_chat("chat-1", title).unwrap())
+            }));
+        }
+        for at in [10_000, 11_000, 12_000] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                assert!(doc.set_chat_seen("chat-1", ts(at)).unwrap())
+            }));
+        }
+        for status in [
+            SessionStatus::Working,
+            SessionStatus::AwaitingInput,
+            SessionStatus::Working,
+        ] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                doc.upsert_session(&session("chat-1", "dev-a", status))
+                    .unwrap()
+            }));
+        }
+        writes.push(Box::new(|doc: &mut RegistryDoc| {
+            let mut done = session("chat-1", "dev-a", SessionStatus::Idle);
+            done.last_completed_turn = Some("t-1".into());
+            doc.upsert_session(&done).unwrap();
+        }));
+        writes.push(Box::new(|doc: &mut RegistryDoc| {
+            assert!(doc.rename_chat("chat-1", "after-sessions").unwrap())
+        }));
+        for archived in [true, false, true] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                assert!(doc.set_chat_archived("chat-1", archived).unwrap())
+            }));
+        }
+        for (preview, at) in [("m1", 20_000), ("m2", 21_000), ("m3", 22_000)] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                assert!(
+                    doc.set_chat_last_message("chat-2", preview, ts(at))
+                        .unwrap()
+                )
+            }));
+        }
+        writes.push(Box::new(|doc: &mut RegistryDoc| {
+            assert!(doc.rename_chat("chat-peer", "mine").unwrap())
+        }));
+        for title in ["ghost-1", "ghost-2"] {
+            writes.push(Box::new(move |doc: &mut RegistryDoc| {
+                assert!(doc.rename_chat("chat-gone", title).unwrap())
+            }));
+        }
+        writes.push(Box::new(|doc: &mut RegistryDoc| {
+            assert_eq!(
+                doc.delete_space("sp-2").unwrap().chat_ids,
+                vec!["chat-3".to_string()]
+            )
+        }));
+        writes.push(Box::new(|doc: &mut RegistryDoc| {
+            assert!(doc.rename_chat("chat-1", "final").unwrap())
+        }));
+        writes
+    }
+
+    // Reference: every write is pushed before the next, so none coalesce.
+    let mut reference = RegistryDoc::new("dev-a");
+    reference.apply_state(base_seq, true, 0, base_rows.clone());
+    let mut reference_server = base.clone();
+    for write in writes() {
+        write(&mut reference);
+        push_unacked(&mut reference, &mut reference_server);
+    }
+    // Offline: the same writes queue, then push together.
+    let mut offline = RegistryDoc::new("dev-a");
+    offline.apply_state(base_seq, true, 0, base_rows);
+    for write in writes() {
+        write(&mut offline);
+    }
+
+    assert_eq!(
+        reference.pending_len(),
+        25,
+        "the reference keeps one batch per write"
+    );
+    // 3 renames → 1; 3 seen pairs → 2; 4 session transitions, 1 rename past
+    // them, 3 archive flips, 1 last-message, 1 peer-row rename, 1 tombstone
+    // rename, 1 cascade, 1 final rename.
+    assert_eq!(offline.pending_len(), 16);
+    let statuses: Vec<Value> = offline
+        .pending
+        .iter()
+        .flat_map(|batch| &batch.ops)
+        // Status upserts only: the cascade also tombstones chat-3's session
+        // row with a set-less delete op.
+        .filter(|op| op.kind == KIND_SESSIONS && op.op == OpKind::Upsert)
+        .map(|op| op.set.as_ref().unwrap()["status"].clone())
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            json!("working"),
+            json!("awaitingInput"),
+            json!("working"),
+            json!("idle")
+        ]
+    );
+    let titles: Vec<Value> = offline
+        .pending
+        .iter()
+        .flat_map(|batch| &batch.ops)
+        .filter(|op| op.id == "chat-1")
+        .filter_map(|op| op.set.as_ref()?.get("title").cloned())
+        .collect();
+    assert_eq!(
+        titles,
+        vec![json!("c"), json!("after-sessions"), json!("final")]
+    );
+    assert!(
+        offline.pending.iter().any(|batch| batch.ops.len() == 3),
+        "the cascade stays one atomic batch"
+    );
+    assert_eq!(offline.read_all().unwrap(), reference.read_all().unwrap());
+
+    let mut offline_server = base.clone();
+    push_unacked(&mut offline, &mut offline_server);
+    assert_eq!(
+        server_outcome(&offline_server),
+        server_outcome(&reference_server)
+    );
+    let field = |key: (&str, &str), name: &str| {
+        offline_server[&(key.0.to_string(), key.1.to_string())]
+            .fields
+            .get(name)
+            .cloned()
+    };
+    assert_eq!(field(("chats", "chat-1"), "title"), Some(json!("final")));
+    assert_eq!(field(("chats", "chat-1"), "archived"), Some(json!(true)));
+    assert_eq!(
+        field(("chats", "chat-peer"), "title"),
+        Some(json!("from the peer"))
+    );
+    assert_eq!(
+        field(("chats", "chat-2"), "lastMessagePreview"),
+        Some(json!("m3"))
+    );
+    assert_eq!(field(("sessions", "chat-1"), "status"), Some(json!("idle")));
+    for gone in [
+        ("chats", "chat-gone"),
+        ("chats", "chat-3"),
+        ("spaces", "sp-2"),
+    ] {
+        assert!(
+            offline_server[&(gone.0.to_string(), gone.1.to_string())].deleted,
+            "{gone:?} must stay deleted"
+        );
+    }
+
+    // A queue persisted before coalescing (the reference's) compacts on open
+    // to the same queue; exact reconstruction (rollback) keeps it verbatim.
+    let legacy = reference.to_bytes().unwrap();
+    assert_eq!(
+        RegistryDoc::from_bytes(&legacy, "dev-a")
+            .unwrap()
+            .pending_len(),
+        25
+    );
+    let (compacted, report) =
+        RegistryDoc::from_bytes_in_mode(&legacy, "dev-a", RegistryMode::Replica).unwrap();
+    assert_eq!(report.coalesced_ops, 9);
+    assert_eq!(compacted.pending_len(), 16);
+    assert_eq!(compacted.read_all().unwrap(), reference.read_all().unwrap());
+    let (_, again) = RegistryDoc::from_bytes_in_mode(
+        &compacted.to_bytes().unwrap(),
+        "dev-a",
+        RegistryMode::Replica,
+    )
+    .unwrap();
+    assert!(again.is_empty(), "compaction is idempotent");
+}
