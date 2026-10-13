@@ -239,8 +239,8 @@ reference of its own.
 | R13 | A resize reloads the document or moves the scroll anchor. | Same view, load count and anchor, and the CSS height follows the native height: `expand.same-view-no-reload`. |
 | R14 | Off-screen rows leave orphan views, or the view budget is exceeded. | No visible view without a painted row, live views ≤ 3, eviction then recreation: `lifecycle.*`. |
 | R15 | Split panes overlap their clips. | `split.panes-clip-independently`. |
-| R16 | Teardown leaks native hosts. | `teardown.no-native-views`. |
-| O1 | Wheel over a document neither scrolls it nor chains to the transcript. | Recorded in `wheel.overDocuments`, gated by a plain-row positive control (`wheel.synthetic-delivery-control`). |
+| R16 | Teardown leaks native hosts, or a handler, delegate or monitor keeps a dropped WebKit view alive. | With the lifecycle stopped, every host drops and every created `WKWebView` deallocates, polled against a 5 s deadline: `teardown.no-native-views` (`liveViews`, `allocatedWebViews`). |
+| O1 | Wheel over a document neither scrolls it nor chains to the transcript. | Wheel events go through the window server (`CGEventPost`). The plain-row positive control is `wheel.synthetic-delivery-control`, and `wheel.overDocuments` is measured only after it moves. Without post-event access (`CGPreflightPostEventAccess` false, no prompt), the run records `wheel.environmentLimitation` and the wheel findings are void, not failed. |
 | O2 | Hidden views keep animating. | `performance.animationFramesPerSecond.hiddenIncludingTransitions` is recorded. It is a finding, not a gate. |
 
 **How the layers work.**
@@ -349,7 +349,7 @@ scripts/cargo.sh build --locked -p luna-ui --features browser-fixture \
 target/debug/examples/ic0-find-feasibility "$RUN/find"; echo "find exit=$?"
 
 # native renderer (macOS GUI session, about 60 s; it moves the cursor, so leave the mouse alone)
-scripts/run-macos-browser-fixture.sh target/debug/examples/isolated-document-fixture "$RUN/renderer"; echo "renderer exit=$?"
+bash scripts/run-macos-browser-fixture.sh target/debug/examples/isolated-document-fixture "$RUN/renderer"; echo "renderer exit=$?"
 
 (cd "$RUN" && find . -type f ! -name sha256.txt -print0 | sort -z | xargs -0 shasum -a 256 > sha256.txt)
 ```
@@ -398,6 +398,7 @@ Not settled here:
 - OpenCode's handling of MCP image content needs a live turn.
 - The minimum macOS version.
 - WebRTC suppression if R2 leaks over UDP.
-- Wheel-chaining policy (O1).
+- Wheel-chaining policy (O1). Measuring it needs input (post-event) access for the
+  temporary fixture bundle.
 - Hidden-view pausing (O2).
 - Turkish dotted-I folding (F13).

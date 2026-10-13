@@ -13,7 +13,7 @@
 //! teardown. No engine, provider, network service or user data is used.
 //!
 //!     cargo build --locked -p luna-ui --example isolated-document-fixture --features browser-fixture
-//!     scripts/run-macos-browser-fixture.sh target/debug/examples/isolated-document-fixture <out-dir>
+//!     bash scripts/run-macos-browser-fixture.sh target/debug/examples/isolated-document-fixture <out-dir>
 //!
 //! Writes <out-dir>/result.json and PNG captures; exits non-zero when any
 //! hard check fails. Observations (wheel chaining, hidden frame rate) are
@@ -37,7 +37,8 @@ mod macos {
         canvas, deferred, div, list, point, prelude::*, px, relative, rgb, size,
     };
     use luna_ui::browser::isolated::{
-        DocumentEvent, IsolatedDocument, Isolation, PreparedResource, live_views,
+        DocumentEvent, InputError, IsolatedDocument, Isolation, PreparedResource,
+        allocated_web_views, live_views,
     };
     use serde_json::{Value, json};
     use std::{
@@ -200,6 +201,8 @@ main{padding:12px}h3{margin:0 0 8px;font:600 15px Georgia}
         max_live: usize,
         evictions: u32,
         refusals: u32,
+        /// Teardown has begun: create nothing, even for rows still painted.
+        closed: bool,
     }
 
     impl Registry {
@@ -263,6 +266,9 @@ main{padding:12px}h3{margin:0 0 8px;font:600 15px Georgia}
         /// Slots painted in the latest frame without a live view, evicting
         /// the least recently painted off-screen view over budget.
         fn plan(&mut self) -> Vec<usize> {
+            if self.closed {
+                return Vec::new();
+            }
             let frame = self.frame;
             let mut create = Vec::new();
             for index in 0..self.slots.len() {
@@ -816,15 +822,24 @@ main{padding:12px}h3{margin:0 0 8px;font:600 15px Georgia}
                 if let Err(error) = &run {
                     report.check("scenario.completed", false, json!(format!("{error:#}")));
                 }
-                // Teardown: dropping every document must remove every native view.
-                for slot in registry.borrow_mut().slots.iter_mut() {
-                    slot.doc = None;
+                // Teardown: stop the lifecycle first (the reconcile task would
+                // otherwise recreate views for rows the window still paints),
+                // then every host must drop and every WebKit view deallocate.
+                // Deallocation may trail the drop by a run-loop turn, so wait
+                // for the release signal itself, bounded.
+                {
+                    let mut registry = registry.borrow_mut();
+                    registry.closed = true;
+                    for slot in registry.slots.iter_mut() {
+                        slot.doc = None;
+                    }
                 }
-                pause(cx, 300).await;
+                let released =
+                    wait_for(cx, 5000, || live_views() == 0 && allocated_web_views() == 0).await;
                 report.check(
                     "teardown.no-native-views",
-                    live_views() == 0,
-                    json!({"liveViews": live_views()}),
+                    released,
+                    json!({"liveViews": live_views(), "allocatedWebViews": allocated_web_views()}),
                 );
                 let command = |program: &str, args: &[&str]| {
                     std::process::Command::new(program)
@@ -1293,19 +1308,37 @@ main{padding:12px}h3{margin:0 0 8px;font:600 15px Georgia}
         let wheel = with_doc(registry, "doc-a", |doc| {
             doc.scroll_wheel(plain.0, plain.1, -240)
         })
-        .unwrap_or(Err("doc-a missing".into()));
+        .unwrap_or(Err(InputError::Failed("doc-a missing".into())));
         pause(cx, 600).await;
         let top_after = list_top(window, cx, Pane::Left)?;
         let delivered = wheel.is_ok() && top_before != top_after;
-        report.check(
-            "wheel.synthetic-delivery-control",
-            delivered,
-            json!({"post": wheel.err(), "before": top_before, "after": top_after}),
-        );
+        if wheel == Err(InputError::PostingUnavailable) {
+            // No post-event access for this bundle: the window server drops
+            // synthetic input, so no wheel finding can be measured. Record the
+            // limitation instead of a product failure.
+            report.observe(
+                "wheel.environmentLimitation",
+                json!({"reason": "the window server refuses synthetic input from this process (CGPreflightPostEventAccess is false); grant the fixture bundle input access to measure wheel routing",
+                       "wheelFindingsVoid": true}),
+            );
+        } else {
+            report.check(
+                "wheel.synthetic-delivery-control",
+                delivered,
+                json!({"post": wheel.as_ref().err().map(|error| format!("{error:?}")),
+                       "before": top_before, "after": top_after}),
+            );
+        }
         scroll(window, cx, Pane::Left, 3, 0.)?;
         pause(cx, 400).await;
         let mut wheel_observations = BTreeMap::new();
-        for (id, row) in [("doc-a", 3usize), ("doc-b", 120)] {
+        // Findings over documents mean something only after the control moved.
+        let probes: &[(&str, usize)] = if delivered {
+            &[("doc-a", 3), ("doc-b", 120)]
+        } else {
+            &[]
+        };
+        for &(id, row) in probes {
             scroll(window, cx, Pane::Left, row, 0.)?;
             let shown = wait_for(cx, 8000, || {
                 with_doc(registry, id, |doc| doc.visible()).unwrap_or(false)

@@ -130,6 +130,31 @@ pub fn live_views() -> usize {
     LIVE_VIEWS.load(Ordering::SeqCst)
 }
 
+thread_local! {
+    static WEB_VIEWS: RefCell<Vec<objc2::rc::Weak<WKWebView>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// WebKit views created here that are still allocated: the release signal
+/// that no handler, delegate or monitor retains a dropped view. WebKit can
+/// free a view a run-loop turn after its host drops (autorelease), so poll
+/// this against a deadline rather than sampling it once.
+pub fn allocated_web_views() -> usize {
+    WEB_VIEWS.with(|views| {
+        let mut views = views.borrow_mut();
+        views.retain(|view| view.load().is_some());
+        views.len()
+    })
+}
+
+/// Why a synthetic input event could not be delivered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InputError {
+    /// The window server refuses synthetic input from this process (no
+    /// post-event access). An environment limitation, not a product result.
+    PostingUnavailable,
+    Failed(String),
+}
+
 struct Assets {
     id: String,
     isolation: Isolation,
@@ -403,19 +428,6 @@ define_class!(
     }
 );
 
-/// Opaque `CGEvent` so `+[NSEvent eventWithCGEvent:]` gets its exact encoding.
-/// Only ever named behind a pointer.
-#[allow(dead_code)]
-#[repr(C)]
-struct CGEventOpaque {
-    _private: [u8; 0],
-}
-
-unsafe impl objc2::encode::RefEncode for CGEventOpaque {
-    const ENCODING_REF: objc2::encode::Encoding =
-        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("__CGEvent", &[]));
-}
-
 struct Host {
     web: WebView,
     view: Retained<WKWebView>,
@@ -527,6 +539,11 @@ impl IsolatedDocument {
             .build_as_child(window)
             .map_err(|e| e.to_string())?;
         let view = Retained::into_super(web.webview());
+        WEB_VIEWS.with(|views| {
+            views
+                .borrow_mut()
+                .push(objc2::rc::Weak::from_retained(&view))
+        });
         window
             .enable_scene_overlay()
             .map_err(|error| error.to_string())?;
@@ -723,7 +740,7 @@ impl IsolatedDocument {
     /// Native left click through AppKit's own dispatch and hit testing.
     pub fn click(&self, x: f64, y: f64) {
         let host = self.0.borrow();
-        host.warp_cursor(x, y);
+        let _ = host.warp_cursor(x, y);
         let Some(window) = host.view.window() else {
             return;
         };
@@ -749,23 +766,39 @@ impl IsolatedDocument {
         }
     }
 
-    /// A real pixel scroll-wheel event at a window point, routed by AppKit
-    /// (WebKit first if the point hits this view, otherwise GPUI).
-    pub fn scroll_wheel(&self, x: f64, y: f64, delta_y: i32) -> Result<(), String> {
-        use core_graphics::event::{CGEvent, ScrollEventUnit};
+    /// A real pixel scroll-wheel event at a window point, delivered by the
+    /// window server like hardware input, so AppKit's own hit testing picks
+    /// the receiver (WebKit if the point hits this view, otherwise GPUI).
+    ///
+    /// A wheel event wrapped from a `CGEvent` and queued with
+    /// `-[NSApplication postEvent:atStart:]` carries no window or
+    /// window-relative location, so AppKit routes it nowhere; only a
+    /// window-server post is a real delivery. That needs post-event access,
+    /// which is checked without prompting.
+    pub fn scroll_wheel(&self, x: f64, y: f64, delta_y: i32) -> Result<(), InputError> {
+        use core_graphics::event::{CGEvent, CGEventTapLocation, ScrollEventUnit};
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
         use foreign_types::ForeignType;
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGPreflightPostEventAccess() -> bool;
+            fn CGEventSetLocation(event: *mut std::ffi::c_void, location: NSPoint);
+        }
+        if !unsafe { CGPreflightPostEventAccess() } {
+            return Err(InputError::PostingUnavailable);
+        }
         let host = self.0.borrow();
-        host.warp_cursor(x, y);
+        let global = host
+            .warp_cursor(x, y)
+            .ok_or_else(|| InputError::Failed("the view is not on a screen".into()))?;
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| "no CoreGraphics event source")?;
+            .map_err(|_| InputError::Failed("no CoreGraphics event source".into()))?;
         let event = CGEvent::new_scroll_event(source, ScrollEventUnit::PIXEL, 1, delta_y, 0, 0)
-            .map_err(|_| "could not create a scroll event")?;
-        let raw = event.as_ptr() as *mut CGEventOpaque;
-        let ns: Option<Retained<NSEvent>> =
-            unsafe { msg_send![class!(NSEvent), eventWithCGEvent: raw] };
-        let ns = ns.ok_or("NSEvent could not wrap the scroll event")?;
-        NSApplication::sharedApplication(host.view.mtm()).postEvent_atStart(&ns, false);
+            .map_err(|_| InputError::Failed("could not create a scroll event".into()))?;
+        unsafe {
+            CGEventSetLocation(event.as_ptr() as *mut std::ffi::c_void, global);
+        }
+        event.post(CGEventTapLocation::HID);
         Ok(())
     }
 }
@@ -789,22 +822,22 @@ impl Host {
         )
     }
 
-    fn warp_cursor(&self, x: f64, y: f64) {
+    /// Move the cursor to a window point; returns that point in global
+    /// display coordinates (top-left origin), the space `CGEvent`s use.
+    fn warp_cursor(&self, x: f64, y: f64) -> Option<NSPoint> {
         #[link(name = "CoreGraphics", kind = "framework")]
         unsafe extern "C" {
             fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
         }
-        let Some(window) = self.view.window() else {
-            return;
-        };
+        let window = self.view.window()?;
         let height = self.parent.bounds().size.height;
         let p = window.convertPointToScreen(NSPoint::new(x, height - y));
-        let Some(screen) = objc2_app_kit::NSScreen::mainScreen(self.view.mtm()) else {
-            return;
-        };
+        let screen = objc2_app_kit::NSScreen::mainScreen(self.view.mtm())?;
+        let global = NSPoint::new(p.x, screen.frame().size.height - p.y);
         unsafe {
-            CGWarpMouseCursorPosition(NSPoint::new(p.x, screen.frame().size.height - p.y));
+            CGWarpMouseCursorPosition(global);
         }
+        Some(global)
     }
 
     fn place(&mut self, bounds: Bounds<Pixels>, mask: Bounds<Pixels>) {
