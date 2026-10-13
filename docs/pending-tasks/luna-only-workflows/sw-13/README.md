@@ -173,7 +173,7 @@ providers running the scheduled turns.
 
 **Fixture.** A disposable Git project in the evidence directory. Each
 occurrence runs one shell command that appends `<marker> <epoch>` to
-`project/sentinels/<case>.log`, after a short `sleep` so admitted work is
+`project/sentinels/<case>.log`, after a short foreground `python3` `time.sleep` (Claude Code blocks a chained shell `sleep`) so admitted work is
 observable. The runner counts these lines itself and maps each line to exactly
 one completed run's time window and one successful exec call. The tool-failure
 fixture `project/fixture/tool-fail.sh` logs its call and exits 7.
@@ -193,7 +193,7 @@ fixture `project/fixture/tool-fail.sh` logs its call and exits 7.
 3. `restart` (needs `I` ≥ 2): three new automations. `restart-coalesce`
    (Codex Full, project, 10-minute tolerance), `restart-skip` (Claude Full,
    current chat, 20-second tolerance) and `restart-inflight` (Claude Full, its
-   own chat, a 45-second `sleep` before the write; Full so no reviewer can end
+   own chat, a 45-second foreground wait before the write; Full so no reviewer can end
    the turn early). After their first slots, the runner takes the shared
    `luna-app-operation.lock` and gracefully quits the exact QA process while
    `restart-inflight` is accepted. It keeps the app down across at least two

@@ -342,11 +342,15 @@ async function sourceChat(provider, mode, label) {
   save(`chat-${key}`, row);
   return sources[key];
 }
-const appendCommand = (c, marker) => `sleep ${c.sleepS}; printf '%s %s\\n' '${marker}' "$(date +%s)" >> '${c.sentinel}'`;
+// Claude Code's Bash tool refuses a shell `sleep` chained before a command
+// (2.1.293), and the model then backgrounds it, so nothing stays in flight.
+// A foreground interpreter wait is accepted by both CLIs.
+const appendCommand = (c, marker) => `python3 -c 'import time; time.sleep(${Number(c.sleepS)})'; printf '%s %s\\n' '${marker}' "$(date +%s)" >> '${c.sentinel}'`;
 function runPrompt(c, marker) {
   return [
-    `SW-13 scheduled QA occurrence (${c.id}). Run exactly this one shell command once:`,
+    `SW-13 scheduled QA occurrence (${c.id}). Run exactly this one shell command once, in the foreground, and wait for it to finish (about ${Number(c.sleepS)} seconds):`,
     appendCommand(c, marker),
+    'Do not run it in the background, split it, or shorten or remove the wait.',
     `Then reply with exactly ${marker} and nothing else.`,
     'Do not run any other command, read or change other files, contact any service or create other work.',
   ].join('\n');
