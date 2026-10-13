@@ -164,7 +164,27 @@ pub(super) enum MenuAction {
     ClearFilters,
     AddChat(String),
     Card(CardAction, String),
+    /// PB-4A: create a feature group from a ticket, or link/unlink it.
+    Group(GroupMenuAction),
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum GroupMenuAction {
+    /// A new group in the ticket's project with the ticket as its member.
+    New(String),
+    Add {
+        group_id: String,
+        work_item_id: String,
+    },
+    Remove {
+        group_id: String,
+        work_item_id: String,
+    },
+}
+
+/// Feature groups one card menu offers at most (the rest are reachable
+/// from their own panel).
+const MENU_GROUPS_MAX: usize = 6;
 
 /// One row of a Board menu.
 #[derive(Debug, Clone)]
@@ -270,6 +290,8 @@ pub struct BoardPage {
     pub(super) authoring: Option<super::authoring_pane::AuthoringMount>,
     /// Resumable Board drafts and the Discuss with AI entry (A6).
     pub(super) drafts: Entity<super::authoring_pane::AuthoringDrafts>,
+    /// PB-4A feature groups of this scope (shown above the columns).
+    pub(super) groups: Entity<super::groups::FeatureGroupsPanel>,
     /// A6's Open ticket: the ticket to show once its conversation closed.
     pub(super) authoring_then_open: Option<String>,
     pub(super) evidence: HashMap<String, CardEvidence>,
@@ -381,6 +403,8 @@ impl BoardPage {
         let drafts = cx
             .new(|cx| super::authoring_pane::AuthoringDrafts::new(model.clone(), page_handle, cx));
         let surfaces_observer = cx.observe(&surfaces, |page, _, cx| page.on_surfaces_changed(cx));
+        let groups = cx.new(|cx| super::groups::FeatureGroupsPanel::new(model.clone(), cx));
+        let groups_observer = cx.observe(&groups, |_, _, cx| cx.notify());
         let model_events =
             cx.subscribe(&model, |page, _, event: &BoardModelEvent, cx| match event {
                 BoardModelEvent::Changed => page.on_model_changed(cx),
@@ -427,6 +451,7 @@ impl BoardPage {
             phases_seeded: false,
             authoring: None,
             drafts,
+            groups,
             authoring_then_open: None,
             evidence: HashMap::new(),
             evidence_supported: true,
@@ -450,6 +475,7 @@ impl BoardPage {
                 model_events,
                 requests,
                 search_events,
+                groups_observer,
             ],
         }
     }
@@ -1426,6 +1452,68 @@ impl BoardPage {
         down.glyph = Some(crate::icons::ARROW_DOWN);
         down.enabled = !archived && self.rank_neighbours(id, 1, cx).is_some();
         entries.push(down);
+        // PB-4A: grouping is explicit; linking a ticket of another project
+        // relates its repository without touching the ticket.
+        {
+            let panel = self.groups.read(cx);
+            let mut new_group = MenuEntry::new(
+                "card-group-new",
+                "New feature group with this ticket",
+                MenuAction::Group(GroupMenuAction::New(id.to_owned())),
+            );
+            new_group.glyph = Some(crate::icons::LAYERS_MINIMALISTIC);
+            new_group.heading = Some("Feature group");
+            new_group.enabled = !archived && panel.supported();
+            entries.push(new_group);
+            for group in panel
+                .groups()
+                .iter()
+                .filter(|group| !group.group.archived)
+                .take(MENU_GROUPS_MAX)
+            {
+                let member = group
+                    .group
+                    .members
+                    .iter()
+                    .any(|member| member.work_item_id == view.item.id);
+                let action = if member {
+                    GroupMenuAction::Remove {
+                        group_id: group.group.id.clone(),
+                        work_item_id: view.item.id.clone(),
+                    }
+                } else {
+                    GroupMenuAction::Add {
+                        group_id: group.group.id.clone(),
+                        work_item_id: view.item.id.clone(),
+                    }
+                };
+                let mut entry = MenuEntry::new(
+                    format!(
+                        "card-group-{}-{}",
+                        if member { "remove" } else { "add" },
+                        group.group.id
+                    ),
+                    if member {
+                        format!("Remove from {}", group.group.title)
+                    } else {
+                        format!("Add to {}", group.group.title)
+                    },
+                    MenuAction::Group(action),
+                );
+                entry.glyph = Some(if member {
+                    crate::icons::CLOSE_CIRCLE
+                } else {
+                    crate::icons::ADD_CIRCLE
+                });
+                // A group homed in another project: name its home.
+                if group.group.project_id != view.item.project_id {
+                    entry.hint = group.project_name.clone();
+                }
+                entry.enabled =
+                    member || group.group.members.len() < luna_proto::FEATURE_GROUP_MEMBERS_MAX;
+                entries.push(entry);
+            }
+        }
         let mut chat = MenuEntry::new(
             "card-chat",
             "Open chat",
@@ -1485,6 +1573,39 @@ impl BoardPage {
             MenuAction::ClearFilters => self.clear_filters(cx),
             MenuAction::AddChat(task_id) => self.convert_chat(task_id, cx),
             MenuAction::Card(action, id) => self.run_card_action(action, &id, window, cx),
+            MenuAction::Group(action) => self.run_group_action(action, cx),
+        }
+    }
+
+    /// One `BoardFeatureGroupMutate`; the panel shows the result. Nothing
+    /// moves, starts or edits the ticket.
+    fn run_group_action(&mut self, action: GroupMenuAction, cx: &mut Context<Self>) {
+        match action {
+            GroupMenuAction::New(id) => {
+                let Some(view) = self.model.read(cx).item(&id).cloned() else {
+                    return;
+                };
+                self.groups.update(cx, |panel, cx| {
+                    panel.create_with_ticket(
+                        view.item.project_id.clone(),
+                        view.item.title.clone(),
+                        view.item.id.clone(),
+                        cx,
+                    )
+                });
+            }
+            GroupMenuAction::Add {
+                group_id,
+                work_item_id,
+            } => self.groups.update(cx, |panel, cx| {
+                panel.add_member(&group_id, &work_item_id, cx)
+            }),
+            GroupMenuAction::Remove {
+                group_id,
+                work_item_id,
+            } => self.groups.update(cx, |panel, cx| {
+                panel.remove_member(&group_id, &work_item_id, cx)
+            }),
         }
     }
 
@@ -2347,6 +2468,7 @@ impl Render for BoardPage {
         self.narrow = self.narrow_mode.narrow;
 
         let remote = self.remote_scope(cx);
+        let groups_shown = remote.is_none() && self.groups.read(cx).shows_anything(cx);
         let header = self.render_header(&theme, window, cx);
         let notice = self.render_notice(&theme, cx);
         let body = self.render_body(&theme, window, cx);
@@ -2422,6 +2544,7 @@ impl Render for BoardPage {
                             .children(notice)
                             // Drafts belong to this host's projects.
                             .when(remote.is_none(), |el| el.child(self.drafts.clone()))
+                            .when(groups_shown, |el| el.child(self.groups.clone()))
                             .child(body),
                     ),
             )
@@ -2941,7 +3064,7 @@ impl BoardPage {
                 })
             })
             .collect();
-        serde_json::json!({
+        let mut readback = serde_json::json!({
             "status": format!("{:?}", model.status()),
             "scope": model.scope(),
             "scopeLabel": self.scope_label(cx),
@@ -2993,6 +3116,8 @@ impl BoardPage {
             "cards": cards,
             "controls": geometry.controls.iter().map(|(label, bounds)| (label.clone(), rect(*bounds))).collect::<serde_json::Map<_, _>>(),
             "emptyState": model.items().is_empty() && !model.has_more() && matches!(model.status(), BoardStatus::Live) && !self.any_filter(cx),
-        })
+        });
+        readback["featureGroups"] = self.groups.read(cx).fixture_readback(cx);
+        readback
     }
 }

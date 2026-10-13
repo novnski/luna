@@ -5,7 +5,9 @@
 //! to this core; the core owns what those results mean. RM-00 proves that
 //! split with the direct-host descriptor probe in [`probe`], RM-02 enrolls a
 //! phone in [`pairing`], and IOS-00's [`session`] runs the public SDK
-//! (`luna-sdk`) over the platform's pinned socket.
+//! (`luna-sdk`) over the platform's pinned socket. RM-03 makes that session
+//! the reconnecting runtime that follows the Mac's task projections
+//! ([`follow`]).
 //!
 //! The Swift-visible contract is versioned by [`FACADE_VERSION`]; UniFFI's
 //! own contract version and per-function checksums refuse a binding compiled
@@ -14,6 +16,7 @@
 
 uniffi::setup_scaffolding!("luna_core");
 
+pub mod follow;
 pub mod pairing;
 pub mod probe;
 pub mod runtime;
@@ -22,7 +25,10 @@ pub mod session;
 /// The facade's own contract version. Bump it whenever a change to an
 /// exported type or call is incompatible with Swift written for the old one
 /// (UniFFI's checksums already refuse mismatched generated bindings).
-pub const FACADE_VERSION: u16 = 1;
+///
+/// 2 (RM-03): `SocketTransport::close_socket`, the runtime session
+/// (`RemoteSession::following`), its lifecycle calls, states and projections.
+pub const FACADE_VERSION: u16 = 2;
 
 /// What the running core library is, for build and support evidence.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]

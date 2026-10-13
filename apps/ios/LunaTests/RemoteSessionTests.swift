@@ -144,6 +144,10 @@ final class RemoteSessionTests: XCTestCase {
         case .idle: "idle"
         case .connecting: "connecting"
         case .open: "open"
+        // RM-03 runtime states; a one-socket IOS-00 session never enters them.
+        case .reconnecting: "reconnecting"
+        case .suspended: "suspended"
+        case .waitingForNetwork: "waitingForNetwork"
         case .closed(let reason, _): "closed:\(reason)"
         }
     }

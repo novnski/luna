@@ -2,10 +2,13 @@ import Foundation
 import Security
 
 /// The platform half of a `RemoteSession` (IOS-00): pinned HTTPS requests and
-/// one pinned WebSocket, all through one ephemeral `URLSession`. The Rust core
+/// pinned WebSockets, all through one ephemeral `URLSession`. The Rust core
 /// decides what every result means; this type moves bytes, evaluates the pin
 /// with `PinnedTrust` and reports each result once. It never logs a bearer,
 /// socket ticket or frame, and never calls the core while holding its lock.
+/// RM-03: a runtime session opens one socket after another on this same
+/// transport (`closeSocket` ends one; a new `openSocket` replaces it); only
+/// `close()` ends the transport.
 final class PinnedSocketTransport: NSObject, SocketTransport, URLSessionDataDelegate,
     URLSessionWebSocketDelegate, @unchecked Sendable {
     private struct Request {
@@ -92,13 +95,26 @@ final class PinnedSocketTransport: NSObject, SocketTransport, URLSessionDataDele
         input.setValue(request.authorization, forHTTPHeaderField: "Authorization")
         let task = urlSession.webSocketTask(with: input)
         task.maximumMessageSize = Int(request.maxMessageBytes)
-        let accepted = lock.withLock { () -> Bool in
-            guard !closed, socket == nil else { return false }
+        let (accepted, previous) = lock.withLock { () -> (Bool, URLSessionWebSocketTask?) in
+            guard !closed else { return (false, nil) }
+            // A newer socket supersedes any earlier one; its late events no
+            // longer match `socket` and are never reported.
+            let previous = socket?.task
             socket = Socket(id: request.socketId, host: request.host, pin: request.spkiSha256, task: task)
-            return true
+            return (true, previous)
         }
+        previous?.cancel(with: .goingAway, reason: nil)
         guard accepted else { task.cancel(); return }
         task.resume()
+    }
+
+    func closeSocket(socketId: UInt64) {
+        let task = lock.withLock { () -> URLSessionWebSocketTask? in
+            guard let current = socket, current.id == socketId else { return nil }
+            socket = nil
+            return current.task
+        }
+        task?.cancel(with: .normalClosure, reason: nil)
     }
 
     func sendFrame(socketId: UInt64, frame: String) {

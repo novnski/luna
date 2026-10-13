@@ -11,12 +11,15 @@
 //!   command contract: a stable command id, an exact target, fences, and a
 //!   lost reply read back by receipt instead of resent under a new id.
 //! - [`TaskCommandWatch`]: a disposable watch with cursor repair.
+//! - [`ProjectionStore`]: RM-03's host-keyed, ordered and bounded view of a
+//!   paired host's task projections ([`Client::watch_remote_tasks`]).
 //! - [`SdkError`]: typed errors whose [`SdkError::kind`] the TypeScript SDK
 //!   shares. A domain refusal is a receipt, not an error.
 
 mod client;
 mod error;
 pub mod ops;
+mod projection;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod watch;
@@ -24,6 +27,10 @@ mod watch;
 pub use client::{Actor, Client, Fencing, TaskCommand, Transport};
 pub use error::SdkError;
 pub use ops::{CommandIntent, Fences, TaskIntent};
+pub use projection::{
+    CacheError, Freshness, HostKey, MAX_CACHE_BYTES, MAX_CACHED_TASKS, ProjectionError,
+    ProjectionStore, ProjectionStream, ProjectionUpdate, RegistryView, TaskView,
+};
 pub use watch::{TaskCommandUpdate, TaskCommandWatch};
 
 /// This SDK's version, independent of the app's.

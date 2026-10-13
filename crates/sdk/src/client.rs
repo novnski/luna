@@ -5,6 +5,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use luna_proto::remote_projection::{
+    ProjectionCursor, RemoteTaskItem, RemoteTaskParams, RemoteTasksItem, RemoteTasksParams,
+};
 use luna_proto::{CommandReceipt, EngineInfo, TaskCommandRead, TaskCommandSnapshot};
 use luna_rpc::RpcClient;
 use luna_rpc::operations::ApiDescription;
@@ -16,6 +19,7 @@ use crate::ops::{
     GetEngineInfo, GetTaskCommandReceipt, GetTaskCommandSnapshot, Operation,
     TaskCommandReceiptParams, TaskCommandSnapshotParams, TaskIntent,
 };
+use crate::projection::ProjectionStream;
 use crate::watch::TaskCommandWatch;
 
 /// A connected transport the client can borrow: an owned [`RpcClient`], a
@@ -438,6 +442,65 @@ impl<T: Transport> Client<T> {
         target_device_id: Option<&str>,
     ) -> Result<TaskCommandWatch<'_, T>, SdkError> {
         TaskCommandWatch::open(self, task_id, after, target_device_id).await
+    }
+
+    /// RM-03: follow the connected host's task registry from `after` (the
+    /// cursor a client holds), or from a snapshot. Dropping the stream
+    /// cancels the engine's stream. Apply its items to a
+    /// [`crate::ProjectionStore`], which refuses anything out of order.
+    pub async fn watch_remote_tasks(
+        &self,
+        after: Option<ProjectionCursor>,
+    ) -> Result<ProjectionStream<RemoteTasksItem>, SdkError> {
+        let subscription = self
+            .subscribe::<ops::WatchRemoteTasks>(&RemoteTasksParams { after })
+            .await?;
+        Ok(ProjectionStream::new(
+            ops::WatchRemoteTasks::NAME,
+            subscription,
+        ))
+    }
+
+    /// RM-03: follow one task in detail from `after`, or from a snapshot.
+    pub async fn watch_remote_task(
+        &self,
+        task_id: &str,
+        after: Option<ProjectionCursor>,
+    ) -> Result<ProjectionStream<RemoteTaskItem>, SdkError> {
+        let subscription = self
+            .subscribe::<ops::WatchRemoteTask>(&RemoteTaskParams {
+                task_id: task_id.into(),
+                after,
+            })
+            .await?;
+        Ok(ProjectionStream::new(
+            ops::WatchRemoteTask::NAME,
+            subscription,
+        ))
+    }
+
+    /// Open a watch operation's stream, bounded by the client's deadline
+    /// until the engine accepts it.
+    async fn subscribe<O: Operation>(
+        &self,
+        params: &O::Params,
+    ) -> Result<luna_rpc::RpcSubscription, SdkError> {
+        self.require::<O>()?;
+        let params = serde_json::to_value(params)
+            .map_err(|error| SdkError::Engine(format!("serialize {}: {error}", O::NAME)))?;
+        let subscribe = self.transport.rpc().subscribe_checked(O::METHOD, params);
+        match self.deadline {
+            Some(after) => {
+                tokio::time::timeout(after, subscribe)
+                    .await
+                    .map_err(|_| SdkError::Timeout {
+                        operation: O::NAME,
+                        after,
+                    })?
+            }
+            None => subscribe.await,
+        }
+        .map_err(|error| SdkError::from_rpc(O::NAME, error))
     }
 
     pub(crate) fn deadline(&self) -> Option<Duration> {

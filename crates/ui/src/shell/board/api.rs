@@ -215,4 +215,7 @@ board_calls! {
     set_dependency(BoardSetDependencyRequest) -> BoardMutationReceipt = BOARD_SET_DEPENDENCY;
     issue_writeback_preview(BoardIssueWritebackPreviewRequest) -> IssueWritebackPreview = BOARD_ISSUE_WRITEBACK_PREVIEW;
     issue_writeback(BoardIssueWritebackRequest) -> IssueWritebackReceipt = BOARD_ISSUE_WRITEBACK;
+    // ---- feature groups (PB-4A) ----
+    feature_groups(luna_proto::BoardFeatureGroupsRequest) -> luna_proto::BoardFeatureGroupPage = BOARD_FEATURE_GROUPS;
+    feature_group_mutate(luna_proto::BoardFeatureGroupMutateRequest) -> luna_proto::FeatureGroupMutation = BOARD_FEATURE_GROUP_MUTATE;
 }

@@ -18,6 +18,8 @@ pub(crate) mod detail;
 pub(crate) mod evidence;
 pub(crate) mod filters;
 pub(crate) mod github_picker;
+/// PB-4A feature groups panel.
+pub(crate) mod groups;
 pub(crate) mod list;
 pub(crate) mod manual_form;
 pub(crate) mod model;

@@ -398,6 +398,701 @@ export const MANIFEST: Manifest = {
       ],
       "type": "object"
     },
+    "ProjectionCurrent": {
+      "description": "A `current` answer: the client's cursor still names this host's state.",
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "host": {
+          "$ref": "#/$defs/ProjectionHost"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "cursor",
+        "observedAtMs"
+      ],
+      "type": "object"
+    },
+    "ProjectionCursor": {
+      "description": "Where a projection is in its host's history.",
+      "properties": {
+        "generation": {
+          "description": "Fresh per engine start; revisions compare only within one generation.",
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generation",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "ProjectionHost": {
+      "description": "The host a projection describes. A client checks it against the host it\npaired with before applying anything.",
+      "properties": {
+        "capabilities": {
+          "description": "What this host serves remotely for these projections and tasks, for\nexample `remote-projections-v1`. Task control is absent until a host\nadmits remote commands (RM-04).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deviceId": {
+          "type": "string"
+        },
+        "engineVersion": {
+          "type": "string"
+        },
+        "environmentId": {
+          "description": "The remote environment (profile) id paired clients target; absent\nwhen this engine has no remote authority store.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "type": "string"
+        },
+        "profileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspaceScope": {
+          "$ref": "#/$defs/WorkspaceScope"
+        }
+      },
+      "required": [
+        "deviceId",
+        "workspaceScope",
+        "generation",
+        "engineVersion",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "ProviderReadiness": {
+      "description": "A provider (harness) on this host and whether it can run work.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "installed",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "RemoteHistoryEntry": {
+      "description": "One transcript entry, reduced to what a list shows.",
+      "properties": {
+        "createdAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "entryId": {
+          "type": "string"
+        },
+        "error": {
+          "type": "boolean"
+        },
+        "otherParts": {
+          "description": "Parts not shown here (images, reasoning, questions, extra tools).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "role": {
+          "description": "`user`, `assistant` or `system`.",
+          "type": "string"
+        },
+        "status": {
+          "description": "`streaming`, `complete` or `aborted`, when the entry has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "The entry's text parts, joined and bounded.",
+          "type": "string"
+        },
+        "textTruncated": {
+          "type": "boolean"
+        },
+        "tools": {
+          "description": "The kind of each tool call, in order and bounded.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entryId",
+        "role",
+        "createdAtMs",
+        "text",
+        "textTruncated",
+        "tools",
+        "otherParts",
+        "error"
+      ],
+      "type": "object"
+    },
+    "RemoteProject": {
+      "description": "One project, by display name only.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "name"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskDelta": {
+      "description": "A task's changes from `base` to `cursor`.",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "order": {
+          "description": "The complete entry order after this delta, when it changed. Always\npresent when an entry was added or removed.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "remove": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteTaskRow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The task's row, when it changed."
+        },
+        "taskRevision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "taskSequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalEntries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upsert": {
+          "items": {
+            "$ref": "#/$defs/RemoteHistoryEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "base",
+        "cursor",
+        "observedAtMs",
+        "taskRevision",
+        "taskSequence",
+        "upsert",
+        "remove",
+        "totalEntries"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskDetail": {
+      "description": "One task in detail: the first item of a watch without a current cursor.",
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "entries": {
+          "description": "The newest entries, oldest first.",
+          "items": {
+            "$ref": "#/$defs/RemoteHistoryEntry"
+          },
+          "type": "array"
+        },
+        "host": {
+          "$ref": "#/$defs/ProjectionHost"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "task": {
+          "$ref": "#/$defs/RemoteTaskRow"
+        },
+        "taskRevision": {
+          "description": "The task's durable command revision and sequence (CORE-05).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "taskSequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalEntries": {
+          "description": "Every entry in the transcript; more than `entries.len()` when bounded.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "cursor",
+        "observedAtMs",
+        "task",
+        "taskRevision",
+        "taskSequence",
+        "entries",
+        "totalEntries"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskItem": {
+      "description": "One `WatchRemoteTask` item.",
+      "oneOf": [
+        {
+          "description": "The whole task; replaces anything the client holds for it.",
+          "properties": {
+            "detail": {
+              "$ref": "#/$defs/RemoteTaskDetail"
+            },
+            "kind": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The client's cursor is current; nothing was resent.",
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/ProjectionCurrent"
+            },
+            "kind": {
+              "const": "current",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "current"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/RemoteTaskDelta"
+            },
+            "kind": {
+              "const": "delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The task is not on this host (deleted, never existed, or its project\nwas removed). The stream ends after it.",
+          "properties": {
+            "kind": {
+              "const": "removed",
+              "type": "string"
+            },
+            "removed": {
+              "$ref": "#/$defs/RemovedTask"
+            }
+          },
+          "required": [
+            "kind",
+            "removed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RemoteTaskParams": {
+      "description": "`WatchRemoteTask` parameters.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectionCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The cursor the client holds for this task; omitted, a snapshot."
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskRegistry": {
+      "description": "The whole registry: the first item of a watch without a current cursor.",
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "host": {
+          "$ref": "#/$defs/ProjectionHost"
+        },
+        "observedAtMs": {
+          "description": "The host's clock (Unix ms) when this was computed.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/RemoteProject"
+          },
+          "type": "array"
+        },
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderReadiness"
+          },
+          "type": "array"
+        },
+        "tasks": {
+          "description": "Host order: pinned first, then the most recent activity.",
+          "items": {
+            "$ref": "#/$defs/RemoteTaskRow"
+          },
+          "type": "array"
+        },
+        "totalTasks": {
+          "description": "Every task the host would list; more than `tasks.len()` when bounded.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "cursor",
+        "observedAtMs",
+        "projects",
+        "tasks",
+        "totalTasks",
+        "providers"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskRow": {
+      "description": "One task's cheap registry row.",
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "createdAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lastActivityMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "preview": {
+          "description": "A bounded preview of the last message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "provider": {
+          "description": "The task's provider id, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RemoteTaskStatus"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unseen": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "taskId",
+        "projectId",
+        "status",
+        "archived",
+        "pinned",
+        "unseen",
+        "createdAtMs"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskStatus": {
+      "description": "A task's status as the host derives it from its own live runs.",
+      "oneOf": [
+        {
+          "enum": [
+            "idle",
+            "working",
+            "awaitingApproval",
+            "awaitingInput",
+            "errored"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "Finished, and not yet seen on any device.",
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteTasksDelta": {
+      "description": "The registry changes from `base` to `cursor`.",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ProjectionCursor"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "order": {
+          "description": "The complete task order after this delta, when it changed. Always\npresent when a row was added or removed.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "projects": {
+          "description": "The complete project list, when it changed.",
+          "items": {
+            "$ref": "#/$defs/RemoteProject"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "remove": {
+          "description": "Rows that left the registry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "totalTasks": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upsert": {
+          "description": "New or changed rows.",
+          "items": {
+            "$ref": "#/$defs/RemoteTaskRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "base",
+        "cursor",
+        "observedAtMs",
+        "upsert",
+        "remove",
+        "totalTasks"
+      ],
+      "type": "object"
+    },
+    "RemoteTasksItem": {
+      "description": "One `WatchRemoteTasks` item.",
+      "oneOf": [
+        {
+          "description": "The whole registry; replaces anything the client holds.",
+          "properties": {
+            "kind": {
+              "const": "snapshot",
+              "type": "string"
+            },
+            "registry": {
+              "$ref": "#/$defs/RemoteTaskRegistry"
+            }
+          },
+          "required": [
+            "kind",
+            "registry"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The client's cursor is current; nothing was resent.",
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/ProjectionCurrent"
+            },
+            "kind": {
+              "const": "current",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "current"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/RemoteTasksDelta"
+            },
+            "kind": {
+              "const": "delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "delta"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RemoteTasksParams": {
+      "description": "`WatchRemoteTasks` parameters.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectionCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The cursor the client holds; omitted, the watch starts with a snapshot."
+        }
+      },
+      "type": "object"
+    },
+    "RemovedTask": {
+      "description": "A task this host does not list.",
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/ProjectionHost"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "taskId",
+        "observedAtMs"
+      ],
+      "type": "object"
+    },
     "ServerFrame": {
       "description": "Exactly one of ok (present, may be null: success), err (failure), item (stream element) or done: true (stream end).",
       "oneOf": [
@@ -949,6 +1644,34 @@ export const MANIFEST: Manifest = {
       },
       "reply": "stream",
       "version": 1
+    },
+    {
+      "id": "luna.core/watch-remote-tasks",
+      "kind": "watch",
+      "method": "WatchRemoteTasks",
+      "name": "watchRemoteTasks",
+      "output": {
+        "$ref": "#/$defs/RemoteTasksItem"
+      },
+      "params": {
+        "$ref": "#/$defs/RemoteTasksParams"
+      },
+      "reply": "stream",
+      "version": 1
+    },
+    {
+      "id": "luna.core/watch-remote-task",
+      "kind": "watch",
+      "method": "WatchRemoteTask",
+      "name": "watchRemoteTask",
+      "output": {
+        "$ref": "#/$defs/RemoteTaskItem"
+      },
+      "params": {
+        "$ref": "#/$defs/RemoteTaskParams"
+      },
+      "reply": "stream",
+      "version": 1
     }
   ],
   "sdkVersion": "0.1.0",
@@ -1050,6 +1773,193 @@ export type OperationRef = {
   version: number;
 };
 
+/** A `current` answer: the client's cursor still names this host's state. */
+export type ProjectionCurrent = {
+  cursor: ProjectionCursor;
+  host: ProjectionHost;
+  observedAtMs: number;
+};
+
+/** Where a projection is in its host's history. */
+export type ProjectionCursor = {
+  /** Fresh per engine start; revisions compare only within one generation. */
+  generation: string;
+  revision: number;
+};
+
+/** The host a projection describes. A client checks it against the host it paired with before applying anything. */
+export type ProjectionHost = {
+  /** What this host serves remotely for these projections and tasks, for example `remote-projections-v1`. Task control is absent until a host admits remote commands (RM-04). */
+  capabilities: Array<string>;
+  deviceId: string;
+  engineVersion: string;
+  /** The remote environment (profile) id paired clients target; absent when this engine has no remote authority store. */
+  environmentId?: string | null;
+  generation: string;
+  profileId?: string | null;
+  workspaceScope: WorkspaceScope;
+};
+
+/** A provider (harness) on this host and whether it can run work. */
+export type ProviderReadiness = {
+  enabled: boolean;
+  id: string;
+  installed: boolean;
+  name: string;
+};
+
+/** One transcript entry, reduced to what a list shows. */
+export type RemoteHistoryEntry = {
+  createdAtMs: number;
+  entryId: string;
+  error: boolean;
+  /** Parts not shown here (images, reasoning, questions, extra tools). */
+  otherParts: number;
+  /** `user`, `assistant` or `system`. */
+  role: string;
+  /** `streaming`, `complete` or `aborted`, when the entry has one. */
+  status?: string | null;
+  /** The entry's text parts, joined and bounded. */
+  text: string;
+  textTruncated: boolean;
+  /** The kind of each tool call, in order and bounded. */
+  tools: Array<string>;
+};
+
+/** One project, by display name only. */
+export type RemoteProject = {
+  name: string;
+  projectId: string;
+};
+
+/** A task's changes from `base` to `cursor`. */
+export type RemoteTaskDelta = {
+  base: ProjectionCursor;
+  cursor: ProjectionCursor;
+  observedAtMs: number;
+  /** The complete entry order after this delta, when it changed. Always present when an entry was added or removed. */
+  order?: Array<string> | null;
+  remove: Array<string>;
+  /** The task's row, when it changed. */
+  task?: RemoteTaskRow | null;
+  taskRevision: number;
+  taskSequence: number;
+  totalEntries: number;
+  upsert: Array<RemoteHistoryEntry>;
+};
+
+/** One task in detail: the first item of a watch without a current cursor. */
+export type RemoteTaskDetail = {
+  cursor: ProjectionCursor;
+  /** The newest entries, oldest first. */
+  entries: Array<RemoteHistoryEntry>;
+  host: ProjectionHost;
+  observedAtMs: number;
+  task: RemoteTaskRow;
+  /** The task's durable command revision and sequence (CORE-05). */
+  taskRevision: number;
+  taskSequence: number;
+  /** Every entry in the transcript; more than `entries.len()` when bounded. */
+  totalEntries: number;
+};
+
+/** One `WatchRemoteTask` item. */
+export type RemoteTaskItem = {
+  detail: RemoteTaskDetail;
+  kind: "snapshot";
+} | {
+  current: ProjectionCurrent;
+  kind: "current";
+} | {
+  delta: RemoteTaskDelta;
+  kind: "delta";
+} | {
+  kind: "removed";
+  removed: RemovedTask;
+};
+
+/** `WatchRemoteTask` parameters. */
+export type RemoteTaskParams = {
+  /** The cursor the client holds for this task; omitted, a snapshot. */
+  after?: ProjectionCursor | null;
+  taskId: string;
+};
+
+/** The whole registry: the first item of a watch without a current cursor. */
+export type RemoteTaskRegistry = {
+  cursor: ProjectionCursor;
+  host: ProjectionHost;
+  /** The host's clock (Unix ms) when this was computed. */
+  observedAtMs: number;
+  projects: Array<RemoteProject>;
+  providers: Array<ProviderReadiness>;
+  /** Host order: pinned first, then the most recent activity. */
+  tasks: Array<RemoteTaskRow>;
+  /** Every task the host would list; more than `tasks.len()` when bounded. */
+  totalTasks: number;
+};
+
+/** One task's cheap registry row. */
+export type RemoteTaskRow = {
+  archived: boolean;
+  createdAtMs: number;
+  lastActivityMs?: number | null;
+  pinned: boolean;
+  /** A bounded preview of the last message. */
+  preview?: string | null;
+  projectId: string;
+  /** The task's provider id, when it has one. */
+  provider?: string | null;
+  status: RemoteTaskStatus;
+  taskId: string;
+  title?: string | null;
+  unseen: boolean;
+};
+
+/** A task's status as the host derives it from its own live runs. */
+export type RemoteTaskStatus = "idle" | "working" | "awaitingApproval" | "awaitingInput" | "errored" | "completed";
+
+/** The registry changes from `base` to `cursor`. */
+export type RemoteTasksDelta = {
+  base: ProjectionCursor;
+  cursor: ProjectionCursor;
+  observedAtMs: number;
+  /** The complete task order after this delta, when it changed. Always present when a row was added or removed. */
+  order?: Array<string> | null;
+  /** The complete project list, when it changed. */
+  projects?: Array<RemoteProject> | null;
+  /** Rows that left the registry. */
+  remove: Array<string>;
+  totalTasks: number;
+  /** New or changed rows. */
+  upsert: Array<RemoteTaskRow>;
+};
+
+/** One `WatchRemoteTasks` item. */
+export type RemoteTasksItem = {
+  kind: "snapshot";
+  registry: RemoteTaskRegistry;
+} | {
+  current: ProjectionCurrent;
+  kind: "current";
+} | {
+  delta: RemoteTasksDelta;
+  kind: "delta";
+};
+
+/** `WatchRemoteTasks` parameters. */
+export type RemoteTasksParams = {
+  /** The cursor the client holds; omitted, the watch starts with a snapshot. */
+  after?: ProjectionCursor | null;
+};
+
+/** A task this host does not list. */
+export type RemovedTask = {
+  host: ProjectionHost;
+  observedAtMs: number;
+  taskId: string;
+};
+
 /** Exactly one of ok (present, may be null: success), err (failure), item (stream element) or done: true (stream end). */
 export type ServerFrame = {
   done?: true;
@@ -1147,6 +2057,8 @@ export interface Operations {
   getTaskCommandReceipt: { params: TaskCommandReceiptParams; output: CommandReceipt | null };
   executeTaskCommand: { params: ExecuteTaskCommandParams; output: CommandReceipt };
   watchTaskCommands: { params: TaskCommandSnapshotParams; output: TaskCommandWatchItem };
+  watchRemoteTasks: { params: RemoteTasksParams; output: RemoteTasksItem };
+  watchRemoteTask: { params: RemoteTaskParams; output: RemoteTaskItem };
 }
 
 export type OperationName = keyof Operations;

@@ -15,6 +15,8 @@ pub(crate) mod authoring;
 pub(crate) mod chat_identity;
 pub(crate) mod context;
 pub(crate) mod github;
+/// PB-4A feature groups (local grouping, explicit related-repository links).
+pub(crate) mod groups;
 pub(crate) mod lifecycle;
 pub(crate) mod review;
 mod store;

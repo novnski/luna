@@ -22,7 +22,8 @@ const NATIVE_CODE = 'luna.capability/native-code';
 const [command, ...rest] = process.argv.slice(2);
 const portAt = rest.indexOf('--port');
 const port = portAt >= 0 ? Number(rest[portAt + 1]) : 59777;
-const positional = rest.filter((_, index) => index !== portAt && index !== portAt + 1);
+const positional =
+  portAt >= 0 ? rest.filter((_, index) => index !== portAt && index !== portAt + 1) : rest;
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const write = (dir, name, value) => {

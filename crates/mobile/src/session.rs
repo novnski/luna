@@ -1,5 +1,6 @@
-//! The SDK session facade (IOS-00): one paired Mac's typed operations through
-//! the shared `luna-sdk` client, over a socket the platform owns.
+//! The SDK session facade (IOS-00) and its connection runtime (RM-03): one
+//! paired Mac's typed operations through the shared `luna-sdk` client, over
+//! sockets the platform owns.
 //!
 //! The split is the one RM-00 proved. Swift performs every network operation
 //! with `URLSession` and evaluates the TLS pin; this core decides what each
@@ -8,38 +9,56 @@
 //! operation through `luna_sdk::Client`, exactly as the desktop app and the
 //! CLI call the engine.
 //!
-//! `connect` opens one socket:
+//! Opening a socket takes four steps:
 //! 1. the pinned descriptor must name the saved host, protocol and the
 //!    catalog this SDK speaks (before any credential is used);
 //! 2. the saved bearer buys one single-use socket ticket;
 //! 3. the platform opens the pinned socket with that ticket;
 //! 4. one typed SDK read (`engineInfo`) must answer as the same host.
 //!
-//! A session never reconnects: once closed it stays closed, and the caller
-//! creates a new one. RM-03 owns reconnect, caches and projections on top of
-//! this type; it extends it rather than adding another connection owner.
+//! This is the single connection owner. It has two lifetimes:
+//! - [`RemoteSession::new`] (IOS-00) opens one socket and never reconnects:
+//!   once closed it stays closed, and the caller creates a new session.
+//! - [`RemoteSession::following`] (RM-03) is the runtime. After a lost socket
+//!   it reconnects with bounded, jittered backoff; it suspends and resumes
+//!   with the app and waits while the platform reports no network. Every
+//!   reconnect repeats all four steps, so a stale socket, a cached row or a
+//!   public descriptor never counts as readiness. While open it follows the
+//!   Mac's task registry and a bounded set of tasks into a host-keyed
+//!   [`luna_sdk::ProjectionStore`], independently of any open view, and
+//!   resumes each from its cursor (or takes the Mac's snapshot repair) on
+//!   the next socket. Each verified socket is a new generation: replies and
+//!   projection updates from an older one are refused. Revoked or expired
+//!   access, a wrong host and an incompatible Mac close it for good.
 //!
 //! Threading: every method is callable from any thread. Platform callbacks
 //! may arrive on any thread, synchronously or late; replies for anything but
 //! the current request or socket are ignored. No lock is held while foreign
-//! code runs. The listener is told *that* the state changed, from whichever
-//! thread changed it; the platform reads [`RemoteSession::state`] on its own
-//! actor, so out-of-order notifications cannot reorder states.
+//! code runs. The listener is told *that* something changed, from whichever
+//! thread changed it, at most once until the platform reads
+//! [`RemoteSession::state`]; the platform reads state and projections on its
+//! own actor, so notifications arriving out of order cannot reorder states
+//! and a burst of updates costs one read.
 
+use std::collections::VecDeque;
+use std::hash::{BuildHasher, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use luna_proto::remote_control::{
     DESCRIPTOR_PATH, HostTicket, RemoteTarget, SOCKET_PATH, SOCKET_TICKET_PATH,
 };
+use luna_proto::remote_projection::{MAX_ID_BYTES, REMOTE_PROJECTIONS_V1};
 use luna_proto::{CommandReceipt, EngineInfo, TaskCommandSnapshot};
 use luna_rpc::RpcClient;
 use luna_rpc::remote_auth::SocketTicket;
-use luna_sdk::{SdkError, TaskCommandUpdate};
+use luna_sdk::{HostKey, ProjectionError, ProjectionStore, SdkError, TaskCommandUpdate};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
+use crate::follow::{RemoteTaskProjection, RemoteTasksProjection, task_projection, tasks_record};
 use crate::pairing::{EnrollmentRequest, SavedMac, now, validate_saved};
 use crate::probe::{
     Endpoint, MAX_DESCRIPTOR_BYTES, RejectReason, RouteObservation, TransportFailure, parse_ticket,
@@ -63,6 +82,15 @@ const FRAME_QUEUE: usize = 256;
 const WATCH_QUEUE: usize = 64;
 /// The remote guard's refusal prefix (`luna_rpc::remote_auth`).
 const DENIED_PREFIX: &str = "remote authorization denied: ";
+/// Tasks the runtime follows at once, besides the registry (most recently
+/// followed kept). Each holds one of the gateway's 32 in-flight slots.
+pub const MAX_FOLLOWED_TASKS: usize = 4;
+/// Resubscriptions of one projection on one socket before it gives up and
+/// reports the problem (a reconnect starts over).
+const MAX_FOLLOW_RETRIES: u32 = 3;
+/// The first reconnect after a lost socket, then doubling to the cap.
+const FIRST_RETRY: Duration = Duration::from_millis(250);
+const MAX_RETRY: Duration = Duration::from_secs(30);
 
 type SdkClient = luna_sdk::Client<RpcClient>;
 type Updates = mpsc::Receiver<Result<TaskCommandChange, RemoteSessionError>>;
@@ -85,25 +113,31 @@ pub struct SocketOpenRequest {
     pub max_message_bytes: u32,
 }
 
-/// The platform half of a session: pinned HTTPS requests and one pinned
-/// WebSocket. Each request is reported once, through
+/// The platform half of a session: pinned HTTPS requests and pinned
+/// WebSockets, one open at a time. Each request is reported once, through
 /// [`RemoteSession::request_completed`] or [`RemoteSession::request_failed`];
-/// the socket through [`RemoteSession::socket_opened`], then
+/// each socket through [`RemoteSession::socket_opened`], then
 /// [`RemoteSession::receive`] for each text message in order, then
 /// [`RemoteSession::socket_closed`]. Calls may come from any thread.
 #[uniffi::export(with_foreign)]
 pub trait SocketTransport: Send + Sync {
     fn send_request(&self, request: EnrollmentRequest);
+    /// Open a socket. A runtime session opens another after the previous one
+    /// ended or was closed with [`SocketTransport::close_socket`].
     fn open_socket(&self, request: SocketOpenRequest);
     /// Send one text message on the open socket, after every earlier one.
     fn send_frame(&self, socket_id: u64, frame: String);
+    /// Close this one socket (RM-03: the session will open another). Nothing
+    /// needs to be reported for it afterwards. Idempotent.
+    fn close_socket(&self, socket_id: u64);
     /// Stop everything for this session: cancel any request and close the
     /// socket. Idempotent; nothing needs to be reported afterwards.
     fn close(&self);
 }
 
-/// Told that [`RemoteSession::state`] changed. Called on whichever thread
-/// changed it: hop to the platform's actor, then read the state there.
+/// Told that [`RemoteSession::state`] or a projection changed. Called on
+/// whichever thread changed it: hop to the platform's actor, then read the
+/// state there. Not called again until the state has been read.
 #[uniffi::export(with_foreign)]
 pub trait RemoteSessionListener: Send + Sync {
     fn on_change(&self);
@@ -153,6 +187,17 @@ pub enum RemoteSessionState {
         /// The route of the ticket request on the same pinned origin.
         route: Option<RouteObservation>,
     },
+    /// RM-03: the socket was lost or an attempt failed; the session retries
+    /// after a bounded backoff. `attempt` counts failed attempts since the
+    /// last open socket.
+    Reconnecting {
+        attempt: u32,
+        detail: String,
+    },
+    /// RM-03: backgrounded on this phone; `resume` reconnects.
+    Suspended,
+    /// RM-03: the platform reports no network; reconnects when it returns.
+    WaitingForNetwork,
     Closed {
         reason: SessionCloseReason,
         detail: String,
@@ -213,6 +258,22 @@ impl RemoteSessionError {
             _ => SessionCloseReason::Failed,
         }
     }
+
+    /// A runtime session stops retrying after one of these: the access, the
+    /// host or its version is wrong, and another attempt cannot change that.
+    fn ends_runtime(&self) -> bool {
+        matches!(
+            self,
+            Self::RePair { .. }
+                | Self::TrustRejected { .. }
+                | Self::IdentityMismatch { .. }
+                | Self::Incompatible { .. }
+                | Self::Denied { .. }
+                | Self::Unsupported { .. }
+                | Self::InvalidSession { .. }
+                | Self::InvalidRequest { .. }
+        )
+    }
 }
 
 /// A task's command position: its revision and durable sequence.
@@ -265,9 +326,9 @@ pub struct TaskCommandWatchHandle {
 
 #[uniffi::export]
 impl TaskCommandWatchHandle {
-    /// The next change. `None` once the watch was cancelled, its session
-    /// closed or the engine ended the stream: open a new watch, which starts
-    /// from a fresh snapshot (RM-03 owns cursors and repair across sockets).
+    /// The next change. `None` once the watch was cancelled, its socket or
+    /// session closed or the engine ended the stream: open a new watch,
+    /// which starts from a fresh snapshot.
     pub async fn next(&self) -> Result<Option<TaskCommandChange>, RemoteSessionError> {
         let mut updates = self.updates.lock().await;
         updates.recv().await.transpose()
@@ -294,8 +355,8 @@ pub struct RemoteSession {
 
 #[uniffi::export]
 impl RemoteSession {
-    /// Validate saved access with the same rules as restore; nothing touches
-    /// the network until [`RemoteSession::connect`].
+    /// IOS-00: one socket. Validate saved access with the same rules as
+    /// restore; nothing touches the network until [`RemoteSession::connect`].
     #[uniffi::constructor]
     pub fn new(
         mac: SavedMac,
@@ -303,52 +364,52 @@ impl RemoteSession {
         transport: Arc<dyn SocketTransport>,
         listener: Option<Arc<dyn RemoteSessionListener>>,
     ) -> Result<Arc<Self>, RemoteSessionError> {
-        let host = validate_saved(&mac).map_err(|error| RemoteSessionError::InvalidSession {
-            detail: error.to_string(),
-        })?;
-        if mac.expires_at_ms <= now() {
-            return Err(RemoteSessionError::RePair {
-                detail: "Access has expired; pair again on the Mac".into(),
-            });
-        }
-        let (_, endpoints) =
-            parse_ticket(&mac.host_ticket).map_err(|error| RemoteSessionError::InvalidSession {
-                detail: error.to_string(),
-            })?;
-        let endpoint = endpoints
-            .into_iter()
-            .nth(endpoint_index as usize)
-            .ok_or_else(|| RemoteSessionError::InvalidSession {
-                detail: format!("the saved Mac has no endpoint {endpoint_index}"),
-            })?;
         Ok(Arc::new(Self {
-            core: Arc::new(Core {
-                host,
-                endpoint,
-                token: mac.session_token,
-                transport,
-                listener,
-                closed: watch::Sender::new(false),
-                inner: Mutex::new(Inner {
-                    phase: Phase::Idle,
-                    next_id: 1,
-                    request: None,
-                    socket: None,
-                    client: None,
-                    route: None,
-                    tasks: Vec::new(),
-                }),
-            }),
+            core: Arc::new(Core::build(mac, endpoint_index, transport, listener, None)?),
         }))
     }
 
-    /// Open and verify the socket. Once; a failed, cancelled or closed
-    /// session stays closed.
+    /// RM-03: the reconnecting runtime that follows the Mac's tasks. `cache`
+    /// is what [`RemoteSession::cache_bytes`] returned on an earlier run for
+    /// this same Mac; it is restored as `cached` and confirmed or repaired
+    /// on the first socket. A cache for any other host, profile or version is
+    /// ignored (see [`RemoteSession::cache_note`]).
+    #[uniffi::constructor]
+    pub fn following(
+        mac: SavedMac,
+        endpoint_index: u32,
+        transport: Arc<dyn SocketTransport>,
+        listener: Option<Arc<dyn RemoteSessionListener>>,
+        cache: Option<Vec<u8>>,
+    ) -> Result<Arc<Self>, RemoteSessionError> {
+        Ok(Arc::new(Self {
+            core: Arc::new(Core::build(
+                mac,
+                endpoint_index,
+                transport,
+                listener,
+                Some(cache),
+            )?),
+        }))
+    }
+
+    /// Open and verify the socket.
+    ///
+    /// IOS-00 session: once; a failed, cancelled or closed session stays
+    /// closed, and a second call is `busy`.
+    ///
+    /// Runtime session: starts the runtime and returns the first socket's
+    /// host, or the first attempt's error while the runtime keeps retrying
+    /// (or the reason it closed). Calling it again while open returns the
+    /// open host; cancelling the call leaves the runtime running.
     pub async fn connect(
         &self,
         cancel: Option<Arc<Cancellation>>,
     ) -> Result<RemoteHostInfo, RemoteSessionError> {
         let core = self.core.clone();
+        if core.follows() {
+            return run(cancel, async move { core.start_runtime().await }).await;
+        }
         run(cancel, async move { core.connect().await }).await
     }
 
@@ -380,8 +441,108 @@ impl RemoteSession {
             .terminate(SessionCloseReason::Local, "Closed on this phone".into());
     }
 
+    /// The current state. Reading it acknowledges the last change
+    /// notification: the next change notifies again.
     pub fn state(&self) -> RemoteSessionState {
+        self.core.pending.store(false, Ordering::SeqCst);
         self.core.state()
+    }
+
+    /// RM-03: the app went to the background. Close the socket (accepted
+    /// work on the Mac continues); projections turn `stale`. Keep the
+    /// session, save [`RemoteSession::cache_bytes`], and call
+    /// [`RemoteSession::resume`] in the foreground.
+    pub fn suspend(&self) {
+        self.core.suspend();
+    }
+
+    /// RM-03: the app is in the foreground again: reconnect now (with full
+    /// verification) and resume every projection from its cursor.
+    pub fn resume(&self) {
+        self.core.resume();
+    }
+
+    /// RM-03: the platform's network path changed. Without a network the
+    /// socket is closed and the session waits; when one returns it
+    /// reconnects at once. An open socket survives a path change until its
+    /// keepalive or the Mac ends it.
+    pub fn network_changed(&self, available: bool) {
+        self.core.network_changed(available);
+    }
+
+    /// RM-03: follow this task's detail (its row, command position and a
+    /// bounded transcript tail) from now on, whether or not a view shows
+    /// it. At most [`MAX_FOLLOWED_TASKS`] are followed; following another
+    /// stops the least recently followed one (its cached detail stays).
+    pub fn follow_task(&self, task_id: String) -> Result<(), RemoteSessionError> {
+        if task_id.is_empty() || task_id.len() > MAX_ID_BYTES {
+            return Err(RemoteSessionError::InvalidRequest {
+                detail: format!("a task id is 1-{MAX_ID_BYTES} bytes"),
+            });
+        }
+        self.core.follow_task(task_id)
+    }
+
+    /// RM-03: stop following a task; its cached detail stays readable.
+    pub fn unfollow_task(&self, task_id: String) {
+        self.core.unfollow_task(&task_id);
+    }
+
+    /// RM-03: the followed tasks, least recently followed first.
+    pub fn followed_tasks(&self) -> Vec<String> {
+        self.core
+            .lock()
+            .follow
+            .as_ref()
+            .map(|follow| follow.followed.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// RM-03: the Mac's projects and tasks as last confirmed, with their
+    /// freshness; `None` before the first snapshot (and without a cache).
+    pub fn remote_tasks(&self) -> Option<RemoteTasksProjection> {
+        let view = self.core.lock().follow.as_ref()?.store.registry()?;
+        Some(tasks_record(&view))
+    }
+
+    /// RM-03: one task's detail as last confirmed (followed or cached).
+    pub fn remote_task(&self, task_id: String) -> Option<RemoteTaskProjection> {
+        let view = self.core.lock().follow.as_ref()?.store.task(&task_id)?;
+        Some(task_projection(&view))
+    }
+
+    /// RM-03: grows whenever a projection or its freshness changed, so the
+    /// platform re-reads projections only when this moved.
+    pub fn projection_revision(&self) -> u64 {
+        self.core
+            .lock()
+            .follow
+            .as_ref()
+            .map_or(0, |follow| follow.revision)
+    }
+
+    /// RM-03: why the Mac's projections are not being followed (an older
+    /// Mac, refused access or repeated failures), if they are not.
+    pub fn projection_issue(&self) -> Option<String> {
+        self.core.lock().follow.as_ref()?.issue.clone()
+    }
+
+    /// RM-03: why the cache given to [`RemoteSession::following`] was not
+    /// restored, if it was not.
+    pub fn cache_note(&self) -> Option<String> {
+        self.core.lock().follow.as_ref()?.cache_note.clone()
+    }
+
+    /// RM-03: the projections to keep for the next run, bounded. Store them
+    /// in protected, non-synchronized storage scoped to this saved Mac, and
+    /// delete them when the Mac is forgotten. Empty for an IOS-00 session.
+    pub fn cache_bytes(&self) -> Vec<u8> {
+        let inner = self.core.lock();
+        inner
+            .follow
+            .as_ref()
+            .map(|follow| follow.store.encode(now_ms()))
+            .unwrap_or_default()
     }
 
     pub fn request_completed(
@@ -424,10 +585,12 @@ impl RemoteSession {
     /// queue is full, so the platform reads no faster than the core consumes.
     pub async fn receive(&self, socket_id: u64, frame: String) {
         if frame.len() > MAX_MESSAGE_BYTES as usize {
-            self.core.terminate(
-                SessionCloseReason::Failed,
-                format!("The Mac sent a message over {MAX_MESSAGE_BYTES} bytes"),
-            );
+            let detail = format!("The Mac sent a message over {MAX_MESSAGE_BYTES} bytes");
+            if self.core.follows() {
+                self.core.socket_lost(socket_id, detail, true);
+            } else {
+                self.core.terminate(SessionCloseReason::Failed, detail);
+            }
             return;
         }
         let Some(inbound) = self.core.inbound(socket_id) else {
@@ -448,6 +611,10 @@ impl RemoteSession {
             // Not opened yet: the connect reports why.
             Some(Some(opening)) => {
                 let _ = opening.send(Err(failure));
+            }
+            Some(None) if self.core.follows() => {
+                self.core
+                    .socket_lost(socket_id, transport_error(failure).to_string(), false);
             }
             Some(None) => self.core.terminate(
                 SessionCloseReason::Remote,
@@ -470,6 +637,9 @@ enum Phase {
     Idle,
     Connecting,
     Open(RemoteHostInfo),
+    Reconnecting { attempt: u32, detail: String },
+    Suspended,
+    WaitingForNetwork,
     Closed(SessionCloseReason, String),
 }
 
@@ -496,8 +666,11 @@ struct Inner {
     socket: Option<Socket>,
     client: Option<Arc<SdkClient>>,
     route: Option<RouteObservation>,
-    /// The outbound pump and every watch; all abort when the session closes.
+    /// The socket's tasks: the outbound pump, every watch and projection
+    /// follower. All abort when the socket ends or the session closes.
     tasks: Vec<AbortHandle>,
+    /// RM-03 runtime state; `None` for an IOS-00 single-socket session.
+    follow: Option<Follow>,
 }
 
 impl Inner {
@@ -508,6 +681,27 @@ impl Inner {
     }
 }
 
+/// The runtime's state, guarded with the rest of [`Inner`].
+struct Follow {
+    store: ProjectionStore,
+    /// The current socket generation. It moves when a socket opens and when
+    /// it ends, so a late update from any earlier socket is refused.
+    epoch: u64,
+    /// Failed attempts since the last open socket.
+    attempt: u32,
+    /// What the platform last said about the network.
+    network: bool,
+    supervisor: Option<AbortHandle>,
+    /// Followed tasks, least recently followed first.
+    followed: VecDeque<String>,
+    /// The current socket's task followers.
+    followers: Vec<(String, AbortHandle)>,
+    last_error: Option<RemoteSessionError>,
+    cache_note: Option<String>,
+    issue: Option<String>,
+    revision: u64,
+}
+
 struct Core {
     host: HostTicket,
     endpoint: Endpoint,
@@ -515,17 +709,127 @@ struct Core {
     transport: Arc<dyn SocketTransport>,
     listener: Option<Arc<dyn RemoteSessionListener>>,
     closed: watch::Sender<bool>,
+    /// Bumped on every state change; the runtime's supervisor and connect
+    /// wait on it.
+    wake: watch::Sender<u64>,
+    /// A change was signalled and the platform has not read the state since.
+    pending: AtomicBool,
     inner: Mutex<Inner>,
 }
 
+/// What the runtime's supervisor does next.
+enum Step {
+    Stop,
+    Wait,
+    Connect,
+    Retry(Duration),
+}
+
+/// Why a follower stops applying its stream.
+enum Refusal {
+    /// The socket (or session) it belonged to is gone.
+    Stop,
+    /// The stream does not follow the held state: resubscribe for a snapshot.
+    Resnapshot,
+}
+
 impl Core {
+    fn build(
+        mac: SavedMac,
+        endpoint_index: u32,
+        transport: Arc<dyn SocketTransport>,
+        listener: Option<Arc<dyn RemoteSessionListener>>,
+        follow: Option<Option<Vec<u8>>>,
+    ) -> Result<Self, RemoteSessionError> {
+        let host = validate_saved(&mac).map_err(|error| RemoteSessionError::InvalidSession {
+            detail: error.to_string(),
+        })?;
+        if mac.expires_at_ms <= now() {
+            return Err(RemoteSessionError::RePair {
+                detail: "Access has expired; pair again on the Mac".into(),
+            });
+        }
+        let (_, endpoints) =
+            parse_ticket(&mac.host_ticket).map_err(|error| RemoteSessionError::InvalidSession {
+                detail: error.to_string(),
+            })?;
+        let endpoint = endpoints
+            .into_iter()
+            .nth(endpoint_index as usize)
+            .ok_or_else(|| RemoteSessionError::InvalidSession {
+                detail: format!("the saved Mac has no endpoint {endpoint_index}"),
+            })?;
+        let follow = follow.map(|cache| {
+            let key = HostKey {
+                device_id: host.target.device_id.clone(),
+                environment_id: host.target.environment_id.clone(),
+                workspace_scope: host.target.workspace_scope,
+            };
+            let (store, cache_note) = match cache {
+                None => (ProjectionStore::new(key), None),
+                Some(bytes) => match ProjectionStore::decode(&bytes, &key) {
+                    Ok(store) => (store, None),
+                    Err(error) => (ProjectionStore::new(key), Some(error.to_string())),
+                },
+            };
+            Follow {
+                store,
+                epoch: 0,
+                attempt: 0,
+                network: true,
+                supervisor: None,
+                followed: VecDeque::new(),
+                followers: Vec::new(),
+                last_error: None,
+                cache_note,
+                issue: None,
+                revision: 1,
+            }
+        });
+        Ok(Self {
+            host,
+            endpoint,
+            token: mac.session_token,
+            transport,
+            listener,
+            closed: watch::Sender::new(false),
+            wake: watch::Sender::new(0),
+            pending: AtomicBool::new(false),
+            inner: Mutex::new(Inner {
+                phase: Phase::Idle,
+                next_id: 1,
+                request: None,
+                socket: None,
+                client: None,
+                route: None,
+                tasks: Vec::new(),
+                follow,
+            }),
+        })
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn follows(&self) -> bool {
+        self.lock().follow.is_some()
+    }
+
+    /// A state change: wake the runtime's waiters and tell the platform.
     fn notify(&self) {
+        self.wake
+            .send_modify(|count| *count = count.wrapping_add(1));
+        self.signal();
+    }
+
+    /// Tell the platform something changed, once until it reads the state.
+    fn signal(&self) {
+        if self.pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
         if let Some(listener) = &self.listener {
             listener.on_change();
         }
@@ -540,6 +844,12 @@ impl Core {
                 host: host.clone(),
                 route: inner.route.clone(),
             },
+            Phase::Reconnecting { attempt, detail } => RemoteSessionState::Reconnecting {
+                attempt: *attempt,
+                detail: detail.clone(),
+            },
+            Phase::Suspended => RemoteSessionState::Suspended,
+            Phase::WaitingForNetwork => RemoteSessionState::WaitingForNetwork,
             Phase::Closed(reason, detail) => RemoteSessionState::Closed {
                 reason: *reason,
                 detail: detail.clone(),
@@ -570,16 +880,25 @@ impl Core {
     /// from inside a platform callback.
     fn terminate(&self, reason: SessionCloseReason, detail: String) {
         let (socket, client, request, tasks) = {
-            let mut inner = self.lock();
+            let mut guard = self.lock();
+            let inner = &mut *guard;
             if matches!(inner.phase, Phase::Closed(..)) {
                 return;
             }
             inner.phase = Phase::Closed(reason, detail);
+            let mut tasks = std::mem::take(&mut inner.tasks);
+            if let Some(follow) = inner.follow.as_mut() {
+                follow.epoch += 1;
+                follow.store.end_epoch();
+                follow.followers.clear();
+                follow.revision += 1;
+                tasks.extend(follow.supervisor.take());
+            }
             (
                 inner.socket.take(),
                 inner.client.take(),
                 inner.request.take(),
-                std::mem::take(&mut inner.tasks),
+                tasks,
             )
         };
         self.closed.send_replace(true);
@@ -592,6 +911,141 @@ impl Core {
         drop((socket, client, request));
         self.transport.close();
         self.notify();
+    }
+
+    /// RM-03: end the current socket (if any) and move to `next`, keeping
+    /// the session. Projections turn stale and their followers stop.
+    fn drop_socket(&self, next: Phase, reset_attempts: bool) {
+        let (socket, client, request, tasks) = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            if matches!(inner.phase, Phase::Closed(..)) {
+                return;
+            }
+            inner.phase = next;
+            if let Some(follow) = inner.follow.as_mut() {
+                follow.epoch += 1;
+                follow.store.end_epoch();
+                follow.followers.clear();
+                follow.revision += 1;
+                if reset_attempts {
+                    follow.attempt = 0;
+                }
+            }
+            inner.route = None;
+            (
+                inner.socket.take(),
+                inner.client.take(),
+                inner.request.take(),
+                std::mem::take(&mut inner.tasks),
+            )
+        };
+        for task in &tasks {
+            task.abort();
+        }
+        let socket_id = socket.as_ref().map(|socket| socket.id);
+        drop((socket, client, request));
+        if let Some(socket_id) = socket_id {
+            self.transport.close_socket(socket_id);
+        }
+        self.notify();
+    }
+
+    /// RM-03: the open (or opening) socket `socket_id` ended: reconnect.
+    /// `failed` counts it as a failed attempt (a protocol fault).
+    fn socket_lost(&self, socket_id: u64, detail: String, failed: bool) {
+        let attempt = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let current = inner
+                .socket
+                .as_ref()
+                .is_some_and(|socket| socket.id == socket_id);
+            let live = matches!(inner.phase, Phase::Open(_) | Phase::Connecting);
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            if !current || !live {
+                return;
+            }
+            if failed || matches!(inner.phase, Phase::Connecting) {
+                follow.attempt = follow.attempt.saturating_add(1);
+            }
+            follow.attempt
+        };
+        self.drop_socket(Phase::Reconnecting { attempt, detail }, false);
+    }
+
+    fn suspend(&self) {
+        let active = {
+            let inner = self.lock();
+            inner.follow.is_some()
+                && !matches!(
+                    inner.phase,
+                    Phase::Idle | Phase::Suspended | Phase::Closed(..)
+                )
+        };
+        if active {
+            self.drop_socket(Phase::Suspended, true);
+        }
+    }
+
+    fn resume(&self) {
+        let changed = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            if !matches!(
+                inner.phase,
+                Phase::Suspended | Phase::Reconnecting { .. } | Phase::WaitingForNetwork
+            ) {
+                return;
+            }
+            follow.attempt = 0;
+            inner.phase = if follow.network {
+                Phase::Connecting
+            } else {
+                Phase::WaitingForNetwork
+            };
+            true
+        };
+        if changed {
+            self.notify();
+        }
+    }
+
+    fn network_changed(&self, available: bool) {
+        let (reconnect, lost) = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            follow.network = available;
+            let reconnect = available
+                && matches!(
+                    inner.phase,
+                    Phase::WaitingForNetwork | Phase::Reconnecting { .. }
+                );
+            let lost = !available
+                && matches!(
+                    inner.phase,
+                    Phase::Open(_) | Phase::Connecting | Phase::Reconnecting { .. }
+                );
+            if reconnect {
+                follow.attempt = 0;
+                inner.phase = Phase::Connecting;
+            }
+            (reconnect, lost)
+        };
+        if reconnect {
+            self.notify();
+        }
+        if lost {
+            self.drop_socket(Phase::WaitingForNetwork, true);
+        }
     }
 
     fn track(&self, task: AbortHandle) {
@@ -645,15 +1099,16 @@ impl Core {
         }
     }
 
+    /// IOS-00: one connect.
     async fn connect(self: Arc<Self>) -> Result<RemoteHostInfo, RemoteSessionError> {
         let refused = {
             let mut inner = self.lock();
             let refused = match &inner.phase {
                 Phase::Idle => None,
-                Phase::Connecting | Phase::Open(_) => Some(RemoteSessionError::Busy),
                 Phase::Closed(_, detail) => Some(RemoteSessionError::Closed {
                     detail: detail.clone(),
                 }),
+                _ => Some(RemoteSessionError::Busy),
             };
             if refused.is_none() {
                 inner.phase = Phase::Connecting;
@@ -676,6 +1131,436 @@ impl Core {
             self.terminate(error.close_reason(), error.to_string());
         }
         result
+    }
+
+    /// RM-03: start the runtime (once) and wait for its first outcome.
+    async fn start_runtime(self: Arc<Self>) -> Result<RemoteHostInfo, RemoteSessionError> {
+        let mut wake = self.wake.subscribe();
+        let start = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            if let Phase::Closed(_, detail) = &inner.phase {
+                return Err(RemoteSessionError::Closed {
+                    detail: detail.clone(),
+                });
+            }
+            if matches!(inner.phase, Phase::Idle) {
+                let network = inner.follow.as_ref().is_none_or(|follow| follow.network);
+                inner.phase = if network {
+                    Phase::Connecting
+                } else {
+                    Phase::WaitingForNetwork
+                };
+                true
+            } else {
+                false
+            }
+        };
+        if start {
+            let supervisor = runtime().spawn(self.clone().supervise());
+            {
+                let mut guard = self.lock();
+                let inner = &mut *guard;
+                let closed = matches!(inner.phase, Phase::Closed(..));
+                match inner.follow.as_mut() {
+                    Some(follow) if !closed => {
+                        follow.supervisor = Some(supervisor.abort_handle());
+                    }
+                    _ => supervisor.abort(),
+                }
+            }
+            self.notify();
+        }
+        loop {
+            {
+                let inner = self.lock();
+                let last_error = inner
+                    .follow
+                    .as_ref()
+                    .and_then(|follow| follow.last_error.clone());
+                match &inner.phase {
+                    Phase::Open(host) => return Ok(host.clone()),
+                    Phase::Closed(_, detail) => {
+                        return Err(last_error.unwrap_or_else(|| RemoteSessionError::Closed {
+                            detail: detail.clone(),
+                        }));
+                    }
+                    Phase::Reconnecting { detail, .. } => {
+                        return Err(last_error.unwrap_or_else(|| RemoteSessionError::Offline {
+                            detail: detail.clone(),
+                        }));
+                    }
+                    Phase::Suspended => return Err(RemoteSessionError::NotOpen),
+                    Phase::WaitingForNetwork => {
+                        return Err(RemoteSessionError::Offline {
+                            detail: "This phone has no network connection".into(),
+                        });
+                    }
+                    Phase::Idle | Phase::Connecting => {}
+                }
+            }
+            if wake.changed().await.is_err() {
+                return Err(self.closed_error());
+            }
+        }
+    }
+
+    /// RM-03: the runtime loop. It owns every attempt after the first
+    /// `connect` and stops when the session closes.
+    async fn supervise(self: Arc<Self>) {
+        let mut wake = self.wake.subscribe();
+        loop {
+            match self.next_step() {
+                Step::Stop => return,
+                Step::Wait => {
+                    if wake.changed().await.is_err() {
+                        return;
+                    }
+                }
+                Step::Retry(delay) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => self.retry_now(),
+                        changed = wake.changed() => if changed.is_err() { return },
+                    }
+                }
+                Step::Connect => {
+                    let outcome = {
+                        let handshake = self.handshake();
+                        tokio::pin!(handshake);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                result = &mut handshake => break Some(result),
+                                changed = wake.changed() => {
+                                    if changed.is_err() {
+                                        return;
+                                    }
+                                    // Suspended, offline or closed: abandon
+                                    // the attempt; the phase says why.
+                                    if !matches!(self.lock().phase, Phase::Connecting) {
+                                        break None;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    match outcome {
+                        None => {}
+                        Some(Ok(_)) => self.opened(),
+                        Some(Err(error)) => self.attempt_failed(error),
+                    }
+                }
+            }
+        }
+    }
+
+    fn next_step(&self) -> Step {
+        let inner = self.lock();
+        let attempt = inner.follow.as_ref().map_or(0, |follow| follow.attempt);
+        match inner.phase {
+            Phase::Closed(..) => Step::Stop,
+            Phase::Connecting => Step::Connect,
+            Phase::Reconnecting { .. } => Step::Retry(backoff(attempt)),
+            Phase::Idle | Phase::Open(_) | Phase::Suspended | Phase::WaitingForNetwork => {
+                Step::Wait
+            }
+        }
+    }
+
+    fn retry_now(&self) {
+        let retry = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let network = inner.follow.as_ref().is_some_and(|follow| follow.network);
+            if network && matches!(inner.phase, Phase::Reconnecting { .. }) {
+                inner.phase = Phase::Connecting;
+                true
+            } else {
+                false
+            }
+        };
+        if retry {
+            self.notify();
+        }
+    }
+
+    /// RM-03: a failed attempt either ends the runtime or waits to retry.
+    fn attempt_failed(&self, error: RemoteSessionError) {
+        if error.ends_runtime() {
+            {
+                let mut inner = self.lock();
+                if let Some(follow) = inner.follow.as_mut() {
+                    follow.last_error = Some(error.clone());
+                }
+            }
+            self.terminate(error.close_reason(), error.to_string());
+            return;
+        }
+        let attempt = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            if !matches!(inner.phase, Phase::Connecting) {
+                return;
+            }
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            follow.attempt = follow.attempt.saturating_add(1);
+            follow.last_error = Some(error.clone());
+            follow.attempt
+        };
+        self.drop_socket(
+            Phase::Reconnecting {
+                attempt,
+                detail: error.to_string(),
+            },
+            false,
+        );
+    }
+
+    /// RM-03: a verified socket is open: start its generation and follow
+    /// the registry and every followed task on it.
+    fn opened(self: &Arc<Self>) {
+        let started = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let (Phase::Open(host), Some(client), Some(follow)) =
+                (&inner.phase, inner.client.clone(), inner.follow.as_mut())
+            else {
+                return;
+            };
+            follow.epoch += 1;
+            follow.attempt = 0;
+            follow.last_error = None;
+            follow.store.begin_epoch(follow.epoch);
+            follow.revision += 1;
+            if host
+                .capabilities
+                .iter()
+                .any(|capability| capability == REMOTE_PROJECTIONS_V1)
+            {
+                follow.issue = None;
+                Some((client, follow.epoch, follow.followed.clone()))
+            } else {
+                follow.issue = Some(
+                    "This Mac's LUNA does not share task lists yet; update LUNA on the Mac".into(),
+                );
+                None
+            }
+        };
+        self.signal();
+        let Some((client, epoch, followed)) = started else {
+            return;
+        };
+        let registry = runtime().spawn(run_registry_follower(self.clone(), client.clone(), epoch));
+        self.track(registry.abort_handle());
+        for task_id in followed {
+            self.spawn_task_follower(task_id, client.clone(), epoch);
+        }
+    }
+
+    fn spawn_task_follower(self: &Arc<Self>, task_id: String, client: Arc<SdkClient>, epoch: u64) {
+        let follower = runtime().spawn(run_task_follower(
+            self.clone(),
+            client,
+            epoch,
+            task_id.clone(),
+        ));
+        let handle = follower.abort_handle();
+        {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            match inner.follow.as_mut() {
+                Some(follow) if follow.epoch == epoch => {
+                    follow.followers.push((task_id, handle.clone()));
+                }
+                _ => {
+                    handle.abort();
+                    return;
+                }
+            }
+        }
+        self.track(handle);
+    }
+
+    fn follow_task(self: &Arc<Self>, task_id: String) -> Result<(), RemoteSessionError> {
+        let (spawn, stopped) = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let Some(follow) = inner.follow.as_mut() else {
+                return Err(RemoteSessionError::InvalidRequest {
+                    detail: "this session does not follow tasks".into(),
+                });
+            };
+            if let Some(position) = follow.followed.iter().position(|id| *id == task_id) {
+                // Already followed: it becomes the most recent.
+                if let Some(id) = follow.followed.remove(position) {
+                    follow.followed.push_back(id);
+                }
+                return Ok(());
+            }
+            follow.followed.push_back(task_id.clone());
+            let mut stopped = Vec::new();
+            while follow.followed.len() > MAX_FOLLOWED_TASKS {
+                if let Some(oldest) = follow.followed.pop_front() {
+                    follow.followers.retain(|(id, handle)| {
+                        if *id == oldest {
+                            stopped.push(handle.clone());
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    follow.store.release_task(&oldest);
+                }
+            }
+            follow.revision += 1;
+            let spawn = match (&inner.phase, inner.client.clone()) {
+                (Phase::Open(_), Some(client)) if follow.issue.is_none() => {
+                    Some((client, follow.epoch))
+                }
+                _ => None,
+            };
+            (spawn, stopped)
+        };
+        for handle in stopped {
+            handle.abort();
+        }
+        if let Some((client, epoch)) = spawn {
+            self.spawn_task_follower(task_id, client, epoch);
+        }
+        self.signal();
+        Ok(())
+    }
+
+    fn unfollow_task(&self, task_id: &str) {
+        let stopped = {
+            let mut inner = self.lock();
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            follow.followed.retain(|id| id != task_id);
+            follow.store.release_task(task_id);
+            let mut stopped = Vec::new();
+            follow.followers.retain(|(id, handle)| {
+                if id == task_id {
+                    stopped.push(handle.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            follow.revision += 1;
+            stopped
+        };
+        for handle in stopped {
+            handle.abort();
+        }
+        self.signal();
+    }
+
+    fn is_epoch(&self, epoch: u64) -> bool {
+        self.lock()
+            .follow
+            .as_ref()
+            .is_some_and(|follow| follow.epoch == epoch)
+    }
+
+    fn set_issue(&self, epoch: u64, issue: String) {
+        {
+            let mut inner = self.lock();
+            let Some(follow) = inner.follow.as_mut() else {
+                return;
+            };
+            if follow.epoch != epoch {
+                return;
+            }
+            follow.issue = Some(issue);
+            follow.revision += 1;
+        }
+        self.signal();
+    }
+
+    /// Apply one registry item from socket `epoch`.
+    fn apply_registry(
+        &self,
+        epoch: u64,
+        item: luna_proto::remote_projection::RemoteTasksItem,
+    ) -> Result<(), Refusal> {
+        let result = {
+            let mut inner = self.lock();
+            let Some(follow) = inner.follow.as_mut() else {
+                return Err(Refusal::Stop);
+            };
+            let result = follow.store.apply_tasks(epoch, item, now_ms());
+            if result.is_ok() {
+                follow.revision += 1;
+            }
+            result.map(|_| ())
+        };
+        self.applied(result)
+    }
+
+    /// Apply one task item from socket `epoch`; `Ok(true)` once the Mac
+    /// reported the task removed.
+    fn apply_task(
+        &self,
+        epoch: u64,
+        task_id: &str,
+        item: luna_proto::remote_projection::RemoteTaskItem,
+    ) -> Result<bool, Refusal> {
+        let result = {
+            let mut inner = self.lock();
+            let Some(follow) = inner.follow.as_mut() else {
+                return Err(Refusal::Stop);
+            };
+            // A follower stopped by eviction may still hold one item.
+            if !follow.followed.iter().any(|id| id == task_id) {
+                return Err(Refusal::Stop);
+            }
+            let result = follow.store.apply_task(epoch, task_id, item, now_ms());
+            if result.is_ok() {
+                follow.revision += 1;
+            }
+            result.map(|view| view.task.is_none())
+        };
+        match result {
+            Ok(removed) => {
+                self.signal();
+                Ok(removed)
+            }
+            Err(error) => self.applied(Err(error)).map(|()| false),
+        }
+    }
+
+    fn applied(&self, result: Result<(), ProjectionError>) -> Result<(), Refusal> {
+        match result {
+            Ok(()) => {
+                self.signal();
+                Ok(())
+            }
+            Err(ProjectionError::StaleGeneration) => Err(Refusal::Stop),
+            Err(ProjectionError::WrongHost(detail)) => {
+                // A verified socket that projects another host is never
+                // trusted again.
+                self.terminate(SessionCloseReason::Rejected, detail);
+                Err(Refusal::Stop)
+            }
+            Err(ProjectionError::OutOfOrder(_) | ProjectionError::Invalid(_)) => {
+                Err(Refusal::Resnapshot)
+            }
+        }
+    }
+
+    fn registry_cursor(&self) -> Option<luna_proto::remote_projection::ProjectionCursor> {
+        self.lock().follow.as_ref()?.store.registry_cursor()
+    }
+
+    fn task_cursor(
+        &self,
+        task_id: &str,
+    ) -> Option<luna_proto::remote_projection::ProjectionCursor> {
+        self.lock().follow.as_ref()?.store.task_cursor(task_id)
     }
 
     async fn handshake(&self) -> Result<RemoteHostInfo, RemoteSessionError> {
@@ -727,7 +1612,11 @@ impl Core {
         )?;
         {
             let mut inner = self.lock();
-            if !matches!(inner.phase, Phase::Connecting) {
+            let current = inner
+                .socket
+                .as_ref()
+                .is_some_and(|socket| socket.id == socket_id);
+            if !matches!(inner.phase, Phase::Connecting) || !current {
                 drop(inner);
                 return Err(self.closed_error());
             }
@@ -900,6 +1789,132 @@ impl Core {
     }
 }
 
+/// RM-03: follow the registry on socket `epoch` until that socket ends.
+/// Each (re)subscription resumes from the held cursor; a stream the store
+/// refuses is replaced by one without a cursor, which starts with a snapshot.
+async fn run_registry_follower(core: Arc<Core>, client: Arc<SdkClient>, epoch: u64) {
+    let mut fresh = false;
+    let mut failures = 0u32;
+    loop {
+        let after = if fresh { None } else { core.registry_cursor() };
+        fresh = false;
+        match client.watch_remote_tasks(after).await {
+            Ok(mut stream) => {
+                while let Some(item) = stream.next().await {
+                    let applied = match item {
+                        Ok(item) => core.apply_registry(epoch, item),
+                        Err(_) => Err(Refusal::Resnapshot),
+                    };
+                    match applied {
+                        Ok(()) => failures = 0,
+                        Err(Refusal::Stop) => return,
+                        Err(Refusal::Resnapshot) => {
+                            fresh = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(issue) = follow_refused(&error) {
+                    core.set_issue(epoch, issue);
+                    return;
+                }
+            }
+        }
+        if !core.is_epoch(epoch) {
+            return;
+        }
+        failures += 1;
+        if failures > MAX_FOLLOW_RETRIES {
+            core.set_issue(
+                epoch,
+                "The Mac's task list stopped updating; it retries on the next connection".into(),
+            );
+            return;
+        }
+        tokio::time::sleep(FIRST_RETRY * failures).await;
+    }
+}
+
+/// RM-03: follow one task on socket `epoch` until that socket ends or the
+/// Mac reports the task removed.
+async fn run_task_follower(core: Arc<Core>, client: Arc<SdkClient>, epoch: u64, task_id: String) {
+    let mut fresh = false;
+    let mut failures = 0u32;
+    loop {
+        let after = if fresh {
+            None
+        } else {
+            core.task_cursor(&task_id)
+        };
+        fresh = false;
+        match client.watch_remote_task(&task_id, after).await {
+            Ok(mut stream) => {
+                while let Some(item) = stream.next().await {
+                    let applied = match item {
+                        Ok(item) => core.apply_task(epoch, &task_id, item),
+                        Err(_) => Err(Refusal::Resnapshot),
+                    };
+                    match applied {
+                        Ok(true) => return,
+                        Ok(false) => failures = 0,
+                        Err(Refusal::Stop) => return,
+                        Err(Refusal::Resnapshot) => {
+                            fresh = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(issue) = follow_refused(&error) {
+                    core.set_issue(epoch, issue);
+                    return;
+                }
+            }
+        }
+        if !core.is_epoch(epoch) {
+            return;
+        }
+        failures += 1;
+        if failures > MAX_FOLLOW_RETRIES {
+            return;
+        }
+        tokio::time::sleep(FIRST_RETRY * failures).await;
+    }
+}
+
+/// A projection subscription the Mac refuses for good on this socket.
+fn follow_refused(error: &SdkError) -> Option<String> {
+    match from_sdk_ref(error) {
+        RemoteSessionError::Unsupported { .. } => {
+            Some("This Mac's LUNA does not share task lists yet; update LUNA on the Mac".into())
+        }
+        RemoteSessionError::Denied { .. } => Some(
+            "This phone's access does not include reading tasks; pair again with task access"
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
+/// Doubling from [`FIRST_RETRY`] to [`MAX_RETRY`], with ±20% jitter so many
+/// phones do not retry in step.
+fn backoff(attempt: u32) -> Duration {
+    let base = FIRST_RETRY
+        .saturating_mul(1u32 << attempt.min(8))
+        .min(MAX_RETRY);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(attempt);
+    let percent = 80 + (hasher.finish() % 41) as u32;
+    base.saturating_mul(percent) / 100
+}
+
+fn now_ms() -> i64 {
+    i64::try_from(now()).unwrap_or(i64::MAX)
+}
+
 /// Closes the session if a connect is dropped before it settles.
 struct CloseUnlessSettled {
     core: Arc<Core>,
@@ -1019,6 +2034,10 @@ fn transport_error(failure: TransportFailure) -> RemoteSessionError {
 
 /// The SDK's error kinds, which the TypeScript SDK shares, as session errors.
 fn from_sdk(error: SdkError) -> RemoteSessionError {
+    from_sdk_ref(&error)
+}
+
+fn from_sdk_ref(error: &SdkError) -> RemoteSessionError {
     let detail = error.to_string();
     match error.kind() {
         "offline" => RemoteSessionError::Offline { detail },

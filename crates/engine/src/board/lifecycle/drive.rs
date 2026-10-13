@@ -679,7 +679,12 @@ impl EngineRpc {
                     LaunchOutcome::Unknown(
                         "The engine restarted before provider acceptance was confirmed.".into(),
                     )
-                } else if !live && crate::now_ms() - receipt.accepted_at_ms > DELIVERY_GRACE_MS {
+                } else if !live
+                    // AW-10: a send waiting for (or just admitted from) the
+                    // host line has provably not been sent.
+                    && !self.sessions.turn_start_pending(worker)
+                    && crate::now_ms() - receipt.accepted_at_ms > DELIVERY_GRACE_MS
+                {
                     LaunchOutcome::Unknown(
                         "The run ended without confirming acceptance of this instruction.".into(),
                     )

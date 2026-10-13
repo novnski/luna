@@ -1285,6 +1285,7 @@ mod cc06;
 mod execution;
 #[path = "sessions_runs.rs"]
 mod runs;
+pub(crate) use runs::{TURN_CAPACITY_RECHECK, TurnAdmission, TurnStartSlot};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -1339,6 +1340,133 @@ impl SessionsEngine {
 
     pub fn set_recovery_settings_path(&self, path: std::path::PathBuf) {
         *lock(&self.inner.recovery_settings_path) = Some(path);
+    }
+
+    // ── AW-10 host turn capacity (owned by the run table) ──────────────────
+
+    /// Read this host's turn limit from `path` (the profile's
+    /// `host-capacity.json`); `set_host_turn_limit` persists there.
+    pub fn set_host_capacity_path(&self, path: std::path::PathBuf) {
+        self.inner.runs.capacity().open(path);
+    }
+
+    /// Take a host turn slot for `task_id`'s next new turn, or give it (or
+    /// keep) its place in line. Never held: a task whose turn is already
+    /// active (the message joins that turn) and a delegated child chat (its
+    /// parent waits for it, so holding it could deadlock a full host).
+    pub(crate) fn admit_turn_start(
+        &self,
+        task_id: &str,
+        kind: luna_proto::HostCapacityWaitKind,
+        source_id: &str,
+        since_ms: i64,
+    ) -> TurnAdmission {
+        if self.turn_in_flight(task_id) || self.delegated_child(task_id) {
+            return TurnAdmission::Admitted(TurnStartSlot::unbounded());
+        }
+        let active = self.active_turn_tasks();
+        self.inner
+            .runs
+            .capacity()
+            .admit(task_id, kind, source_id, since_ms, &active, now_ms())
+    }
+
+    /// Whether this exact start still has a place in the host line.
+    pub(crate) fn turn_start_waiting(
+        &self,
+        task_id: &str,
+        kind: luna_proto::HostCapacityWaitKind,
+        source_id: &str,
+    ) -> bool {
+        self.inner
+            .runs
+            .capacity()
+            .is_waiting(task_id, kind, source_id, now_ms())
+    }
+
+    /// Whether any start of this kind for `task_id` waits (re-check loops).
+    pub(crate) fn turn_start_waiting_for_task(
+        &self,
+        task_id: &str,
+        kind: luna_proto::HostCapacityWaitKind,
+    ) -> bool {
+        self.inner
+            .runs
+            .capacity()
+            .task_waiting(task_id, kind, now_ms())
+    }
+
+    /// Leave the host line: the waiting work was withdrawn.
+    pub(crate) fn forget_turn_start(
+        &self,
+        task_id: &str,
+        kind: luna_proto::HostCapacityWaitKind,
+        source_id: &str,
+    ) {
+        self.inner
+            .runs
+            .capacity()
+            .forget(task_id, kind, Some(source_id));
+    }
+
+    /// A send of `task_id` waits in, or was just admitted from, the host
+    /// line. Readers that turn a pending receipt without a live turn into
+    /// "delivery unknown" after a grace (Automations, Board) treat this as
+    /// still pending: the send provably has not reached a provider.
+    pub(crate) fn turn_start_pending(&self, task_id: &str) -> bool {
+        self.inner.runs.capacity().send_pending(task_id, now_ms())
+    }
+
+    /// `GetHostCapacity`: this host's turns against its limit and the line.
+    pub fn host_capacity(&self) -> luna_proto::HostCapacity {
+        let mut active: Vec<luna_proto::HostCapacityTurn> = lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, session)| is_active(session))
+            .map(|(task_id, session)| luna_proto::HostCapacityTurn {
+                task_id: task_id.clone(),
+                status: session.status,
+            })
+            .collect();
+        active.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        let ids: std::collections::HashSet<String> =
+            active.iter().map(|turn| turn.task_id.clone()).collect();
+        let now = now_ms();
+        let (limit, starting, waiting) = self.inner.runs.capacity().snapshot(&ids, now);
+        luna_proto::HostCapacity {
+            device_id: self.inner.device_id.clone(),
+            limit,
+            active,
+            starting,
+            waiting,
+            read_at_ms: now,
+        }
+    }
+
+    /// `SetHostCapacity`: persist and apply a new limit (`None`: no limit).
+    /// Running turns are never stopped; new starts wait while the host is
+    /// at or above the limit.
+    pub fn set_host_turn_limit(
+        &self,
+        limit: Option<u32>,
+    ) -> Result<luna_proto::HostCapacity, EngineError> {
+        self.inner.runs.capacity().set_limit(limit)?;
+        Ok(self.host_capacity())
+    }
+
+    /// Tasks whose turn holds a slot: running, or parked on a question.
+    fn active_turn_tasks(&self) -> std::collections::HashSet<String> {
+        lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, session)| is_active(session))
+            .map(|(task_id, _)| task_id.clone())
+            .collect()
+    }
+
+    fn delegated_child(&self, task_id: &str) -> bool {
+        self.inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(task_id).ok().flatten())
+            .is_some_and(|chat| chat.child_thread.is_some())
     }
 
     /// Wire the doc host (called once at engine assembly; the two services are mutually
@@ -5284,6 +5412,12 @@ impl SessionsEngine {
     }
 
     fn arm_recovery(&self, record: RecoveryRecord) {
+        self.arm_recovery_after(record, std::time::Duration::ZERO);
+    }
+
+    /// `arm_recovery`, firing no sooner than `at_least` from now (AW-10: a
+    /// due retry held for host capacity re-checks without moving its time).
+    fn arm_recovery_after(&self, record: RecoveryRecord, at_least: std::time::Duration) {
         match self
             .inner
             .recovery
@@ -5312,7 +5446,8 @@ impl SessionsEngine {
         let attempt_count = record.view.attempt_count;
         let task_key = task_id.clone();
         let handle = tokio::spawn(async move {
-            let wait_ms = retry_at_ms.saturating_sub(now_ms()).max(0) as u64;
+            let wait_ms = (retry_at_ms.saturating_sub(now_ms()).max(0) as u64)
+                .max(at_least.as_millis() as u64);
             tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
             lock(&engine.inner.recovery_tasks).remove(&task_key);
             if let Err(error) = engine
@@ -5352,6 +5487,7 @@ impl SessionsEngine {
             self.arm_recovery(current);
             return Ok(());
         }
+        let mut turn_slot = None;
         let mut next = current.clone();
         let dispatch = if !self.automatic_retries_enabled() {
             next.view.status = RecoveryStatus::Held;
@@ -5375,6 +5511,22 @@ impl SessionsEngine {
                 "The four-attempt automatic retry limit was reached before dispatch.".into();
             false
         } else {
+            // AW-10: the retry starts a new turn, so it takes a host slot
+            // before the chain is claimed. While the host is full the chain
+            // stays Scheduled (never claimed, nothing sent) in line.
+            match self.admit_turn_start(
+                task_id,
+                luna_proto::HostCapacityWaitKind::AutomaticRetry,
+                chain_id,
+                expected_retry_at_ms,
+            ) {
+                TurnAdmission::Admitted(slot) => turn_slot = Some(slot),
+                TurnAdmission::Waiting {
+                    position,
+                    occupied,
+                    limit,
+                } => return self.hold_retry_for_capacity(current, position, occupied, limit),
+            }
             next.view.status = RecoveryStatus::Running;
             next.view.automatic = false;
             next.view.retry_at_ms = None;
@@ -5392,6 +5544,38 @@ impl SessionsEngine {
         self.publish_committed_recovery(&change.next);
         if dispatch {
             self.execute_claimed_recovery(change.next).await?;
+        }
+        // The slot counted this retry until its turn registered (or failed).
+        drop(turn_slot);
+        Ok(())
+    }
+
+    /// AW-10: a due automatic retry found the host full. The chain stays
+    /// Scheduled with its time unchanged and says why; it re-checks every
+    /// second. The six-hour window, Send now and Cancel still apply, and the
+    /// record is rewritten only when the reason changes.
+    fn hold_retry_for_capacity(
+        &self,
+        current: RecoveryRecord,
+        position: u32,
+        occupied: u32,
+        limit: u32,
+    ) -> Result<(), EngineError> {
+        let detail = format!(
+            "Waiting for a free turn on this host ({occupied} of {limit} active, {} in line). The retry has not been sent; Send now starts it anyway and Cancel withdraws it.",
+            runs::place_in_line(position)
+        );
+        if current.view.detail == detail {
+            self.arm_recovery_after(current, TURN_CAPACITY_RECHECK);
+            return Ok(());
+        }
+        let mut next = current.clone();
+        next.view.detail = detail;
+        next.view.updated_at_ms = now_ms();
+        let change = self.inner.recovery.prepare_change(current, next);
+        if self.inner.recovery.apply_change(&change)? {
+            self.publish_committed_recovery(&change.next);
+            self.arm_recovery_after(change.next, TURN_CAPACITY_RECHECK);
         }
         Ok(())
     }
@@ -5441,6 +5625,15 @@ impl SessionsEngine {
     pub(crate) fn publish_committed_recovery(&self, record: &RecoveryRecord) {
         if let Some(task) = lock(&self.inner.recovery_tasks).remove(&record.view.task_id) {
             task.abort();
+        }
+        if record.view.status != RecoveryStatus::Scheduled {
+            // AW-10: a chain that was claimed, cancelled, held or superseded
+            // no longer waits for a host slot.
+            self.inner.runs.capacity().forget(
+                &record.view.task_id,
+                luna_proto::HostCapacityWaitKind::AutomaticRetry,
+                None,
+            );
         }
         self.inner
             .publish_recovery(&record.view.task_id, Some(record.view.clone()));

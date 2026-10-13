@@ -9,6 +9,10 @@ use luna_proto::{
     AttentionTransitionKind, TerminalInventoryEntry, TerminalProcessState,
 };
 
+/// AW-10 Host capacity section (the host's turn line and scheduled retries).
+#[path = "activity_capacity.rs"]
+mod capacity;
+
 /// Automation alerts listed in the Activity view at most.
 const AUTOMATION_ALERT_ROWS: usize = 5;
 
@@ -27,6 +31,9 @@ pub(super) struct ActivityUi {
     last_request: Option<std::time::Instant>,
     poll_task: Option<Task<()>>,
     ticker: Option<Task<()>>,
+    /// AW-10 Host capacity section, made on the first Activity refresh.
+    capacity: Option<gpui::Entity<capacity::HostCapacityPanel>>,
+    _capacity_events: Option<gpui::Subscription>,
 }
 
 impl ActivityUi {
@@ -224,6 +231,12 @@ impl Shell {
     }
 
     pub(super) fn refresh_activity(&mut self, cx: &mut Context<Self>) {
+        // AW-10: the Host capacity section reads the line with this poll,
+        // only while the Activity view shows it.
+        if self.activity.view_active {
+            let panel = self.host_capacity_panel(cx);
+            panel.update(cx, |panel, cx| panel.refresh(cx));
+        }
         let (handle, engine_generation) = {
             let state = self.state.read(cx);
             (state.engine().cloned(), state.engine_generation())
@@ -558,6 +571,40 @@ impl Shell {
                     .map(|task_id| (item.device_id.clone(), task_id.clone()))
             })
             .collect()
+    }
+
+    /// AW-10: the Activity view's Host capacity section, made once. Its Open
+    /// action (a held queued row) opens that task here.
+    fn host_capacity_panel(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<capacity::HostCapacityPanel> {
+        if let Some(panel) = &self.activity.capacity {
+            return panel.clone();
+        }
+        let state = self.state.clone();
+        let panel = cx.new(|_| capacity::HostCapacityPanel::new(state));
+        self.activity._capacity_events = Some(cx.subscribe(
+            &panel,
+            |shell, _, event: &capacity::HostCapacityEvent, cx| match event {
+                capacity::HostCapacityEvent::OpenTask(task_id) => {
+                    shell.open_chat(task_id.clone(), cx)
+                }
+            },
+        ));
+        self.activity.capacity = Some(panel.clone());
+        panel
+    }
+
+    /// AW-10: this host's turns against its limit, the new turns waiting for
+    /// a free slot and the scheduled retries. Hidden outside Activity and for
+    /// an engine without the capacity owner.
+    pub(super) fn render_host_capacity(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.activity.view_active {
+            return None;
+        }
+        let panel = self.host_capacity_panel(cx);
+        panel.read(cx).visible().then(|| panel.into_any_element())
     }
 
     /// Running LUNA-owned PTYs remain visible even when their task is archived.

@@ -4279,8 +4279,13 @@ impl Shell {
             }
             _ => false,
         };
+        // A Side chat's live pane in this Main's workbench owns its links:
+        // they resolve under that chat's own folder and host (ZI-04). Views
+        // exist only for tabs in the current layout.
+        let workbench_pane =
+            self.workbench.main() == self.active_chat && self.workbench.has_view(source);
         if self.active_chat.is_empty()
-            || (source != self.active_chat && !current_pane)
+            || (source != self.active_chat && !current_pane && !workbench_pane)
             || self.state.read(cx).selected_chat.as_deref() != Some(self.active_chat.as_str())
         {
             return LinkOutcome::Rejected;
@@ -4654,7 +4659,19 @@ impl Shell {
         if !was_open {
             self.right_tween = Some(WidthTween::new(from, self.right_target(cx)));
         }
-        self.add_file_surface_for_owner(source_chat.to_owned(), link.path, window, cx);
+        // The Files place may already be this chat's editor of the file (its
+        // tree promotes itself): focus that buffer, never a second copy.
+        let place_editor = self.files.get(&key).is_some_and(|files| {
+            let files = files.read(cx);
+            files.chat_id() == source_chat && files.attachment_path() == Some(link.path.as_str())
+        });
+        if place_editor {
+            self.push_right_tab(&key, RightSurface::Files);
+            self.set_right_active(RightSurface::Files, cx);
+            self.focus_right_file_editor(RightSurface::Files, window, cx);
+        } else {
+            self.add_file_surface_for_owner(source_chat.to_owned(), link.path, window, cx);
+        }
         true
     }
 
@@ -10428,6 +10445,8 @@ impl Shell {
         // rode the previous frame's offset, so the last frame of a content
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
+        // AW-10: the host's turns against its limit, and what waits for one.
+        let host_capacity = self.render_host_capacity(cx);
         let terminal_inventory = self.render_terminal_inventory(theme, cx);
         // Automation alerts with no chat row to carry them: each opens its
         // project's automation and history.
@@ -10503,6 +10522,7 @@ impl Shell {
         let shelves_index = shelves.as_ref().map(|_| {
             usize::from(activity_load_state.is_some())
                 + 1
+                + usize::from(host_capacity.is_some())
                 + usize::from(terminal_inventory.is_some())
                 + usize::from(automation_alerts.is_some())
                 + usize::from(board_activity.is_some())
@@ -10522,6 +10542,7 @@ impl Shell {
                 .map(|_| "load".to_owned())
                 .into_iter()
                 .chain(["top".to_owned()])
+                .chain(host_capacity.as_ref().map(|_| "capacity".to_owned()))
                 .chain(terminal_inventory.as_ref().map(|_| "terminals".to_owned()))
                 .chain(automation_alerts.as_ref().map(|_| "automations".to_owned()))
                 .chain(board_activity.as_ref().map(|_| "board".to_owned()))
@@ -10553,6 +10574,7 @@ impl Shell {
                     .pt(px(4.0))
                     .when_some(activity_load_state, |el, state| el.child(state))
                     .child(top)
+                    .children(host_capacity)
                     .children(terminal_inventory)
                     .children(automation_alerts)
                     .children(board_activity)
@@ -21456,6 +21478,11 @@ impl Shell {
         cx.notify();
     }
 }
+
+/// ZI-04: typed tool file badges through the shell's file route.
+#[cfg(all(test, unix))]
+#[path = "files/tool_file_open_e2e.rs"]
+mod tool_file_open_e2e;
 
 #[cfg(test)]
 mod right_tab_mouse_regressions {

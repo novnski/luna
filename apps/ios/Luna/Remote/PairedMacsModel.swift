@@ -36,10 +36,23 @@ final class PairedMacsModel {
     @ObservationIgnored private var owner: Enrollment?
     @ObservationIgnored private var transport: PinnedEnrollmentTransport?
     @ObservationIgnored private var generation: UInt64 = 0
-    /// The SDK socket opened once this connect authenticated (IOS-00): its
-    /// typed engine read names the host. Never persisted.
+    /// The selected Mac's live connection once a connect authenticated: the
+    /// RM-03 runtime, whose typed engine read names the host (IOS-00). It
+    /// reconnects, follows the Mac's tasks whether or not a view shows them,
+    /// and survives closing this sheet and backgrounding. Only its bounded
+    /// projection cache is persisted (`RemoteTaskCache`).
     var liveStatus: String?
+    /// RM-03: the selected Mac's projects and tasks with their freshness.
+    var remoteTasks: RemoteTasksProjection?
+    /// Why the Mac's tasks are not followed, when they are not.
+    var tasksIssue: String?
+    /// RM-03: the opened task's detail (followed, or cached).
+    var openTask: RemoteTaskProjection?
+    var openTaskId: String?
+    var showingTask = false
     @ObservationIgnored private var live: RemoteHostSession?
+    @ObservationIgnored private var liveHostId: String?
+    @ObservationIgnored private var path: NetworkPathObserver?
     /// The access this connect authenticated with, for its live socket only.
     @ObservationIgnored private var access: SavedMac?
     private static let metadataKey = "luna.paired-macs.v1"
@@ -71,7 +84,11 @@ final class PairedMacsModel {
         begin(owner)
     }
     func connect(_ host: PairedMacMetadata) {
-        disconnect()
+        // RM-03: the same Mac's runtime (and what it has shown) is kept.
+        cancelEnrollmentTransport()
+        if liveHostId != host.id { closeLive() }
+        access = nil
+        phase = "offline"
         preview = nil
         incomingCode = nil
         selectedId = host.id
@@ -81,6 +98,8 @@ final class PairedMacsModel {
                 phase = "re-pair"
                 message = "Access is no longer saved on this phone. Pair again on the Mac."
                 update(host.id) { $0.needsPairing = true }
+                closeLive(save: false)
+                RemoteTaskCache.remove(account: host.id)
             } else {
                 phase = "offline"
                 message = "Access is unavailable while this phone is locked. Unlock it and reconnect."
@@ -92,6 +111,9 @@ final class PairedMacsModel {
             let core = try Enrollment.restore(mac: mac)
             owner = core
             access = mac
+            // Cached tasks show at once, labelled cached, while RM-02's check
+            // and then the runtime's own verification run.
+            prepareLive(mac, hostId: host.id)
             begin(core)
         } catch {
             phase = "re-pair"
@@ -100,7 +122,14 @@ final class PairedMacsModel {
     }
     func backgrounded() {
         let interrupted = ["redeeming", "saving"].contains(phase) && preview != nil
-        disconnect()
+        cancelEnrollmentTransport()
+        // RM-03: the runtime suspends (accepted Mac work continues) and its
+        // projections, now stale, are saved for the next run.
+        if let live, let liveHostId {
+            live.suspend()
+            RemoteTaskCache.save(live.cacheBytes, account: liveHostId)
+        }
+        phase = "offline"
         preview = nil
         incomingCode = nil
         if interrupted {
@@ -109,35 +138,58 @@ final class PairedMacsModel {
         }
     }
     func foregrounded() {
+        // The runtime re-verifies the Mac by itself; RM-02's check runs too.
+        live?.resume()
         if let selectedId, let saved = hosts.first(where: { $0.id == selectedId }), preview == nil {
             connect(saved)
         }
     }
+    /// RM-03 network adapter: the device path changed (`NetworkPathObserver`).
+    func networkChanged(available: Bool) {
+        live?.networkChanged(available: available)
+    }
     func disconnect() {
-        generation &+= 1
-        transport?.cancel()
-        transport = nil
-        owner = nil
+        cancelEnrollmentTransport()
         closeLive()
         access = nil
         phase = "offline"
     }
+    /// Ends an enrollment or a review. The selected Mac's runtime keeps
+    /// following its tasks: delivery does not depend on this sheet.
     func cancelEnrollment() {
-        disconnect()
+        cancelEnrollmentTransport()
+        if phase != "connected" { phase = "offline" }
         preview = nil
         incomingCode = nil
         message = nil
     }
     func forget(_ host: PairedMacMetadata) {
         if selectedId == host.id { disconnect(); selectedId = nil }
+        if liveHostId == host.id { closeLive(save: false) }
         let status = Keychain.forgetRemoteToken(account: host.id)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             message = "Could not remove this saved connection. Unlock the phone and try again."
             return
         }
+        RemoteTaskCache.remove(account: host.id)
         hosts.removeAll { $0.id == host.id }
         persistMetadata()
         message = "Removed from this phone. To end its grant, revoke access on the Mac."
+    }
+    /// RM-03: open a task of the selected Mac. The runtime follows it from
+    /// now on (bounded); closing the view does not stop delivery.
+    func openTask(_ taskId: String) {
+        openTaskId = taskId
+        showingTask = true
+        guard let live else { openTask = nil; return }
+        try? live.follow(taskId: taskId)
+        openTask = live.task(taskId)
+    }
+    private func cancelEnrollmentTransport() {
+        generation &+= 1
+        transport?.cancel()
+        transport = nil
+        owner = nil
     }
     private func begin(_ core: Enrollment) {
         generation &+= 1
@@ -197,11 +249,13 @@ final class PairedMacsModel {
             preview = nil
             incomingCode = nil
             message = "Connected. This phone verified the Mac and its access."
-            if let access { openLive(access) }
+            if let access, let selectedId { startLive(access, hostId: selectedId) }
         case .rePair(let reason):
             if let selectedId, preview == nil {
                 _ = Keychain.forgetRemoteToken(account: selectedId)
                 update(selectedId) { $0.needsPairing = true }
+                if liveHostId == selectedId { closeLive(save: false) }
+                RemoteTaskCache.remove(account: selectedId)
             }
             message = reason
         case .rejected(let reason):
@@ -212,31 +266,73 @@ final class PairedMacsModel {
         case .ignore: break
         }
     }
-    /// Opens this connect's SDK socket. Only the current generation may change
-    /// what it shows; disconnecting closes it (cancelling anything in flight).
-    private func openLive(_ access: SavedMac) {
+    /// RM-03: the selected Mac's runtime, restoring its saved projections
+    /// (shown as cached). Only the current runtime may change what shows.
+    private func prepareLive(_ access: SavedMac, hostId: String) {
+        if let live, liveHostId == hostId, !Self.isClosed(live.state) { return }
         closeLive()
         let session: RemoteHostSession
         do {
-            session = try RemoteHostSession(mac: access)
+            session = try RemoteHostSession(following: access, cache: RemoteTaskCache.load(account: hostId))
         } catch {
             liveStatus = "Live connection unavailable for this saved access."
             return
         }
         live = session
+        liveHostId = hostId
         liveStatus = Self.liveText(session.state)
-        let current = generation
         session.onChange = { [weak self, weak session] state in
-            guard let self, let session, self.generation == current, self.live === session else { return }
-            self.liveStatus = Self.liveText(state)
+            guard let self, let session, self.live === session else { return }
+            self.liveChanged(state)
         }
-        // Failures arrive as the session's closed state through onChange.
-        Task { _ = try? await session.connect() }
+        session.onProjections = { [weak self, weak session] in
+            guard let self, let session, self.live === session else { return }
+            self.readProjections(session)
+        }
+        readProjections(session)
+        if path == nil {
+            path = NetworkPathObserver { [weak self] available in self?.networkChanged(available: available) }
+        }
     }
-    private func closeLive() {
+    /// The authenticated connect: start (or resume) the runtime. Failures
+    /// arrive as its state through onChange; it keeps retrying by itself.
+    private func startLive(_ access: SavedMac, hostId: String) {
+        prepareLive(access, hostId: hostId)
+        guard let live else { return }
+        live.resume()
+        Task { _ = try? await live.connect() }
+    }
+    private func liveChanged(_ state: RemoteSessionState) {
+        liveStatus = Self.liveText(state)
+        // A revoked or expired grant never comes back: forget it like RM-02.
+        if case .closed(.rePair, _) = state, let hostId = liveHostId {
+            _ = Keychain.forgetRemoteToken(account: hostId)
+            update(hostId) { $0.needsPairing = true }
+            RemoteTaskCache.remove(account: hostId)
+            if selectedId == hostId { phase = "re-pair" }
+            message = "Access to this Mac was revoked or has expired. Pair again on the Mac."
+        }
+    }
+    private func readProjections(_ session: RemoteHostSession) {
+        remoteTasks = session.tasks
+        tasksIssue = session.projectionIssue
+        if let openTaskId { openTask = session.task(openTaskId) }
+    }
+    private func closeLive(save: Bool = true) {
+        if save, let live, let liveHostId { RemoteTaskCache.save(live.cacheBytes, account: liveHostId) }
         live?.close()
         live = nil
+        liveHostId = nil
         liveStatus = nil
+        remoteTasks = nil
+        tasksIssue = nil
+        openTask = nil
+        openTaskId = nil
+        showingTask = false
+    }
+    private static func isClosed(_ state: RemoteSessionState) -> Bool {
+        if case .closed = state { return true }
+        return false
     }
     private static func liveText(_ state: RemoteSessionState) -> String? {
         switch state {
@@ -244,6 +340,12 @@ final class PairedMacsModel {
             return "Opening live connection…"
         case .open(let host, _):
             return "Live · host \(host.deviceId.prefix(8)) · API \(host.apiVersion)"
+        case .reconnecting(let attempt, let detail):
+            return attempt == 0 ? "Reconnecting…" : "Reconnecting (\(attempt) failed): \(detail)"
+        case .suspended:
+            return "Paused while LUNA is in the background"
+        case .waitingForNetwork:
+            return "Waiting for a network connection"
         case .closed(let reason, let detail):
             switch reason {
             case .local: return nil

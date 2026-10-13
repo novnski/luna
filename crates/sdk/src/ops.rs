@@ -3,6 +3,9 @@
 //! kind and reply shape, plus the Rust types that are its runtime validation
 //! and the source of the published JSON Schemas and TypeScript types.
 
+use luna_proto::remote_projection::{
+    RemoteTaskItem, RemoteTaskParams, RemoteTasksItem, RemoteTasksParams,
+};
 use luna_proto::{CommandReceipt, EngineInfo, TaskCommandRead};
 use luna_rpc::methods;
 use luna_rpc::operations::{ApiDescription, OperationSpec};
@@ -34,6 +37,8 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     (GetTaskCommandReceipt::NAME, GetTaskCommandReceipt::METHOD),
     (ExecuteTaskCommand::NAME, ExecuteTaskCommand::METHOD),
     (WatchTaskCommands::NAME, WatchTaskCommands::METHOD),
+    (WatchRemoteTasks::NAME, WatchRemoteTasks::METHOD),
+    (WatchRemoteTask::NAME, WatchRemoteTask::METHOD),
 ];
 
 /// Parameters of an operation that takes none.
@@ -228,4 +233,24 @@ impl Operation for WatchTaskCommands {
     const METHOD: &'static str = methods::WATCH_TASK_COMMANDS;
     type Params = TaskCommandSnapshotParams;
     type Output = TaskCommandWatchItem;
+}
+
+/// RM-03: the connected host's projects and tasks (its cheap registry): a
+/// snapshot, or `current` for the client's cursor, then each change.
+pub struct WatchRemoteTasks;
+impl Operation for WatchRemoteTasks {
+    const NAME: &'static str = "watchRemoteTasks";
+    const METHOD: &'static str = methods::WATCH_REMOTE_TASKS;
+    type Params = RemoteTasksParams;
+    type Output = RemoteTasksItem;
+}
+
+/// RM-03: one task in detail (its row, command position and a bounded
+/// transcript tail): a snapshot or `current`, then deltas, or `removed`.
+pub struct WatchRemoteTask;
+impl Operation for WatchRemoteTask {
+    const NAME: &'static str = "watchRemoteTask";
+    const METHOD: &'static str = methods::WATCH_REMOTE_TASK;
+    type Params = RemoteTaskParams;
+    type Output = RemoteTaskItem;
 }

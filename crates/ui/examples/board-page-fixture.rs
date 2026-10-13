@@ -101,6 +101,14 @@
 //! 22. Another machine's project in the sidebar: the Board shows an engine
 //!     error instead of saying which machine holds its board, or New issue
 //!     or From GitHub issue still open anything.
+//! 23. Feature groups (PB-4A, docs/pending-tasks/devin-project-board/pb-4a):
+//!     the card menu's New feature group or Add to … makes anything but
+//!     exactly one `BoardFeatureGroupMutate` (or any move, start, control or
+//!     review call); the panel shows a related member under the home
+//!     project, misses the pending gate, or offers Accept while tickets are
+//!     not Done (clicking it sends anything); recording a gate is not one
+//!     call; Remove changes the ticket or keeps the group on the related
+//!     project's Board.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example board-page-fixture
@@ -2899,6 +2907,284 @@ async fn scope_creation_pass(
     Ok(())
 }
 
+// ---- feature groups (PB-4A) ------------------------------------------------
+
+/// The panel's readback (part of the Board readback).
+async fn wait_groups(
+    window: Window,
+    cx: &mut AsyncApp,
+    what: &str,
+    done: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Value> {
+    wait(window, cx, what, |rb| {
+        let groups = &rb["featureGroups"];
+        groups["pending"] == 0 && groups["loading"] == false && done(groups)
+    })
+    .await
+}
+
+/// Focus a card (click, then Escape from its drawer) and open its menu
+/// with Shift+F10.
+async fn open_card_menu(window: Window, cx: &mut AsyncApp, id: &str) -> anyhow::Result<Value> {
+    let rb = wait(window, cx, "the card on the board", |rb| {
+        card(rb, id).is_ok_and(|card| card["bounds"].is_object())
+    })
+    .await?;
+    click(window, cx, center(card_rect(&rb, id)?)).await?;
+    wait(window, cx, "the detail drawer", |rb| {
+        rb["overlay"] == "detail"
+    })
+    .await?;
+    press(window, cx, "escape").await?;
+    wait(window, cx, "focus back on the card", |rb| {
+        rb["overlay"].is_null() && rb["focused"] == id
+    })
+    .await?;
+    press(window, cx, "shift-f10").await?;
+    wait(window, cx, "the card menu", |rb| !rb["menu"].is_null()).await
+}
+
+/// Choose one card-menu row by keyboard: Up wraps to the last row and skips
+/// disabled rows, so the row is as many Ups away as enabled rows from it to
+/// the end.
+async fn choose_menu_entry(window: Window, cx: &mut AsyncApp, key: &str) -> anyhow::Result<()> {
+    let rb = board(window, cx)?;
+    let entries = rb["menuEntries"].as_array().cloned().unwrap_or_default();
+    let index = entries
+        .iter()
+        .position(|entry| entry["key"] == key)
+        .ok_or_else(|| anyhow::anyhow!("item 23: no {key} in the card menu: {entries:?}"))?;
+    anyhow::ensure!(
+        entries[index]["enabled"] == true,
+        "item 23: {key} is disabled: {entries:?}"
+    );
+    let presses = entries[index..]
+        .iter()
+        .filter(|entry| entry["enabled"] == true)
+        .count();
+    for _ in 0..presses {
+        press(window, cx, "up").await?;
+    }
+    press(window, cx, "enter").await
+}
+
+fn group_control(groups: &Value, label: &str) -> anyhow::Result<(f32, f32, f32, f32)> {
+    rect_of(&groups["bounds"][label]).map_err(|e| anyhow::anyhow!("group control {label}: {e}"))
+}
+
+/// The mutations made since `mark`, as their action kinds.
+fn group_mutations(calls: &[(String, String, Value)]) -> Vec<String> {
+    calls
+        .iter()
+        .filter(|(method, ..)| method == methods::BOARD_FEATURE_GROUP_MUTATE)
+        .map(|(_, _, params)| params["action"]["kind"].as_str().unwrap_or("?").to_owned())
+        .collect()
+}
+
+/// Item 23: create a group from a ticket, link another project's ticket,
+/// record a gate and unlink, through the real card menu and panel.
+async fn feature_groups_pass(
+    window: Window,
+    cx: &mut AsyncApp,
+    engine: &Engine,
+    calls: &Calls,
+    manifest: &mut Manifest,
+) -> anyhow::Result<()> {
+    let notes = engine
+        .create(
+            P_NOTES,
+            "fg-notes",
+            "Sign in with a site token",
+            BoardPlacement::Top,
+        )
+        .await?;
+    let site = engine
+        .create(P_SITE, "fg-site", "Issue site tokens", BoardPlacement::Top)
+        .await?;
+    let site_before = engine.read(&site).await?;
+
+    // New feature group from the Notes ticket's menu.
+    sidebar_pick(window, cx, Some(P_NOTES)).await?;
+    open_card_menu(window, cx, &notes).await?;
+    let before = mark(calls);
+    choose_menu_entry(window, cx, "card-group-new").await?;
+    let rb = wait_groups(window, cx, "the new feature group", |groups| {
+        groups["groups"]
+            .as_array()
+            .is_some_and(|shown| shown.len() == 1)
+    })
+    .await?;
+    let made = calls_since(calls, before);
+    anyhow::ensure!(
+        group_mutations(&made) == ["create"] && count(&made, methods::BOARD_MOVE) == 0,
+        "item 23: New feature group must be one create mutation and no move: {made:?}"
+    );
+    ensure_no_execution(&made, "item 23 create")?;
+    let shown = rb["featureGroups"]["groups"][0].clone();
+    let group_id = shown["id"].as_str().unwrap_or_default().to_owned();
+    let unmet = strings(&shown["unmet"]);
+    anyhow::ensure!(
+        shown["title"] == "Sign in with a site token"
+            && shown["projectId"] == P_NOTES
+            && shown["home"] == true
+            && shown["canAccept"] == false
+            && shown["members"][0]["id"] == notes.as_str()
+            && shown["members"][0]["projectName"] == "Notes"
+            && shown["gates"][0]["status"] == "pending"
+            && unmet.iter().any(|reason| reason.contains("is not Done"))
+            && unmet.iter().any(|reason| reason.contains("is pending")),
+        "item 23: the new group must show its member, pending gate and unmet reasons: {shown}"
+    );
+    let png_created = capture(window, cx, manifest, "fg-created")?;
+    manifest.step(
+        "feature-group-created",
+        "the card menu's New feature group makes one create mutation and no execution call; the panel shows the ticket, the pending Integration check and no Accept",
+        json!({"group": shown, "png": png_created}),
+    );
+
+    // Accept is disabled: clicking it sends nothing.
+    let before = mark(calls);
+    click(
+        window,
+        cx,
+        center(group_control(
+            &rb["featureGroups"],
+            &format!("accept-{group_id}"),
+        )?),
+    )
+    .await?;
+    settle(cx, 300).await;
+    let made = calls_since(calls, before);
+    anyhow::ensure!(
+        group_mutations(&made).is_empty(),
+        "item 23: a disabled Accept must send nothing: {made:?}"
+    );
+
+    // Link the Website ticket from its own Board (a related project).
+    sidebar_pick(window, cx, Some(P_SITE)).await?;
+    open_card_menu(window, cx, &site).await?;
+    let before = mark(calls);
+    choose_menu_entry(window, cx, &format!("card-group-add-{group_id}")).await?;
+    let rb = wait_groups(
+        window,
+        cx,
+        "the related group on Website's Board",
+        |groups| {
+            groups["groups"][0]["members"]
+                .as_array()
+                .is_some_and(|members| members.len() == 2)
+        },
+    )
+    .await?;
+    let made = calls_since(calls, before);
+    anyhow::ensure!(
+        group_mutations(&made) == ["addMember"],
+        "item 23: Add to … must be one addMember mutation: {made:?}"
+    );
+    ensure_no_execution(&made, "item 23 link")?;
+    let shown = rb["featureGroups"]["groups"][0].clone();
+    let projects: Vec<Value> = shown["members"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|member| json!([member["id"], member["projectName"], member["column"]]))
+        .collect();
+    anyhow::ensure!(
+        shown["home"] == false
+            && shown["projectName"] == "Notes"
+            && projects
+                == vec![
+                    json!([notes, "Notes", "backlog"]),
+                    json!([site, "Website", "backlog"]),
+                ]
+            && shown["canAccept"] == false,
+        "item 23: each member must show its own project and column, the group its home: {shown}"
+    );
+    let png_related = capture(window, cx, manifest, "fg-related")?;
+
+    // Record the gate: one recordGate, still not acceptable.
+    let before = mark(calls);
+    click(
+        window,
+        cx,
+        center(group_control(
+            &rb["featureGroups"],
+            &format!("gate-pass-{group_id}-g1"),
+        )?),
+    )
+    .await?;
+    let rb = wait_groups(window, cx, "the passed gate", |groups| {
+        groups["groups"][0]["gates"][0]["status"] == "passed"
+    })
+    .await?;
+    let made = calls_since(calls, before);
+    anyhow::ensure!(
+        group_mutations(&made) == ["recordGate"]
+            && rb["featureGroups"]["groups"][0]["canAccept"] == false,
+        "item 23: Passed must be one recordGate and the unfinished tickets keep Accept off: {made:?}"
+    );
+    manifest.step(
+        "feature-group-related",
+        "Add to … from the related project's card menu is one addMember; the panel there names the home (Notes) and each member's own project; Passed is one recordGate and Accept stays off while tickets are not Done",
+        json!({"group": rb["featureGroups"]["groups"][0], "png": png_related}),
+    );
+
+    // Remove the Website ticket: the ticket is unchanged and the group
+    // leaves Website's Board.
+    let before = mark(calls);
+    click(
+        window,
+        cx,
+        center(group_control(
+            &rb["featureGroups"],
+            &format!("remove-{group_id}-{site}"),
+        )?),
+    )
+    .await?;
+    let rb = wait_groups(
+        window,
+        cx,
+        "the group gone from Website's Board",
+        |groups| {
+            groups["groups"]
+                .as_array()
+                .is_some_and(|shown| shown.is_empty())
+        },
+    )
+    .await?;
+    let made = calls_since(calls, before);
+    let site_after = engine.read(&site).await?;
+    let engine_groups = engine
+        .call(
+            methods::BOARD_FEATURE_GROUPS,
+            json!({"scope": {"kind": "allProjects"}, "groupId": group_id}),
+        )
+        .await?;
+    let members: Vec<Value> = engine_groups["groups"][0]["group"]["members"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|member| member["workItemId"].clone())
+        .collect();
+    anyhow::ensure!(
+        group_mutations(&made) == ["removeMember"]
+            && site_after["view"]["item"]["revision"] == site_before["view"]["item"]["revision"]
+            && site_after["view"]["item"]["column"] == site_before["view"]["item"]["column"]
+            && site_after["view"]["item"]["projectId"] == P_SITE
+            && members == vec![json!(notes)],
+        "item 23: Remove must be one removeMember and leave the ticket as it was: {made:?} {site_after} {engine_groups}"
+    );
+    ensure_no_execution(&made, "item 23 unlink")?;
+    let snapshot = manifest.json_snapshot("fg-final-readback", &rb)?;
+    manifest.step(
+        "feature-group-unlinked",
+        "Remove is one removeMember; the Website ticket keeps its revision, column and project; the group keeps the Notes ticket and leaves Website's Board",
+        json!({"siteRevision": site_after["view"]["item"]["revision"], "members": members, "readback": snapshot}),
+    );
+    sidebar_pick(window, cx, Some(P_LUNA)).await?;
+    Ok(())
+}
+
 fn exit_failed(temp_root: &Path) -> ! {
     if let Err(error) = std::fs::remove_dir_all(temp_root) {
         eprintln!(
@@ -3195,6 +3481,7 @@ fn main() -> anyhow::Result<()> {
                     )
                     .await?;
                     scope_creation_pass(current, cx, &engine, &calls, &mut manifest).await?;
+                    feature_groups_pass(current, cx, &engine, &calls, &mut manifest).await?;
                     Ok(())
                 }
                 .await;
@@ -3203,7 +3490,7 @@ fn main() -> anyhow::Result<()> {
                         let written = manifest.write("pass").and_then(|_| {
                             std::fs::write(
                                 out.join("board-page.pass"),
-                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell; past one engine page every column stays reachable: Load more is one bounded cursor read per column, live re-reads keep every loaded page without duplicates and keep the selection, and scope or search changes return to the first page; the Board always shows the sidebar's project filter: under a project New issue is bound to it and saves there, under All projects it asks in the sidebar's searchable project picker (this Mac's projects only) and saves in the picked project, From GitHub issue uses the same picker, a sidebar change closes another project's drawer or form without saving and All projects keeps them, and another machine's project says where its Board is and creates nothing\n",
+                                "PASS: headless production Shell, real in-process engine and Mock harness, real GPUI drags and keystrokes at Interface sizes 12, 16 and 20: Board sits directly below Automations; the sidebar filter prefilters and All projects aggregates with project names; Backlog/Ready/Done with help and engine counts; a drag to Ready is one BoardMove and shows the engine's phase; a drag back is one BoardMove and never claims Stopped before the engine; a reorder is one BoardRank with no launch; a drop on Done calls nothing; keyboard moves, drawer, card menu, archive/unarchive and announcements keep focus; a live insert keeps the focused card; narrow windows get the List with the same actions; the empty state offers four paths without GitHub; presentation prefs restore after re-creating the Shell; past one engine page every column stays reachable: Load more is one bounded cursor read per column, live re-reads keep every loaded page without duplicates and keep the selection, and scope or search changes return to the first page; the Board always shows the sidebar's project filter: under a project New issue is bound to it and saves there, under All projects it asks in the sidebar's searchable project picker (this Mac's projects only) and saves in the picked project, From GitHub issue uses the same picker, a sidebar change closes another project's drawer or form without saving and All projects keeps them, and another machine's project says where its Board is and creates nothing; feature groups: the card menu creates a group from a ticket and links another project's ticket with one BoardFeatureGroupMutate each and no execution call, the panel names each member's own project and the pending gate, a disabled Accept sends nothing, a gate result is one call, and Remove leaves the ticket untouched\n",
                             )
                             .map_err(anyhow::Error::from)
                         });

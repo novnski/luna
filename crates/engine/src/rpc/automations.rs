@@ -1311,6 +1311,9 @@ impl EngineRpc {
                     }
                     CommandReceiptStatus::Pending
                         if !self.sessions.turn_in_flight(&run.task_id)
+                            // AW-10: a send waiting for (or just admitted
+                            // from) the host line has provably not been sent.
+                            && !self.sessions.turn_start_pending(&run.task_id)
                             && crate::now_ms().saturating_sub(r.accepted_at_ms) > 5_000 =>
                     {
                         // As with Board delivery, give an admitted startup a

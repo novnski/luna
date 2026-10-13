@@ -519,6 +519,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -1668,14 +1684,34 @@ public func FfiConverterTypeProbeListener_lower(_ value: ProbeListener) -> UInt6
 public protocol RemoteSessionProtocol: AnyObject, Sendable {
 
     /**
+     * RM-03: the projections to keep for the next run, bounded. Store them
+     * in protected, non-synchronized storage scoped to this saved Mac, and
+     * delete them when the Mac is forgotten. Empty for an IOS-00 session.
+     */
+    func cacheBytes()  -> Data
+
+    /**
+     * RM-03: why the cache given to [`RemoteSession::following`] was not
+     * restored, if it was not.
+     */
+    func cacheNote()  -> String?
+
+    /**
      * Close on this phone: pending operations end with `closed`, watches
      * end, and the platform is told to close.
      */
     func close()
 
     /**
-     * Open and verify the socket. Once; a failed, cancelled or closed
-     * session stays closed.
+     * Open and verify the socket.
+     *
+     * IOS-00 session: once; a failed, cancelled or closed session stays
+     * closed, and a second call is `busy`.
+     *
+     * Runtime session: starts the runtime and returns the first socket's
+     * host, or the first attempt's error while the runtime keeps retrying
+     * (or the reason it closed). Calling it again while open returns the
+     * open host; cancelling the call leaves the runtime running.
      */
     func connect(cancel: Cancellation?) async throws  -> RemoteHostInfo
 
@@ -1686,20 +1722,87 @@ public protocol RemoteSessionProtocol: AnyObject, Sendable {
     func engineInfo(cancel: Cancellation?) async throws  -> RemoteHostInfo
 
     /**
+     * RM-03: follow this task's detail (its row, command position and a
+     * bounded transcript tail) from now on, whether or not a view shows
+     * it. At most [`MAX_FOLLOWED_TASKS`] are followed; following another
+     * stops the least recently followed one (its cached detail stays).
+     */
+    func followTask(taskId: String) throws
+
+    /**
+     * RM-03: the followed tasks, least recently followed first.
+     */
+    func followedTasks()  -> [String]
+
+    /**
+     * RM-03: the platform's network path changed. Without a network the
+     * socket is closed and the session waits; when one returns it
+     * reconnects at once. An open socket survives a path change until its
+     * keepalive or the Mac ends it.
+     */
+    func networkChanged(available: Bool)
+
+    /**
+     * RM-03: why the Mac's projections are not being followed (an older
+     * Mac, refused access or repeated failures), if they are not.
+     */
+    func projectionIssue()  -> String?
+
+    /**
+     * RM-03: grows whenever a projection or its freshness changed, so the
+     * platform re-reads projections only when this moved.
+     */
+    func projectionRevision()  -> UInt64
+
+    /**
      * One text message from the open socket. Waits while the core's frame
      * queue is full, so the platform reads no faster than the core consumes.
      */
     func receive(socketId: UInt64, frame: String) async
 
+    /**
+     * RM-03: one task's detail as last confirmed (followed or cached).
+     */
+    func remoteTask(taskId: String)  -> RemoteTaskProjection?
+
+    /**
+     * RM-03: the Mac's projects and tasks as last confirmed, with their
+     * freshness; `None` before the first snapshot (and without a cache).
+     */
+    func remoteTasks()  -> RemoteTasksProjection?
+
     func requestCompleted(requestId: UInt64, status: UInt16, body: Data, route: RouteObservation)
 
     func requestFailed(requestId: UInt64, failure: TransportFailure)
+
+    /**
+     * RM-03: the app is in the foreground again: reconnect now (with full
+     * verification) and resume every projection from its cursor.
+     */
+    func resume()
 
     func socketClosed(socketId: UInt64, failure: TransportFailure)
 
     func socketOpened(socketId: UInt64)
 
+    /**
+     * The current state. Reading it acknowledges the last change
+     * notification: the next change notifies again.
+     */
     func state()  -> RemoteSessionState
+
+    /**
+     * RM-03: the app went to the background. Close the socket (accepted
+     * work on the Mac continues); projections turn `stale`. Keep the
+     * session, save [`RemoteSession::cache_bytes`], and call
+     * [`RemoteSession::resume`] in the foreground.
+     */
+    func suspend()
+
+    /**
+     * RM-03: stop following a task; its cached detail stays readable.
+     */
+    func unfollowTask(taskId: String)
 
     /**
      * Watch a task's command receipts from its current snapshot. Returns
@@ -1751,8 +1854,8 @@ open class RemoteSession: RemoteSessionProtocol, @unchecked Sendable {
         return try! rustCall { uniffi_luna_mobile_fn_clone_remotesession(self.handle, $0) }
     }
     /**
-     * Validate saved access with the same rules as restore; nothing touches
-     * the network until [`RemoteSession::connect`].
+     * IOS-00: one socket. Validate saved access with the same rules as
+     * restore; nothing touches the network until [`RemoteSession::connect`].
      */
 public convenience init(mac: SavedMac, endpointIndex: UInt32, transport: SocketTransport, listener: RemoteSessionListener?)throws  {
     let handle =
@@ -1778,7 +1881,54 @@ public convenience init(mac: SavedMac, endpointIndex: UInt32, transport: SocketT
     }
 
 
+    /**
+     * RM-03: the reconnecting runtime that follows the Mac's tasks. `cache`
+     * is what [`RemoteSession::cache_bytes`] returned on an earlier run for
+     * this same Mac; it is restored as `cached` and confirmed or repaired
+     * on the first socket. A cache for any other host, profile or version is
+     * ignored (see [`RemoteSession::cache_note`]).
+     */
+public static func following(mac: SavedMac, endpointIndex: UInt32, transport: SocketTransport, listener: RemoteSessionListener?, cache: Data?)throws  -> RemoteSession  {
+    return try  FfiConverterTypeRemoteSession_lift(try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_constructor_remotesession_following(
+        FfiConverterTypeSavedMac_lower(mac),
+        FfiConverterUInt32.lower(endpointIndex),
+        FfiConverterTypeSocketTransport_lower(transport),
+        FfiConverterOptionTypeRemoteSessionListener.lower(listener),
+        FfiConverterOptionData.lower(cache),uniffiCallStatus
+    )
+})
+}
 
+
+
+    /**
+     * RM-03: the projections to keep for the next run, bounded. Store them
+     * in protected, non-synchronized storage scoped to this saved Mac, and
+     * delete them when the Mac is forgotten. Empty for an IOS-00 session.
+     */
+open func cacheBytes() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_cache_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-03: why the cache given to [`RemoteSession::following`] was not
+     * restored, if it was not.
+     */
+open func cacheNote() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_cache_note(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
 
     /**
      * Close on this phone: pending operations end with `closed`, watches
@@ -1793,8 +1943,15 @@ open func close()  {try! rustCall() {
 }
 
     /**
-     * Open and verify the socket. Once; a failed, cancelled or closed
-     * session stays closed.
+     * Open and verify the socket.
+     *
+     * IOS-00 session: once; a failed, cancelled or closed session stays
+     * closed, and a second call is `busy`.
+     *
+     * Runtime session: starts the runtime and returns the first socket's
+     * host, or the first attempt's error while the runtime keeps retrying
+     * (or the reason it closed). Calling it again while open returns the
+     * open host; cancelling the call leaves the runtime running.
      */
 open func connect(cancel: Cancellation?)async throws  -> RemoteHostInfo  {
     return
@@ -1833,6 +1990,74 @@ open func engineInfo(cancel: Cancellation?)async throws  -> RemoteHostInfo  {
 }
 
     /**
+     * RM-03: follow this task's detail (its row, command position and a
+     * bounded transcript tail) from now on, whether or not a view shows
+     * it. At most [`MAX_FOLLOWED_TASKS`] are followed; following another
+     * stops the least recently followed one (its cached detail stays).
+     */
+open func followTask(taskId: String)throws   {try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_follow_task(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * RM-03: the followed tasks, least recently followed first.
+     */
+open func followedTasks() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_followed_tasks(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-03: the platform's network path changed. Without a network the
+     * socket is closed and the session waits; when one returns it
+     * reconnects at once. An open socket survives a path change until its
+     * keepalive or the Mac ends it.
+     */
+open func networkChanged(available: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_network_changed(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(available),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * RM-03: why the Mac's projections are not being followed (an older
+     * Mac, refused access or repeated failures), if they are not.
+     */
+open func projectionIssue() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_projection_issue(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-03: grows whenever a projection or its freshness changed, so the
+     * platform re-reads projections only when this moved.
+     */
+open func projectionRevision() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_projection_revision(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
      * One text message from the open socket. Waits while the core's frame
      * queue is full, so the platform reads no faster than the core consumes.
      */
@@ -1851,6 +2076,32 @@ open func receive(socketId: UInt64, frame: String)async   {
             errorHandler: nil
 
         )
+}
+
+    /**
+     * RM-03: one task's detail as last confirmed (followed or cached).
+     */
+open func remoteTask(taskId: String) -> RemoteTaskProjection?  {
+    return try!  FfiConverterOptionTypeRemoteTaskProjection.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_remote_task(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-03: the Mac's projects and tasks as last confirmed, with their
+     * freshness; `None` before the first snapshot (and without a cache).
+     */
+open func remoteTasks() -> RemoteTasksProjection?  {
+    return try!  FfiConverterOptionTypeRemoteTasksProjection.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_remote_tasks(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
 
 open func requestCompleted(requestId: UInt64, status: UInt16, body: Data, route: RouteObservation)  {try! rustCall() {
@@ -1875,6 +2126,18 @@ open func requestFailed(requestId: UInt64, failure: TransportFailure)  {try! rus
 }
 }
 
+    /**
+     * RM-03: the app is in the foreground again: reconnect now (with full
+     * verification) and resume every projection from its cursor.
+     */
+open func resume()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_resume(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
 open func socketClosed(socketId: UInt64, failure: TransportFailure)  {try! rustCall() {
         uniffiCallStatus in
     uniffi_luna_mobile_fn_method_remotesession_socket_closed(
@@ -1894,6 +2157,10 @@ open func socketOpened(socketId: UInt64)  {try! rustCall() {
 }
 }
 
+    /**
+     * The current state. Reading it acknowledges the last change
+     * notification: the next change notifies again.
+     */
 open func state() -> RemoteSessionState  {
     return try!  FfiConverterTypeRemoteSessionState_lift(try! rustCall() {
         uniffiCallStatus in
@@ -1901,6 +2168,32 @@ open func state() -> RemoteSessionState  {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
+}
+
+    /**
+     * RM-03: the app went to the background. Close the socket (accepted
+     * work on the Mac continues); projections turn `stale`. Keep the
+     * session, save [`RemoteSession::cache_bytes`], and call
+     * [`RemoteSession::resume`] in the foreground.
+     */
+open func suspend()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_suspend(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * RM-03: stop following a task; its cached detail stays readable.
+     */
+open func unfollowTask(taskId: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_unfollow_task(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),uniffiCallStatus
+    )
+}
 }
 
     /**
@@ -1974,8 +2267,9 @@ public func FfiConverterTypeRemoteSession_lower(_ value: RemoteSession) -> UInt6
 
 
 /**
- * Told that [`RemoteSession::state`] changed. Called on whichever thread
- * changed it: hop to the platform's actor, then read the state there.
+ * Told that [`RemoteSession::state`] or a projection changed. Called on
+ * whichever thread changed it: hop to the platform's actor, then read the
+ * state there. Not called again until the state has been read.
  */
 public protocol RemoteSessionListener: AnyObject, Sendable {
 
@@ -1983,8 +2277,9 @@ public protocol RemoteSessionListener: AnyObject, Sendable {
 
 }
 /**
- * Told that [`RemoteSession::state`] changed. Called on whichever thread
- * changed it: hop to the platform's actor, then read the state there.
+ * Told that [`RemoteSession::state`] or a projection changed. Called on
+ * whichever thread changed it: hop to the platform's actor, then read the
+ * state there. Not called again until the state has been read.
  */
 open class RemoteSessionListenerImpl: RemoteSessionListener, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -2177,10 +2472,10 @@ public func FfiConverterTypeRemoteSessionListener_lower(_ value: RemoteSessionLi
 
 
 /**
- * The platform half of a session: pinned HTTPS requests and one pinned
- * WebSocket. Each request is reported once, through
+ * The platform half of a session: pinned HTTPS requests and pinned
+ * WebSockets, one open at a time. Each request is reported once, through
  * [`RemoteSession::request_completed`] or [`RemoteSession::request_failed`];
- * the socket through [`RemoteSession::socket_opened`], then
+ * each socket through [`RemoteSession::socket_opened`], then
  * [`RemoteSession::receive`] for each text message in order, then
  * [`RemoteSession::socket_closed`]. Calls may come from any thread.
  */
@@ -2188,12 +2483,22 @@ public protocol SocketTransport: AnyObject, Sendable {
 
     func sendRequest(request: EnrollmentRequest)
 
+    /**
+     * Open a socket. A runtime session opens another after the previous one
+     * ended or was closed with [`SocketTransport::close_socket`].
+     */
     func openSocket(request: SocketOpenRequest)
 
     /**
      * Send one text message on the open socket, after every earlier one.
      */
     func sendFrame(socketId: UInt64, frame: String)
+
+    /**
+     * Close this one socket (RM-03: the session will open another). Nothing
+     * needs to be reported for it afterwards. Idempotent.
+     */
+    func closeSocket(socketId: UInt64)
 
     /**
      * Stop everything for this session: cancel any request and close the
@@ -2203,10 +2508,10 @@ public protocol SocketTransport: AnyObject, Sendable {
 
 }
 /**
- * The platform half of a session: pinned HTTPS requests and one pinned
- * WebSocket. Each request is reported once, through
+ * The platform half of a session: pinned HTTPS requests and pinned
+ * WebSockets, one open at a time. Each request is reported once, through
  * [`RemoteSession::request_completed`] or [`RemoteSession::request_failed`];
- * the socket through [`RemoteSession::socket_opened`], then
+ * each socket through [`RemoteSession::socket_opened`], then
  * [`RemoteSession::receive`] for each text message in order, then
  * [`RemoteSession::socket_closed`]. Calls may come from any thread.
  */
@@ -2272,6 +2577,10 @@ open func sendRequest(request: EnrollmentRequest)  {try! rustCall() {
 }
 }
 
+    /**
+     * Open a socket. A runtime session opens another after the previous one
+     * ended or was closed with [`SocketTransport::close_socket`].
+     */
 open func openSocket(request: SocketOpenRequest)  {try! rustCall() {
         uniffiCallStatus in
     uniffi_luna_mobile_fn_method_sockettransport_open_socket(
@@ -2290,6 +2599,19 @@ open func sendFrame(socketId: UInt64, frame: String)  {try! rustCall() {
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(socketId),
         FfiConverterString.lower(frame),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Close this one socket (RM-03: the session will open another). Nothing
+     * needs to be reported for it afterwards. Idempotent.
+     */
+open func closeSocket(socketId: UInt64)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_sockettransport_close_socket(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(socketId),uniffiCallStatus
     )
 }
 }
@@ -2397,6 +2719,30 @@ fileprivate struct UniffiCallbackInterfaceSocketTransport {
                 return uniffiObj.sendFrame(
                      socketId: try FfiConverterUInt64.lift(socketId),
                      frame: try FfiConverterString.lift(frame)
+                )
+            }
+
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        closeSocket: { (
+            uniffiHandle: UInt64,
+            socketId: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeSocketTransport.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.closeSocket(
+                     socketId: try FfiConverterUInt64.lift(socketId)
                 )
             }
 
@@ -2522,9 +2868,9 @@ public protocol TaskCommandWatchHandleProtocol: AnyObject, Sendable {
     func cancel()
 
     /**
-     * The next change. `None` once the watch was cancelled, its session
-     * closed or the engine ended the stream: open a new watch, which starts
-     * from a fresh snapshot (RM-03 owns cursors and repair across sockets).
+     * The next change. `None` once the watch was cancelled, its socket or
+     * session closed or the engine ended the stream: open a new watch,
+     * which starts from a fresh snapshot.
      */
     func next() async throws  -> TaskCommandChange?
 
@@ -2599,9 +2945,9 @@ open func cancel()  {try! rustCall() {
 }
 
     /**
-     * The next change. `None` once the watch was cancelled, its session
-     * closed or the engine ended the stream: open a new watch, which starts
-     * from a fresh snapshot (RM-03 owns cursors and repair across sockets).
+     * The next change. `None` once the watch was cancelled, its socket or
+     * session closed or the engine ended the stream: open a new watch,
+     * which starts from a fresh snapshot.
      */
 open func next()async throws  -> TaskCommandChange?  {
     return
@@ -2936,6 +3282,150 @@ public func FfiConverterTypePairingPreview_lower(_ value: PairingPreview) -> Rus
 }
 
 
+public struct ProviderRecord: Equatable, Hashable {
+    public var id: String
+    public var name: String
+    public var installed: Bool
+    public var enabled: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, installed: Bool, enabled: Bool) {
+        self.id = id
+        self.name = name
+        self.installed = installed
+        self.enabled = enabled
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProviderRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProviderRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderRecord {
+        return
+            try ProviderRecord(
+                id: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf),
+                installed: FfiConverterBool.read(from: &buf),
+                enabled: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProviderRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterBool.write(value.installed, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderRecord_lift(_ buf: RustBuffer) throws -> ProviderRecord {
+    return try FfiConverterTypeProviderRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderRecord_lower(_ value: ProviderRecord) -> RustBuffer {
+    return FfiConverterTypeProviderRecord.lower(value)
+}
+
+
+public struct RemoteEntryRecord: Equatable, Hashable {
+    public var entryId: String
+    public var role: String
+    public var status: String?
+    public var createdAtMs: Int64
+    public var text: String
+    public var textTruncated: Bool
+    public var tools: [String]
+    public var otherParts: UInt32
+    public var error: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(entryId: String, role: String, status: String?, createdAtMs: Int64, text: String, textTruncated: Bool, tools: [String], otherParts: UInt32, error: Bool) {
+        self.entryId = entryId
+        self.role = role
+        self.status = status
+        self.createdAtMs = createdAtMs
+        self.text = text
+        self.textTruncated = textTruncated
+        self.tools = tools
+        self.otherParts = otherParts
+        self.error = error
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteEntryRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteEntryRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteEntryRecord {
+        return
+            try RemoteEntryRecord(
+                entryId: FfiConverterString.read(from: &buf),
+                role: FfiConverterString.read(from: &buf),
+                status: FfiConverterOptionString.read(from: &buf),
+                createdAtMs: FfiConverterInt64.read(from: &buf),
+                text: FfiConverterString.read(from: &buf),
+                textTruncated: FfiConverterBool.read(from: &buf),
+                tools: FfiConverterSequenceString.read(from: &buf),
+                otherParts: FfiConverterUInt32.read(from: &buf),
+                error: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RemoteEntryRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.entryId, into: &buf)
+        FfiConverterString.write(value.role, into: &buf)
+        FfiConverterOptionString.write(value.status, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterBool.write(value.textTruncated, into: &buf)
+        FfiConverterSequenceString.write(value.tools, into: &buf)
+        FfiConverterUInt32.write(value.otherParts, into: &buf)
+        FfiConverterBool.write(value.error, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteEntryRecord_lift(_ buf: RustBuffer) throws -> RemoteEntryRecord {
+    return try FfiConverterTypeRemoteEntryRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteEntryRecord_lower(_ value: RemoteEntryRecord) -> RustBuffer {
+    return FfiConverterTypeRemoteEntryRecord.lower(value)
+}
+
+
 /**
  * The verified host behind an open socket.
  */
@@ -3038,6 +3528,398 @@ public func FfiConverterTypeRemoteHostInfo_lift(_ buf: RustBuffer) throws -> Rem
 #endif
 public func FfiConverterTypeRemoteHostInfo_lower(_ value: RemoteHostInfo) -> RustBuffer {
     return FfiConverterTypeRemoteHostInfo.lower(value)
+}
+
+
+public struct RemoteProjectRecord: Equatable, Hashable {
+    public var projectId: String
+    public var name: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(projectId: String, name: String) {
+        self.projectId = projectId
+        self.name = name
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteProjectRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteProjectRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteProjectRecord {
+        return
+            try RemoteProjectRecord(
+                projectId: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RemoteProjectRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.projectId, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteProjectRecord_lift(_ buf: RustBuffer) throws -> RemoteProjectRecord {
+    return try FfiConverterTypeRemoteProjectRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteProjectRecord_lower(_ value: RemoteProjectRecord) -> RustBuffer {
+    return FfiConverterTypeRemoteProjectRecord.lower(value)
+}
+
+
+/**
+ * One followed task as the Mac last confirmed it.
+ */
+public struct RemoteTaskProjection: Equatable, Hashable {
+    public var taskId: String
+    /**
+     * The Mac no longer lists this task.
+     */
+    public var removed: Bool
+    public var task: RemoteTaskRecord?
+    public var generation: String?
+    public var revision: UInt64?
+    public var freshness: ProjectionFreshness
+    public var lastChange: ProjectionChange
+    public var observedAtMs: Int64
+    public var confirmedAtMs: Int64
+    /**
+     * The task's durable command revision and sequence on the Mac.
+     */
+    public var taskRevision: UInt64
+    public var taskSequence: UInt64
+    /**
+     * The newest entries, oldest first.
+     */
+    public var entries: [RemoteEntryRecord]
+    public var totalEntries: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(taskId: String,
+        /**
+         * The Mac no longer lists this task.
+         */removed: Bool, task: RemoteTaskRecord?, generation: String?, revision: UInt64?, freshness: ProjectionFreshness, lastChange: ProjectionChange, observedAtMs: Int64, confirmedAtMs: Int64,
+        /**
+         * The task's durable command revision and sequence on the Mac.
+         */taskRevision: UInt64, taskSequence: UInt64,
+        /**
+         * The newest entries, oldest first.
+         */entries: [RemoteEntryRecord], totalEntries: UInt32) {
+        self.taskId = taskId
+        self.removed = removed
+        self.task = task
+        self.generation = generation
+        self.revision = revision
+        self.freshness = freshness
+        self.lastChange = lastChange
+        self.observedAtMs = observedAtMs
+        self.confirmedAtMs = confirmedAtMs
+        self.taskRevision = taskRevision
+        self.taskSequence = taskSequence
+        self.entries = entries
+        self.totalEntries = totalEntries
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteTaskProjection: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteTaskProjection: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteTaskProjection {
+        return
+            try RemoteTaskProjection(
+                taskId: FfiConverterString.read(from: &buf),
+                removed: FfiConverterBool.read(from: &buf),
+                task: FfiConverterOptionTypeRemoteTaskRecord.read(from: &buf),
+                generation: FfiConverterOptionString.read(from: &buf),
+                revision: FfiConverterOptionUInt64.read(from: &buf),
+                freshness: FfiConverterTypeProjectionFreshness.read(from: &buf),
+                lastChange: FfiConverterTypeProjectionChange.read(from: &buf),
+                observedAtMs: FfiConverterInt64.read(from: &buf),
+                confirmedAtMs: FfiConverterInt64.read(from: &buf),
+                taskRevision: FfiConverterUInt64.read(from: &buf),
+                taskSequence: FfiConverterUInt64.read(from: &buf),
+                entries: FfiConverterSequenceTypeRemoteEntryRecord.read(from: &buf),
+                totalEntries: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RemoteTaskProjection, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.taskId, into: &buf)
+        FfiConverterBool.write(value.removed, into: &buf)
+        FfiConverterOptionTypeRemoteTaskRecord.write(value.task, into: &buf)
+        FfiConverterOptionString.write(value.generation, into: &buf)
+        FfiConverterOptionUInt64.write(value.revision, into: &buf)
+        FfiConverterTypeProjectionFreshness.write(value.freshness, into: &buf)
+        FfiConverterTypeProjectionChange.write(value.lastChange, into: &buf)
+        FfiConverterInt64.write(value.observedAtMs, into: &buf)
+        FfiConverterInt64.write(value.confirmedAtMs, into: &buf)
+        FfiConverterUInt64.write(value.taskRevision, into: &buf)
+        FfiConverterUInt64.write(value.taskSequence, into: &buf)
+        FfiConverterSequenceTypeRemoteEntryRecord.write(value.entries, into: &buf)
+        FfiConverterUInt32.write(value.totalEntries, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTaskProjection_lift(_ buf: RustBuffer) throws -> RemoteTaskProjection {
+    return try FfiConverterTypeRemoteTaskProjection.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTaskProjection_lower(_ value: RemoteTaskProjection) -> RustBuffer {
+    return FfiConverterTypeRemoteTaskProjection.lower(value)
+}
+
+
+public struct RemoteTaskRecord: Equatable, Hashable {
+    public var taskId: String
+    public var projectId: String
+    public var title: String?
+    /**
+     * `idle`, `working`, `awaitingApproval`, `awaitingInput`, `errored` or
+     * `completed`.
+     */
+    public var status: String
+    public var archived: Bool
+    public var pinned: Bool
+    public var unseen: Bool
+    public var provider: String?
+    public var createdAtMs: Int64
+    public var lastActivityMs: Int64?
+    public var preview: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(taskId: String, projectId: String, title: String?,
+        /**
+         * `idle`, `working`, `awaitingApproval`, `awaitingInput`, `errored` or
+         * `completed`.
+         */status: String, archived: Bool, pinned: Bool, unseen: Bool, provider: String?, createdAtMs: Int64, lastActivityMs: Int64?, preview: String?) {
+        self.taskId = taskId
+        self.projectId = projectId
+        self.title = title
+        self.status = status
+        self.archived = archived
+        self.pinned = pinned
+        self.unseen = unseen
+        self.provider = provider
+        self.createdAtMs = createdAtMs
+        self.lastActivityMs = lastActivityMs
+        self.preview = preview
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteTaskRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteTaskRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteTaskRecord {
+        return
+            try RemoteTaskRecord(
+                taskId: FfiConverterString.read(from: &buf),
+                projectId: FfiConverterString.read(from: &buf),
+                title: FfiConverterOptionString.read(from: &buf),
+                status: FfiConverterString.read(from: &buf),
+                archived: FfiConverterBool.read(from: &buf),
+                pinned: FfiConverterBool.read(from: &buf),
+                unseen: FfiConverterBool.read(from: &buf),
+                provider: FfiConverterOptionString.read(from: &buf),
+                createdAtMs: FfiConverterInt64.read(from: &buf),
+                lastActivityMs: FfiConverterOptionInt64.read(from: &buf),
+                preview: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RemoteTaskRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.taskId, into: &buf)
+        FfiConverterString.write(value.projectId, into: &buf)
+        FfiConverterOptionString.write(value.title, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterBool.write(value.archived, into: &buf)
+        FfiConverterBool.write(value.pinned, into: &buf)
+        FfiConverterBool.write(value.unseen, into: &buf)
+        FfiConverterOptionString.write(value.provider, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+        FfiConverterOptionInt64.write(value.lastActivityMs, into: &buf)
+        FfiConverterOptionString.write(value.preview, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTaskRecord_lift(_ buf: RustBuffer) throws -> RemoteTaskRecord {
+    return try FfiConverterTypeRemoteTaskRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTaskRecord_lower(_ value: RemoteTaskRecord) -> RustBuffer {
+    return FfiConverterTypeRemoteTaskRecord.lower(value)
+}
+
+
+/**
+ * The Mac's projects and tasks, in the Mac's order.
+ */
+public struct RemoteTasksProjection: Equatable, Hashable {
+    /**
+     * The host it describes (always the paired Mac).
+     */
+    public var deviceId: String
+    public var generation: String
+    public var revision: UInt64
+    public var freshness: ProjectionFreshness
+    public var lastChange: ProjectionChange
+    /**
+     * The Mac's clock when it computed this state.
+     */
+    public var observedAtMs: Int64
+    /**
+     * This phone's clock when the Mac last confirmed it.
+     */
+    public var confirmedAtMs: Int64
+    public var projects: [RemoteProjectRecord]
+    public var tasks: [RemoteTaskRecord]
+    /**
+     * Every task the Mac lists; more than `tasks` when bounded.
+     */
+    public var totalTasks: UInt32
+    public var providers: [ProviderRecord]
+    public var capabilities: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The host it describes (always the paired Mac).
+         */deviceId: String, generation: String, revision: UInt64, freshness: ProjectionFreshness, lastChange: ProjectionChange,
+        /**
+         * The Mac's clock when it computed this state.
+         */observedAtMs: Int64,
+        /**
+         * This phone's clock when the Mac last confirmed it.
+         */confirmedAtMs: Int64, projects: [RemoteProjectRecord], tasks: [RemoteTaskRecord],
+        /**
+         * Every task the Mac lists; more than `tasks` when bounded.
+         */totalTasks: UInt32, providers: [ProviderRecord], capabilities: [String]) {
+        self.deviceId = deviceId
+        self.generation = generation
+        self.revision = revision
+        self.freshness = freshness
+        self.lastChange = lastChange
+        self.observedAtMs = observedAtMs
+        self.confirmedAtMs = confirmedAtMs
+        self.projects = projects
+        self.tasks = tasks
+        self.totalTasks = totalTasks
+        self.providers = providers
+        self.capabilities = capabilities
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteTasksProjection: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteTasksProjection: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteTasksProjection {
+        return
+            try RemoteTasksProjection(
+                deviceId: FfiConverterString.read(from: &buf),
+                generation: FfiConverterString.read(from: &buf),
+                revision: FfiConverterUInt64.read(from: &buf),
+                freshness: FfiConverterTypeProjectionFreshness.read(from: &buf),
+                lastChange: FfiConverterTypeProjectionChange.read(from: &buf),
+                observedAtMs: FfiConverterInt64.read(from: &buf),
+                confirmedAtMs: FfiConverterInt64.read(from: &buf),
+                projects: FfiConverterSequenceTypeRemoteProjectRecord.read(from: &buf),
+                tasks: FfiConverterSequenceTypeRemoteTaskRecord.read(from: &buf),
+                totalTasks: FfiConverterUInt32.read(from: &buf),
+                providers: FfiConverterSequenceTypeProviderRecord.read(from: &buf),
+                capabilities: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RemoteTasksProjection, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.deviceId, into: &buf)
+        FfiConverterString.write(value.generation, into: &buf)
+        FfiConverterUInt64.write(value.revision, into: &buf)
+        FfiConverterTypeProjectionFreshness.write(value.freshness, into: &buf)
+        FfiConverterTypeProjectionChange.write(value.lastChange, into: &buf)
+        FfiConverterInt64.write(value.observedAtMs, into: &buf)
+        FfiConverterInt64.write(value.confirmedAtMs, into: &buf)
+        FfiConverterSequenceTypeRemoteProjectRecord.write(value.projects, into: &buf)
+        FfiConverterSequenceTypeRemoteTaskRecord.write(value.tasks, into: &buf)
+        FfiConverterUInt32.write(value.totalTasks, into: &buf)
+        FfiConverterSequenceTypeProviderRecord.write(value.providers, into: &buf)
+        FfiConverterSequenceString.write(value.capabilities, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTasksProjection_lift(_ buf: RustBuffer) throws -> RemoteTasksProjection {
+    return try FfiConverterTypeRemoteTasksProjection.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteTasksProjection_lower(_ value: RemoteTasksProjection) -> RustBuffer {
+    return FfiConverterTypeRemoteTasksProjection.lower(value)
 }
 
 
@@ -3938,6 +4820,190 @@ public func FfiConverterTypeProbeState_lower(_ value: ProbeState) -> RustBuffer 
 
 
 
+/**
+ * What last changed a projection.
+ */
+
+public enum ProjectionChange: Equatable, Hashable {
+
+    /**
+     * The Mac sent the whole projection (first follow, or a repair).
+     */
+    case snapshot
+    /**
+     * The Mac confirmed the cursor this phone held; nothing was resent.
+     */
+    case current
+    case delta
+    case removed
+    /**
+     * Restored from the saved cache.
+     */
+    case restored
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProjectionChange: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProjectionChange: FfiConverterRustBuffer {
+    typealias SwiftType = ProjectionChange
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProjectionChange {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .snapshot
+
+        case 2: return .current
+
+        case 3: return .delta
+
+        case 4: return .removed
+
+        case 5: return .restored
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProjectionChange, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .snapshot:
+            writeInt(&buf, Int32(1))
+
+
+        case .current:
+            writeInt(&buf, Int32(2))
+
+
+        case .delta:
+            writeInt(&buf, Int32(3))
+
+
+        case .removed:
+            writeInt(&buf, Int32(4))
+
+
+        case .restored:
+            writeInt(&buf, Int32(5))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectionChange_lift(_ buf: RustBuffer) throws -> ProjectionChange {
+    return try FfiConverterTypeProjectionChange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectionChange_lower(_ value: ProjectionChange) -> RustBuffer {
+    return FfiConverterTypeProjectionChange.lower(value)
+}
+
+
+
+/**
+ * How much a projection can be trusted right now.
+ */
+
+public enum ProjectionFreshness: Equatable, Hashable {
+
+    /**
+     * Confirmed by the Mac on the open connection, which follows changes.
+     */
+    case live
+    /**
+     * Confirmed earlier on this run; that connection ended.
+     */
+    case stale
+    /**
+     * Restored from this phone's saved cache; not confirmed since.
+     */
+    case cached
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProjectionFreshness: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProjectionFreshness: FfiConverterRustBuffer {
+    typealias SwiftType = ProjectionFreshness
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProjectionFreshness {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .live
+
+        case 2: return .stale
+
+        case 3: return .cached
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProjectionFreshness, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .live:
+            writeInt(&buf, Int32(1))
+
+
+        case .stale:
+            writeInt(&buf, Int32(2))
+
+
+        case .cached:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectionFreshness_lift(_ buf: RustBuffer) throws -> ProjectionFreshness {
+    return try FfiConverterTypeProjectionFreshness.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectionFreshness_lower(_ value: ProjectionFreshness) -> RustBuffer {
+    return FfiConverterTypeProjectionFreshness.lower(value)
+}
+
+
+
 
 public enum RejectReason: Equatable, Hashable {
 
@@ -4266,6 +5332,21 @@ public enum RemoteSessionState: Equatable, Hashable {
          * The route of the ticket request on the same pinned origin.
          */route: RouteObservation?
     )
+    /**
+     * RM-03: the socket was lost or an attempt failed; the session retries
+     * after a bounded backoff. `attempt` counts failed attempts since the
+     * last open socket.
+     */
+    case reconnecting(attempt: UInt32, detail: String
+    )
+    /**
+     * RM-03: backgrounded on this phone; `resume` reconnects.
+     */
+    case suspended
+    /**
+     * RM-03: the platform reports no network; reconnects when it returns.
+     */
+    case waitingForNetwork
     case closed(reason: SessionCloseReason, detail: String
     )
 
@@ -4296,7 +5377,14 @@ public struct FfiConverterTypeRemoteSessionState: FfiConverterRustBuffer {
         case 3: return .`open`(host: try FfiConverterTypeRemoteHostInfo.read(from: &buf), route: try FfiConverterOptionTypeRouteObservation.read(from: &buf)
         )
 
-        case 4: return .closed(reason: try FfiConverterTypeSessionCloseReason.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        case 4: return .reconnecting(attempt: try FfiConverterUInt32.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        )
+
+        case 5: return .suspended
+
+        case 6: return .waitingForNetwork
+
+        case 7: return .closed(reason: try FfiConverterTypeSessionCloseReason.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -4321,8 +5409,22 @@ public struct FfiConverterTypeRemoteSessionState: FfiConverterRustBuffer {
             FfiConverterOptionTypeRouteObservation.write(route, into: &buf)
 
 
-        case let .closed(reason,detail):
+        case let .reconnecting(attempt,detail):
             writeInt(&buf, Int32(4))
+            FfiConverterUInt32.write(attempt, into: &buf)
+            FfiConverterString.write(detail, into: &buf)
+
+
+        case .suspended:
+            writeInt(&buf, Int32(5))
+
+
+        case .waitingForNetwork:
+            writeInt(&buf, Int32(6))
+
+
+        case let .closed(reason,detail):
+            writeInt(&buf, Int32(7))
             FfiConverterTypeSessionCloseReason.write(reason, into: &buf)
             FfiConverterString.write(detail, into: &buf)
 
@@ -4698,6 +5800,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -4714,6 +5840,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4794,6 +5944,78 @@ fileprivate struct FfiConverterOptionTypeRemoteSessionListener: FfiConverterRust
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeRemoteTaskProjection: FfiConverterRustBuffer {
+    typealias SwiftType = RemoteTaskProjection?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRemoteTaskProjection.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRemoteTaskProjection.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeRemoteTaskRecord: FfiConverterRustBuffer {
+    typealias SwiftType = RemoteTaskRecord?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRemoteTaskRecord.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRemoteTaskRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeRemoteTasksProjection: FfiConverterRustBuffer {
+    typealias SwiftType = RemoteTasksProjection?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRemoteTasksProjection.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRemoteTasksProjection.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeRouteObservation: FfiConverterRustBuffer {
     typealias SwiftType = RouteObservation?
 
@@ -4859,6 +6081,106 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeProviderRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [ProviderRecord]
+
+    public static func write(_ value: [ProviderRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeProviderRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ProviderRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ProviderRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeProviderRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRemoteEntryRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [RemoteEntryRecord]
+
+    public static func write(_ value: [RemoteEntryRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRemoteEntryRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RemoteEntryRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RemoteEntryRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRemoteEntryRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRemoteProjectRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [RemoteProjectRecord]
+
+    public static func write(_ value: [RemoteProjectRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRemoteProjectRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RemoteProjectRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RemoteProjectRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRemoteProjectRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRemoteTaskRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [RemoteTaskRecord]
+
+    public static func write(_ value: [RemoteTaskRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRemoteTaskRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RemoteTaskRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RemoteTaskRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRemoteTaskRecord.read(from: &buf))
         }
         return seq
     }
@@ -5019,16 +6341,43 @@ private let initializationResult: InitializationResult = {
     if (uniffi_luna_mobile_checksum_method_cancellation_is_cancelled() != 3837) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_luna_mobile_checksum_method_remotesession_cache_bytes() != 19787) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_cache_note() != 13364) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_luna_mobile_checksum_method_remotesession_close() != 37531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_method_remotesession_connect() != 57366) {
+    if (uniffi_luna_mobile_checksum_method_remotesession_connect() != 18522) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesession_engine_info() != 51908) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_luna_mobile_checksum_method_remotesession_follow_task() != 37336) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_followed_tasks() != 52190) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_network_changed() != 46740) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_projection_issue() != 11978) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_projection_revision() != 26169) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_luna_mobile_checksum_method_remotesession_receive() != 35239) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_remote_task() != 60893) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_remote_tasks() != 28913) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesession_request_completed() != 61755) {
@@ -5037,13 +6386,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_luna_mobile_checksum_method_remotesession_request_failed() != 34627) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_luna_mobile_checksum_method_remotesession_resume() != 22898) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_luna_mobile_checksum_method_remotesession_socket_closed() != 41581) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesession_socket_opened() != 27432) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_method_remotesession_state() != 3318) {
+    if (uniffi_luna_mobile_checksum_method_remotesession_state() != 40061) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_suspend() != 562) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_unfollow_task() != 40978) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesession_watch_task_commands() != 43811) {
@@ -5055,19 +6413,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_luna_mobile_checksum_method_sockettransport_send_request() != 48921) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_method_sockettransport_open_socket() != 846) {
+    if (uniffi_luna_mobile_checksum_method_sockettransport_open_socket() != 59021) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_sockettransport_send_frame() != 3245) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_method_sockettransport_close() != 38957) {
+    if (uniffi_luna_mobile_checksum_method_sockettransport_close_socket() != 21539) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_sockettransport_close() != 17410) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_taskcommandwatchhandle_cancel() != 4047) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_method_taskcommandwatchhandle_next() != 13727) {
+    if (uniffi_luna_mobile_checksum_method_taskcommandwatchhandle_next() != 28636) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_constructor_enrollment_manual() != 30940) {
@@ -5085,7 +6446,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_luna_mobile_checksum_constructor_cancellation_new() != 531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_luna_mobile_checksum_constructor_remotesession_new() != 7762) {
+    if (uniffi_luna_mobile_checksum_constructor_remotesession_following() != 11613) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_constructor_remotesession_new() != 20426) {
         return InitializationResult.apiChecksumMismatch
     }
 

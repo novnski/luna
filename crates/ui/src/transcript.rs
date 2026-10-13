@@ -62,6 +62,7 @@ use luna_syntax::LanguageId as Lang;
 mod agent_cards;
 mod child_notices;
 mod diagrams;
+mod file_badges;
 mod find;
 
 pub use find::FindInConversation;
@@ -4025,6 +4026,9 @@ pub struct Transcript {
     /// boundary invalidates only the live tail per commit.
     render_cache: Rc<RefCell<RenderCache>>,
     workspace_link: Option<render::LinkUi>,
+    /// The file badge whose last activation the owning surface declined
+    /// (badge key, reason), shown beside it until the next activation.
+    file_badge_refusal: Option<(SharedString, SharedString)>,
     rendered_rows: HashSet<SharedString>,
     /// When this view was last painted (pinned-doc views defer their sync
     /// while hidden), and whether a deferred sync awaits the next render.
@@ -4371,6 +4375,7 @@ impl Transcript {
             veil_attach_pending: true,
             render_cache: Rc::new(RefCell::new(RenderCache::default())),
             workspace_link: None,
+            file_badge_refusal: None,
             rendered_rows: HashSet::new(),
             last_painted: Cell::new(None),
             sync_deferred: false,
@@ -8707,6 +8712,13 @@ impl Transcript {
         // one, upgraded in place by a fetched sidecar blob (chat2-sync A3).
         // Resolved per paint (a HashMap probe per chip) so fetched content
         // needs no row rebuild — arrival is a cx.notify, like a fold toggle.
+        // File badges resolve per paint too: against the owning chat's
+        // current folder, through the route this view was given (ZI-04).
+        let tool_files: Vec<Option<file_badges::ToolFileBadge>> = tools
+            .iter()
+            .enumerate()
+            .map(|(ix, tool)| self.tool_file_badge(row_id, ix, tool, cx))
+            .collect();
         let details: Vec<Option<Arc<ToolDetail>>> = tools
             .iter()
             .map(|tool| {
@@ -9090,6 +9102,7 @@ impl Transcript {
                     return reveal_tool_row(
                         tool_chip(
                             tool,
+                            tool_files[ix].as_ref(),
                             collapses,
                             ix > 0,
                             ix + 1 < tools.len(),
@@ -9191,6 +9204,7 @@ impl Transcript {
                             }))
                             .child(chip_header(
                                 tool,
+                                tool_files[ix].as_ref(),
                                 chevron_progress,
                                 theme,
                                 cx.entity_id(),
@@ -10339,6 +10353,7 @@ impl gpui::Render for ChildInspectionTooltip {
 /// Spawn chips keep the existing card and show only observed child metadata.
 fn chip_header_row(
     tool: &ToolItem,
+    file_badge: Option<&file_badges::ToolFileBadge>,
     trail: Option<ChipTrail>,
     theme: &Theme,
     view: gpui::EntityId,
@@ -10350,14 +10365,8 @@ fn chip_header_row(
         tool_chip_content(&tool.call)
     };
     let activity = !is_agent_tool(tool);
-    let file_path = match &tool.call {
-        ToolCall::ReadFile { path }
-        | ToolCall::WriteFile { path, .. }
-        | ToolCall::EditFile { path, .. }
-        | ToolCall::ApplyPatch { path: Some(path) } => Some(path.as_str()),
-        ToolCall::ViewImage { path } => Some(path.as_str()),
-        _ => None,
-    };
+    let file_path = file_badges::tool_file_path(&tool.call);
+    let file_refusal = file_badge.and_then(file_badges::ToolFileBadge::refusal);
     let running = tool.subagent_ref.is_some()
         && matches!(tool.subagent_status, Some(SubagentStatus::Running));
     let failed = if is_agent_tool(tool) && tool.subagent_status.is_some() {
@@ -10453,54 +10462,7 @@ fn chip_header_row(
                     theme.text.opacity(0.85)
                 })
                 .child(if let Some(path) = file_path {
-                    let badge = div()
-                        .min_w_0()
-                        .h(px(22.0))
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .gap(px(6.0))
-                        .rounded(px(crate::theme::radius::SM))
-                        .bg(theme.ink(0.06))
-                        .pl(px(1.0))
-                        .pr(px(6.0))
-                        .text_color(theme.text.opacity(0.85))
-                        .child(
-                            div()
-                                .size(px(20.0))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(crate::theme::radius::XS))
-                                .bg(crate::file_icons::well_bg(theme))
-                                .child(
-                                    crate::file_icons::icon(
-                                        crate::file_icons::FileIconIdentity::file(path),
-                                        theme.appearance,
-                                    )
-                                    .size(px(14.0)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(file_badge_name(path).to_owned())),
-                        )
-                        .map(|badge| {
-                            if hover_text {
-                                badge
-                                    .id("tool-file-badge")
-                                    .group_hover("tool-header", |style| {
-                                        style.text_color(theme.text)
-                                    })
-                                    .into_any_element()
-                            } else {
-                                badge.into_any_element()
-                            }
-                        });
-                    crate::frost::frosted(5.0, 16.0, badge).into_any_element()
+                    file_badges::render_file_badge(path, file_badge, hover_text, theme)
                 } else {
                     div()
                         .min_w_0()
@@ -10519,6 +10481,19 @@ fn chip_header_row(
                     }
                 }),
         )
+        // A declined badge activation says so beside the badge (ZI-04).
+        .when_some(file_refusal, |row, message| {
+            row.child(
+                div()
+                    .id("tool-file-refusal")
+                    .flex_none()
+                    .role(gpui::Role::Label)
+                    .aria_label(message.clone())
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.readable_tone(theme.danger, 1.0))
+                    .child(message),
+            )
+        })
         // Trailing accessories (model, status, spinner, disclosure) share one
         // right-aligned column instead of trailing the text at a varying x.
         .child(div().flex_1().min_w(px(4.0)))
@@ -10640,12 +10615,20 @@ fn chip_header_row(
 /// The header row of an expandable chip card.
 fn chip_header(
     tool: &ToolItem,
+    file_badge: Option<&file_badges::ToolFileBadge>,
     progress: f32,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> gpui::Div {
-    chip_header_row(tool, Some(ChipTrail::Chevron { progress }), theme, view, cx)
+    chip_header_row(
+        tool,
+        file_badge,
+        Some(ChipTrail::Chevron { progress }),
+        theme,
+        view,
+        cx,
+    )
 }
 
 /// Max chars a subagent tab title keeps. The strip chip is fixed-width and
@@ -10840,6 +10823,7 @@ fn activity_ribbon(path: &mut PathBuilder, points: &[Point<Pixels>]) {
 /// A plain activity row, or a card for a subagent without a linked document.
 fn tool_chip(
     tool: &ToolItem,
+    file_badge: Option<&file_badges::ToolFileBadge>,
     rail: bool,
     has_predecessor: bool,
     continues: bool,
@@ -10875,7 +10859,7 @@ fn tool_chip(
                 .top(px(4.0 * (1.0 - content_reveal)))
                 .opacity(content_reveal)
         })
-        .child(chip_header_row(tool, None, theme, view, cx));
+        .child(chip_header_row(tool, file_badge, None, theme, view, cx));
     let card = if is_agent_tool(tool) {
         let inspection = child_inspection_lines(tool);
         card.id(format!("child-inspection-{}", tool.part_id))
@@ -10978,6 +10962,7 @@ fn subagent_chip(
                 })
                 .child(chip_header_row(
                     tool,
+                    None,
                     Some(ChipTrail::OpenArrow),
                     theme,
                     view,

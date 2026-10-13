@@ -1639,6 +1639,677 @@ mod gateway {
         shutdown(core).await;
     }
 
+    /// RM-03 P1–P11, core half: the mobile runtime
+    /// (`RemoteSession::following`) over the real gateway follows this Mac's
+    /// own tasks. Its registry and a followed task's detail carry the host's
+    /// task and entry ids and durable command position; Mac changes arrive as
+    /// deltas; suspend and resume or a lost and returned network reconnect
+    /// with a fresh ticket and resume from the held cursor (`current`, no
+    /// resend); a change made while the phone was away is repaired with a
+    /// snapshot; a saved cache comes back `cached` and is confirmed without a
+    /// resend, while another host's cache is refused; a deleted task turns
+    /// `removed`; at most four tasks are followed; a Mac restart is a new
+    /// generation repaired by snapshot with every task identity kept; a
+    /// revoke ends the runtime instead of retrying. Failure contract:
+    /// docs/pending-tasks/control-this-mac/rm-03/README.md. With
+    /// LUNA_NATIVE_RUNTIME_FIXTURE the restarted host then serves the native
+    /// campaign (`LunaTests/RemoteTasksRuntimeTests`) through the app's
+    /// shipped model, transport and lifecycle adapters.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mobile_runtime_follows_mac_tasks_across_suspend_network_restart_and_cursor_repair() {
+        use luna_mobile::follow::{ProjectionChange, ProjectionFreshness};
+        use luna_mobile::session::{RemoteSession, RemoteSessionState, SessionCloseReason};
+
+        let root = tempfile::tempdir().unwrap();
+        let mut core = assemble(root.path());
+        let mut local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let status = enable(&local, &bind).await;
+        if firewalled(&bind).await {
+            shutdown(core).await;
+            return;
+        }
+        let pin = status["spkiSha256"].as_str().unwrap().to_owned();
+        let http = http(&pin);
+        let engine: luna_proto::EngineInfo = local
+            .call_as(methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        seed_rm03_tasks(&core, &local, root.path()).await;
+        let host_tasks: std::collections::BTreeSet<String> = core
+            .workspace
+            .watch_chats()
+            .borrow()
+            .iter()
+            .filter(|chat| chat.space_id.as_deref() == Some(RM03_SPACE))
+            .map(|chat| chat.id.clone())
+            .collect();
+        assert_eq!(host_tasks.len(), 3, "the fixture seeded three listed tasks");
+        let issued = pair(&local, &http, &bind, "rm03", 3600).await;
+        let mac = saved_mac(&issued, &bind, &pin, "RM03 QA Mac");
+
+        // P1: the cheap registry names this Mac and lists exactly its own
+        // tasks, by the host's ids, never the removed project's.
+        let changes = Arc::new(Changes(tokio::sync::watch::Sender::new(0)));
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::following(
+            mac.clone(),
+            0,
+            transport.clone(),
+            Some(changes.clone()),
+            None,
+        )
+        .unwrap();
+        transport.attach(&session);
+        let host = session.connect(None).await.unwrap();
+        assert_eq!(host.device_id, engine.device_id);
+        let first = projected(&session, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(first.device_id, engine.device_id);
+        assert_eq!(first.last_change, ProjectionChange::Snapshot);
+        assert_eq!(rm03_ids(&first), host_tasks, "the same Mac task identities");
+        assert!(
+            first.tasks.iter().all(|task| task.task_id != RM03_HIDDEN),
+            "a removed project's task is not listed"
+        );
+        assert_eq!(first.total_tasks as usize, first.tasks.len());
+        assert!(
+            first.capabilities.iter().any(
+                |capability| capability == luna_proto::remote_projection::REMOTE_PROJECTIONS_V1
+            )
+        );
+        assert!(
+            first
+                .projects
+                .iter()
+                .any(|project| project.project_id == RM03_SPACE && project.name == "RM03 project")
+                && first
+                    .projects
+                    .iter()
+                    .all(|project| project.project_id != RM03_REMOVED_SPACE),
+            "projects by name only, removed projects omitted: {:?}",
+            first.projects
+        );
+
+        // P2: the detailed history of one followed task: its entries by the
+        // host's ids, and the durable command position the host reads.
+        session.follow_task(RM03_A.into()).unwrap();
+        let detail = followed(&session, &changes, RM03_A, |task| {
+            task.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        let entry_ids: Vec<&str> = detail
+            .entries
+            .iter()
+            .map(|entry| entry.entry_id.as_str())
+            .collect();
+        assert_eq!(entry_ids, ["rm03-a-1", "rm03-a-2"]);
+        assert_eq!(detail.entries[0].text, "First RM03 prompt");
+        assert_eq!(
+            detail.task.as_ref().unwrap().title.as_deref(),
+            Some("RM03 alpha")
+        );
+        let commands: luna_proto::TaskCommandRead = local
+            .call_as(
+                methods::GET_TASK_COMMAND_SNAPSHOT,
+                json!({"taskId": RM03_A}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail.task_revision, commands.snapshot.task_revision);
+        assert_eq!(detail.task_sequence, commands.snapshot.task_sequence);
+
+        // P3: Mac changes arrive as deltas against the held cursor.
+        core.workspace
+            .rename_chat(RM03_B, "RM03 beta renamed")
+            .unwrap();
+        let renamed = projected(&session, &changes, |tasks| {
+            title(tasks, RM03_B) == Some("RM03 beta renamed")
+        })
+        .await;
+        assert_eq!(renamed.last_change, ProjectionChange::Delta);
+        assert!(renamed.revision > first.revision);
+        assert_eq!(renamed.generation, first.generation);
+        core.doc_host
+            .open(RM03_A)
+            .unwrap()
+            .write_user_message("rm03-a-3", "Third RM03 prompt", rm03_now() + 3)
+            .unwrap();
+        let grown = followed(&session, &changes, RM03_A, |task| task.entries.len() == 3).await;
+        assert_eq!(grown.last_change, ProjectionChange::Delta);
+        assert_eq!(grown.entries[2].entry_id, "rm03-a-3");
+
+        // P4: suspend closes the socket and labels everything stale; resume
+        // re-verifies on a new socket and the unchanged cursor is `current`.
+        session.suspend();
+        assert_eq!(session.state(), RemoteSessionState::Suspended);
+        let away = session.remote_tasks().unwrap();
+        assert_eq!(away.freshness, ProjectionFreshness::Stale);
+        assert_eq!(
+            session.remote_task(RM03_A.into()).unwrap().freshness,
+            ProjectionFreshness::Stale
+        );
+        session.resume();
+        let resumed = projected(&session, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(
+            resumed.last_change,
+            ProjectionChange::Current,
+            "nothing was resent"
+        );
+        assert_eq!(
+            (resumed.generation.as_str(), resumed.revision),
+            (renamed.generation.as_str(), renamed.revision)
+        );
+        let detail = followed(&session, &changes, RM03_A, |task| {
+            task.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(detail.last_change, ProjectionChange::Current);
+
+        // P5: a change made while the phone was away is a cursor the host
+        // no longer serves: the registry is repaired with a snapshot.
+        session.suspend();
+        core.workspace
+            .rename_chat(RM03_C, "RM03 gamma while away")
+            .unwrap();
+        session.resume();
+        let repaired = projected(&session, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(repaired.last_change, ProjectionChange::Snapshot);
+        assert_eq!(title(&repaired, RM03_C), Some("RM03 gamma while away"));
+        assert!(repaired.revision > resumed.revision);
+        assert_eq!(rm03_ids(&repaired), host_tasks);
+
+        // P6: no network closes the socket and waits; the network's return
+        // reconnects at once and resumes from the cursor.
+        session.network_changed(false);
+        assert_eq!(session.state(), RemoteSessionState::WaitingForNetwork);
+        assert_eq!(
+            session.remote_tasks().unwrap().freshness,
+            ProjectionFreshness::Stale
+        );
+        session.network_changed(true);
+        let returned = projected(&session, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(returned.last_change, ProjectionChange::Current);
+        let sockets = transport.sockets.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(sockets, 4, "the first socket plus three reconnects");
+        let paths = transport.paths();
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| *path == "/remote/v1/socket-ticket")
+                .count(),
+            sockets,
+            "every reconnect bought a fresh ticket with the saved bearer: {paths:?}"
+        );
+
+        // P9: a deleted task turns `removed` on its followed detail and
+        // leaves the registry; at most four tasks are followed, and
+        // re-following resumes from the held cursor.
+        session.follow_task(RM03_C.into()).unwrap();
+        followed(&session, &changes, RM03_C, |task| {
+            task.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert!(core.workspace.delete_chat(RM03_C).unwrap());
+        let deleted = followed(&session, &changes, RM03_C, |task| task.removed).await;
+        assert_eq!(deleted.last_change, ProjectionChange::Removed);
+        assert!(deleted.entries.is_empty() && deleted.task.is_none());
+        let shrunk = projected(&session, &changes, |tasks| {
+            tasks.tasks.iter().all(|task| task.task_id != RM03_C)
+        })
+        .await;
+        assert_eq!(shrunk.last_change, ProjectionChange::Delta);
+        for missing in ["rm03-missing-1", "rm03-missing-2", "rm03-missing-3"] {
+            session.follow_task(missing.into()).unwrap();
+        }
+        assert_eq!(
+            session.followed_tasks(),
+            [RM03_C, "rm03-missing-1", "rm03-missing-2", "rm03-missing-3"],
+            "the least recently followed task stopped"
+        );
+        let missing = followed(&session, &changes, "rm03-missing-3", |task| task.removed).await;
+        assert_eq!(missing.last_change, ProjectionChange::Removed);
+        let released = session
+            .remote_task(RM03_A.into())
+            .expect("an unfollowed task keeps its cached detail");
+        assert_eq!(
+            released.freshness,
+            ProjectionFreshness::Stale,
+            "a detail nobody follows is not live"
+        );
+        session.follow_task(RM03_A.into()).unwrap();
+        let refollowed = followed(&session, &changes, RM03_A, |task| {
+            task.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(refollowed.last_change, ProjectionChange::Current);
+        assert_eq!(
+            refollowed.revision, released.revision,
+            "resumed from its cursor"
+        );
+
+        // P7: the phone restarts. Its saved cache comes back `cached` before
+        // any connection, and the first socket confirms it with `current`.
+        let cache = session.cache_bytes();
+        // `luna_sdk::MAX_CACHE_BYTES`; the engine tests do not link the SDK.
+        assert!(!cache.is_empty() && cache.len() <= 4 * 1024 * 1024);
+        let before_restart = session.remote_tasks().unwrap();
+        drop(session);
+        transport.closed().await;
+        let changes = Arc::new(Changes(tokio::sync::watch::Sender::new(0)));
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let restarted = RemoteSession::following(
+            mac.clone(),
+            0,
+            transport.clone(),
+            Some(changes.clone()),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        transport.attach(&restarted);
+        assert_eq!(restarted.cache_note(), None);
+        let cached = restarted.remote_tasks().unwrap();
+        assert_eq!(cached.freshness, ProjectionFreshness::Cached);
+        assert_eq!(cached.last_change, ProjectionChange::Restored);
+        assert_eq!(cached.tasks, before_restart.tasks);
+        assert_eq!(
+            restarted.remote_task(RM03_A.into()).unwrap().freshness,
+            ProjectionFreshness::Cached
+        );
+        assert!(transport.paths().is_empty(), "restoring touched no network");
+        restarted.follow_task(RM03_A.into()).unwrap();
+        restarted.connect(None).await.unwrap();
+        let confirmed = projected(&restarted, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Live
+        })
+        .await;
+        assert_eq!(confirmed.last_change, ProjectionChange::Current);
+        assert_eq!(confirmed.revision, before_restart.revision);
+
+        // P8: a cache saved for another host or profile is never shown.
+        let mut foreign = issued.clone();
+        foreign.target.environment_id = "foreign-profile".into();
+        let other = RemoteSession::following(
+            saved_mac(&foreign, &bind, &pin, "RM03 QA foreign"),
+            0,
+            PlatformStandIn::new(&pin, &bind),
+            None,
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert!(other.remote_tasks().is_none() && other.remote_task(RM03_A.into()).is_none());
+        assert!(other.cache_note().is_some(), "the refusal is explained");
+        drop(other);
+
+        // P10: the Mac restarts (same profile and pin). The runtime
+        // reconnects by itself; the new generation is repaired by snapshot
+        // and every task keeps its identity.
+        shutdown(core).await;
+        projected(&restarted, &changes, |tasks| {
+            tasks.freshness == ProjectionFreshness::Stale
+        })
+        .await;
+        core = assemble(root.path());
+        local = luna_rpc::memory_client(core.rpc_service());
+        let reborn = projected_within(&restarted, &changes, Duration::from_secs(90), |tasks| {
+            tasks.freshness == ProjectionFreshness::Live && tasks.generation != confirmed.generation
+        })
+        .await;
+        assert_eq!(reborn.last_change, ProjectionChange::Snapshot);
+        assert_eq!(
+            reborn.tasks, confirmed.tasks,
+            "the same tasks, rows and order"
+        );
+        let detail = followed(&restarted, &changes, RM03_A, |task| {
+            task.freshness == ProjectionFreshness::Live
+                && task.generation.as_deref() == Some(reborn.generation.as_str())
+        })
+        .await;
+        assert_eq!(detail.last_change, ProjectionChange::Snapshot);
+        assert_eq!(detail.entries.len(), 3);
+
+        // P11: a revoke closes the socket; the next attempt is refused and
+        // the runtime ends instead of retrying.
+        local
+            .call(
+                methods::REVOKE_REMOTE_SESSION,
+                json!({"id": issued.session.id}),
+            )
+            .await
+            .unwrap();
+        let state = settled(&restarted, &changes, |state| {
+            matches!(state, RemoteSessionState::Closed { .. })
+        })
+        .await;
+        assert!(
+            matches!(
+                state,
+                RemoteSessionState::Closed {
+                    reason: SessionCloseReason::RePair,
+                    ..
+                }
+            ),
+            "{state:?}"
+        );
+        transport.closed().await;
+        assert_eq!(
+            restarted.remote_tasks().unwrap().freshness,
+            ProjectionFreshness::Stale,
+            "data seen before the revoke stays labelled, never live"
+        );
+
+        if let Some(path) = std::env::var_os("LUNA_NATIVE_RUNTIME_FIXTURE") {
+            rm03_native_campaign(PathBuf::from(path), root.path(), core, &bind, &pin).await;
+            return;
+        }
+        shutdown(core).await;
+    }
+
+    const RM03_SPACE: &str = "rm03-space";
+    const RM03_REMOVED_SPACE: &str = "rm03-removed-space";
+    const RM03_A: &str = "rm03-task-a";
+    const RM03_B: &str = "rm03-task-b";
+    const RM03_C: &str = "rm03-task-c";
+    const RM03_HIDDEN: &str = "rm03-task-hidden";
+
+    fn rm03_now() -> i64 {
+        chrono::Utc::now().timestamp_millis()
+    }
+
+    /// One project with three tasks (two transcript entries on the first),
+    /// and a removed project whose task must stay hidden.
+    async fn seed_rm03_tasks(core: &EngineCore, local: &luna_rpc::RpcClient, root: &Path) {
+        let folder = |name: &str| {
+            let path = root.join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            path.canonicalize().unwrap().to_string_lossy().to_string()
+        };
+        let cwd = folder("rm03-project");
+        let hidden_cwd = folder("rm03-removed-project");
+        core.workspace
+            .create_space(
+                RM03_SPACE,
+                &core.device_id,
+                &cwd,
+                Some("RM03 project".into()),
+                false,
+            )
+            .unwrap();
+        core.workspace
+            .create_space(
+                RM03_REMOVED_SPACE,
+                &core.device_id,
+                &hidden_cwd,
+                None,
+                false,
+            )
+            .unwrap();
+        for (task, space, path, title) in [
+            (RM03_A, RM03_SPACE, &cwd, "RM03 alpha"),
+            (RM03_B, RM03_SPACE, &cwd, "RM03 beta"),
+            (RM03_C, RM03_SPACE, &cwd, "RM03 gamma"),
+            (RM03_HIDDEN, RM03_REMOVED_SPACE, &hidden_cwd, "RM03 hidden"),
+        ] {
+            local
+                .call(
+                    methods::MUTATE,
+                    json!({"op": "createChat", "chatId": task, "spaceId": space, "cwd": path}),
+                )
+                .await
+                .unwrap();
+            core.workspace.rename_chat(task, title).unwrap();
+        }
+        assert!(core.workspace.remove_space(RM03_REMOVED_SPACE).unwrap());
+        let handle = core.doc_host.open(RM03_A).unwrap();
+        handle
+            .write_user_message("rm03-a-1", "First RM03 prompt", rm03_now())
+            .unwrap();
+        handle
+            .write_user_message("rm03-a-2", "Second RM03 prompt", rm03_now() + 1)
+            .unwrap();
+    }
+
+    fn rm03_ids(
+        tasks: &luna_mobile::follow::RemoteTasksProjection,
+    ) -> std::collections::BTreeSet<String> {
+        tasks
+            .tasks
+            .iter()
+            .map(|task| task.task_id.clone())
+            .collect()
+    }
+
+    fn title<'a>(
+        tasks: &'a luna_mobile::follow::RemoteTasksProjection,
+        task_id: &str,
+    ) -> Option<&'a str> {
+        tasks
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)?
+            .title
+            .as_deref()
+    }
+
+    async fn projected(
+        session: &luna_mobile::session::RemoteSession,
+        changes: &Changes,
+        done: impl Fn(&luna_mobile::follow::RemoteTasksProjection) -> bool,
+    ) -> luna_mobile::follow::RemoteTasksProjection {
+        projected_within(session, changes, Duration::from_secs(30), done).await
+    }
+
+    /// Waits on the session's change notifications (never a timer) until
+    /// its registry projection satisfies `done`. Reading the state re-arms
+    /// the coalesced notification.
+    async fn projected_within(
+        session: &luna_mobile::session::RemoteSession,
+        changes: &Changes,
+        within: Duration,
+        done: impl Fn(&luna_mobile::follow::RemoteTasksProjection) -> bool,
+    ) -> luna_mobile::follow::RemoteTasksProjection {
+        let mut seen = changes.0.subscribe();
+        let waited = tokio::time::timeout(within, async {
+            loop {
+                let _ = session.state();
+                if let Some(tasks) = session.remote_tasks()
+                    && done(&tasks)
+                {
+                    return tasks;
+                }
+                seen.changed()
+                    .await
+                    .expect("the listener outlives the wait");
+            }
+        })
+        .await;
+        waited.unwrap_or_else(|_| {
+            panic!(
+                "the registry projection did not reach the expected state; state {:?}, issue {:?}, last {:?}",
+                session.state(),
+                session.projection_issue(),
+                session.remote_tasks()
+            )
+        })
+    }
+
+    async fn followed(
+        session: &luna_mobile::session::RemoteSession,
+        changes: &Changes,
+        task_id: &str,
+        done: impl Fn(&luna_mobile::follow::RemoteTaskProjection) -> bool,
+    ) -> luna_mobile::follow::RemoteTaskProjection {
+        let mut seen = changes.0.subscribe();
+        let waited = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let _ = session.state();
+                if let Some(task) = session.remote_task(task_id.into())
+                    && done(&task)
+                {
+                    return task;
+                }
+                seen.changed()
+                    .await
+                    .expect("the listener outlives the wait");
+            }
+        })
+        .await;
+        waited.unwrap_or_else(|_| {
+            panic!(
+                "task {task_id}'s projection did not reach the expected state; state {:?}, last {:?}",
+                session.state(),
+                session.remote_task(task_id.into())
+            )
+        })
+    }
+
+    /// The native half (LUNA_NATIVE_RUNTIME_FIXTURE): the app pairs through
+    /// its own model from a `luna://pair` code minted by CreateRemotePairing,
+    /// then the host and `LunaTests/RemoteTasksRuntimeTests` take turns
+    /// through private cue files in the hosted test's Documents.
+    async fn rm03_native_campaign(
+        fixture: PathBuf,
+        root: &Path,
+        core: EngineCore,
+        bind: &str,
+        pin: &str,
+    ) {
+        use luna_proto::remote_control::{HostTicket, PairingTicket};
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(fixture.file_name().unwrap(), "rm03-runtime.json");
+        assert!(!fixture.exists(), "refuse a stale native fixture");
+        let directory = fixture.parent().unwrap().to_path_buf();
+        let mut core = core;
+        let mut local = luna_rpc::memory_client(core.rpc_service());
+        let engine: luna_proto::EngineInfo = local
+            .call_as(methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": "RM03 native", "scopes": ["environment-read", "tasks-read"],
+                    "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let code = PairingTicket {
+            version: 1,
+            host_name: Some("RM03 QA Mac".into()),
+            host: HostTicket {
+                version: 1,
+                target: issued.target.clone(),
+                endpoints: vec![format!("https://{bind}")],
+                spki_sha256: pin.into(),
+            },
+            pairing_id: issued.pairing.id.clone(),
+            credential: issued.credential.clone(),
+            expires_at_ms: issued.pairing.expires_at_ms,
+            scopes: vec!["environment-read".into(), "tasks-read".into()],
+        }
+        .encode()
+        .unwrap();
+        let tasks: Vec<Value> = core
+            .workspace
+            .watch_chats()
+            .borrow()
+            .iter()
+            .filter(|chat| chat.space_id.as_deref() == Some(RM03_SPACE))
+            .map(|chat| json!({"taskId": chat.id, "title": chat.title}))
+            .collect();
+        std::fs::write(
+            &fixture,
+            serde_json::to_vec(&json!({
+                "code": code, "name": "RM03 QA Mac", "deviceId": engine.device_id,
+                "tasks": tasks, "followTaskId": RM03_A,
+                "entryIds": ["rm03-a-1", "rm03-a-2", "rm03-a-3"],
+                "renameTaskId": RM03_B, "renamedTitle": "RM03 beta native",
+                "awayTaskId": RM03_A, "awayTitle": "RM03 alpha while backgrounded",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        wait_native_file(&directory.join("rm03-native-live.json")).await;
+        core.workspace
+            .rename_chat(RM03_B, "RM03 beta native")
+            .unwrap();
+        std::fs::write(directory.join("rm03-host-renamed.json"), b"{}").unwrap();
+
+        wait_native_file(&directory.join("rm03-native-suspended.json")).await;
+        core.workspace
+            .rename_chat(RM03_A, "RM03 alpha while backgrounded")
+            .unwrap();
+        std::fs::write(directory.join("rm03-host-changed.json"), b"{}").unwrap();
+
+        wait_native_file(&directory.join("rm03-native-restarted.json")).await;
+        shutdown(core).await;
+        core = assemble(root);
+        local = luna_rpc::memory_client(core.rpc_service());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let status = local.call("GetRemoteAccess", json!({})).await.unwrap();
+                if status["listening"] == true {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("enabled remote access resumes on start");
+        std::fs::write(directory.join("rm03-host-restarted.json"), b"{}").unwrap();
+
+        let result = directory.join("rm03-native-result.json");
+        wait_native_file(&result).await;
+        let result: Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+        for field in [
+            "pairedFromLink",
+            "sameTaskIdentities",
+            "detailEntries",
+            "liveDelta",
+            "staleWhileBackgrounded",
+            "repairedAfterForeground",
+            "waitingWithoutNetwork",
+            "currentAfterNetwork",
+            "cachedAfterRestart",
+            "confirmedAfterRestart",
+            "repairedAfterMacRestart",
+            "resultsOnMain",
+            "cacheRemovedOnForget",
+        ] {
+            assert_eq!(result[field], true, "native observation missing: {field}");
+        }
+        assert_eq!(result["deviceId"], engine.device_id.as_str());
+        let sessions: Vec<SessionView> = local
+            .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+            .await
+            .unwrap();
+        let native = sessions
+            .iter()
+            .find(|row| row.pairing_id.as_deref() == Some(issued.pairing.id.as_str()))
+            .expect("the native phone redeemed the link");
+        assert!(native.last_used_at_ms.is_some());
+        // Forget on the phone is local; end the grant on the host too.
+        local
+            .call(methods::REVOKE_REMOTE_SESSION, json!({"id": native.id}))
+            .await
+            .unwrap();
+        shutdown(core).await;
+    }
+
     fn saved_mac(
         session: &IssuedSession,
         bind: &str,
@@ -1681,7 +2352,8 @@ mod gateway {
         bind: String,
         session: std::sync::Mutex<std::sync::Weak<luna_mobile::session::RemoteSession>>,
         urls: std::sync::Mutex<Vec<String>>,
-        socket: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Message>>>,
+        /// The open socket's id and outbound frames; RM-03 opens one after another.
+        socket: std::sync::Mutex<Option<(u64, tokio::sync::mpsc::UnboundedSender<Message>)>>,
         sockets: std::sync::atomic::AtomicUsize,
         closed: tokio::sync::watch::Sender<bool>,
     }
@@ -1786,7 +2458,8 @@ mod gateway {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let session = self.session.lock().unwrap().clone();
             let (frames, mut outbound) = tokio::sync::mpsc::unbounded_channel::<Message>();
-            *self.socket.lock().unwrap() = Some(frames);
+            // A new socket replaces (and so closes) any previous one.
+            *self.socket.lock().unwrap() = Some((request.socket_id, frames));
             let tls = tls(&self.pin);
             tokio::spawn(async move {
                 let mut upgrade = request.url.as_str().into_client_request().unwrap();
@@ -1849,9 +2522,18 @@ mod gateway {
             });
         }
 
-        fn send_frame(&self, _socket_id: u64, frame: String) {
-            if let Some(frames) = &*self.socket.lock().unwrap() {
+        fn send_frame(&self, socket_id: u64, frame: String) {
+            if let Some((id, frames)) = &*self.socket.lock().unwrap()
+                && *id == socket_id
+            {
                 let _ = frames.send(Message::Text(frame));
+            }
+        }
+
+        fn close_socket(&self, socket_id: u64) {
+            let mut socket = self.socket.lock().unwrap();
+            if socket.as_ref().is_some_and(|(id, _)| *id == socket_id) {
+                socket.take();
             }
         }
 

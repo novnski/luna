@@ -51,6 +51,9 @@ struct PairedMacsView: View {
                                 Text(live).font(Theme.mono(11)).foregroundStyle(Theme.textMuted)
                                     .accessibilityIdentifier("remote.live")
                             }
+                            if model.selectedId == host.id {
+                                RemoteTasksSection(model: model)
+                            }
                             Text("Access expires \(Date(timeIntervalSince1970: Double(host.expiresAtMs) / 1000).formatted(date: .abbreviated, time: .omitted))")
                                 .font(Theme.sans(12)).foregroundStyle(Theme.textMuted)
                             HStack {
@@ -68,6 +71,7 @@ struct PairedMacsView: View {
                         .accessibilityIdentifier("remote.core-identity")
                 }.padding(20)
             }.background(Theme.bg).navigationTitle("Paired Macs")
+                .navigationDestination(isPresented: $model.showingTask) { RemoteTaskDetailView(model: model) }
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelEnrollment(); dismiss() } } }
                 .sheet(isPresented: $scanning) {
                     NavigationStack {

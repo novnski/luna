@@ -552,6 +552,13 @@ enum TaskCommandIntent {
     CancelRecovery {
         chain_id: String,
     },
+    /// AW-10: withdraw a send (a pending Run command) while it waits for a
+    /// free turn on this host. Nothing is sent; a send that already started
+    /// is refused (use Stop).
+    #[serde(rename_all = "camelCase")]
+    CancelCapacityWait {
+        command_id: String,
+    },
     #[serde(rename_all = "camelCase")]
     MarkSeen {
         #[serde(default)]
@@ -638,6 +645,7 @@ impl TaskCommandIntent {
             Self::SteerQueuedNow { .. } => "steerQueuedNow",
             Self::RetryRecovery { .. } => "retryRecovery",
             Self::CancelRecovery { .. } => "cancelRecovery",
+            Self::CancelCapacityWait { .. } => "cancelCapacityWait",
             Self::MarkSeen { .. } => "markSeen",
         }
     }
@@ -686,9 +694,14 @@ impl TaskCommandIntent {
     }
 
     fn requires_binding_fence(&self) -> bool {
+        // A held send never reached the provider binding, so withdrawing it
+        // is not fenced by one.
         !matches!(
             self,
-            Self::CreateChildChat { .. } | Self::CreateChat { .. } | Self::SetActivity { .. }
+            Self::CreateChildChat { .. }
+                | Self::CreateChat { .. }
+                | Self::SetActivity { .. }
+                | Self::CancelCapacityWait { .. }
         )
     }
 
@@ -1243,9 +1256,11 @@ mod context_transfer;
 mod diagnostics;
 mod extension_providers;
 mod extensions;
+mod host_capacity;
 mod native_extensions;
 mod prompt_stash;
 mod provider_defaults;
+mod remote_projections;
 mod side_chats;
 mod task_work;
 
@@ -1287,6 +1302,8 @@ pub struct EngineRpc {
     remote_auth: Option<std::sync::Arc<luna_rpc::RemoteAuthStore>>,
     remote_auth_unavailable: Option<crate::RemoteAuthorityUnavailable>,
     remote_access: Option<std::sync::Arc<crate::remote_access::RemoteAccess>>,
+    /// RM-03 task projections, shared by this engine's local and remote services.
+    remote_projections: Option<std::sync::Arc<crate::remote_projections::RemoteProjections>>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<luna_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
@@ -1514,6 +1531,7 @@ impl EngineRpc {
             remote_auth: None,
             remote_auth_unavailable: None,
             remote_access: None,
+            remote_projections: None,
             links: None,
             updater: None,
             local_import: None,
@@ -7806,6 +7824,36 @@ impl EngineRpc {
                 self.sessions.publish_committed_recovery(&change.next);
                 Ok(Some(receipt))
             }
+            TaskCommandIntent::CancelCapacityWait {
+                command_id: held_command_id,
+            } => {
+                let cancelled = self
+                    .doc_host
+                    .cancel_held_send(task_id, &held_command_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let (status, message, recovery) = if cancelled {
+                    (CommandReceiptStatus::Applied, "", "")
+                } else {
+                    (
+                        CommandReceiptStatus::Rejected,
+                        "this send is no longer waiting for a free turn on this host",
+                        "If it started, use Stop to interrupt it; otherwise reload the task.",
+                    )
+                };
+                let receipt = self
+                    .finish_task_command(
+                        command_id,
+                        status,
+                        cancelled,
+                        CommandReasonCode::OperationRejected,
+                        message,
+                        recovery,
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
+            }
             TaskCommandIntent::MarkSeen { at } => {
                 let at = at
                     .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
@@ -9387,11 +9435,17 @@ impl EngineRpc {
         if diagnostics::handles(method) {
             return self.handle_diagnostics(method, params).await;
         }
+        if host_capacity::handles(method) {
+            return self.handle_host_capacity(method, params);
+        }
         if extension_providers::handles(method) {
             return self.handle_extension_providers(&params);
         }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
+        }
+        if remote_projections::handles(method) {
+            return self.handle_remote_projection(method, params);
         }
         if context_transfer::handles(method) {
             return self.handle_context_transfer(method, params);

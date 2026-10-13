@@ -102,6 +102,10 @@ pub mod methods {
     pub const BOARD_ISSUE_WRITEBACK: &str = "BoardIssueWriteback";
     /// Diagnostics: the board tools actually attached to a chat's runs.
     pub const BOARD_TOOL_CATALOG: &str = "BoardToolCatalog";
+    /// PB-4A feature groups: read a scope's groups with their engine-derived
+    /// member/gate aggregate, and change one group (owner-local).
+    pub const BOARD_FEATURE_GROUPS: &str = "BoardFeatureGroups";
+    pub const BOARD_FEATURE_GROUP_MUTATE: &str = "BoardFeatureGroupMutate";
     // L29: only the local IPC owner can administer pairings and sessions.
     // Redeem/authenticate are handled by the guarded remote dispatch itself.
     pub const CREATE_REMOTE_PAIRING: &str = "CreateRemotePairing";
@@ -313,6 +317,10 @@ pub mod methods {
     pub const GET_ATTENTION: &str = "GetAttention";
     pub const CLAIM_ATTENTION_TRANSITIONS: &str = "ClaimAttentionTransitions";
     pub const MUTATE_ATTENTION: &str = "MutateAttention";
+    /// AW-10 host turn capacity (owner only): this host's active turns
+    /// against its limit and the new turns waiting, and the limit itself.
+    pub const GET_HOST_CAPACITY: &str = "GetHostCapacity";
+    pub const SET_HOST_CAPACITY: &str = "SetHostCapacity";
     /// Read the current provider-native history fork capability for one task.
     pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
     /// Read durable pre-edit recovery snapshots available for one task.
@@ -341,6 +349,11 @@ pub mod methods {
     pub const GET_DELETION_CLEANUP_SUMMARY: &str = "GetDeletionCleanupSummary";
     pub const GET_TASK_COMMAND_SNAPSHOT: &str = "GetTaskCommandSnapshot";
     pub const WATCH_TASK_COMMANDS: &str = "WatchTaskCommands";
+    /// RM-03 host-authoritative projections for paired clients: the cheap
+    /// project/task registry and one task's bounded detail, each a
+    /// snapshot-or-current item and then deltas against a cursor.
+    pub const WATCH_REMOTE_TASKS: &str = "WatchRemoteTasks";
+    pub const WATCH_REMOTE_TASK: &str = "WatchRemoteTask";
     /// L08 composing-device-local durable draft surface. These methods are
     /// intentionally not relay-forwardable or synced across devices.
     pub const GET_COMPOSER_DRAFT: &str = "GetComposerDraft";
@@ -513,6 +526,8 @@ pub mod methods {
         BOARD_ISSUE_WRITEBACK_PREVIEW,
         BOARD_ISSUE_WRITEBACK,
         BOARD_TOOL_CATALOG,
+        BOARD_FEATURE_GROUPS,
+        BOARD_FEATURE_GROUP_MUTATE,
     ];
     /// Inventory of shipped RPC names. Remote policy treats unlisted names as unknown.
     pub const ALL: &[&str] = &[
@@ -573,6 +588,8 @@ pub mod methods {
         BOARD_ISSUE_WRITEBACK_PREVIEW,
         BOARD_ISSUE_WRITEBACK,
         BOARD_TOOL_CATALOG,
+        BOARD_FEATURE_GROUPS,
+        BOARD_FEATURE_GROUP_MUTATE,
         CREATE_REMOTE_PAIRING,
         LIST_REMOTE_PAIRINGS,
         REVOKE_REMOTE_PAIRING,
@@ -696,6 +713,8 @@ pub mod methods {
         GET_ATTENTION,
         CLAIM_ATTENTION_TRANSITIONS,
         MUTATE_ATTENTION,
+        GET_HOST_CAPACITY,
+        SET_HOST_CAPACITY,
         GET_HISTORY_CAPABILITY,
         LIST_HISTORY_RECOVERIES,
         PREVIEW_NATIVE_FILE_REWIND,
@@ -715,6 +734,8 @@ pub mod methods {
         GET_DELETION_CLEANUP_SUMMARY,
         GET_TASK_COMMAND_SNAPSHOT,
         WATCH_TASK_COMMANDS,
+        WATCH_REMOTE_TASKS,
+        WATCH_REMOTE_TASK,
         GET_COMPOSER_DRAFT,
         SAVE_COMPOSER_DRAFT,
         LIST_PROMPT_STASH,

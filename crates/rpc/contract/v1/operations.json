@@ -686,6 +686,30 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "BoardFeatureGroups",
+      "id": "luna.core/board-feature-groups",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "BoardFeatureGroupMutate",
+      "id": "luna.core/board-feature-group-mutate",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "CreateRemotePairing",
       "id": "luna.core/create-remote-pairing",
       "version": 1,
@@ -2082,6 +2106,30 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "GetHostCapacity",
+      "id": "luna.core/get-host-capacity",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "SetHostCapacity",
+      "id": "luna.core/set-host-capacity",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "GetHistoryCapability",
       "id": "luna.core/get-history-capability",
       "version": 1,
@@ -2306,6 +2354,32 @@
       "kind": "watch",
       "reply": "stream",
       "target": "deviceAddressable",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchRemoteTasks",
+      "id": "luna.core/watch-remote-tasks",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchRemoteTask",
+      "id": "luna.core/watch-remote-task",
+      "version": 1,
+      "kind": "watch",
+      "reply": "stream",
+      "target": "local",
       "authority": {
         "kind": "remote",
         "scope": "tasks-read"

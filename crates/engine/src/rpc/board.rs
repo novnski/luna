@@ -155,6 +155,11 @@ impl EngineRpc {
                 board_async!(this, params, board_issue_writeback_preview)
             }
             methods::BOARD_ISSUE_WRITEBACK => board_async!(this, params, board_issue_writeback),
+            // ---- feature groups (PB-4A) ----
+            methods::BOARD_FEATURE_GROUPS => board_async!(this, params, board_feature_groups),
+            methods::BOARD_FEATURE_GROUP_MUTATE => {
+                board_async!(this, params, board_feature_group_mutate)
+            }
             // ---- agent tools (A4) ----
             methods::BOARD_TOOL_CATALOG => Box::pin(async move {
                 #[derive(Deserialize)]

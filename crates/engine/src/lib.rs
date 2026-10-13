@@ -159,6 +159,7 @@ mod provider_updates;
 pub mod recovery;
 pub mod registry;
 pub mod remote_access;
+mod remote_projections;
 pub mod repos;
 pub mod rpc;
 pub mod run_journal;
@@ -350,6 +351,9 @@ pub struct EngineCore {
     remote_auth_unavailable: Option<RemoteAuthorityUnavailable>,
     /// Direct remote access (RM-01): config, identity and the running gateway.
     remote_access: Arc<remote_access::RemoteAccess>,
+    /// RM-03 task projections for paired clients: one generation and one
+    /// revision sequence for every service of this engine.
+    remote_projections: Arc<remote_projections::RemoteProjections>,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
@@ -582,6 +586,8 @@ impl EngineCore {
         let sessions =
             SessionsEngine::new(device_id.clone(), journal, registry.clone(), store.clone());
         sessions.set_recovery_settings_path(profile.device_root().join("ui-settings.json"));
+        // AW-10: this profile's host turn limit (absent: no limit).
+        sessions.set_host_capacity_path(profile.store_root().join("host-capacity.json"));
         sessions.set_integration_settings(integration_settings::IntegrationSettings::open(
             profile.store_root().join("luna-instructions.json"),
         )?);
@@ -762,6 +768,25 @@ impl EngineCore {
         let lifetime = engine_lifetime::EngineLifetime::new(device_write.handle());
         let remote_access =
             remote_access::RemoteAccess::new(profile.store_root(), remote_auth.clone());
+        let remote_projections = remote_projections::RemoteProjections::new(
+            remote_projections::HostIdentity {
+                device_id: device_id.clone(),
+                environment_id: remote_auth
+                    .as_ref()
+                    .map(|auth| auth.environment().environment_id)
+                    .or_else(|| {
+                        remote_auth_unavailable
+                            .as_ref()
+                            .map(|unavailable| unavailable.environment.environment_id.clone())
+                    }),
+                workspace_scope: profile.scope(),
+                profile_id: Some(workspace.profile_id(profile.scope())),
+            },
+            workspace.clone(),
+            sessions.clone(),
+            doc_host.clone(),
+            registry.clone(),
+        );
         let diagnostics = diagnostics::Diagnostics::new(
             data_dir,
             profile.store_root(),
@@ -797,6 +822,7 @@ impl EngineCore {
             remote_auth,
             remote_auth_unavailable,
             remote_access,
+            remote_projections,
             local_import,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
@@ -1019,7 +1045,8 @@ impl EngineCore {
         .with_github_pr(self.github_pr.clone())
         .with_side_chats(self.side_chats.clone())
         .with_provider_defaults(self.provider_defaults.clone())
-        .with_board_hub(self.board_hub.clone());
+        .with_board_hub(self.board_hub.clone())
+        .with_remote_projections(self.remote_projections.clone());
         if include_backup {
             // Saved shell commands are a local desktop workflow, never relay RPCs.
             rpc = rpc.with_project_commands(self.project_commands.clone());

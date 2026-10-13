@@ -92,6 +92,11 @@ jobs:
       - name: Diagnostics and storage accounting (AW-09)
         if: ${{ !cancelled() }}
         run: cargo test --locked -p luna-engine --test diagnostics_storage -- --nocapture
+      # AW-10: the host turn line over the real send, queue and retry paths,
+      # across a restart, with a synthetic provider the test releases.
+      - name: Host capacity and recovery controls (AW-10)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p luna-engine --test host_capacity -- --nocapture
 
   ui-tests:
     runs-on: ubuntu-24.04

@@ -28,6 +28,8 @@ pub mod capabilities {
     pub const CHAT_WORKBENCH_V1: &str = "chat-workbench-v1";
     pub const TASK_WORK_V1: &str = "task-work-v1";
     pub const CONTEXT_TRANSFER_V1: &str = "context-transfer-v1";
+    /// RM-03: `WatchRemoteTasks` and `WatchRemoteTask` for paired clients.
+    pub const REMOTE_PROJECTIONS_V1: &str = crate::remote_projection::REMOTE_PROJECTIONS_V1;
 
     pub const CURRENT: &[&str] = &[
         LUNA_OWNER_IPC_V1,
@@ -43,6 +45,7 @@ pub mod capabilities {
         CHAT_WORKBENCH_V1,
         CONTEXT_TRANSFER_V1,
         TASK_WORK_V1,
+        REMOTE_PROJECTIONS_V1,
     ];
 
     pub fn current() -> Vec<String> {

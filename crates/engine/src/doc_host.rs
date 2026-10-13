@@ -103,6 +103,9 @@ const ATTACHMENT_WAIT_RECHECK: std::time::Duration = std::time::Duration::from_s
 /// grant this device recorded at admission (its content or workspace
 /// association changed). The drain never dispatched it.
 const UNVERIFIED_LOCAL_COMMAND: &str = "This message no longer matches what this device accepted, so nothing was sent. Review the preserved draft and send it again.";
+/// AW-10 receipt reason for a send withdrawn while it waited for a free turn.
+pub(crate) const HELD_SEND_CANCELLED: &str =
+    "Cancelled while waiting for a free turn on this host; nothing was sent.";
 
 /// Transfer attempt outcome: transient failures retry (the link may heal),
 /// permanent ones stop (the host actively refused, or the bytes are gone).
@@ -6063,6 +6066,18 @@ impl DocHost {
             // a fresh turn.
             return;
         }
+        // AW-10: a queued follow-up starts a new turn, so it takes a host
+        // turn slot before it is claimed. While the host is full the row
+        // stays Held and unclaimed (never unknown) and keeps its place in line.
+        let Some(_turn_slot) = self.admit_turn_start(
+            &sessions,
+            handle,
+            luna_proto::HostCapacityWaitKind::QueuedMessage,
+            &head.id,
+            head.issued_at,
+        ) else {
+            return;
+        };
         let send = QueueSend::NextTurn;
         let command_id = format!(
             "queue-dispatch:{}:{}:{}",
@@ -7284,6 +7299,27 @@ impl DocHost {
                     continue;
                 }
             }
+            // AW-10 host turn gate (also BEFORE the processed mark and the
+            // transcript write): a Run that starts a new turn takes a host
+            // slot. While the host is full it stays pending and unprocessed,
+            // in line; Cancel withdraws it unsent and a restart re-evaluates
+            // it. The slot is held until `execute` has registered the turn.
+            let _turn_slot = if matches!(disposition, CommandDisposition::Execute)
+                && matches!(entry.payload, SessionCommandPayload::Run { .. })
+            {
+                match self.admit_turn_start(
+                    &sessions,
+                    handle,
+                    luna_proto::HostCapacityWaitKind::Send,
+                    &entry.id,
+                    entry.issued_at,
+                ) {
+                    Some(slot) => Some(slot),
+                    None => return, // preserve order; the capacity re-check re-kicks
+                }
+            } else {
+                None
+            };
             // In-flight claim: guards the dead-command sweep (an id in
             // `executing` is alive, not crashed) and serializes racing
             // drains on the same entry.
@@ -7397,6 +7433,146 @@ impl DocHost {
                 && !self.inner.store.is_processed(&c.id).unwrap_or(false)
                 && !self.missing_attachments(c).is_empty()
         })
+    }
+
+    /// AW-10: take a host turn slot for this task's next new turn, or keep
+    /// its place in the host line and arm one re-check loop for the task.
+    /// `None` means it waits: nothing was written, claimed or sent.
+    fn admit_turn_start(
+        &self,
+        sessions: &SessionsEngine,
+        handle: &Arc<ChatDocHandle>,
+        kind: luna_proto::HostCapacityWaitKind,
+        source_id: &str,
+        since_ms: i64,
+    ) -> Option<crate::sessions::TurnStartSlot> {
+        match sessions.admit_turn_start(&handle.chat_id, kind, source_id, since_ms) {
+            crate::sessions::TurnAdmission::Admitted(slot) => Some(slot),
+            crate::sessions::TurnAdmission::Waiting {
+                position,
+                occupied,
+                limit,
+            } => {
+                tracing::debug!(chat = %handle.chat_id, source = %source_id, ?kind,
+                    position, occupied, limit, "new turn waits for a free host slot");
+                self.arm_capacity_wait(handle, kind);
+                None
+            }
+        }
+    }
+
+    /// AW-10: one re-check loop per task and kind while its start waits. The
+    /// drain itself re-admits (or keeps the place in line); the loop ends
+    /// once nothing of this kind waits for the task.
+    fn arm_capacity_wait(
+        &self,
+        handle: &Arc<ChatDocHandle>,
+        kind: luna_proto::HostCapacityWaitKind,
+    ) {
+        let chat = handle.chat_id.clone();
+        let key = format!("capacity:{kind:?}:{chat}");
+        if !lock(&self.inner.drain_waiting).insert(key.clone()) {
+            return;
+        }
+        let weak = Arc::downgrade(handle);
+        let host = self.clone();
+        self.spawn_worker(async move {
+            loop {
+                tokio::time::sleep(crate::sessions::TURN_CAPACITY_RECHECK).await;
+                let Some(handle) = weak.upgrade() else { break };
+                match kind {
+                    luna_proto::HostCapacityWaitKind::QueuedMessage => {
+                        host.drain_queue(&handle).await
+                    }
+                    _ => host.drain_commands(&handle).await,
+                }
+                drop(handle);
+                if host.turn_start_waits(&chat, kind) {
+                    continue;
+                }
+                lock(&host.inner.drain_waiting).remove(&key);
+                // A start that joined the line between the check and the
+                // removal found this loop still armed; re-check once more so
+                // it is never left without one.
+                if !host.turn_start_waits(&chat, kind)
+                    || !lock(&host.inner.drain_waiting).insert(key.clone())
+                {
+                    return;
+                }
+            }
+            lock(&host.inner.drain_waiting).remove(&key);
+        });
+    }
+
+    fn turn_start_waits(&self, chat_id: &str, kind: luna_proto::HostCapacityWaitKind) -> bool {
+        self.sessions()
+            .is_some_and(|sessions| sessions.turn_start_waiting_for_task(chat_id, kind))
+    }
+
+    /// AW-10 `cancelCapacityWait`: withdraw one held send. Only a pending,
+    /// unprocessed Run that this host lists as waiting is cancelled: it is
+    /// marked processed (it can never run) and resolved Cancelled, so its
+    /// receipt is rejected with nothing sent. `false` when it is not waiting
+    /// (already started, finished, cancelled, or never held); a send that
+    /// started is stopped with Stop, never reported as cancelled here.
+    pub fn cancel_held_send(&self, task_id: &str, command_id: &str) -> Result<bool, EngineError> {
+        if !self.is_host(task_id) {
+            return Err(EngineError::Other(
+                "A held send is cancelled on the device that runs its task".into(),
+            ));
+        }
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("task runtime is unavailable".into()))?;
+        let handle = self.open(task_id)?;
+        // The drain's own claim: a send the drain is executing is not held.
+        if !self.claim_executing(task_id, command_id) {
+            return Ok(false);
+        }
+        let cancelled = self.cancel_claimed_held_send(&sessions, &handle, command_id);
+        lock(&self.inner.executing).remove(command_id);
+        if matches!(cancelled, Ok(true)) {
+            // Later commands of this task were waiting behind it.
+            let host = self.clone();
+            self.spawn_worker(async move { host.drain_commands(&handle).await });
+        }
+        cancelled
+    }
+
+    fn cancel_claimed_held_send(
+        &self,
+        sessions: &SessionsEngine,
+        handle: &Arc<ChatDocHandle>,
+        command_id: &str,
+    ) -> Result<bool, EngineError> {
+        let pending_run = handle.doc.read_commands()?.iter().any(|entry| {
+            entry.id == command_id
+                && entry.status == SessionCommandStatus::Pending
+                && matches!(entry.payload, SessionCommandPayload::Run { .. })
+        });
+        if !pending_run
+            || self.inner.store.is_processed(command_id)?
+            || !sessions.turn_start_waiting(
+                &handle.chat_id,
+                luna_proto::HostCapacityWaitKind::Send,
+                command_id,
+            )
+        {
+            return Ok(false);
+        }
+        self.inner.store.mark_processed(command_id)?;
+        sessions.forget_turn_start(
+            &handle.chat_id,
+            luna_proto::HostCapacityWaitKind::Send,
+            command_id,
+        );
+        self.resolve_command(
+            handle,
+            command_id,
+            SessionCommandStatus::Cancelled,
+            Some(HELD_SEND_CANCELLED),
+        );
+        Ok(true)
     }
 
     /// Rewrite a request's landed `pending://` refs to this device's absolute

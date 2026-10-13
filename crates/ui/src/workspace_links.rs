@@ -73,6 +73,14 @@ pub(crate) fn resolve_workspace_file_link(
     Some(WorkspaceFileLink { path, line, column })
 }
 
+/// The canonical `luna-file:` target for an exact typed path (a tool call's
+/// file, ZI-04). [`resolve_workspace_file_link`] then applies its root and
+/// escape rules to the path as written, without reading `:line` or `#L`
+/// suffixes out of the file name.
+pub(crate) fn file_mention_target(path: &str) -> String {
+    format!("{FILE_MENTION_SCHEME}{}", percent_encode_path(path))
+}
+
 fn safe_relative_path(path: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in path.components() {
