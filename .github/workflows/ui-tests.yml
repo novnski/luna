@@ -74,7 +74,7 @@ jobs:
             --test m5c_accounts_uploads_titles --test workspace_sync --test task_identity \
             --test device_routing --test no_keychain --test local_import \
             --test workspace_identity_repair --test codex_login_resolution --test codex_login_resolver \
-            --test backup_restore --test remote_access
+            --test backup_restore --test remote_access --test registry_growth_e2e
       # CORE-07 E09: Wasm packages run in the separate portable host process.
       - name: Portable extension host and broker (CORE-07)
         if: ${{ !cancelled() }}

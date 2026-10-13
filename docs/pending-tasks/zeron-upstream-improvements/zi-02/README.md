@@ -138,5 +138,5 @@ boot folds the queue.
   replica is separate and unchanged.
 - The join refusal and the open-time edge rejection for `LocalOnly` have no
   production caller and no test.
-- CI routing (`.github/workflows/ui-tests.yml`) does not list the new test
-  target yet. Adding it is the orchestrator's call.
+- CI runs `registry_growth_e2e` in the *Engine integration keepers* step of
+  `.github/workflows/ui-tests.yml` (about 10 s in a debug build).

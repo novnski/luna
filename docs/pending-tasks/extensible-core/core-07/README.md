@@ -328,9 +328,12 @@ the explicit message.
 
 ## Limitations and hand-offs
 
-- **Bundling:** `scripts/run-macos-dev.sh` and the release packaging do not
-  copy `luna-extension-host` next to `luna` yet. Until they do, the app
-  refuses Wasm packages honestly. Owner: the orchestrator/packaging.
+- **Bundling:** `scripts/run-macos-dev.sh` builds `luna-extension-host` and
+  signs it next to `luna` in the LUNA Dev and QA bundles. Release packaging
+  (`scripts/package-macos.sh`) does not bundle it yet: under the hardened
+  runtime Wasmtime needs a JIT entitlement on the host, which is a separate
+  signing decision. Until then a release app refuses Wasm packages honestly.
+  Owner: packaging.
 - **Native trust:** no OS sandbox. A native worker can reach the loopback
   owner IPC port, the user's files and the network; only what LUNA brokers is
   scoped. A child that calls `setsid` leaves the sampled group, and its memory

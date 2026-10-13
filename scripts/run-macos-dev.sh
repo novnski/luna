@@ -228,7 +228,9 @@ fi
 cd "$ROOT"
 echo "building $APP_NAME ($BUNDLE_ID); full output: $BUILD_LOG" >&2
 build_start=$SECONDS
-if "$ROOT/scripts/cargo.sh" build --locked -p luna --target-dir "$ROOT/target" >"$BUILD_LOG" 2>&1; then
+# The portable extension host runs Wasm packages in its own process (CORE-07);
+# the engine looks for it next to the luna executable.
+if "$ROOT/scripts/cargo.sh" build --locked -p luna -p luna-extension-host --target-dir "$ROOT/target" >"$BUILD_LOG" 2>&1; then
   echo "build succeeded in $((SECONDS - build_start))s" >&2
 else
   result_code=$?
@@ -244,6 +246,7 @@ staged_app="$stage_root/$APP_NAME.app"
 staged_contents="$staged_app/Contents"
 mkdir -p "$staged_contents/MacOS" "$staged_contents/Resources" "$DATA_DIR"
 install -m 755 "$ROOT/target/debug/luna" "$staged_contents/MacOS/luna"
+install -m 755 "$ROOT/target/debug/luna-extension-host" "$staged_contents/MacOS/luna-extension-host"
 sed -e "s/__UPSTREAM_VERSION__/$UPSTREAM_VERSION/g" \
   -e "s/__LUNA_REVISION__/$LUNA_REVISION/g" \
   "$ROOT/dist/macos/Info-dev.plist" >"$staged_contents/Info.plist"
@@ -279,8 +282,10 @@ if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)"
 fi
 if [[ -n "$IDENTITY" ]]; then
+  codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID.extension-host" "$staged_contents/MacOS/luna-extension-host"
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" "$staged_app"
 else
+  codesign --force --sign - --identifier "$BUNDLE_ID.extension-host" "$staged_contents/MacOS/luna-extension-host"
   codesign --force --sign - --identifier "$BUNDLE_ID" "$staged_app"
   echo "warning: no Apple Development identity; macOS may ask for permissions again" >&2
 fi
