@@ -145,16 +145,7 @@ impl Enrollment {
 
     #[uniffi::constructor]
     pub fn restore(mac: SavedMac) -> Result<Arc<Self>, EnrollmentError> {
-        let host: HostTicket =
-            serde_json::from_str(&mac.host_ticket).map_err(|_| EnrollmentError::InvalidHost)?;
-        validate_host(&host)?;
-        if mac.session_id.is_empty()
-            || mac.session_id.len() > 128
-            || !secret(&mac.session_token)
-            || !scopes_valid(&mac.scopes)
-        {
-            return Err(EnrollmentError::InvalidSession);
-        }
+        let host = validate_saved(&mac)?;
         Ok(Self::assemble(host, None, Some(mac)))
     }
 
@@ -580,6 +571,22 @@ impl Enrollment {
     }
 }
 
+/// The one validator for saved access: restore (RM-02) and the SDK session
+/// (IOS-00) accept exactly the same records.
+pub(crate) fn validate_saved(mac: &SavedMac) -> Result<HostTicket, EnrollmentError> {
+    let host: HostTicket =
+        serde_json::from_str(&mac.host_ticket).map_err(|_| EnrollmentError::InvalidHost)?;
+    validate_host(&host)?;
+    if mac.session_id.is_empty()
+        || mac.session_id.len() > 128
+        || !secret(&mac.session_token)
+        || !scopes_valid(&mac.scopes)
+    {
+        return Err(EnrollmentError::InvalidSession);
+    }
+    Ok(host)
+}
+
 fn validate_host(host: &HostTicket) -> Result<(), EnrollmentError> {
     let text = serde_json::to_string(host).map_err(|_| EnrollmentError::InvalidHost)?;
     parse_ticket(&text).map_err(|_| EnrollmentError::InvalidHost)?;
@@ -631,7 +638,7 @@ fn rejected(inner: &mut Inner, reason: &str) -> EnrollmentAction {
         reason: reason.into(),
     }
 }
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

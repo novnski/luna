@@ -3,9 +3,11 @@
 The current-source comparison and pending migration live in
 [Native iOS parity](../../docs/pending-tasks/ios-parity/README.md). The guide
 below describes the existing edge-backed client and direct paired-Mac setup.
-Paired Macs verifies identity, enrolls and reconnects read-only access. Remote
-task controls and streaming remain later migration work; pairing alone does
-not certify provider execution.
+Paired Macs verifies identity, enrolls and reconnects read-only access. After
+authentication it opens one pinned SDK socket and shows `Live · host …` once
+the engine's typed identity read names the paired Mac. Remote task controls,
+projections and reconnect remain later migration work (RM-03 onward); pairing
+alone does not certify provider execution.
 
 A native SwiftUI viewport onto the luna mesh. The phone is a **peer
 device**: it joins the same Loro CRDT rooms as every other device (workspace
@@ -18,8 +20,19 @@ engine runs on the phone.
 Requires Xcode 26+ (iOS 26 SDK — Liquid Glass APIs).
 Install Rust and the `aarch64-apple-ios` target for physical devices, or
 `aarch64-apple-ios-sim` (`x86_64-apple-ios` on Intel) for simulators. The Xcode
-build phase runs the repository Cargo wrapper with `--locked`, links the
-shared native core and regenerates its Swift bindings.
+build phase runs `scripts/ios/build-mobile-core.sh` through the repository
+Cargo wrapper with `--locked`: Debug builds the core with Cargo's dev profile
+and Release with `--release`; each architecture in `ARCHS` gets its Rust
+target (combined with `lipo`), and the iOS 26 floor is enforced. It links the
+shared native core, regenerates its Swift bindings from that same library and
+records `target/ios-core/<platform>/identity.json` (targets, profile,
+toolchain, revision and library/binding hashes). CI fails when the committed
+`Luna/Generated/luna_core.swift` differs from what the core generates.
+
+The core (`crates/mobile`) speaks the public SDK (`crates/sdk`) to a paired
+Mac over a socket that `Luna/Remote/PinnedSocketTransport.swift` owns; see
+[IOS-00](../../docs/pending-tasks/ios-parity/ios-00/README.md) for its
+contract.
 
 ```sh
 cd apps/ios

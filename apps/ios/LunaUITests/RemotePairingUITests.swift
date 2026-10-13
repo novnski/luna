@@ -49,6 +49,14 @@ final class RemotePairingUITests: XCTestCase {
         pair(app, code: code)
         let card = app.otherElements.matching(identifier: "remote.saved-mac").containing(.staticText, identifier: name).firstMatch
         XCTAssertTrue(card.exists)
+        // IOS-00: after authentication the app opens the pinned SDK socket;
+        // its typed engine read must name this host, not just any listener.
+        if let deviceId = fields["deviceId"] {
+            let live = card.staticTexts.matching(NSPredicate(format:
+                "identifier == 'remote.live' AND label BEGINSWITH %@",
+                "Live · host \(deviceId.prefix(8))")).firstMatch
+            XCTAssertTrue(live.waitForExistence(timeout: 20), "the live socket's typed read names the paired Mac")
+        }
         app.terminate()
         app.launch()
         openConnections(app)

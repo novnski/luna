@@ -36,6 +36,12 @@ final class PairedMacsModel {
     @ObservationIgnored private var owner: Enrollment?
     @ObservationIgnored private var transport: PinnedEnrollmentTransport?
     @ObservationIgnored private var generation: UInt64 = 0
+    /// The SDK socket opened once this connect authenticated (IOS-00): its
+    /// typed engine read names the host. Never persisted.
+    var liveStatus: String?
+    @ObservationIgnored private var live: RemoteHostSession?
+    /// The access this connect authenticated with, for its live socket only.
+    @ObservationIgnored private var access: SavedMac?
     private static let metadataKey = "luna.paired-macs.v1"
 
     init() {
@@ -82,8 +88,10 @@ final class PairedMacsModel {
             return
         }
         do {
-            let core = try Enrollment.restore(mac: host.session(token: token))
+            let mac = host.session(token: token)
+            let core = try Enrollment.restore(mac: mac)
             owner = core
+            access = mac
             begin(core)
         } catch {
             phase = "re-pair"
@@ -110,6 +118,8 @@ final class PairedMacsModel {
         transport?.cancel()
         transport = nil
         owner = nil
+        closeLive()
+        access = nil
         phase = "offline"
     }
     func cancelEnrollment() {
@@ -167,6 +177,7 @@ final class PairedMacsModel {
                 hosts.append(metadata)
                 persistMetadata()
                 selectedId = id
+                access = mac
                 // The grant is now saved. Authentication failures belong to
                 // this selected session, and bootstrap input is no longer needed.
                 preview = nil
@@ -186,6 +197,7 @@ final class PairedMacsModel {
             preview = nil
             incomingCode = nil
             message = "Connected. This phone verified the Mac and its access."
+            if let access { openLive(access) }
         case .rePair(let reason):
             if let selectedId, preview == nil {
                 _ = Keychain.forgetRemoteToken(account: selectedId)
@@ -198,6 +210,46 @@ final class PairedMacsModel {
         case .uncertain(let reason):
             message = reason
         case .ignore: break
+        }
+    }
+    /// Opens this connect's SDK socket. Only the current generation may change
+    /// what it shows; disconnecting closes it (cancelling anything in flight).
+    private func openLive(_ access: SavedMac) {
+        closeLive()
+        let session: RemoteHostSession
+        do {
+            session = try RemoteHostSession(mac: access)
+        } catch {
+            liveStatus = "Live connection unavailable for this saved access."
+            return
+        }
+        live = session
+        liveStatus = Self.liveText(session.state)
+        let current = generation
+        session.onChange = { [weak self, weak session] state in
+            guard let self, let session, self.generation == current, self.live === session else { return }
+            self.liveStatus = Self.liveText(state)
+        }
+        // Failures arrive as the session's closed state through onChange.
+        Task { _ = try? await session.connect() }
+    }
+    private func closeLive() {
+        live?.close()
+        live = nil
+        liveStatus = nil
+    }
+    private static func liveText(_ state: RemoteSessionState) -> String? {
+        switch state {
+        case .idle, .connecting:
+            return "Opening live connection…"
+        case .open(let host, _):
+            return "Live · host \(host.deviceId.prefix(8)) · API \(host.apiVersion)"
+        case .closed(let reason, let detail):
+            switch reason {
+            case .local: return nil
+            case .rePair: return "Live connection refused. Pair again on the Mac."
+            case .cancelled, .remote, .rejected, .failed: return "Live connection ended: \(detail)"
+            }
         }
     }
     private func account(_ preview: PairingPreview) -> String {

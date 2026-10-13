@@ -1310,7 +1310,9 @@ mod gateway {
             wrong_profile.host.spki_sha256 = second.host.spki_sha256.clone();
             std::fs::write(&fixture, serde_json::to_vec(&json!({"code":first.encode().unwrap(),
                     "name":first.host_name, "secondCode":second.encode().unwrap(), "secondName":second.host_name,
-                    "wrongPinCode":wrong_pin.encode().unwrap(),"wrongProfileCode":wrong_profile.encode().unwrap()})).unwrap()).unwrap();
+                    "wrongPinCode":wrong_pin.encode().unwrap(),"wrongProfileCode":wrong_profile.encode().unwrap(),
+                    // IOS-00: the live socket's typed read must name this device.
+                    "deviceId":first.host.target.device_id})).unwrap()).unwrap();
             std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).unwrap();
             let directory = fixture.parent().unwrap();
             wait_native_file(&directory.join("rm02-revoke-ready.json")).await;
@@ -1371,6 +1373,522 @@ mod gateway {
             shutdown(second_core).await;
         }
         shutdown(core).await;
+    }
+
+    /// IOS-00 P01, core half: the mobile SDK session (`luna_mobile::session`)
+    /// against the real gateway. The pinned descriptor and the SDK's typed
+    /// `engineInfo` read name the host; a saved profile the descriptor
+    /// contradicts is refused before the bearer is offered; 40 cancelled
+    /// watches on one socket fit the gateway's 32 in-flight slots only if
+    /// every cancellation reaches the engine; a cancelled read leaves the
+    /// socket usable; a released session ends its watch and closes its
+    /// transport; a revoke closes the open socket and the next connect must
+    /// re-pair. Failure contract: docs/pending-tasks/ios-parity/ios-00/README.md.
+    /// With LUNA_NATIVE_SESSION_FIXTURE the same host then serves the native
+    /// campaign (`LunaTests/RemoteSessionTests`), which replaces the Rust
+    /// stand-in below with the shipped Swift transport.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mobile_session_reads_typed_identity_and_every_cancellation_reaches_the_engine() {
+        use luna_mobile::runtime::Cancellation;
+        use luna_mobile::session::{
+            RemoteSession, RemoteSessionError, RemoteSessionState, SessionCloseReason,
+            TaskCommandChange,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble(root.path());
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let status = enable(&local, &bind).await;
+        if firewalled(&bind).await {
+            shutdown(core).await;
+            return;
+        }
+        let pin = status["spkiSha256"].as_str().unwrap().to_owned();
+        let http = http(&pin);
+        let engine: luna_proto::EngineInfo = local
+            .call_as(methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        let issued = pair(&local, &http, &bind, "ios00", 3600).await;
+        let mac = saved_mac(&issued, &bind, &pin, "IOS00 QA Mac");
+        // No command has touched this task: the engine's durable store
+        // answers its zero snapshot, and the watch is a real engine stream.
+        let task_id = "ios00-watched-task";
+
+        // F6: a contradicting host never sees the bearer.
+        let mut foreign = issued.clone();
+        foreign.target.environment_id = "foreign-profile".into();
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::new(
+            saved_mac(&foreign, &bind, &pin, "IOS00 QA foreign"),
+            0,
+            transport.clone(),
+            None,
+        )
+        .unwrap();
+        transport.attach(&session);
+        let refused = session.connect(None).await.unwrap_err();
+        assert!(
+            matches!(refused, RemoteSessionError::IdentityMismatch { .. }),
+            "{refused:?}"
+        );
+        assert_eq!(
+            transport.paths(),
+            ["/remote/v1/descriptor"],
+            "no socket ticket was requested for a contradicting host"
+        );
+        assert!(matches!(
+            session.state(),
+            RemoteSessionState::Closed {
+                reason: SessionCloseReason::Rejected,
+                ..
+            }
+        ));
+        drop(session);
+
+        // The typed descriptor and engine read over one socket.
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::new(mac.clone(), 0, transport.clone(), None).unwrap();
+        transport.attach(&session);
+        let host = session.connect(None).await.unwrap();
+        assert_eq!(host.device_id, engine.device_id);
+        assert_eq!(host.environment_id, issued.target.environment_id);
+        assert_eq!(host.catalog_version, luna_rpc::operations::CATALOG_VERSION);
+        assert_eq!(host.api_version, luna_rpc::operations::CATALOG_VERSION);
+        assert!(
+            matches!(session.connect(None).await, Err(RemoteSessionError::Busy)),
+            "one connect per session"
+        );
+        assert_eq!(
+            transport.paths(),
+            [
+                "/remote/v1/descriptor",
+                "/remote/v1/socket-ticket",
+                "/remote/v1/ws"
+            ]
+        );
+        assert!(
+            transport
+                .urls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|url| !url.contains(&issued.session_token)),
+            "no secret travels in a URL"
+        );
+
+        // F8: each watch holds one of the socket's 32 in-flight slots until
+        // its engine stream is cancelled; a lost cancellation fails by 33.
+        for round in 1..=40 {
+            let watch = session
+                .watch_task_commands(task_id.into(), None)
+                .await
+                .unwrap_or_else(|error| panic!("round {round}: {error}"));
+            match watch.next().await.unwrap() {
+                Some(TaskCommandChange::Snapshot { state, .. }) => {
+                    assert_eq!(state.task_id, task_id)
+                }
+                other => panic!("round {round}: a watch starts with its snapshot, got {other:?}"),
+            }
+            watch.cancel();
+            let ended = tokio::time::timeout(Duration::from_secs(5), watch.next())
+                .await
+                .expect("a cancelled watch ends");
+            assert_eq!(ended, Ok(None), "round {round}");
+        }
+
+        // F9: a cancelled read reports cancellation and the socket stays usable.
+        let cancelled = Cancellation::new();
+        cancelled.cancel();
+        assert_eq!(
+            session.engine_info(Some(cancelled)).await,
+            Err(RemoteSessionError::Cancelled)
+        );
+        assert_eq!(
+            session.engine_info(None).await.unwrap().device_id,
+            engine.device_id
+        );
+        assert_eq!(
+            transport.sockets.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "every read and watch shared the one socket"
+        );
+
+        // F11: releasing the session ends its watch and closes its transport.
+        let orphan = session
+            .watch_task_commands(task_id.into(), None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            orphan.next().await,
+            Ok(Some(TaskCommandChange::Snapshot { .. }))
+        ));
+        drop(session);
+        let ended = tokio::time::timeout(Duration::from_secs(5), orphan.next())
+            .await
+            .expect("a released session ends its watch");
+        assert_eq!(ended, Ok(None));
+        transport.closed().await;
+
+        // F12: a revoke closes the open socket; the next connect must re-pair.
+        let changes = Arc::new(Changes(tokio::sync::watch::Sender::new(0)));
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session =
+            RemoteSession::new(mac.clone(), 0, transport.clone(), Some(changes.clone())).unwrap();
+        transport.attach(&session);
+        session.connect(None).await.unwrap();
+        local
+            .call(
+                methods::REVOKE_REMOTE_SESSION,
+                json!({"id": issued.session.id}),
+            )
+            .await
+            .unwrap();
+        let state = settled(&session, &changes, |state| {
+            matches!(state, RemoteSessionState::Closed { .. })
+        })
+        .await;
+        assert!(
+            matches!(
+                state,
+                RemoteSessionState::Closed {
+                    reason: SessionCloseReason::Remote,
+                    ..
+                }
+            ),
+            "{state:?}"
+        );
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let again = RemoteSession::new(mac, 0, transport.clone(), None).unwrap();
+        transport.attach(&again);
+        assert!(matches!(
+            again.connect(None).await,
+            Err(RemoteSessionError::RePair { .. })
+        ));
+        assert!(matches!(
+            again.state(),
+            RemoteSessionState::Closed {
+                reason: SessionCloseReason::RePair,
+                ..
+            }
+        ));
+
+        // Optional native extension: the shipped Swift transport, UniFFI core
+        // and SDK against this same host, coordinated through private files
+        // in the hosted test's Documents. No production QA seam is used.
+        if let Some(path) = std::env::var_os("LUNA_NATIVE_SESSION_FIXTURE") {
+            use std::os::unix::fs::PermissionsExt;
+            let fixture = PathBuf::from(path);
+            assert_eq!(fixture.file_name().unwrap(), "ios00-session.json");
+            assert!(!fixture.exists(), "refuse a stale native fixture");
+            let native = pair(&local, &http, &bind, "IOS00 native", 3600).await;
+            let access = saved_mac(&native, &bind, &pin, "IOS00 QA Mac");
+            std::fs::write(
+                &fixture,
+                serde_json::to_vec(&json!({
+                    "hostName": access.host_name, "hostTicket": access.host_ticket,
+                    "sessionId": access.session_id, "sessionToken": access.session_token,
+                    "expiresAtMs": access.expires_at_ms, "scopes": access.scopes,
+                    "deviceId": engine.device_id, "taskId": task_id,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let directory = fixture.parent().unwrap();
+            wait_native_file(&directory.join("ios00-revoke-ready.json")).await;
+            let sessions: Vec<SessionView> = local
+                .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+                .await
+                .unwrap();
+            let row = sessions
+                .iter()
+                .find(|row| row.id == native.session.id)
+                .unwrap();
+            assert!(
+                !row.revoked && row.last_used_at_ms.is_some(),
+                "the native sockets opened with this grant"
+            );
+            local
+                .call(
+                    methods::REVOKE_REMOTE_SESSION,
+                    json!({"id": native.session.id}),
+                )
+                .await
+                .unwrap();
+            std::fs::write(directory.join("ios00-revoked.json"), b"{}").unwrap();
+            let result = directory.join("ios00-native-result.json");
+            wait_native_file(&result).await;
+            let result: Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+            for field in [
+                "typedRead",
+                "resumedOnMain",
+                "swiftCancelEndedRead",
+                "socketReusedAfterCancel",
+                "releaseEndedWatch",
+                "remoteCloseDeliveredOnMain",
+                "rePairAfterRevoke",
+            ] {
+                assert_eq!(result[field], true, "native observation missing: {field}");
+            }
+            assert_eq!(result["deviceId"], engine.device_id.as_str());
+            assert_eq!(result["watchCycles"], 40);
+            assert_eq!(result["apiVersion"], luna_rpc::operations::CATALOG_VERSION);
+        }
+        shutdown(core).await;
+    }
+
+    fn saved_mac(
+        session: &IssuedSession,
+        bind: &str,
+        pin: &str,
+        name: &str,
+    ) -> luna_mobile::pairing::SavedMac {
+        let host = luna_proto::remote_control::HostTicket {
+            version: 1,
+            target: session.target.clone(),
+            endpoints: vec![format!("https://{bind}")],
+            spki_sha256: pin.into(),
+        };
+        luna_mobile::pairing::SavedMac {
+            host_name: name.into(),
+            host_ticket: serde_json::to_string(&host).unwrap(),
+            session_id: session.session.id.clone(),
+            session_token: session.session_token.clone(),
+            expires_at_ms: session.session.expires_at_ms,
+            scopes: session
+                .session
+                .scopes
+                .iter()
+                .map(|scope| {
+                    serde_json::to_value(scope)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect(),
+            client_label: name.into(),
+        }
+    }
+
+    /// The phone's platform transport, in Rust: pinned HTTPS and one pinned
+    /// WebSocket reporting into the session exactly as the app's
+    /// `PinnedSocketTransport` does. It decides nothing; the core does.
+    struct PlatformStandIn {
+        pin: String,
+        bind: String,
+        session: std::sync::Mutex<std::sync::Weak<luna_mobile::session::RemoteSession>>,
+        urls: std::sync::Mutex<Vec<String>>,
+        socket: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Message>>>,
+        sockets: std::sync::atomic::AtomicUsize,
+        closed: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl PlatformStandIn {
+        fn new(pin: &str, bind: &str) -> Arc<Self> {
+            Arc::new(Self {
+                pin: pin.into(),
+                bind: bind.into(),
+                session: std::sync::Mutex::new(std::sync::Weak::new()),
+                urls: std::sync::Mutex::new(Vec::new()),
+                socket: std::sync::Mutex::new(None),
+                sockets: std::sync::atomic::AtomicUsize::new(0),
+                closed: tokio::sync::watch::Sender::new(false),
+            })
+        }
+
+        fn attach(&self, session: &Arc<luna_mobile::session::RemoteSession>) {
+            *self.session.lock().unwrap() = Arc::downgrade(session);
+        }
+
+        /// The request paths in order (no host, no secret).
+        fn paths(&self) -> Vec<String> {
+            self.urls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|url| {
+                    url.split_once("://")
+                        .and_then(|(_, rest)| rest.find('/').map(|at| rest[at..].to_owned()))
+                        .unwrap_or_default()
+                })
+                .collect()
+        }
+
+        fn route(&self) -> luna_mobile::probe::RouteObservation {
+            luna_mobile::probe::RouteObservation {
+                remote_address: Some(self.bind.clone()),
+                local_address: None,
+                interface: "other".into(),
+                proxied: false,
+                tls_version: None,
+            }
+        }
+
+        /// Resolves once the core told the transport to close.
+        async fn closed(&self) {
+            let mut closed = self.closed.subscribe();
+            let _ = tokio::time::timeout(Duration::from_secs(5), closed.wait_for(|closed| *closed))
+                .await
+                .expect("the core closed its transport");
+        }
+    }
+
+    impl luna_mobile::session::SocketTransport for PlatformStandIn {
+        fn send_request(&self, request: luna_mobile::pairing::EnrollmentRequest) {
+            self.urls.lock().unwrap().push(request.url.clone());
+            let session = self.session.lock().unwrap().clone();
+            let client = http(&self.pin);
+            let route = self.route();
+            tokio::spawn(async move {
+                let method = reqwest::Method::from_bytes(request.method.as_bytes()).unwrap();
+                let mut call = client.request(method, &request.url);
+                if !request.body.is_empty() {
+                    call = call
+                        .header("content-type", "application/json")
+                        .body(request.body.clone());
+                }
+                if let Some(authorization) = &request.authorization {
+                    call = call.header("authorization", authorization);
+                }
+                let reply = match call.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        let body = response
+                            .bytes()
+                            .await
+                            .map(|body| body.to_vec())
+                            .unwrap_or_default();
+                        Ok((status, body))
+                    }
+                    Err(error) => Err(error.to_string()),
+                };
+                let Some(session) = session.upgrade() else {
+                    return;
+                };
+                match reply {
+                    Ok((status, body)) => {
+                        session.request_completed(request.request_id, status, body, route)
+                    }
+                    Err(detail) => session.request_failed(
+                        request.request_id,
+                        luna_mobile::probe::TransportFailure::Network { detail },
+                    ),
+                }
+            });
+        }
+
+        fn open_socket(&self, request: luna_mobile::session::SocketOpenRequest) {
+            self.urls.lock().unwrap().push(request.url.clone());
+            self.sockets
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session = self.session.lock().unwrap().clone();
+            let (frames, mut outbound) = tokio::sync::mpsc::unbounded_channel::<Message>();
+            *self.socket.lock().unwrap() = Some(frames);
+            let tls = tls(&self.pin);
+            tokio::spawn(async move {
+                let mut upgrade = request.url.as_str().into_client_request().unwrap();
+                upgrade
+                    .headers_mut()
+                    .insert("authorization", request.authorization.parse().unwrap());
+                let opened = tokio_tungstenite::connect_async_tls_with_config(
+                    upgrade,
+                    None,
+                    false,
+                    Some(tokio_tungstenite::Connector::Rustls(tls)),
+                )
+                .await;
+                let socket = match opened {
+                    Ok((socket, _)) => socket,
+                    Err(error) => {
+                        if let Some(session) = session.upgrade() {
+                            session.socket_closed(
+                                request.socket_id,
+                                luna_mobile::probe::TransportFailure::Network {
+                                    detail: error.to_string(),
+                                },
+                            );
+                        }
+                        return;
+                    }
+                };
+                match session.upgrade() {
+                    Some(session) => session.socket_opened(request.socket_id),
+                    None => return,
+                }
+                let (mut sink, mut stream) = socket.split();
+                loop {
+                    tokio::select! {
+                        frame = outbound.recv() => match frame {
+                            Some(frame) => if sink.send(frame).await.is_err() { break },
+                            None => {
+                                let _ = sink.send(Message::Close(None)).await;
+                                break;
+                            }
+                        },
+                        message = stream.next() => match message {
+                            Some(Ok(Message::Text(text))) => match session.upgrade() {
+                                Some(session) => session.receive(request.socket_id, text).await,
+                                None => break,
+                            },
+                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                            Some(Ok(_)) => {}
+                        },
+                    }
+                }
+                if let Some(session) = session.upgrade() {
+                    session.socket_closed(
+                        request.socket_id,
+                        luna_mobile::probe::TransportFailure::Network {
+                            detail: "The Mac closed the connection".into(),
+                        },
+                    );
+                }
+            });
+        }
+
+        fn send_frame(&self, _socket_id: u64, frame: String) {
+            if let Some(frames) = &*self.socket.lock().unwrap() {
+                let _ = frames.send(Message::Text(frame));
+            }
+        }
+
+        fn close(&self) {
+            self.socket.lock().unwrap().take();
+            self.closed.send_replace(true);
+        }
+    }
+
+    /// Counts the core's change notifications so a wait follows real events.
+    struct Changes(tokio::sync::watch::Sender<u64>);
+
+    impl luna_mobile::session::RemoteSessionListener for Changes {
+        fn on_change(&self) {
+            self.0.send_modify(|count| *count += 1);
+        }
+    }
+
+    async fn settled(
+        session: &luna_mobile::session::RemoteSession,
+        changes: &Changes,
+        done: impl Fn(&luna_mobile::session::RemoteSessionState) -> bool,
+    ) -> luna_mobile::session::RemoteSessionState {
+        let mut seen = changes.0.subscribe();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let state = session.state();
+                if done(&state) {
+                    return state;
+                }
+                seen.changed()
+                    .await
+                    .expect("the listener outlives the wait");
+            }
+        })
+        .await
+        .expect("the session reached the expected state")
     }
 
     async fn wait_native_file(path: &Path) {

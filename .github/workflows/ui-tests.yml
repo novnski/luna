@@ -200,6 +200,10 @@ jobs:
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
             -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
             -only-testing:LunaTests CODE_SIGNING_ALLOWED=NO test
+      # The build phase regenerated the bindings from the library it linked
+      # (IOS-00); a committed copy that differs was compiled against another core.
+      - name: Committed Swift bindings match the mobile core
+        run: git diff --exit-code -- apps/ios/Luna/Generated/luna_core.swift
       - name: Upload iOS test results
         if: always()
         uses: actions/upload-artifact@v4

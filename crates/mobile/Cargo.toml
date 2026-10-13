@@ -7,8 +7,10 @@ publish.workspace = true
 
 # The owned mobile core that the iOS app links through UniFFI. Platform code
 # owns networking, TLS trust, Keychain and lifecycle; it feeds results into
-# this core, which decides what they mean. RM-00 holds only the direct-host
-# descriptor probe; IOS-00 grows the facade.
+# this core, which decides what they mean. RM-00 added the direct-host
+# descriptor probe, RM-02 enrollment; IOS-00 adds the SDK session facade
+# (`session`), which speaks the public operation contract through
+# `luna-sdk` over the platform's socket instead of a second client.
 [lib]
 name = "luna_mobile"
 crate-type = ["lib", "staticlib"]
@@ -23,7 +25,11 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 luna-proto.workspace = true
+luna-rpc.workspace = true
+luna-sdk.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uniffi = "0.32"
 url = "2"

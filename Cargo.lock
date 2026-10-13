@@ -5235,8 +5235,12 @@ name = "luna-mobile"
 version = "0.2.73"
 dependencies = [
  "luna-proto",
+ "luna-rpc",
+ "luna-sdk",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "uniffi",
  "url",
 ]

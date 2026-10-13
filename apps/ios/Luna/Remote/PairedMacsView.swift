@@ -47,6 +47,10 @@ struct PairedMacsView: View {
                                     .font(Theme.sans(12)).foregroundStyle(Theme.textMuted)
                             }
                             if let route = host.route { Text(route).font(Theme.mono(11)).foregroundStyle(Theme.textMuted) }
+                            if model.selectedId == host.id, let live = model.liveStatus {
+                                Text(live).font(Theme.mono(11)).foregroundStyle(Theme.textMuted)
+                                    .accessibilityIdentifier("remote.live")
+                            }
                             Text("Access expires \(Date(timeIntervalSince1970: Double(host.expiresAtMs) / 1000).formatted(date: .abbreviated, time: .omitted))")
                                 .font(Theme.sans(12)).foregroundStyle(Theme.textMuted)
                             HStack {
@@ -60,6 +64,8 @@ struct PairedMacsView: View {
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("remote.saved-mac")
                     }
+                    Text(Self.coreLine).font(Theme.mono(11)).foregroundStyle(Theme.textMuted)
+                        .accessibilityIdentifier("remote.core-identity")
                 }.padding(20)
             }.background(Theme.bg).navigationTitle("Paired Macs")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelEnrollment(); dismiss() } } }
@@ -126,6 +132,11 @@ struct PairedMacsView: View {
             Button("Cancel") { model.cancelEnrollment(); code = ""; entering = true }
         }.padding(16).background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16))
     }
+    /// Which owned core this build linked (IOS-00): support and build evidence.
+    private static let coreLine: String = {
+        let core = coreIdentity()
+        return "LUNA core \(core.coreVersion) · SDK \(core.sdkVersion) · API \(core.apiVersion)"
+    }()
     private func scopeName(_ scope: String) -> String {
         switch scope { case "environment-read": "Host information"; case "tasks-read": "Read tasks"
         case "files-read": "Read files"; case "terminal-operate": "Terminal access"; default: "Unsupported access" }

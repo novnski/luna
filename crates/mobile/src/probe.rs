@@ -20,8 +20,11 @@ use luna_proto::remote_control::{
 
 const MAX_TICKET_BYTES: usize = 4 * 1024;
 const MAX_ENDPOINTS: usize = 8;
-const MAX_DESCRIPTOR_BYTES: u32 = 16 * 1024;
-const SUPPORTED_CATALOG_VERSIONS: &[u16] = &[1];
+pub(crate) const MAX_DESCRIPTOR_BYTES: u32 = 16 * 1024;
+/// The core speaks exactly the operation catalog its SDK was built against
+/// (IOS-00): a host serving another catalog is refused before any credential
+/// is used, instead of being driven with mismatched typed operations.
+const SUPPORTED_CATALOG_VERSIONS: &[u16] = &[luna_sdk::API_VERSION];
 
 /// One pinned GET the platform must perform.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -118,7 +121,10 @@ pub trait ProbeListener: Send + Sync {
 }
 
 pub(crate) struct Endpoint {
+    /// The descriptor URL on this origin.
     pub(crate) url: String,
+    /// The bare `https://host[:port]` origin, for the session's other routes.
+    pub(crate) origin: String,
     pub(crate) host: String,
 }
 
@@ -364,13 +370,16 @@ fn parse_endpoint(text: &str) -> Result<Endpoint, ProbeError> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_owned();
+    let origin = url.origin().ascii_serialization();
     Ok(Endpoint {
-        url: format!("{}{DESCRIPTOR_PATH}", url.origin().ascii_serialization()),
+        url: format!("{origin}{DESCRIPTOR_PATH}"),
+        origin,
         host,
     })
 }
 
-/// Shared by the harmless M0 probe and the production enrollment preflight.
+/// Shared by the harmless M0 probe, the production enrollment preflight and
+/// the SDK session's preflight.
 pub(crate) fn verify_descriptor(
     ticket: &HostTicket,
     status: u16,
