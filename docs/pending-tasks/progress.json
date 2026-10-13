@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "catalog_hash": "89c2ad6c33aafd9114a47cc5eb841b24f64aab4b7959ae6710a5f98404f269f9",
-  "created_at": 1791851818.847244,
+  "created_at": 1791892332.050545,
   "summary": {
     "counts": {
       "blocked": 1,
       "cancelled": 0,
       "deferred": 25,
-      "done": 18,
+      "done": 19,
       "in_progress": 0,
       "paused": 0,
-      "ready": 62,
+      "ready": 61,
       "review": 0
     },
     "groups": [
@@ -129,11 +129,11 @@
         "id": "integration",
         "title": "Provider access, effective tools and skills",
         "tasks": 4,
-        "done": 2,
-        "remaining": 2,
-        "accepted_units": 8,
+        "done": 3,
+        "remaining": 1,
+        "accepted_units": 12,
         "total_units": 16,
-        "acceptance_percent": 50.0,
+        "acceptance_percent": 75.0,
         "milestone_status": {}
       },
       {
@@ -373,35 +373,25 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 76,
-      "done": 13,
-      "remaining": 63,
-      "accepted_units": 51,
+      "done": 14,
+      "remaining": 62,
+      "accepted_units": 55,
       "total_units": 296,
-      "acceptance_percent": 17.2
+      "acceptance_percent": 18.6
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
-      "SW-02",
       "SW-03",
       "CORE-05",
       "SW-10",
       "IC-0",
       "ZI-01",
       "CORE-06",
-      "ZI-03"
+      "ZI-03",
+      "ZI-04"
     ]
   },
   "tasks": [
-    {
-      "attempts": 0,
-      "blocker": null,
-      "checks": {},
-      "id": "SW-02",
-      "last_worker": null,
-      "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
-      "status": "ready",
-      "updated_at": 1791673834.958435
-    },
     {
       "attempts": 0,
       "blocker": null,
@@ -2571,6 +2561,79 @@
       ],
       "status": "done",
       "updated_at": 1791851818.735708
+    },
+    {
+      "attempts": 1,
+      "blocker": null,
+      "checks": {
+        "contract": {
+          "at": 1791892331.472965,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+              "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+            },
+            {
+              "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+            }
+          ],
+          "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+        },
+        "delivery": {
+          "at": 1791892331.598212,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+              "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+            }
+          ],
+          "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs."
+        },
+        "handoff": {
+          "at": 1791892331.810196,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-02/delivery.json",
+              "sha256": "d866e7d5c6772f9651a46538bbb37e73fbd12bd6eb038893bfe6cb2e687ea40e"
+            },
+            {
+              "ref": "commit:6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f"
+            }
+          ],
+          "note": "Latest origin/main UI included, QA resources cleaned with retained hashes, primary LUNA Dev refreshed in 88 seconds and process/port/signature/UI readback verified. SSH push and origin/main readback match."
+        },
+        "verification": {
+          "at": 1791892331.7056708,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+              "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+            }
+          ],
+          "note": "Native Codex Ask, Claude Ask and eligible Opus Auto reads passed including real read-only Infra Monitor call. Deny/allow/mislabeled/stale/restart cases passed; Haiku Auto explicitly refuses. Latest-main Ask resumed successfully; 13 integration tests plus final engine rerun, Clippy and fmt passed."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "docs/pending-tasks/luna-only-workflows/sw-02/delivery.json",
+          "sha256": "d866e7d5c6772f9651a46538bbb37e73fbd12bd6eb038893bfe6cb2e687ea40e"
+        },
+        {
+          "ref": "commit:6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f"
+        }
+      ],
+      "id": "SW-02",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791880722.6104379,
+        "expires_at": 1791899110.93244,
+        "heartbeat_at": 1791891910.93244,
+        "owner": "codex",
+        "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+      },
+      "note": "Scoped saved HTTP/SSE MCP delivery works in native Claude Ask and eligible Auto, keeps permission confinement and exact call identity, and adds no Keychain or auth store. Latest main rebuilt and handed off with passing native E2E/integration checks; temporary QA gateway/policy/service/bundles removed. Stdio remains outside this lane; Haiku Auto is explicitly ineligible.",
+      "status": "done",
+      "updated_at": 1791892331.944981
     }
   ],
   "events": [
@@ -11053,6 +11116,501 @@
           "claimed_at": 1791850914.398589,
           "expires_at": 1791858439.5568051,
           "heartbeat_at": 1791851239.5568051,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 295,
+      "task": "SW-02",
+      "at": 1791880722.610518,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791887922.6104379,
+          "heartbeat_at": 1791880722.6104379,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 296,
+      "task": "SW-02",
+      "at": 1791881480.8761559,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791888680.876064,
+          "heartbeat_at": 1791881480.876064,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 297,
+      "task": "SW-02",
+      "at": 1791882542.921538,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791889742.921443,
+          "heartbeat_at": 1791882542.921443,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 298,
+      "task": "SW-02",
+      "at": 1791883298.236246,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791890498.23615,
+          "heartbeat_at": 1791883298.23615,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 299,
+      "task": "SW-02",
+      "at": 1791885136.972747,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791892336.97265,
+          "heartbeat_at": 1791885136.97265,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 300,
+      "task": "SW-02",
+      "at": 1791886854.185469,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791894054.185384,
+          "heartbeat_at": 1791886854.185384,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 301,
+      "task": "SW-02",
+      "at": 1791887546.637953,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791894746.637839,
+          "heartbeat_at": 1791887546.637839,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 302,
+      "task": "SW-02",
+      "at": 1791888982.152591,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791896182.1524942,
+          "heartbeat_at": 1791888982.1524942,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 303,
+      "task": "SW-02",
+      "at": 1791891910.9325461,
+      "action": "heartbeat",
+      "detail": {
+        "blocker": null,
+        "checks": {},
+        "criterion": null,
+        "evidence": null,
+        "note": "Read every linked specification and failure contract; rebase against current main and existing acceptance evidence. Implement only a demonstrated gap. Preserve partial work, record the next command and retained artifacts before pausing.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 304,
+      "task": "SW-02",
+      "at": 1791892331.4881191,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791892331.472965,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+                "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+              },
+              {
+                "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+              }
+            ],
+            "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+          }
+        },
+        "criterion": "contract",
+        "evidence": null,
+        "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 305,
+      "task": "SW-02",
+      "at": 1791892331.5988019,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791892331.472965,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+                "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+              },
+              {
+                "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+              }
+            ],
+            "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+          },
+          "delivery": {
+            "at": 1791892331.598212,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs."
+          }
+        },
+        "criterion": "delivery",
+        "evidence": null,
+        "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 306,
+      "task": "SW-02",
+      "at": 1791892331.705879,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791892331.472965,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+                "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+              },
+              {
+                "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+              }
+            ],
+            "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+          },
+          "delivery": {
+            "at": 1791892331.598212,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs."
+          },
+          "verification": {
+            "at": 1791892331.7056708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Native Codex Ask, Claude Ask and eligible Opus Auto reads passed including real read-only Infra Monitor call. Deny/allow/mislabeled/stale/restart cases passed; Haiku Auto explicitly refuses. Latest-main Ask resumed successfully; 13 integration tests plus final engine rerun, Clippy and fmt passed."
+          }
+        },
+        "criterion": "verification",
+        "evidence": null,
+        "note": "Native Codex Ask, Claude Ask and eligible Opus Auto reads passed including real read-only Infra Monitor call. Deny/allow/mislabeled/stale/restart cases passed; Haiku Auto explicitly refuses. Latest-main Ask resumed successfully; 13 integration tests plus final engine rerun, Clippy and fmt passed.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 307,
+      "task": "SW-02",
+      "at": 1791892331.8253188,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791892331.472965,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+                "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+              },
+              {
+                "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+              }
+            ],
+            "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+          },
+          "delivery": {
+            "at": 1791892331.598212,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs."
+          },
+          "handoff": {
+            "at": 1791892331.810196,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/delivery.json",
+                "sha256": "d866e7d5c6772f9651a46538bbb37e73fbd12bd6eb038893bfe6cb2e687ea40e"
+              },
+              {
+                "ref": "commit:6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f"
+              }
+            ],
+            "note": "Latest origin/main UI included, QA resources cleaned with retained hashes, primary LUNA Dev refreshed in 88 seconds and process/port/signature/UI readback verified. SSH push and origin/main readback match."
+          },
+          "verification": {
+            "at": 1791892331.7056708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Native Codex Ask, Claude Ask and eligible Opus Auto reads passed including real read-only Infra Monitor call. Deny/allow/mislabeled/stale/restart cases passed; Haiku Auto explicitly refuses. Latest-main Ask resumed successfully; 13 integration tests plus final engine rerun, Clippy and fmt passed."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": null,
+        "note": "Latest origin/main UI included, QA resources cleaned with retained hashes, primary LUNA Dev refreshed in 88 seconds and process/port/signature/UI readback verified. SSH push and origin/main readback match.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expired": false,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
+          "owner": "codex",
+          "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
+        }
+      }
+    },
+    {
+      "seq": 308,
+      "task": "SW-02",
+      "at": 1791892331.9452631,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "contract": {
+            "at": 1791892331.472965,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/README.md",
+                "sha256": "b6d51fa87488495baaa9b79b0128204ab02138fe838f76e2d156480e64023077"
+              },
+              {
+                "ref": "commit:3037d07dd07e0d9fd43ca8776a481e62a8a1a20d"
+              }
+            ],
+            "note": "Installed native SDK control attaches selected saved HTTP/SSE definitions with correlated acknowledgement under restriction; existing LUNA endpoint survives."
+          },
+          "delivery": {
+            "at": 1791892331.598212,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Saved credentials and policies preserved; no new auth store. Native exact approvals, stale binding/config rejection and uncertain delivery with no replay verified by independent effect logs."
+          },
+          "handoff": {
+            "at": 1791892331.810196,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/delivery.json",
+                "sha256": "d866e7d5c6772f9651a46538bbb37e73fbd12bd6eb038893bfe6cb2e687ea40e"
+              },
+              {
+                "ref": "commit:6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f"
+              }
+            ],
+            "note": "Latest origin/main UI included, QA resources cleaned with retained hashes, primary LUNA Dev refreshed in 88 seconds and process/port/signature/UI readback verified. SSH push and origin/main readback match."
+          },
+          "verification": {
+            "at": 1791892331.7056708,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+                "sha256": "8d79fa78d857522cdb8c779a11d6abbadf79c623ceedba4a837b4657113b9128"
+              }
+            ],
+            "note": "Native Codex Ask, Claude Ask and eligible Opus Auto reads passed including real read-only Infra Monitor call. Deny/allow/mislabeled/stale/restart cases passed; Haiku Auto explicitly refuses. Latest-main Ask resumed successfully; 13 integration tests plus final engine rerun, Clippy and fmt passed."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "docs/pending-tasks/luna-only-workflows/sw-02/delivery.json",
+            "sha256": "d866e7d5c6772f9651a46538bbb37e73fbd12bd6eb038893bfe6cb2e687ea40e"
+          },
+          {
+            "ref": "commit:6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f"
+          }
+        ],
+        "note": "Scoped saved HTTP/SSE MCP delivery works in native Claude Ask and eligible Auto, keeps permission confinement and exact call identity, and adds no Keychain or auth store. Latest main rebuilt and handed off with passing native E2E/integration checks; temporary QA gateway/policy/service/bundles removed. Stdio remains outside this lane; Haiku Auto is explicitly ineligible.",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791880722.6104379,
+          "expires_at": 1791899110.93244,
+          "heartbeat_at": 1791891910.93244,
           "owner": "codex",
           "session": "01a130a0-0d31-75d0-8616-0caf98915c99"
         }

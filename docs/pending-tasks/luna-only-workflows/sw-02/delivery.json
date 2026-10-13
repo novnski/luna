@@ -1,0 +1,37 @@
+{
+  "task": "SW-02",
+  "sourceCommit": "3037d07d",
+  "latestMainIncluded": "bfb3dfab",
+  "verifiedMainCommit": "6e3ea6d6dc2bf0562d2af90676e1f6d78ac2594f",
+  "remoteMainVerified": true,
+  "app": {
+    "path": "/Users/iulian/workspace/code/personal/luna/target/luna-macos-dev/LUNA Dev.app",
+    "pid": 51200,
+    "ipcPort": 59777,
+    "signatureVerified": true,
+    "buildSeconds": 88,
+    "qaIsolation": false,
+    "qaServerAllowlist": [],
+    "existingChat": "Key Management Request",
+    "openTabs": 3,
+    "backgroundWork": 0
+  },
+  "verificationReport": "docs/pending-tasks/luna-only-workflows/sw-02/verification.json",
+  "cleanup": {
+    "temporaryExecutorRegistrationRemoved": true,
+    "temporaryPolicyRemoved": true,
+    "existingConnectionsAndPoliciesPreserved": true,
+    "qaServiceStopped": true,
+    "taskQaBundlesRemoved": true,
+    "taskProjectFixturesArchivedThenRemoved": true,
+    "devAndQaDataPreserved": true,
+    "sharedCachesPreserved": true
+  },
+  "handoffHashes": {
+    "main-final-refresh.log": "c621a2de97f59ec69802b9fc45055e43db091620cf612cb124d9c9de17765018",
+    "main-final-signature.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "main-final-ax.txt": "c4c4123fbc3874e43a0c7cecad04fa85d6a73915ff88130063b49de9b0a6b665",
+    "main-final-ui.png": "d837e8d5d3b76d054bd6ed1136a7f91074e4faa4d0d47f9211309effe4f119ed",
+    "cleanup-executor.json": "adb15fd2edfb43b438cf7f1a966edf40c4b5750dae412ee63c646916891115b4"
+  }
+}
