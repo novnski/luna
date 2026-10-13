@@ -1123,6 +1123,9 @@ impl DocsStore {
             insert_attention_transition(&tx, AttentionTransitionKind::Resolved, &item)?;
             changed = true;
         }
+        // A projection read before an automation's delete committed can land
+        // after it; the tombstone still wins in this transaction.
+        changed |= automations::retire_deleted_automation_attention(&tx, now)?;
 
         // BB's inspected notification center keeps 200 rows. LUNA applies
         // that bound only to Recent presentation; unresolved action items are

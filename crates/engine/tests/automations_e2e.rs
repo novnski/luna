@@ -2659,3 +2659,130 @@ async fn a_scheduled_run_still_starting_after_the_grace_is_not_unknown() {
     );
     e.shutdown().await;
 }
+
+/// SW-13 P5/F7, found live (`sw13-live-20261014-014727`): Delete keeps the
+/// tombstone and run history and leaves Activity, while an occurrence admitted
+/// before it still ends in its conversation. A paused definition's item is the
+/// control that stays. Regression: the deleted definition's resolved
+/// `automationCompleted` stayed in Recent, because tombstones are no longer
+/// projected and the reconcile never revisits a resolved row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_automation_leaves_activity_while_its_admitted_run_ends() {
+    fn listed(snapshot: &Value, prefix: &str) -> Vec<Value> {
+        ["needsAttention", "recent"]
+            .into_iter()
+            .flat_map(|list| snapshot[list].as_array().unwrap().clone())
+            .filter(|item| {
+                item["dedupKey"]
+                    .as_str()
+                    .is_some_and(|key| key.starts_with(prefix))
+            })
+            .collect()
+    }
+    let root = tempfile::tempdir().unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let completion = Arc::new(tokio::sync::Notify::new());
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(Peer {
+        seen: seen.clone(),
+        completion: Some(completion.clone()),
+    }));
+    let e = registered_core(root.path(), registry, HarnessId::Mock);
+    let c = luna_rpc::memory_client(e.rpc_service());
+    create(&c, &e).await;
+    let kept = format!("automation:{}:kept:", e.device_id);
+    let retired = format!("automation:{}:retired:", e.device_id);
+    let mut request = save(
+        &e,
+        "kept",
+        "kept",
+        json!({"kind":"interval","anchorMs":NOW+1000,"everyMinutes":1}),
+    );
+    request["operation"]["definition"]["target"] =
+        json!({"kind":"newConversation","originTaskId":CHAT});
+    mutate(&c, request).await;
+    complete_at(&e, &c, "kept", NOW + 1000).await;
+    let live = call(&c, "ListAutomations", json!({"automationId":"kept"})).await;
+    let paused = mutate(&c, json!({"requestId":"kept-pause","automationId":"kept","ownerHostId":e.device_id,"expectedRevision":live["items"][0]["revision"],"operation":{"kind":"pause"}})).await;
+    assert_eq!(paused["record"]["enabled"], false);
+    mutate(
+        &c,
+        save(
+            &e,
+            "retired",
+            "hold archive",
+            json!({"kind":"interval","anchorMs":NOW+61000,"everyMinutes":1}),
+        ),
+    )
+    .await;
+    // The held peer finishes this first occurrence at once.
+    completion.notify_one();
+    complete_at(&e, &c, "retired", NOW + 61000).await;
+    let before = call(&c, "GetAttention", json!({"targetDeviceId":e.device_id})).await;
+    assert!(
+        listed(&before, &retired)
+            .iter()
+            .any(|item| item["kind"] == "automationCompleted"),
+        "{before}"
+    );
+    // The next occurrence is admitted; its turn stays live across the delete.
+    e.rpc_service()
+        .automation_tick_at(NOW + 121000)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while seen.lock().unwrap().len() < 3 || !e.sessions.turn_in_flight(CHAT) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let admitted = runs(&c, "retired").await;
+    assert_eq!(
+        admitted["items"][0]["scheduledAtMs"],
+        NOW + 121000,
+        "{admitted}"
+    );
+    assert!(
+        ["dispatching", "accepted"].contains(&admitted["items"][0]["state"].as_str().unwrap()),
+        "{admitted}"
+    );
+    let live = call(&c, "ListAutomations", json!({"automationId":"retired"})).await;
+    let deleted = mutate(&c, json!({"requestId":"retired-delete","automationId":"retired","ownerHostId":e.device_id,"expectedRevision":live["items"][0]["revision"],"operation":{"kind":"delete"}})).await;
+    assert_eq!(deleted["record"]["deleted"], true);
+    completion.notify_one();
+    let ended = complete_at(&e, &c, "retired", NOW + 121001).await;
+    let after = call(&c, "GetAttention", json!({"targetDeviceId":e.device_id})).await;
+    assert!(
+        listed(&after, &retired).is_empty(),
+        "a deleted definition must leave Activity: {after}"
+    );
+    assert!(
+        listed(&after, &kept)
+            .iter()
+            .any(|item| item["kind"] == "automationCompleted"),
+        "a paused definition keeps its Activity: {after}"
+    );
+    // History and the tombstone stay readable; nothing ran after the delete.
+    let history = ended["items"].as_array().unwrap();
+    assert_eq!(history.len(), 2, "{ended}");
+    assert!(
+        history
+            .iter()
+            .all(|run| run["state"] == "completed" && run["taskId"] == CHAT),
+        "{ended}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 3);
+    let tombstone = call(
+        &c,
+        "ListAutomations",
+        json!({"automationId":"retired","includeDeleted":true}),
+    )
+    .await;
+    assert_eq!(tombstone["items"][0]["deleted"], true, "{tombstone}");
+    evidence(
+        "deleted-automation-leaves-activity",
+        json!({"before":before,"deleteReceipt":deleted,"runs":ended,"after":after,"tombstone":tombstone}),
+    );
+    e.shutdown().await;
+}

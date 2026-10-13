@@ -39,7 +39,7 @@ runner checks observed behaviour against them; it does not redefine them.
 | F4 | Receipts | Completed without an applied Run receipt correlated to the message; a project run without an applied create receipt | `GetTaskCommandReceipt` |
 | F5 | No duplicate writes | One occurrence delivered twice: the same message twice, a replay after restart, an update/delete race | Disposable sentinel lines (with epoch seconds) counted by the runner against run windows and successful exec calls |
 | F6 | Update | The old prompt is delivered after the update commit; the new revision is not used; the update stalls later work | Run `automationRevision`, per-marker sentinel lines |
-| F7 | Delete while admitted | Delete kills or duplicates the admitted run; a new occurrence runs after delete | The admitted run ends; no later run rows; sentinel |
+| F7 | Delete while admitted | Delete kills or duplicates the admitted run; a new occurrence runs after delete; the deleted definition keeps an Activity item | The admitted run ends; no later run rows; sentinel; no `automation:<host>:<id>:` item in `GetAttention` (see G4) |
 | F8 | Pause | A new occurrence is claimed after the pause commit | No run claimed after the commit, except one already admitted |
 | F9 | Restart across slots, within tolerance | A catch-up burst, no run, or a silent miss | One run, `coalesced` ≥ 1, claimed after relaunch, sentinel +1 |
 | F10 | Restart across a slot, beyond tolerance | A late run despite the tolerance, or a dropped slot with no row | One Skipped row with the tolerance reason; the next slot runs |
@@ -138,6 +138,19 @@ A real account change holds provider startup (`prepare_provider_account_change`,
 the lock every dispatch takes) for 6 s after the Run was queued. The
 occurrence must still be Dispatching with no Needs attention, then complete
 once the change ends. On the pre-fix code that reconcile records Unknown.
+
+**G4 (F7), found live.** In `sw13-live-20261014-014727` two resolved
+`automationCompleted` items, both created before the delete, stayed in Recent
+after it. Tombstones are not projected, and the reconcile only resolves
+unresolved rows, so a resolved row was never revisited. Fix
+(`crates/sync/src/store/automations.rs`): the delete transaction dismisses that
+definition's items (resolving any unresolved one first, with its transition),
+and every attention reconcile re-applies this, so a projection that raced the
+delete cannot leave a row. Rows are dismissed, not removed. Pause, run history,
+the admitted run and task-level items are unchanged. Regression:
+`automations_e2e::a_deleted_automation_leaves_activity_while_its_admitted_run_ends`
+(a paused definition's item is the control). On the pre-fix code the deleted
+definition's completion is still listed.
 
 ## Criteria mapping
 

@@ -35,6 +35,40 @@ fn write_run(c: &Connection, r: &AutomationRun) -> Result<(), StoreError> {
     c.execute("INSERT INTO automation_runs(id,automation_id,owner_host_id,scheduled_at_ms,task_id,message_id,blocks_next,state,record) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET blocks_next=excluded.blocks_next,state=excluded.state,record=excluded.record",params![r.id,r.automation_id,r.owner_host_id,r.scheduled_at_ms,r.task_id,r.message_id,r.state.blocks_next(),serde_json::to_string(&r.state)?,serde_json::to_vec(r)?])?;
     Ok(())
 }
+/// A deleted definition keeps its tombstone and run history, but its items
+/// leave Activity (Needs attention and Recent). Rows are dismissed, never
+/// removed, so attention history stays auditable; an item still unresolved is
+/// resolved first, with its transition. The range is the projector's
+/// `automation:<host>:<id>:` key prefix (`;` is the byte after `:`). Ids may
+/// contain `:` but the run/`watch`/`skipped` suffix never does, so a colon-free
+/// remainder keeps `a` from matching the items of a live `a:b`.
+pub(super) fn retire_deleted_automation_attention(
+    tx: &rusqlite::Transaction<'_>,
+    now: i64,
+) -> Result<bool, StoreError> {
+    let mut q = tx.prepare(
+        "SELECT i.item_json FROM automations a CROSS JOIN attention_items i
+         WHERE a.deleted=1 AND i.dismissed=0
+           AND i.dedup_key>='automation:'||a.owner_host_id||':'||a.id||':'
+           AND i.dedup_key<'automation:'||a.owner_host_id||':'||a.id||';'
+           AND instr(substr(i.dedup_key,length(a.owner_host_id)+length(a.id)+14),':')=0",
+    )?;
+    let rows = q
+        .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(q);
+    for bytes in &rows {
+        let mut item: AttentionItem = serde_json::from_slice(bytes)?;
+        if item.unresolved() {
+            item.lifecycle = AttentionLifecycle::Resolved;
+            item.resolved_at_ms = Some(now);
+            item.updated_at_ms = now;
+            insert_attention_transition(tx, AttentionTransitionKind::Resolved, &item)?;
+        }
+        update_attention_item(tx, &item, true)?;
+    }
+    Ok(!rows.is_empty())
+}
 impl DocsStore {
     pub fn automation_changes(
         &self,
@@ -370,6 +404,12 @@ impl DocsStore {
             write_run(&tx, &run)?;
         }
         write_record(&tx, r)?;
+        // P5: the tombstone and its Activity retirement commit together. An
+        // admitted run may still finish; tombstones are never projected again.
+        let now = now_ms();
+        if r.deleted && retire_deleted_automation_attention(&tx, now)? {
+            bump_attention_revision(&tx, now)?;
+        }
         tx.execute("INSERT INTO automation_mutations(request_id,automation_id,payload_hash,committed_at_ms,receipt) VALUES(?1,?2,?3,?4,?5)",params![receipt.request_id,r.id,receipt.payload_hash,receipt.committed_at_ms,serde_json::to_vec(receipt)?])?;
         tx.commit()?;
         self.notify_automation_change();
