@@ -1,5 +1,10 @@
 # Bottom tab row and per-chat checkout row (2026-10-12)
 
+> The tabs moved again the next day, into the titlebar after the project
+> name: see [Chat tabs in the titlebar](../titlebar-tabs-2026-10-13/spec.md).
+> The checkout row above each prompt, Review changes and Commit & push only
+> in the Overview, and Balance panes in the tab menu still stand.
+
 Follow-up to the [right sidebar redesign](../right-sidebar-redesign-2026-10-11/spec.md).
 The user asked for three changes:
 

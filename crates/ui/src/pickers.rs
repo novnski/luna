@@ -6024,7 +6024,9 @@ impl Pickers {
 
     /// A chat's checkout row above its prompt: where it works (Local
     /// checkout, Worktree, or its folder when there is no Git repository)
-    /// and its branch, then the pull request badge at the row's end.
+    /// and its branch, then the pull request badge at the row's end. A chat
+    /// on another machine names that machine first (the titlebar no longer
+    /// does).
     /// Read-only (a chat never changes checkout), in the new thread's target
     /// chip metrics, so the two rows crossfade in one place. Each composer
     /// names its own chat, so a tab switch changes what the row says.
@@ -6033,9 +6035,21 @@ impl Pickers {
         // Only labels painted from this render report bounds.
         let measure = self.context_bounds.clone();
         measure.borrow_mut().clear();
-        let (folder, git, worktree, branch, change_request) = {
+        let (folder, git, worktree, branch, change_request, remote) = {
             let state = self.state.read(cx);
             let chat = self.binding.chat_row(state)?;
+            let remote = state
+                .local_device_id
+                .as_deref()
+                .is_some_and(|local| local != chat.device_id)
+                .then(|| {
+                    SharedString::from(
+                        state
+                            .device_name(&chat.device_id)
+                            .unwrap_or("Another machine")
+                            .to_string(),
+                    )
+                });
             let space = self.binding.space_row(state);
             let folder = chat
                 .cwd
@@ -6049,7 +6063,7 @@ impl Pickers {
                 .filter(|branch| !branch.is_empty())
                 .map(|branch| SharedString::from(branch.to_string()));
             let change_request = state.change_request_for_chat(chat).cloned();
-            (folder, git, worktree, branch, change_request)
+            (folder, git, worktree, branch, change_request, remote)
         };
         let (glyph, noun, label): (&'static str, &'static str, SharedString) = if !git {
             let name = std::path::Path::new(&folder)
@@ -6071,6 +6085,19 @@ impl Pickers {
         } else {
             format!("{folder} (no Git repository)").into()
         };
+        let machine = remote.map(|name| {
+            Self::context_label(
+                "context-machine",
+                crate::icons::MONITOR,
+                name.clone(),
+                "Machine",
+                name,
+                180.0,
+                1.0,
+                measure.clone(),
+                &theme,
+            )
+        });
         let checkout = Self::context_label(
             "context-checkout",
             glyph,
@@ -6098,6 +6125,7 @@ impl Pickers {
         Some(
             workspace_footer_row()
                 .gap(crate::typography::ui_rems(2.0))
+                .children(machine)
                 .child(checkout)
                 .children(branch)
                 .child(div().flex_1().min_w_0())

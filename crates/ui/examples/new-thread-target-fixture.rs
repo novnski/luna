@@ -1,8 +1,9 @@
 //! Headless GPUI E2E for the new thread's target controls above its prompt:
 //! the machine, project, checkout-kind and branch pickers sit in the
 //! checkout row right above the pill, where a working chat names its own
-//! checkout and branch (docs/design/bottom-tabs-2026-10-12). The frame's
-//! bottom row holds a chat's tabs, so on a new thread it is empty.
+//! checkout and branch (docs/design/bottom-tabs-2026-10-12). A chat's tabs
+//! sit in the titlebar after its project (docs/design/titlebar-tabs-2026-10-13),
+//! so a new thread shows none.
 //!
 //! Drives the production `Shell` in hidden windows against an in-process
 //! `EngineCore`. Two Git projects (real repositories with a `main` branch
@@ -13,11 +14,11 @@
 //!
 //! Failure cases this run must catch (written before the change):
 //! 1. A target chip (machine, project, checkout, branch) paints anywhere
-//!    but in the checkout row right above the new-thread pill: below it, in
-//!    the frame's bottom row, or more than 8 px above it.
+//!    but in the checkout row right above the new-thread pill: below it, or
+//!    more than 8 px above it.
 //! 2. The checkout row of a new thread for a Git project misses one of the
-//!    four target pickers, or the bottom row is not empty (a new thread
-//!    has no tabs).
+//!    four target pickers, or the new thread shows a tab row or a tab strip
+//!    (it has no tabs).
 //! 3. A target chip leaves the checkout row: it extends past the row's left
 //!    or right edge, crosses its top or bottom, overlaps another chip, or
 //!    (900 px, 20 px, long machine and branch names) the row overflows
@@ -37,20 +38,22 @@
 //! 6. The two screens don't read as one design: the working chat's row
 //!    does not name its checkout and branch above its own pill, its labels
 //!    differ from the target chips in height (22 pt) or are not centred in
-//!    their row; target chips remain on the working chat; or its bottom
-//!    row does not hold its tab.
+//!    their row; target chips remain on the working chat; or the titlebar
+//!    does not hold its tab.
 //! 7. Text-adjacent sizes don't follow the Interface size: a chip's height
 //!    at 12 and 20 px is not 0.75x and 1.25x of its 16 px height (±1 px).
 //! 8. A target chip has no accessible name naming its kind and value
 //!    ("Project: luna"), or is not a keyboard control (Enter opens it).
 //! 9. The pill is no longer placed sensibly: its centre is more than 24 px
-//!    from the canvas centre, or it overlaps the bottom row.
+//!    from the canvas centre, or it leaves the canvas.
 //! 10. The route change jumps: sending from the new thread (selecting the
 //!     working chat) shows the target pickers and the chat's checkout row
 //!     at the same time, the target layer's opacity ever rises or the
 //!     chat row's ever falls during the change, or the change does not end
 //!     with the chat row fully shown and no target chips; the reverse
 //!     (Cmd+N back) must mirror it.
+//! 11. A chat on another machine does not name that machine first in its
+//!     checkout row, or a chat on this machine names one.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example new-thread-target-fixture
@@ -498,7 +501,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("new-thread-target.pass"),
-                                "PASS: headless production Shell; the new thread's machine, project, checkout and branch pickers sit in the checkout row right above its pill (the bottom row empty), inside the row and the window at 12/16/20 px, dark and light, 1200 and 900 px wide; their menus open upward inside the window; picking a project, machine, checkout and branch there sets the target; a working chat names its own checkout and branch in the same row above its pill (22 pt labels, centred) with its tab in the bottom row; chips scale with the Interface size; the route crossfade never shows both rows and runs monotonically both ways\n",
+                                "PASS: headless production Shell; the new thread's machine, project, checkout and branch pickers sit in the checkout row right above its pill (no tabs), inside the row and the window at 12/16/20 px, dark and light, 1200 and 900 px wide; their menus open upward inside the window; picking a project, machine, checkout and branch there sets the target; a working chat names its own checkout and branch in the same row above its pill (22 pt labels, centred) with its tab in the titlebar, naming the machine first when it runs on another one; chips scale with the Interface size; the route crossfade never shows both rows and runs monotonically both ways\n",
                             )
                         });
                         if let Err(error) = written {
@@ -540,10 +543,6 @@ fn check_new_thread(
     if readback["framed"] != false {
         fail("the new thread renders inside the workbench frame".into());
     }
-    let Some(bottom) = rect(&readback["row"]) else {
-        fail("the bottom row was not painted".into());
-        return;
-    };
     let Some(row) = rect(&readback["contextRow"]["row"]) else {
         fail("the checkout row above the pill was not painted".into());
         return;
@@ -552,7 +551,7 @@ fn check_new_thread(
         fail("the composer pill was not painted".into());
         return;
     };
-    // Case 2: all four pickers; nothing in the bottom row.
+    // Case 2: all four pickers; no tabs.
     let chips: Vec<(String, [f32; 4], Value)> = TARGETS
         .iter()
         .filter_map(|id| chip(readback, id).map(|(chip, bounds)| (id.to_string(), bounds, chip)))
@@ -564,13 +563,14 @@ fn check_new_thread(
             readback["targets"]["chips"]
         ));
     }
-    if readback["strips"]
-        .as_array()
-        .is_some_and(|strips| !strips.is_empty())
+    if !readback["row"].is_null()
+        || readback["strips"]
+            .as_array()
+            .is_some_and(|strips| !strips.is_empty())
     {
         fail(format!(
-            "a new thread's bottom row holds tabs: {}",
-            readback["strips"]
+            "a new thread shows tabs: {} {}",
+            readback["row"], readback["strips"]
         ));
     }
     // Case 1: the row right above the pill.
@@ -583,8 +583,7 @@ fn check_new_thread(
     let scale = pixels / 16.0;
     let row_mid = row[1] + row[3] / 2.0;
     for (index, (id, b, chip)) in chips.iter().enumerate() {
-        // Cases 1 and 3: inside the row (so above the pill, never in the
-        // bottom row).
+        // Cases 1 and 3: inside the row (so right above the pill).
         if b[0] < row[0] - 0.5
             || b[0] + b[2] > row[0] + row[2] + 0.5
             || b[1] < row[1] - 0.5
@@ -592,11 +591,6 @@ fn check_new_thread(
         {
             fail(format!(
                 "{id} leaves the checkout row ({b:?} vs row {row:?})"
-            ));
-        }
-        if b[1] + b[3] > bottom[1] - 0.5 && b[1] < bottom[1] + bottom[3] {
-            fail(format!(
-                "{id} paints in the bottom row ({b:?} vs {bottom:?})"
             ));
         }
         if b[0] + b[2] > width - 8.0 {
@@ -643,17 +637,17 @@ fn check_new_thread(
             ));
         }
     }
-    // Case 9: the pill near the canvas centre, clear of the bottom row.
+    // Case 9: the pill near the canvas centre, inside it.
     if let Some(canvas) = rect(&readback["canvas"]) {
         let offset = centre(pill).1 - centre(canvas).1;
         if offset.abs() > 24.0 {
             fail(format!("the pill sits {offset} px from the canvas centre"));
         }
+        if pill[1] + pill[3] > canvas[1] + canvas[3] {
+            fail("the pill leaves the canvas".into());
+        }
     } else {
         fail("the canvas was not measured".into());
-    }
-    if pill[1] + pill[3] > bottom[1] {
-        fail("the pill overlaps the bottom row".into());
     }
 }
 
@@ -723,7 +717,7 @@ async fn close_menu(window: Win, cx: &mut AsyncApp) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Open a bottom-row menu by clicking its chip, optionally type into its
+/// Open a target menu by clicking its chip, optionally type into its
 /// search box, then press `keys_after`; returns the target afterwards.
 #[allow(clippy::too_many_arguments)]
 async fn pick(
@@ -755,7 +749,7 @@ async fn pick(
     Ok(json!({"kind": kind, "menuChecks": checks, "after": after["targets"].clone()}))
 }
 
-/// Case 5: every bottom-row menu still sets the new thread's target.
+/// Case 5: every target menu still sets the new thread's target.
 async fn check_picks(
     window: Win,
     cx: &mut AsyncApp,
@@ -1192,14 +1186,19 @@ async fn run(
                     {
                         fail("target chips remain on the working chat".into());
                     }
-                    // Its tab, in the bottom row.
-                    if thread["strips"]
-                        .as_array()
-                        .is_none_or(|strips| strips.is_empty())
+                    // Its tab, in the titlebar (above the canvas).
+                    let in_titlebar = match (rect(&thread["row"]), rect(&thread["canvas"])) {
+                        (Some(row), Some(canvas)) => row[1] + row[3] <= canvas[1] + 0.5,
+                        _ => false,
+                    };
+                    if !in_titlebar
+                        || thread["strips"]
+                            .as_array()
+                            .is_none_or(|strips| strips.is_empty())
                     {
                         fail(format!(
-                            "the working chat's bottom row holds no tab strip: {}",
-                            thread["strips"]
+                            "the titlebar holds no tab strip for the working chat: {} {}",
+                            thread["row"], thread["strips"]
                         ));
                     }
                     // Case 6: the same row above its own pill, labels as
@@ -1230,6 +1229,40 @@ async fn run(
                         _ => fail("the chat's checkout row or pill was not painted".into()),
                     }
                 }
+                // Case 11: the same chat on another machine names it first;
+                // back on this machine it names none.
+                let set_device = |cx: &mut AsyncApp, device_id: String| {
+                    cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            if let Some(chat) = state.chats.iter_mut().find(|c| c.id == THREAD) {
+                                chat.device_id = device_id.clone();
+                            }
+                            cx.notify();
+                        })
+                    })
+                };
+                set_device(cx, OTHER_DEVICE.to_string());
+                let remote = footer_until(window, cx, 3000, |r| {
+                    r["contextRow"]["labels"].as_array().map_or(0, Vec::len) == 3
+                })
+                .await?;
+                let remote_texts: Vec<String> = remote["contextRow"]["labels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| l["text"].as_str().map(str::to_string))
+                    .collect();
+                if remote_texts != [OTHER_NAME, "Local checkout", "main"] {
+                    failures.push(format!(
+                        "{name}: a chat on {OTHER_NAME} does not name it first: {remote_texts:?}"
+                    ));
+                }
+                set_device(cx, local.clone());
+                footer_until(window, cx, 3000, |r| {
+                    r["contextRow"]["labels"].as_array().map_or(0, Vec::len) == 2
+                })
+                .await?;
+                readback.insert("remoteMachine".into(), json!(remote_texts));
                 readback.insert("thread".into(), thread);
                 record.insert(name.clone(), Value::Object(readback));
                 cx.update(|cx| state.update(cx, |state, cx| state.select_chat(None, cx)));
