@@ -2395,8 +2395,11 @@ impl Changes {
         // the target is unchanged); a boot-deferred attempt retries here too.
         self.ensure_watch(cx);
         if self.scope == DiffScope::History {
-            self.history_pane(cx)
-                .update(cx, |history, cx| history.ensure_loaded(cx));
+            let revision = self.resolved(cx).map(|diff| diff.checksum);
+            self.history_pane(cx).update(cx, |history, cx| {
+                history.ensure_loaded(cx);
+                history.note_checkout_revision(revision, cx);
+            });
             return;
         }
         if self.scope != DiffScope::Commit {
@@ -5417,6 +5420,9 @@ impl Render for Changes {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+mod history_e2e;
 
 #[cfg(test)]
 mod tests {

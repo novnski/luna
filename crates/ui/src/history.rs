@@ -1327,6 +1327,14 @@ pub struct GitHistory {
     search_scroll_anchor: Option<HistoryScrollAnchor>,
     search_task: Option<Task<()>>,
     loading: bool,
+    /// A first page for `target_key` has been applied. An unborn branch
+    /// legitimately answers with zero commits, so an empty list cannot stand
+    /// in for "not loaded yet": that re-requested the page on every render
+    /// and pinned the pane on its spinner (user report).
+    loaded: bool,
+    /// The diff watch's revision for this checkout (see
+    /// [`Self::note_checkout_revision`]).
+    checkout_revision: Option<String>,
     error: Option<SharedString>,
     graph: GraphLayout,
     graph_lane_capacity: usize,
@@ -1972,6 +1980,8 @@ impl GitHistory {
             search_scroll_anchor: None,
             search_task: None,
             loading: false,
+            loaded: false,
+            checkout_revision: None,
             error: None,
             graph: GraphLayout::default(),
             graph_lane_capacity: 0,
@@ -2055,10 +2065,11 @@ impl GitHistory {
             self.graph_hover_clear_task = None;
             self.avatar_images.clear();
             self.loading = false;
+            self.loaded = false;
             return;
         };
         if self.target_key.as_deref() == Some(key.as_str()) {
-            if !self.loading && self.commits.is_empty() && self.error.is_none() {
+            if !self.loading && !self.loaded && self.error.is_none() {
                 self.fetch_page(key, cwd, target, 0, true, cx);
             }
             return;
@@ -2069,6 +2080,7 @@ impl GitHistory {
         self.fetch_for = None;
         self.fetch_error = None;
         self.loading = false;
+        self.loaded = false;
         self.target_key = Some(key.clone());
         self.commits.clear();
         self.visible_commits.clear();
@@ -2108,6 +2120,20 @@ impl GitHistory {
         };
         self.target_key = Some(key.clone());
         self.fetch_page(key, cwd, target, 0, true, cx);
+    }
+
+    /// Follow the checkout's diff-watch revision, whose checksum covers HEAD.
+    /// Loaded history otherwise waits for an explicit refresh, but an empty
+    /// one (an unborn branch) has no rows to keep stable: re-read it when the
+    /// checkout moves so the first commit appears on its own.
+    pub fn note_checkout_revision(&mut self, revision: Option<String>, cx: &mut Context<Self>) {
+        if self.checkout_revision == revision {
+            return;
+        }
+        self.checkout_revision = revision;
+        if self.loaded && !self.loading && self.commits.is_empty() {
+            self.refresh(cx);
+        }
     }
 
     pub fn fetch_all(&mut self, cx: &mut Context<Self>) {
@@ -2689,6 +2715,7 @@ impl GitHistory {
                         .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(page) => {
+                        history.loaded = true;
                         let restart_search = (reset && history.search_active())
                             .then(|| history.search_query.clone());
                         if restart_search.is_some() {
@@ -4298,7 +4325,7 @@ impl Render for GitHistory {
                 .text_color(theme.text_faint)
                 .child("No repository selected")
                 .into_any_element()
-        } else if self.loading && self.commits.is_empty() {
+        } else if self.loading && !self.loaded {
             div()
                 .flex_1()
                 .flex()
@@ -4329,6 +4356,10 @@ impl Render for GitHistory {
             let message = active_error.clone().unwrap_or_else(|| {
                 SharedString::from(if self.search_active() {
                     "No matching commits"
+                } else if self.total_count == Some(0) {
+                    // An unborn branch: the repository exists but has no
+                    // commit for History to draw yet.
+                    "No commits yet"
                 } else if self.view_mode == GitHistoryViewMode::BranchTips {
                     "No branch tips found"
                 } else {
