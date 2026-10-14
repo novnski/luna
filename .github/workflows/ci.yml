@@ -152,6 +152,8 @@ jobs:
           for changed in json.loads(os.environ['CHANGED_ENGINE_FILES'] or '[]'):
               path = PurePosixPath(changed)
               if path.parent == PurePosixPath('crates/engine/tests') and path.suffix == '.rs':
+                  if path.stem.startswith(('extension_', 'opencode_package_', 'board_tools_opencode_package_')):
+                      continue  # The extensions lane owns these and builds their portable host.
                   # Deleted targets cannot run; renamed/new regressions still must.
                   if os.path.isfile(changed):
                       tests.add(path.stem)
@@ -163,12 +165,27 @@ jobs:
           cargo build --profile ci --locked -p luna-headless -p luna-relay
       - name: Installed extension and portable host E2E
         if: matrix.suite == 'extensions'
+        env:
+          CHANGED_ENGINE_FILES: ${{ needs.changes.outputs.engine-files }}
         run: |
           cargo build --profile ci --locked -p luna-extension-host
-          LUNA_EXTENSION_HOST="$PWD/target/ci/luna-extension-host" \
-            cargo test --profile ci --locked -p luna-engine --test extension_portable \
-              --test extension_providers --test extension_ui --test opencode_package_parity \
-              --test opencode_package_lifecycle --test board_tools_opencode_package_e2e
+          export LUNA_EXTENSION_HOST="$PWD/target/ci/luna-extension-host"
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import PurePosixPath
+          tests = {'extension_portable', 'extension_providers', 'extension_ui',
+                   'opencode_package_parity', 'opencode_package_lifecycle', 'board_tools_opencode_package_e2e'}
+          for changed in json.loads(os.environ['CHANGED_ENGINE_FILES'] or '[]'):
+              path = PurePosixPath(changed)
+              if (path.parent == PurePosixPath('crates/engine/tests') and path.suffix == '.rs'
+                      and path.stem.startswith(('extension_', 'opencode_package_', 'board_tools_opencode_package_'))
+                      and os.path.isfile(changed)):
+                  tests.add(path.stem)
+          command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna-engine']
+          for test in sorted(tests):
+              command += ['--test', test]
+          subprocess.run(command, check=True)
+          PYTHON
       - name: Desktop application, UI and fixture regressions
         if: matrix.suite == 'ui'
         run: |
