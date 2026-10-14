@@ -6,7 +6,7 @@ if (-not $ReleasesUrl.StartsWith('https://')) { throw 'Release feed must use HTT
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
-    cargo build --release --locked -p luna
+    cargo build --release --locked -p luna -p luna-extension-host -p luna-engine
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
     # Explicit pipes also work for the GUI-subsystem executable in CI. A
     # PowerShell collection match does not populate the scalar $Matches map.
@@ -35,6 +35,9 @@ try {
     $stage = Join-Path $out "luna-$version-windows-x86_64"
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item -LiteralPath './target/release/luna.exe' -Destination (Join-Path $stage 'luna.exe')
+    foreach ($binary in 'luna-extension-host.exe','luna-opencode-worker.exe') {
+        Copy-Item -LiteralPath "./target/release/$binary" -Destination (Join-Path $stage $binary)
+    }
     @{ releases_url = $ReleasesUrl } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $stage 'luna-update.json')
     Copy-Item -LiteralPath 'LICENSE','THIRD_PARTY_NOTICES.md' -Destination $stage
     $licenses = Join-Path $stage 'licenses/fonts'

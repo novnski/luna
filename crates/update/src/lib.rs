@@ -418,6 +418,21 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
         if ancestor.extension().is_some_and(|ext| ext == "app")
             && exe.starts_with(ancestor.join("Contents").join("MacOS"))
         {
+            // Frozen local candidates are updated only by explicit promotion.
+            // Keep that policy even if someone renames the installed bundle.
+            let manual = plist::Value::from_file(ancestor.join("Contents/Info.plist"))
+                .ok()
+                .and_then(|value| {
+                    value
+                        .as_dictionary()
+                        .and_then(|info| info.get("LUNAUpdatePolicy"))
+                        .and_then(plist::Value::as_string)
+                        .map(|policy| policy == "manual")
+                })
+                .unwrap_or(false);
+            if manual {
+                return InstallKind::Unmanaged;
+            }
             let production_bundle = ancestor.file_name().is_some_and(|name| name == "LUNA.app");
             #[cfg(debug_assertions)]
             let qa_bundle = std::env::var("LUNA_RELEASES_URL").is_ok()

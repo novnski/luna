@@ -375,17 +375,34 @@ mod about_panel {
         NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion,
         NSAboutPanelOptionVersion, NSApplication,
     };
-    use objc2_foundation::{NSDictionary, NSString};
+    use objc2_foundation::{NSBundle, NSDictionary, NSString, ns_string};
 
     pub(super) fn show() {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        let name = NSString::from_str("LUNA");
-        let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
-        // Empty build version: CFBundleVersion equals the marketing version, and
-        // AppKit would otherwise render "Version 0.2.61 (0.2.61)".
-        let build = NSString::from_str("");
+        let bundle = NSBundle::mainBundle();
+        let string = |key: &NSString| {
+            bundle.objectForInfoDictionaryKey(key).and_then(|value| {
+                value
+                    .downcast_ref::<NSString>()
+                    .map(|text| text.to_string())
+            })
+        };
+        let name = NSString::from_str(
+            &string(ns_string!("CFBundleDisplayName")).unwrap_or_else(|| "LUNA".into()),
+        );
+        let version = NSString::from_str(
+            &string(ns_string!("CFBundleShortVersionString"))
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
+        );
+        // Show source identity for a frozen build; avoid repeating the marketing
+        // version in the ordinary release About panel.
+        let build = NSString::from_str(
+            &string(ns_string!("LUNARevision"))
+                .map(|revision| revision.chars().take(12).collect::<String>())
+                .unwrap_or_default(),
+        );
         let values: [&AnyObject; 3] = [&name, &version, &build];
         unsafe {
             let options = NSDictionary::from_slices(

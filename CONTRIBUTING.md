@@ -35,9 +35,11 @@ Run the relevant integration/E2E suite and the required build for the changed fe
 
 Read the [test-audit skill](.codex/skills/test-audit/SKILL.md) before writing or changing tests. Define the behavior and credible failure cases first. Prefer an existing end-to-end or integration owner, avoid test-only production seams, and do not add unit tests after writing the implementation. Retain repeatable evidence such as a command transcript, structured result, screenshot, or recording.
 
-For meaningful macOS app code changes, refresh LUNA Dev with `scripts/run-macos-dev.sh --refresh` after checks. Confirm the exact bundle process, IPC listener, and signature as described in `AGENTS.md`. Respect an explicit request to keep LUNA stopped.
+For meaningful macOS app code changes, switch to and refresh LUNA Dev with `python3 scripts/macos-app.py dev` after checks. Confirm the exact bundle process, IPC listener, and signature as described in `AGENTS.md`. Keep the daily Alpha snapshot unchanged unless its update is explicitly requested. Respect an explicit request to keep LUNA stopped.
 
 ## Pull requests
+
+Before completing a behavior change, classify its product-version impact using [the versioning policy](docs/reference/local-release-workflow.md): compatible fix → patch, new feature or pre-1.0 breaking change → minor, documentation/test-only/refactor without behavior change → no bump. Use `python3 scripts/version.py bump patch` or `minor` once for the PR, then add a concise `CHANGELOG.md` entry. Internal SDK/API/schema versions are separate. A version bump never promotes the daily Alpha app or publishes a release.
 
 The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) appears automatically when opening a PR. Explain the problem and resulting behavior, link related issues, list affected areas, and include verification commands with their outcomes. For UI changes, attach before/after evidence where useful. State any migration, compatibility impact, or unverified platform.
 

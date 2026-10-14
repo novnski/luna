@@ -1,0 +1,24 @@
+name: Version consistency
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  product-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workspace, lockfile, and iOS marketing versions
+        run: python3 scripts/version.py check
+      - name: Verify version CLI transactions with real locked Cargo metadata
+        run: python3 scripts/verify-version-workflow.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: version-workflow
+          path: target/qa/version-workflow/

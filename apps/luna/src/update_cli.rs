@@ -4,6 +4,12 @@ use anyhow::{Context as _, bail};
 use luna_update::{InstallKind, detect_install, fetch_latest, version_newer};
 
 pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
+    let install = detect_install();
+    if !check_only && matches!(install, InstallKind::Unmanaged) {
+        bail!(
+            "this installation is not update-managed; frozen Alpha builds require an explicit update-alpha command"
+        );
+    }
     let manifest = fetch_latest(edge_url)
         .await
         .context("checking GitHub Releases for updates")?;
@@ -23,7 +29,7 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match detect_install() {
+    match install {
         InstallKind::Managed { app_root } => {
             luna_update::stage_headless(edge_url, &manifest, &app_root).await?;
             luna_update::apply_headless(&app_root, &manifest.version)?;

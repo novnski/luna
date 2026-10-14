@@ -35,10 +35,21 @@ cd luna
 Install Xcode Command Line Tools. Build and open the isolated development app:
 
 ```sh
-scripts/run-macos-dev.sh --refresh
+python3 scripts/macos-app.py dev
 ```
 
-This creates **LUNA Dev** at `target/luna-macos-dev/LUNA Dev.app`, with separate data under `target/luna-macos-dev/data/`. The script builds first, gracefully quits the previous instance, and launches the replacement. Close any other LUNA GUI app before running it. Use `--build-only` to build without launching.
+This creates **LUNA Dev** at `target/luna-macos-dev/LUNA Dev.app`, with separate data under `target/luna-macos-dev/data/`. It gracefully leaves Alpha, then uses the guarded development build/refresh. Any other LUNA GUI must save and quit first. For packaging without launching, use `scripts/run-macos-dev.sh --build-only` directly.
+
+For day-to-day use, install a frozen **LUNA Alpha** from committed, clean `main`:
+
+```sh
+python3 scripts/macos-app.py install-alpha   # first installation only
+python3 scripts/macos-app.py alpha           # open the existing snapshot
+python3 scripts/macos-app.py dev             # switch to development and refresh Dev
+python3 scripts/macos-app.py update-alpha    # replace Alpha only when explicitly requested
+```
+
+Alpha lives at `~/Applications/LUNA Alpha.app`, uses `~/.luna-alpha` for its own data/worktrees, and does not update itself. Dev refreshes and source version bumps do not replace Alpha. Keep one LUNA GUI running at a time; switching saves and quits gracefully. Existing Dev conversations stay in Dev; Alpha starts with its own profile. See [app channels, versioning, and releases](docs/reference/local-release-workflow.md).
 
 ### Linux
 

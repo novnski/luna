@@ -20,8 +20,48 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate product version before building artifacts
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/version.py check
+          version="$(python3 scripts/version.py show)"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/version.py check --tag "$GITHUB_REF_NAME"
+            git fetch origin main
+            git merge-base --is-ancestor HEAD origin/main
+            # A published release is immutable, including workflow reruns.
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/existing-releases.json"
+            python3 - "$RUNNER_TEMP/existing-releases.json" "$GITHUB_REF_NAME" <<'PY'
+          import json, sys
+          releases = [release for page in json.load(open(sys.argv[1])) for release in page]
+          if any(release['tag_name'] == sys.argv[2] for release in releases):
+              sys.exit('This tag already has a release; bump the version instead of replacing its assets.')
+          PY
+          fi
+          if [[ "$version" == 0.* ]]; then
+            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
+          fi
+
   linux:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -60,6 +100,7 @@ jobs:
   #     key (raw .p8 contents), for notarytool. All three present → the package
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
   macos:
+    needs: validate
     runs-on: macos-latest # Apple silicon
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -112,6 +153,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: validate
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -140,7 +182,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows]
+    needs: [validate, linux, macos, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -184,4 +226,6 @@ jobs:
             release-meta/manifest.json
             release-meta/manifest.sig
           generate_release_notes: true
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.validate.outputs.prerelease == 'true' && 'false' || 'true' }}
           fail_on_unmatched_files: true

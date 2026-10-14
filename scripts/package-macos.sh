@@ -25,14 +25,16 @@ cd "$ROOT"
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   # The local wrapper reserves 25 GiB of headroom, more than a hosted runner
   # offers. CI uses its own isolated build and disk lifecycle.
-  cargo build --locked --release -p luna
+  cargo build --locked --release -p luna -p luna-extension-host -p luna-engine
 else
-  "$ROOT/scripts/cargo.sh" build --locked --release -p luna
+  "$ROOT/scripts/cargo.sh" build --locked --release -p luna -p luna-extension-host -p luna-engine
 fi
 
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 755 "$ROOT/target/release/luna" "$APP/Contents/MacOS/luna"
+install -m 755 "$ROOT/target/release/luna-extension-host" "$APP/Contents/MacOS/luna-extension-host"
+install -m 755 "$ROOT/target/release/luna-opencode-worker" "$APP/Contents/MacOS/luna-opencode-worker"
 sed "s/__VERSION__/$VERSION/" "$ROOT/dist/macos/Info.plist" >"$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$APP/Contents/Resources/licenses/fonts/"
@@ -45,13 +47,20 @@ iconutil -c icns "$ROOT/dist/macos/luna.iconset" \
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   # Hardened runtime + secure timestamp are both notarization requirements.
-  # (No --deep: Apple deprecated it; the bundle is a single Mach-O anyway.)
+  # Sign nested native runtimes before sealing the application bundle.
+  for binary in luna-extension-host luna-opencode-worker; do
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP/Contents/MacOS/$binary"
+  done
   codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
 else
   # Ad-hoc signature so the app launches on Apple silicon (Gatekeeper still
   # requires right-click → Open on first launch without notarization).
-  codesign --deep --force --sign - "$APP"
+  for binary in luna-extension-host luna-opencode-worker; do
+    codesign --force --sign - "$APP/Contents/MacOS/$binary"
+  done
+  codesign --force --sign - "$APP"
 fi
+codesign --verify --deep --strict "$APP"
 
 # notarize <path>: submit to Apple and wait for the verdict. A rejection may
 # still exit 0 depending on the notarytool version — the `stapler staple` that

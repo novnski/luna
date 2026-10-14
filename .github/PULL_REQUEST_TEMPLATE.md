@@ -8,6 +8,8 @@
 
 ## Verification
 
+<!-- State the version impact: patch / minor / none, with a short reason. Confirm the bump was made once for this PR and add its CHANGELOG.md entry. Alpha promotion and public release require separate explicit authorization. -->
+
 <!-- Include exact commands, outcomes, environment/platform, and repeatable E2E or integration evidence. For docs-only changes, describe link/syntax checks. -->
 
 ## Screenshots or recordings

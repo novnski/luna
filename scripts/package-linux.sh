@@ -19,17 +19,25 @@ STAGE="$OUT_DIR/luna-$VERSION-linux-$ARCH"
 TARBALL="$STAGE.tar.gz"
 
 cd "$ROOT"
+BUILD=(build --locked -p luna -p luna-extension-host -p luna-engine)
 if [[ "$PROFILE" == "release" ]]; then
-  cargo build --locked --release -p luna
+  BUILD+=(--release)
   BIN="$ROOT/target/release/luna"
 else
-  cargo build --locked -p luna
   BIN="$ROOT/target/debug/luna"
+fi
+if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+  cargo "${BUILD[@]}"
+else
+  "$ROOT/scripts/cargo.sh" "${BUILD[@]}"
 fi
 
 rm -rf "$STAGE" "$TARBALL"
 mkdir -p "$STAGE"
 install -m 755 "$BIN" "$STAGE/luna"
+for binary in luna-extension-host luna-opencode-worker; do
+  install -m 755 "$(dirname "$BIN")/$binary" "$STAGE/$binary"
+done
 install -m 644 "$ROOT/dist/luna.desktop" "$STAGE/luna.desktop"
 install -m 644 "$ROOT/dist/luna.png" "$STAGE/luna.png"
 mkdir -p "$STAGE/licenses/fonts"
@@ -41,6 +49,9 @@ cat >"$STAGE/install.sh" <<'INSTALL'
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -Dm755 "$HERE/luna" "$HOME/.local/bin/luna"
+for binary in luna-extension-host luna-opencode-worker; do
+  install -Dm755 "$HERE/$binary" "$HOME/.local/bin/$binary"
+done
 install -Dm644 "$HERE/luna.desktop" "$HOME/.local/share/applications/luna.desktop"
 install -Dm644 "$HERE/luna.png" "$HOME/.local/share/icons/hicolor/1024x1024/apps/luna.png"
 command -v update-desktop-database >/dev/null 2>&1 \

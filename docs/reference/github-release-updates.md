@@ -10,6 +10,12 @@ GitHub hosts the files; the project's signing key authenticates them.
 The app follows GitHub's latest published stable release; drafts and
 prereleases are not offered through this channel.
 
+The local **LUNA Alpha** channel is a separate frozen snapshot with manual
+promotion and its own data. It cannot install updates through this feed.
+See [app channels and the product-version policy](local-release-workflow.md).
+Product `0.x` releases are published as GitHub prereleases; the local installer
+does not create a public release.
+
 ## One-time setup
 
 The signing key has already been generated for this project. Its private PEM
@@ -36,8 +42,13 @@ GitHub download URLs used by the app cannot work.
 
 ## Publishing
 
-1. Bump the workspace version in `Cargo.toml` and update `Cargo.lock`.
-2. Merge the change, then push tag `v<version>` at that commit.
+1. Classify the change and use `python3 scripts/version.py bump patch` or
+   `minor`, then update `CHANGELOG.md`. `python3 scripts/version.py check --metadata`
+   validates the workspace, lockfile, and iOS marketing version.
+2. Merge and verify the change on `origin/main`, then run
+   `python3 scripts/version.py release-plan`. Only when publishing is explicitly
+   requested, create and push a new annotated `v<version>` tag at that commit.
+   Never replace a previously published version.
 3. The release workflow builds Linux, macOS, and Windows artifacts. After all
    builds pass, it checks that their names match the tag, creates and signs the
    manifest, and publishes all assets in one GitHub Release.
