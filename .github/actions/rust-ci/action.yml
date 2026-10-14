@@ -1,36 +1,24 @@
 name: Shared Rust CI cache
-description: Update stable Rust and reuse compiler results across jobs and workflows
+description: Use consistent Rust and share compatible dependency builds across jobs
+
+inputs:
+  cache-group:
+    description: Compatible workload/profile group, never a job name or commit SHA
+    default: core
+  save-cache:
+    description: Let the largest job in a shared group save its dependency graph
+    default: 'true'
+  workspaces:
+    description: Cargo workspace roots and target directories
+    default: .
 
 runs:
   using: composite
   steps:
-    # Runner images can carry different stable releases. Install/update the
-    # repository's stable channel before computing any compiler cache keys.
     - uses: dtolnay/rust-toolchain@stable
-    # Downloads are portable across profiles and jobs. Do not archive target/:
-    # immutable per-job archives duplicate dependencies and cannot merge writes.
-    - name: Cargo downloads
-      uses: actions/cache@v4
+    - uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-          ~/.cargo/git/db
-        key: cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: cargo-downloads-v1-${{ runner.os }}-
-    - uses: mozilla-actions/sccache-action@v0.0.11
-      with:
-        version: v0.18.0
-    - name: Enable shared compiler cache
-      shell: bash
-      run: |
-        {
-          echo 'CARGO_INCREMENTAL=0'
-          echo 'RUSTC_WRAPPER=sccache'
-          echo 'SCCACHE_GHA_ENABLED=true'
-          echo 'SCCACHE_LOG=warn'
-          echo "SCCACHE_ERROR_LOG=$RUNNER_TEMP/sccache-errors.log"
-          # One namespace for all jobs; sccache hashes the compiler, target,
-          # source and flags. Never add the job name or commit SHA here.
-          echo 'SCCACHE_GHA_VERSION=luna-rust-v1'
-        } >> "$GITHUB_ENV"
+        shared-key: ${{ inputs.cache-group }}
+        save-if: ${{ inputs.save-cache }}
+        cache-on-failure: true
+        workspaces: ${{ inputs.workspaces }}

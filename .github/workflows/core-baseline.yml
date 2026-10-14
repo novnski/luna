@@ -2,23 +2,6 @@ name: Core baseline probes
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'tools/core-baseline/**'
-      - 'scripts/qa-core-*.mjs'
-      - 'crates/ui/examples/core-contribution-probe.rs'
-      - 'crates/ui/examples/macos-resource-profile.rs'
-      - '.github/workflows/core-baseline.yml'
-      - '.github/actions/rust-ci/**'
-  push:
-    branches: [main]
-    paths:
-      - 'tools/core-baseline/**'
-      - 'scripts/qa-core-*.mjs'
-      - 'crates/ui/examples/core-contribution-probe.rs'
-      - 'crates/ui/examples/macos-resource-profile.rs'
-      - '.github/workflows/core-baseline.yml'
-      - '.github/actions/rust-ci/**'
 
 permissions:
   contents: read
@@ -37,6 +20,9 @@ jobs:
         with:
           node-version: '24'
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: baseline
+          workspaces: tools/core-baseline
       - name: Compile and exercise real worker and Wasm boundaries
         run: |
           mkdir -p evidence

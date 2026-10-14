@@ -1,11 +1,8 @@
-name: Preview networking
+name: Full preview networking
+
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml', '.github/actions/rust-ci/**']
-  push:
-    branches: [main]
-    paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml', '.github/actions/rust-ci/**']
+
 permissions:
   contents: read
 concurrency:

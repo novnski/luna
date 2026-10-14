@@ -36,44 +36,52 @@ prerequisite for this project.
 
 ## GitHub Actions
 
+[CI](../../.github/workflows/ci.yml) is the automatic pull-request and main-push
+workflow. It selects affected suites from changed paths, runs them in parallel,
+and exposes one `Required checks` result. Documentation-only changes skip the
+Rust graph. Shared manifests, toolchains and CI setup changes exercise all Rust
+suites. A failed, cancelled or timed-out selected suite fails the final result.
+
+The execution budget is one minute for routing, eight minutes per parallel
+check, and one minute for the final result. GitHub runner queue time is external
+to these execution limits. Measure the elapsed time from run creation through
+the last required result; a timeout is a failure, not successful verification.
+
+The `ci` Cargo profile keeps development assertions and overflow checks, with
+no optimization, debug information or incremental output. It leaves local dev
+and release profiles unchanged. The macOS job compiles the app test target,
+full UI library suite and six fixture suites in one Cargo invocation and one
+feature configuration. Linux checks the application platform contract without
+repeating the entire UI runtime suite. Core contracts, provider fixtures,
+engine lifecycle E2Es, preview networking and edge runtime checks have separate
+owners. iOS changes compile the Swift app and tests against freshly generated
+Rust bindings without booting a simulator; the opt-in `LUNA_IOS_CARGO_PROFILE=ci`
+is rejected for Release builds.
+
+The extended engine matrix, native browser screenshots, simulator runtime
+suite and performance probes remain available through the manual **Full
+platform verification**, **Full preview networking**, and **Core baseline
+probes** workflows. They no longer run on every pull request or main push.
+Release and TestFlight workflows retain their distribution profiles.
+
 Rust jobs use [the shared setup action](../../.github/actions/rust-ci/action.yml).
-It updates the repository's stable toolchain instead of accepting whichever
-version a runner image happens to contain, restores Cargo downloads, and uses
-[sccache](https://github.com/mozilla/sccache) with GitHub's cache backend.
+It updates stable Rust consistently, then restores a `Swatinem/rust-cache`
+dependency archive. Compatible core jobs share `core-ci`; desktop and iOS use
+`desktop-ci` and `ios-ci`. The action also keys by OS, architecture, compiler,
+environment and dependency manifests. Do not add a commit SHA or individual
+job name to a shared group. The engine job saves the largest core graph;
+smaller core jobs only restore it so they cannot win the immutable archive save
+with a partial dependency set. Manual/distribution profiles use separate groups.
 
-Compiler entries share the `luna-rust-v1` namespace across jobs and workflows.
-There is no job name or commit SHA in that namespace. sccache's content keys
-include compiler identity, target, source and flags, so matching compilations
-can be reused while Linux, macOS, iOS, feature sets and build profiles remain
-compatible. Each compilation contributes its own entry; parallel jobs do not
-race to replace one immutable `target/` archive. Cargo downloads use a separate
-small archive per runner OS and lockfile set, with an older-lockfile fallback.
-The existing local mbx cache is independent.
+GitHub caches are reusable, not permanent: branch access restrictions, the
+repository storage limit and seven-day idle eviction still apply. Do not raise
+paid storage limits as part of ordinary CI work. See [GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
 
-The `UI tests` workflow overrides only its release test profile: optimization
-level 1, LTO off, 16 codegen units, and no debug information. All existing test
-targets, feature variants, assertions, fixture runs and evidence uploads remain.
-The macOS application compile check is a full build, so it verifies linking and
-shares compiled libraries instead of generating a separate metadata-only graph.
-Release and TestFlight packaging retain their original profiles and thin LTO.
-This is CI tooling only; it does not require a product version bump or a local
-app refresh.
-
-This is reusable storage, not permanent storage. GitHub's branch access rules
-apply: branches can read main's entries, but main cannot read a branch's entries.
-GitHub also evicts unused entries after seven days and old entries when the
-repository's storage limit is reached (10 GB by default). Do not encode a run
-number in the namespace, increase paid storage, or delete other jobs' caches to
-make a benchmark look faster. Change `SCCACHE_GHA_VERSION` only for a deliberate
-cache reset. See [GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
-
-For repeatable verification, dispatch `UI tests` twice at the same revision,
-retain the run/job JSON and logs, and compare job durations and sccache's automatic
-post-job hit/miss summaries. The first run seeds compiler entries; the second
-must show actual hits. Passing tests alone do not demonstrate cache reuse.
-sccache does not cache final linking, proc-macro compilation or `cargo check`;
-those steps still run. Preserve the native browser captures and iOS result
-bundle as the behavior evidence.
+For repeatable verification, run every fast suite through `workflow_dispatch`
+(or a CI/configuration PR), retain run/job JSON and logs, and measure both cold
+and warm runs. Also verify that a documentation-only change skips the matrix
+and a failed selected suite cannot produce a green final gate. This is CI
+infrastructure only and requires no product version bump or local app refresh.
 
 ## Policy and disk usage
 

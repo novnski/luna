@@ -1,45 +1,10 @@
-name: UI tests
+name: Full platform verification
 
 on:
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - 'sdk/**'
-      - 'scripts/test-linux-browser.sh'
-      - 'scripts/run-macos-browser-fixture.sh'
-      - 'dist/macos/Info.plist'
-      - 'apps/ios/**'
-      - '.github/workflows/ui-tests.yml'
-      - '.github/actions/rust-ci/**'
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - 'sdk/**'
-      - 'scripts/test-linux-browser.sh'
-      - 'scripts/run-macos-browser-fixture.sh'
-      - 'dist/macos/Info.plist'
-      - 'apps/ios/**'
-      - '.github/workflows/ui-tests.yml'
-      - '.github/actions/rust-ci/**'
   workflow_dispatch:
 
 permissions:
   contents: read
-
-# Optimized test executables without distribution-time whole-program linking.
-# Keep this scoped to CI: release packaging still uses Cargo.toml's thin LTO.
-env:
-  CARGO_PROFILE_RELEASE_LTO: 'off'
-  CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
-  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
-  CARGO_PROFILE_RELEASE_DEBUG: '0'
 
 concurrency:
   group: ui-tests-${{ github.ref }}
@@ -52,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       # The fake Claude/Codex/OpenCode CLI suites own the provider protocol
       # contracts; the 2026-10-09 test audit retired their inline duplicates.
       - name: Provider protocol and permission regressions
@@ -134,6 +101,8 @@ jobs:
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: UI and headless layout regressions
         run: cargo test --release --locked -p luna-ui --lib -- --test-threads=1
       # Fixture examples default to `test = false` and their feature is off in
@@ -155,6 +124,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       # A real app build checks linking too and seeds reusable library objects.
       # `cargo check` emits metadata only, which sccache cannot reuse here.
       - name: Build macOS application
@@ -206,12 +177,11 @@ jobs:
   ios-tests:
     runs-on: macos-latest
     timeout-minutes: 30
-    env:
-      # Simulator CI needs backtraces, not full Rust debugger type information.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: Rust targets for the owned native client
         run: |
           case "$(uname -m)" in
@@ -241,20 +211,6 @@ jobs:
       # (IOS-00); a committed copy that differs was compiled against another core.
       - name: Committed Swift bindings match the mobile core
         run: git diff --exit-code -- apps/ios/Luna/Generated/luna_core.swift
-      - name: Compiler cache write diagnostics
-        if: always()
-        run: |
-          python3 - <<'PYTHON'
-          import json, os
-          from pathlib import Path
-          log = Path(os.environ['RUNNER_TEMP']) / 'sccache-errors.log'
-          lines = log.read_text(errors='replace').lower().splitlines() if log.exists() else []
-          # Only counts leave the runner; cache service URLs/tokens stay private.
-          categories = ['alreadyexists', 'permissiondenied', 'ratelimited',
-                        'too many requests', '409', '403', '429', 'reserve', 'timeout']
-          print(json.dumps({'log_lines': len(lines), 'errors': {
-              key: sum(key in line for line in lines) for key in categories}}, indent=2))
-          PYTHON
       - name: Upload iOS test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -279,6 +235,8 @@ jobs:
             libwebkit2gtk-4.1-dev libjson-glib-dev xvfb xdotool openbox \
             weston ffmpeg imagemagick fonts-noto-cjk
       - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: Build browser fixture
         run: cargo build --release --locked -p luna-ui --example browser-fixture --features browser-fixture
       - name: X11 and Wayland browser regressions
