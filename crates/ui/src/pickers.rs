@@ -10666,6 +10666,304 @@ mod tests {
         });
     }
 
+    /// The model menu alone in a window, as the composer opens it.
+    struct ModelMenuHost {
+        pickers: Entity<Pickers>,
+    }
+
+    impl Render for ModelMenuHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let menu = self.pickers.update(cx, |pickers, cx| {
+                let content = pickers.render_harness_model_popover(cx);
+                pickers.popover_frame_flush(popover::MENU_W_L, content, cx)
+            });
+            div().size_full().relative().child(
+                div()
+                    .absolute()
+                    .top(px(100.0))
+                    .left(px(32.0))
+                    .w(px(popover::MENU_W_L))
+                    .child(menu),
+            )
+        }
+    }
+
+    /// Opens the model menu with assistive technology connected.
+    fn open_model_menu_for_assistive_tech(
+        cx: &mut gpui::TestAppContext,
+        setup: impl FnOnce(&mut Pickers, &mut Context<Pickers>) + 'static,
+    ) -> (gpui::WindowHandle<ModelMenuHost>, Entity<Pickers>) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let handle = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            let pickers = cx.new(|cx| Pickers::new(state, cx));
+            pickers.update(cx, |pickers, cx| {
+                setup(pickers, cx);
+                pickers.open.open(PickerKind::HarnessModel);
+            });
+            ModelMenuHost { pickers }
+        });
+        cx.simulate_a11y_activation(handle.into());
+        let pickers = handle
+            .read_with(cx, |host, _| host.pickers.clone())
+            .unwrap();
+        (handle, pickers)
+    }
+
+    /// The tree a screen reader would read now, after the frame settles.
+    fn a11y_tree(
+        cx: &mut gpui::TestAppContext,
+        handle: gpui::WindowHandle<ModelMenuHost>,
+    ) -> serde_json::Value {
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+            serde_json::from_str(&window.debug_a11y_tree_json().expect("accessibility active"))
+                .unwrap()
+        })
+        .unwrap()
+    }
+
+    /// Every node with `role`, as (id, aria) in set order.
+    fn a11y_nodes(
+        tree: &serde_json::Value,
+        role: &str,
+    ) -> Vec<(gpui::accesskit::NodeId, serde_json::Value)> {
+        let mut nodes = tree["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|node| node["aria"]["role"] == role)
+            .map(|node| {
+                let id = node["accesskit_id"].as_str().unwrap().parse().unwrap();
+                (gpui::accesskit::NodeId(id), node["aria"].clone())
+            })
+            .collect::<Vec<_>>();
+        nodes.sort_by_key(|(_, aria)| aria["position_in_set"].as_u64());
+        nodes
+    }
+
+    fn a11y_node(
+        tree: &serde_json::Value,
+        role: &str,
+        label: &str,
+    ) -> (gpui::accesskit::NodeId, serde_json::Value) {
+        a11y_nodes(tree, role)
+            .into_iter()
+            .find(|(_, aria)| aria["label"] == label)
+            .unwrap_or_else(|| panic!("no {role} named {label:?} in the accessibility tree"))
+    }
+
+    // Issue #11: the menu read back only its search field, so a screen
+    // reader could neither find nor press the tabs, models, stars and
+    // settings. Fails if any of them loses its role, name or state, or if
+    // pressing it from assistive technology stops doing what a click does.
+    #[gpui::test]
+    fn model_menu_controls_are_named_and_pressable_from_assistive_tech(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let press = gpui::AccessibleAction::Click;
+        let (handle, pickers) = open_model_menu_for_assistive_tech(cx, |pickers, cx| {
+            let mut model = bare_model("test", "Test model");
+            model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
+            model.options.push(ModelOption {
+                id: "contextWindow".into(),
+                label: "Context window".into(),
+                choices: ["200k", "1m"]
+                    .map(|id| ModelOptionChoice {
+                        id: id.into(),
+                        label: id.into(),
+                    })
+                    .into(),
+                default_choice: "200k".into(),
+            });
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.harnesses = Loadable::Ready(vec![
+                descriptor(HarnessId::ClaudeCode, "Claude Code"),
+                descriptor(HarnessId::Codex, "Codex"),
+            ]);
+            pickers.models.insert(
+                HarnessId::ClaudeCode,
+                Loadable::Ready(vec![model, bare_model("other", "Other model")]),
+            );
+            pickers.models.insert(
+                HarnessId::Codex,
+                Loadable::Ready(vec![bare_model("gpt", "GPT model")]),
+            );
+            let account = |id: &str, email: &str, active: bool| -> luna_proto::AgentAccount {
+                serde_json::from_value(serde_json::json!({
+                    "id": id, "harness": "codex", "email": email,
+                    "planLabel": null, "active": active, "switchable": active,
+                }))
+                .unwrap()
+            };
+            pickers.accounts = Loadable::Ready(AgentAccountsSnapshot {
+                accounts: vec![
+                    account("a1", "one@example.com", true),
+                    account("a2", "two@example.com", false),
+                ],
+                warnings: Vec::new(),
+            });
+            pickers.pick_model("test".into(), cx);
+        });
+        let tree = a11y_tree(cx, handle);
+
+        a11y_node(&tree, "TabList", "Providers");
+        let tabs = a11y_nodes(&tree, "Tab");
+        let tabs: Vec<_> = tabs
+            .iter()
+            .map(|(_, tab)| (tab["label"].as_str().unwrap(), tab["selected"] == true))
+            .collect();
+        assert_eq!(
+            tabs,
+            [
+                ("Favorites", false),
+                ("Claude Code", true),
+                ("Codex", false)
+            ]
+        );
+        a11y_node(&tree, "ListBox", "Models");
+        let models: Vec<_> = a11y_nodes(&tree, "ListBoxOption")
+            .into_iter()
+            .map(|(_, option)| {
+                (
+                    option["label"].as_str().unwrap().to_string(),
+                    option["selected"] == true,
+                    option["position_in_set"].as_u64(),
+                    option["size_of_set"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            models,
+            [
+                ("Test model".to_string(), true, Some(1), Some(2)),
+                ("Other model".to_string(), false, Some(2), Some(2)),
+            ]
+        );
+        let (reasoning, aria) = a11y_node(&tree, "ComboBox", "Reasoning");
+        assert_eq!(aria["value"], "High");
+        assert_eq!(aria["expanded"], false);
+
+        // A setting opens on a press (the pointer's click only dismisses it)
+        // and lists its choices; pressing one applies it.
+        cx.simulate_a11y_action(handle.into(), reasoning, press);
+        let tree = a11y_tree(cx, handle);
+        assert_eq!(
+            a11y_node(&tree, "ComboBox", "Reasoning").1["expanded"],
+            true
+        );
+        a11y_node(&tree, "ListBox", "Reasoning");
+        let (low, low_aria) = a11y_node(&tree, "ListBoxOption", "Low");
+        assert_eq!(low_aria["selected"], false);
+        assert_eq!(
+            a11y_node(&tree, "ListBoxOption", "High").1["selected"],
+            true
+        );
+        cx.simulate_a11y_action(handle.into(), low, press);
+        pickers.read_with(cx, |pickers, cx| {
+            assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::Low));
+            assert!(pickers.setting_menu.is_none());
+        });
+        // A second press on an open setting closes it.
+        let tree = a11y_tree(cx, handle);
+        let context = a11y_node(&tree, "ComboBox", "Context window").0;
+        cx.simulate_a11y_action(handle.into(), context, press);
+        assert!(pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_some()));
+        let tree = a11y_tree(cx, handle);
+        let context = a11y_node(&tree, "ComboBox", "Context window").0;
+        cx.simulate_a11y_action(handle.into(), context, press);
+        assert!(pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_none()));
+
+        // The star toggles the favorite, and the row picks its model.
+        let tree = a11y_tree(cx, handle);
+        let (star, star_aria) = a11y_node(&tree, "Button", "Favorite Other model");
+        assert_eq!(star_aria["toggled"], "False");
+        cx.simulate_a11y_action(handle.into(), star, press);
+        let tree = a11y_tree(cx, handle);
+        assert_eq!(
+            a11y_node(&tree, "Button", "Favorite Other model").1["toggled"],
+            "True"
+        );
+        let other = a11y_node(&tree, "ListBoxOption", "Other model").0;
+        cx.simulate_a11y_action(handle.into(), other, press);
+        assert_eq!(
+            pickers.read_with(cx, |pickers, cx| pickers.current_model_id(cx)),
+            Some("other".to_string())
+        );
+
+        // A provider tab switches provider; Codex then offers its accounts,
+        // the unavailable one without a press.
+        let tree = a11y_tree(cx, handle);
+        let codex = a11y_node(&tree, "Tab", "Codex").0;
+        cx.simulate_a11y_action(handle.into(), codex, press);
+        let tree = a11y_tree(cx, handle);
+        assert_eq!(a11y_node(&tree, "Tab", "Codex").1["selected"], true);
+        a11y_node(&tree, "RadioGroup", "Account");
+        let (_, one) = a11y_node(&tree, "RadioButton", "one@example.com");
+        let (_, two) = a11y_node(&tree, "RadioButton", "two@example.com");
+        assert_eq!(one["toggled"], "True");
+        assert_eq!(two["toggled"], "False");
+        assert!(two["on_action"].is_null());
+    }
+
+    // The model list is virtualized, so only the rows in view existed and a
+    // screen reader stopped at the viewport's edge (PR #26 review). Fails if
+    // the list stops exposing rows past its edge while assistive tech is
+    // connected, or a row stops scrolling itself into view when reached.
+    #[gpui::test]
+    fn screen_readers_reach_every_row_of_a_long_model_list(cx: &mut gpui::TestAppContext) {
+        let (handle, pickers) = open_model_menu_for_assistive_tech(cx, |pickers, cx| {
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.harnesses =
+                Loadable::Ready(vec![descriptor(HarnessId::ClaudeCode, "Claude Code")]);
+            pickers.models.insert(
+                HarnessId::ClaudeCode,
+                Loadable::Ready(
+                    (1..=60)
+                        .map(|n| bare_model(&format!("m{n}"), &format!("Model {n}")))
+                        .collect(),
+                ),
+            );
+            pickers.pick_model("m1".into(), cx);
+        });
+        let positions = |tree: &serde_json::Value| {
+            a11y_nodes(tree, "ListBoxOption")
+                .into_iter()
+                .map(|(_, option)| {
+                    assert_eq!(option["size_of_set"], 60);
+                    option["position_in_set"].as_u64().unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut tree = a11y_tree(cx, handle);
+        let exposed = positions(&tree);
+        // Still virtualized: a window of rows, not the whole catalog.
+        assert_eq!(exposed.first(), Some(&1));
+        assert!(exposed.len() < 60, "{exposed:?}");
+        // Walking onto the last exposed row scrolls it into view, which
+        // exposes the next ones, until the end of the catalog.
+        for _ in 0..60 {
+            if positions(&tree).last() == Some(&60) {
+                break;
+            }
+            let (last, _) = a11y_nodes(&tree, "ListBoxOption").pop().unwrap();
+            cx.simulate_a11y_action(handle.into(), last, gpui::AccessibleAction::ScrollIntoView);
+            tree = a11y_tree(cx, handle);
+        }
+        assert_eq!(positions(&tree).last(), Some(&60));
+        // A row clipped above the viewport still picks its model.
+        let (first, aria) = a11y_nodes(&tree, "ListBoxOption").remove(0);
+        let n = aria["position_in_set"].as_u64().unwrap();
+        assert!(n > 1, "the walk scrolled the list");
+        cx.simulate_a11y_action(handle.into(), first, gpui::AccessibleAction::Click);
+        assert_eq!(
+            pickers.read_with(cx, |pickers, cx| pickers.current_model_id(cx)),
+            Some(format!("m{n}"))
+        );
+    }
+
     fn descriptor(id: HarnessId, name: &str) -> HarnessDescriptor {
         HarnessDescriptor {
             id,

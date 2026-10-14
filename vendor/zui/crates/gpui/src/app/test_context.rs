@@ -527,6 +527,31 @@ impl TestAppContext {
         .unwrap();
     }
 
+    /// Simulates an assistive technology connecting to the window, so it
+    /// builds an accessibility tree (see [`Window::debug_a11y_tree_json`]).
+    pub fn simulate_a11y_activation(&self, window: AnyWindowHandle) {
+        self.test_window(window).simulate_a11y_activation();
+        self.run_until_parked();
+    }
+
+    /// Simulates an assistive technology requesting `action` on the node
+    /// `target`, an `accesskit_id` from [`Window::debug_a11y_tree_json`].
+    pub fn simulate_a11y_action(
+        &self,
+        window: AnyWindowHandle,
+        target: accesskit::NodeId,
+        action: accesskit::Action,
+    ) {
+        self.test_window(window)
+            .simulate_a11y_action(accesskit::ActionRequest {
+                action,
+                target_tree: accesskit::TreeId::ROOT,
+                target_node: target,
+                data: None,
+            });
+        self.run_until_parked();
+    }
+
     /// Returns the `TestWindow` backing the given handle.
     pub(crate) fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
         self.app
