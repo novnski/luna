@@ -1,24 +1,29 @@
 //! AppKit boundary for the browser. Wry owns the native child and its UI
-//! delegate; our navigation delegate supplies browser policy and state. All
-//! callbacks enqueue events, never re-enter GPUI. No page-to-engine IPC.
-use super::model::{LocalDocument, PageState, Presentation, allowed_navigation};
+//! delegate; our navigation delegate supplies browser policy and state, and a
+//! shared download delegate saves files. All callbacks enqueue events, never
+//! re-enter GPUI. No page-to-engine IPC.
+use super::model::{Download, LocalDocument, PageState, Presentation, allowed_navigation};
 use gpui::{Bounds, Pixels, Window};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel};
+use objc2::{
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, class, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
     NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
-    NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions, NSObject,
-    NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSString, NSURL,
+    NSData, NSDictionary, NSError, NSHTTPURLResponse, NSKeyValueChangeKey,
+    NSKeyValueObservingOptions, NSObject, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol,
+    NSString, NSURL, NSURLResponse,
 };
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKNavigationResponse, WKNavigationResponsePolicy, WKWebView,
+    WKDownload, WKDownloadDelegate, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
+    WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKWebView,
 };
 use std::{
     cell::{Cell, RefCell},
+    path::{Path, PathBuf},
     rc::Rc,
 };
 use wry::{WebView, WebViewBuilderExtMacos, WebViewExtMacOS};
@@ -27,6 +32,8 @@ use wry::{WebView, WebViewBuilderExtMacos, WebViewExtMacOS};
 struct BrowserStore {
     store: Option<Retained<objc2_web_kit::WKWebsiteDataStore>>,
     preview_hosts: std::collections::BTreeSet<String>,
+    /// Outlives individual tabs, so closing one does not orphan a download.
+    downloads: Option<Retained<Downloads>>,
 }
 #[derive(Clone, Default)]
 pub(super) struct BrowserData(Rc<RefCell<BrowserStore>>);
@@ -50,6 +57,13 @@ impl BrowserData {
             configuration.setWebsiteDataStore(data.store.as_ref().unwrap());
         }
         configuration
+    }
+    fn downloads(&self, mtm: MainThreadMarker) -> Retained<Downloads> {
+        self.0
+            .borrow_mut()
+            .downloads
+            .get_or_insert_with(|| Downloads::new(mtm))
+            .clone()
     }
     pub(super) fn register_preview(&self, address: &str) {
         let Ok(url) = url::Url::parse(address) else {
@@ -147,10 +161,12 @@ pub(super) enum NativeEvent {
     NewTab(String),
     Key(gpui::Keystroke),
     Favicon { page: String, url: String },
+    Download(Download),
 }
 
 struct ObserverState {
     tx: Sender,
+    downloads: Retained<Downloads>,
     pending: Cell<bool>,
     error: RefCell<Option<String>>,
     requested_url: RefCell<Option<String>>,
@@ -175,6 +191,12 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         fn policy(&self, _view: &WKWebView, action: &WKNavigationAction, decision: &block2::Block<dyn Fn(WKNavigationActionPolicy)>) {
             let url = unsafe { action.request().URL() }.and_then(|u| u.absoluteString()).map(|u| u.to_string()).unwrap_or_default();
+            // A download attribute saves the file, including a page's own
+            // Blob or data exports, which are never displayed as pages.
+            if unsafe { action.shouldPerformDownload() } && allowed_download(&url) {
+                decision.call((WKNavigationActionPolicy::Download,));
+                return;
+            }
             let allowed = self.allows(&url);
             if allowed && unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() }) {
                 *self.ivars().requested_url.borrow_mut() = Some(url.clone());
@@ -184,8 +206,27 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
         fn response(&self, _view: &WKWebView, response: &WKNavigationResponse, decision: &block2::Block<dyn Fn(WKNavigationResponsePolicy)>) {
             let displayable = unsafe { response.canShowMIMEType() };
-            if !displayable { self.fail("This file can’t be previewed here. Open it in your default browser."); }
-            decision.call((if displayable { WKNavigationResponsePolicy::Allow } else { WKNavigationResponsePolicy::Cancel },));
+            // Only the page itself becomes a download: a frame's unsupported
+            // content must not save files merely because a page embedded it.
+            let policy = if !unsafe { response.isForMainFrame() } {
+                if displayable { WKNavigationResponsePolicy::Allow } else { WKNavigationResponsePolicy::Cancel }
+            } else if displayable && !attachment(&*unsafe { response.response() }) {
+                WKNavigationResponsePolicy::Allow
+            } else {
+                // The current page stays; so does its address.
+                self.ivars().requested_url.borrow_mut().take();
+                self.changed();
+                WKNavigationResponsePolicy::Download
+            };
+            decision.call((policy,));
+        }
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        fn action_download(&self, view: &WKWebView, _action: &WKNavigationAction, download: &WKDownload) {
+            self.ivars().downloads.adopt(view, download, self.ivars().tx.clone());
+        }
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_download(&self, view: &WKWebView, _response: &WKNavigationResponse, download: &WKDownload) {
+            self.ivars().downloads.adopt(view, download, self.ivars().tx.clone());
         }
         #[unsafe(method(webView:didStartProvisionalNavigation:))]
         fn start(&self, _view: &WKWebView, _navigation: Option<&WKNavigation>) {
@@ -201,14 +242,18 @@ define_class!(
         }
         #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
         fn provisional_error(&self, _view: &WKWebView, _navigation: Option<&WKNavigation>, error: &NSError) {
-            if error.code() != -999 {
+            if interrupted(error) {
+                self.changed();
+            } else if error.code() != -999 {
                 tracing::warn!(domain = %error.domain(), code = error.code(), "browser provisional navigation failed");
                 self.fail("Check the address and make sure your server is running, then try again.");
             }
         }
         #[unsafe(method(webView:didFailNavigation:withError:))]
         fn navigation_error(&self, _view: &WKWebView, _navigation: Option<&WKNavigation>, error: &NSError) {
-            if error.code() != -999 {
+            if interrupted(error) {
+                self.changed();
+            } else if error.code() != -999 {
                 tracing::warn!(domain = %error.domain(), code = error.code(), "browser navigation failed");
                 self.fail("The connection was interrupted. Try loading this page again.");
             }
@@ -221,9 +266,15 @@ define_class!(
 );
 
 impl Observer {
-    fn new(tx: Sender, local: Option<LocalDocument>, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(
+        tx: Sender,
+        downloads: Retained<Downloads>,
+        local: Option<LocalDocument>,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
         let object = mtm.alloc().set_ivars(ObserverState {
             tx,
+            downloads,
             pending: Cell::new(false),
             error: RefCell::new(None),
             requested_url: RefCell::new(None),
@@ -249,6 +300,257 @@ impl Observer {
     fn fail(&self, message: &str) {
         *self.ivars().error.borrow_mut() = Some(message.into());
         self.changed();
+    }
+}
+
+/// A response saved as a download ends its navigation with this error. The
+/// current page stays in place, so it is not a load failure.
+fn interrupted(error: &NSError) -> bool {
+    // WebKitErrorFrameLoadInterruptedByPolicyChange
+    error.code() == 102 && error.domain().to_string() == "WebKitErrorDomain"
+}
+
+/// Website addresses, plus the page's own Blob and data exports. These other
+/// schemes are only ever saved, never navigated to.
+fn allowed_download(address: &str) -> bool {
+    allowed_navigation(address)
+        || url::Url::parse(address).is_ok_and(|url| match url.scheme() {
+            "data" => true,
+            "blob" => matches!(url.origin(), url::Origin::Tuple(scheme, ..) if scheme == "http" || scheme == "https"),
+            _ => false,
+        })
+}
+
+fn attachment(response: &NSURLResponse) -> bool {
+    response
+        .downcast_ref::<NSHTTPURLResponse>()
+        .and_then(|http| {
+            http.valueForHTTPHeaderField(objc2_foundation::ns_string!("Content-Disposition"))
+        })
+        .is_some_and(|value| {
+            value
+                .to_string()
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("attachment")
+        })
+}
+
+struct ActiveDownload {
+    download: Retained<WKDownload>,
+    tx: Sender,
+    name: String,
+    page: Option<String>,
+    path: Option<PathBuf>,
+}
+
+#[derive(Default)]
+struct DownloadsState {
+    active: RefCell<Vec<ActiveDownload>>,
+}
+
+// WebKit holds its download delegate weakly. One per browser context keeps
+// downloads reporting to their tab and finishing after that tab closes.
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LunaBrowserDownloads"]
+    #[ivars = DownloadsState]
+    struct Downloads;
+    unsafe impl NSObjectProtocol for Downloads {}
+    unsafe impl WKDownloadDelegate for Downloads {
+        #[unsafe(method(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:))]
+        fn destination(
+            &self,
+            download: &WKDownload,
+            _response: &NSURLResponse,
+            suggested: &NSString,
+            completion: &block2::DynBlock<dyn Fn(*mut NSURL)>,
+        ) {
+            let Some(index) = self.position(download) else {
+                completion.call((std::ptr::null_mut(),));
+                return;
+            };
+            let path = downloads_directory()
+                .and_then(|directory| destination(&directory, &suggested.to_string()));
+            let mut active = self.ivars().active.borrow_mut();
+            let Some(path) = path else {
+                let entry = active.remove(index);
+                drop(active);
+                entry.report(Some("Your Downloads folder isn’t available.".into()));
+                completion.call((std::ptr::null_mut(),));
+                return;
+            };
+            let entry = &mut active[index];
+            entry.name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entry.report(None);
+            let url = NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&path.to_string_lossy()),
+                false,
+            );
+            entry.path = Some(path);
+            drop(active);
+            completion.call((Retained::as_ptr(&url) as *mut NSURL,));
+        }
+        #[unsafe(method(downloadDidFinish:))]
+        fn finished(&self, download: &WKDownload) {
+            if let Some(index) = self.position(download) {
+                let entry = self.ivars().active.borrow_mut().remove(index);
+                if let Some(path) = &entry.path {
+                    quarantine(path, &entry.download, entry.page.as_deref());
+                }
+                entry.report(None);
+            }
+        }
+        #[unsafe(method(download:didFailWithError:resumeData:))]
+        fn failed(&self, download: &WKDownload, error: &NSError, _resume: Option<&NSData>) {
+            if let Some(index) = self.position(download) {
+                tracing::warn!(domain = %error.domain(), code = error.code(), "browser download failed");
+                let mut entry = self.ivars().active.borrow_mut().remove(index);
+                entry.path = None;
+                entry.report(Some(error.localizedDescription().to_string()));
+            }
+        }
+    }
+);
+
+impl Downloads {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let object = mtm.alloc().set_ivars(DownloadsState::default());
+        unsafe { msg_send![super(object), init] }
+    }
+    fn adopt(&self, view: &WKWebView, download: &WKDownload, tx: Sender) {
+        let url = unsafe { download.originalRequest() }.and_then(|request| request.URL());
+        let name = url
+            .filter(|url| {
+                url.absoluteString()
+                    .is_some_and(|url| allowed_navigation(&url.to_string()))
+            })
+            .and_then(|url| url.lastPathComponent())
+            .map(|name| name.to_string())
+            .filter(|name| !name.is_empty() && name != "/")
+            .unwrap_or_else(|| "download".into());
+        let page = unsafe { view.URL() }
+            .and_then(|url| url.absoluteString())
+            .map(|url| url.to_string());
+        unsafe { download.setDelegate(Some(ProtocolObject::from_ref(self))) };
+        self.ivars().active.borrow_mut().push(ActiveDownload {
+            download: download.retain(),
+            tx,
+            name,
+            page,
+            path: None,
+        });
+    }
+    fn position(&self, download: &WKDownload) -> Option<usize> {
+        self.ivars()
+            .active
+            .borrow()
+            .iter()
+            .position(|entry| std::ptr::eq(&*entry.download, download))
+    }
+}
+
+impl ActiveDownload {
+    fn report(&self, error: Option<String>) {
+        let _ = self.tx.try_send(NativeEvent::Download(Download {
+            name: self.name.clone(),
+            path: if error.is_none() {
+                self.path.clone()
+            } else {
+                None
+            },
+            error,
+        }));
+    }
+}
+
+fn downloads_directory() -> Option<PathBuf> {
+    let manager = objc2_foundation::NSFileManager::defaultManager();
+    let directory = manager
+        .URLsForDirectory_inDomains(
+            objc2_foundation::NSSearchPathDirectory::DownloadsDirectory,
+            objc2_foundation::NSSearchPathDomainMask::UserDomainMask,
+        )
+        .firstObject()?
+        .path()?;
+    let directory = PathBuf::from(directory.to_string());
+    std::fs::create_dir_all(&directory).ok()?;
+    Some(directory)
+}
+
+/// A new file in `directory`. Never overwrites: a taken name gets a numbered
+/// suffix. The suggested name cannot leave the directory or hide the file.
+fn destination(directory: &Path, suggested: &str) -> Option<PathBuf> {
+    let name: String = Path::new(suggested)
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { '_' } else { c })
+        .collect();
+    let name = name.trim_start_matches(['.', ' ']);
+    let name = if name.is_empty() { "download" } else { name };
+    let (stem, extension) = match name.rfind('.') {
+        Some(index) if index > 0 => name.split_at(index),
+        _ => (name, ""),
+    };
+    (0..1000)
+        .map(|n| {
+            directory.join(if n == 0 {
+                name.to_owned()
+            } else {
+                format!("{stem} ({n}){extension}")
+            })
+        })
+        .find(|path| std::fs::symlink_metadata(path).is_err())
+}
+
+/// Mark website files as downloaded, so Gatekeeper checks them as it would
+/// after any browser, unless WebKit already recorded the quarantine.
+fn quarantine(path: &Path, download: &WKDownload, page: Option<&str>) {
+    let file = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let key = unsafe { objc2_foundation::NSURLQuarantinePropertiesKey };
+    let mut existing = None;
+    if unsafe { file.getResourceValue_forKey_error(&mut existing, key) }.is_err()
+        || existing.is_some()
+    {
+        return;
+    }
+    let source = unsafe { download.originalRequest() }
+        .and_then(|request| request.URL())
+        .filter(|url| {
+            url.absoluteString()
+                .is_some_and(|url| allowed_navigation(&url.to_string()))
+        });
+    let page = page
+        .filter(|page| allowed_navigation(page))
+        .and_then(|page| NSURL::URLWithString(&NSString::from_str(page)));
+    let mut keys = vec![
+        objc2_foundation::ns_string!("LSQuarantineAgentName"),
+        objc2_foundation::ns_string!("LSQuarantineType"),
+    ];
+    let mut values: Vec<Retained<AnyObject>> = vec![
+        Retained::into_super(Retained::into_super(NSString::from_str("LUNA"))),
+        Retained::into_super(Retained::into_super(NSString::from_str(
+            "LSQuarantineTypeWebDownload",
+        ))),
+    ];
+    if let Some(source) = source {
+        keys.push(objc2_foundation::ns_string!("LSQuarantineDataURL"));
+        values.push(Retained::into_super(Retained::into_super(source)));
+    }
+    if let Some(page) = page {
+        keys.push(objc2_foundation::ns_string!("LSQuarantineOriginURL"));
+        values.push(Retained::into_super(Retained::into_super(page)));
+    }
+    let properties = NSDictionary::<NSString, AnyObject>::from_retained_objects(&keys, &values);
+    let properties: &AnyObject = &properties;
+    if let Err(error) = unsafe { file.setResourceValue_forKey_error(Some(properties), key) } {
+        tracing::warn!(code = error.code(), "could not quarantine browser download");
     }
 }
 
@@ -320,7 +622,6 @@ impl NativePage {
                 }
                 wry::NewWindowResponse::Deny
             })
-            .with_download_started_handler(|_, _| false)
             .build_as_child(window)
             .map_err(|e| e.to_string())?;
         let view = Retained::into_super(web.webview());
@@ -361,7 +662,7 @@ impl NativePage {
         }
         clip.addSubview(&view);
 
-        let observer = Observer::new(tx.clone(), local, mtm);
+        let observer = Observer::new(tx.clone(), data.downloads(mtm), local, mtm);
         unsafe {
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
             for key in OBSERVED {

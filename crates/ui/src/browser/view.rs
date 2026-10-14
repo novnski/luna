@@ -297,6 +297,122 @@ impl BrowserSurface {
             .into_any_element()
     }
 
+    /// Every download reports where its file went, or why it was not saved,
+    /// so a page's "exported" message is never the only feedback.
+    fn download_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let download = self.download.as_ref()?;
+        let action = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .h(crate::typography::ui_rems(22.0))
+                .px(crate::typography::ui_rems(6.0))
+                .flex_none()
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .text_color(theme.text)
+                .cursor_pointer()
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .hover_wash(id)
+                .child(label)
+        };
+        let (glyph, tone, message, button) = if let Some(error) = &download.error {
+            (
+                icons::DANGER_TRIANGLE,
+                theme.readable_tone(theme.danger, 1.0),
+                format!("Couldn’t download {}: {error}", download.name),
+                self.page.url.is_some().then(|| {
+                    action("browser-download-external", "Open in Browser")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_external(cx)))
+                }),
+            )
+        } else if let Some(path) = download.path.clone() {
+            let folder = path
+                .parent()
+                .and_then(|folder| folder.file_name())
+                .map(|folder| folder.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Downloads".into());
+            (
+                icons::CHECK,
+                theme.text_muted,
+                format!("Saved {} to {folder}", download.name),
+                Some(
+                    action(
+                        "browser-download-reveal",
+                        if cfg!(target_os = "macos") {
+                            "Show in Finder"
+                        } else {
+                            "Show in Folder"
+                        },
+                    )
+                    .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                ),
+            )
+        } else {
+            (
+                icons::ROUND_ARROW_DOWN,
+                theme.text_muted,
+                format!("Downloading {}…", download.name),
+                None,
+            )
+        };
+        Some(
+            div()
+                .id("browser-download")
+                .role(gpui::Role::Status)
+                .aria_label(message.clone())
+                .min_h(crate::typography::ui_rems(32.0))
+                .pl(crate::typography::ui_rems(12.0))
+                .pr(crate::typography::ui_rems(6.0))
+                .border_b_1()
+                .border_color(theme.border)
+                .flex()
+                .items_center()
+                .gap(crate::typography::ui_rems(8.0))
+                .text_size(crate::typography::ui_rems(11.0))
+                .child(
+                    icons::icon(glyph)
+                        .size(crate::typography::ui_rems(12.0))
+                        .flex_none()
+                        .text_color(tone),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(tone)
+                        .child(message),
+                )
+                .children(button)
+                .child(
+                    div()
+                        .id("browser-download-dismiss")
+                        .size(crate::typography::ui_rems(22.0))
+                        .flex_none()
+                        .rounded(px(6.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .aria_label("Dismiss download")
+                        .hover_wash("browser-download-dismiss")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.download = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            icons::icon(icons::CLOSE)
+                                .size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn empty_body(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if self.page.url.is_none() && self.previews_task.is_some() {
             return self.preview_body(theme, cx);
@@ -701,6 +817,7 @@ impl Render for BrowserSurface {
             .when_some(local_page, |el, folder| el.child(div().id("browser-local-scope").px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(6.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted).truncate()
                 .child(format!("Local file preview. Only pages in “{folder}” open here."))))
+            .children(self.download_bar(&theme, cx))
             .child(body)
             .when(external, |el| el.child(div().h(crate::typography::ui_rems(26.0)).px(crate::typography::ui_rems(10.0)).flex().items_center().gap(crate::typography::ui_rems(5.0)).border_t_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_faint)

@@ -89,6 +89,8 @@ pub struct BrowserSurface {
     focus: FocusHandle,
     pub page: PageState,
     pub favicon: Option<std::sync::Arc<gpui::Image>>,
+    /// The latest download this tab started, until dismissed.
+    pub download: Option<model::Download>,
     address_edited: bool,
     validation: Option<String>,
     remote: bool,
@@ -171,6 +173,7 @@ impl BrowserSurface {
             focus: cx.focus_handle(),
             page: PageState::default(),
             favicon: None,
+            download: None,
             address_edited: false,
             validation: None,
             remote,
@@ -544,6 +547,10 @@ impl BrowserSurface {
                 if self.presentation == Presentation::Live {
                     cx.emit(BrowserEvent::NewTab(Some(url)));
                 }
+            }
+            native::NativeEvent::Download(download) => {
+                self.download = Some(download);
+                cx.notify();
             }
             native::NativeEvent::Key(key) => {
                 if self.presentation == Presentation::Live {

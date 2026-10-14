@@ -1,6 +1,6 @@
 //! WebKitGTK renders offscreen in an isolated helper process. GPUI composites
 //! its frames, so browser content uses the same clipping and blur as other UI.
-use super::model::{LocalDocument, PageState, Presentation};
+use super::model::{Download, LocalDocument, PageState, Presentation};
 use gpui::{Bounds, Pixels, RenderImage};
 use serde_json::{Value, json};
 use std::{
@@ -22,6 +22,7 @@ pub enum NativeEvent {
     NewTab(String),
     Clipboard(String),
     Menu(Value),
+    Download(Download),
 }
 
 #[derive(Clone, Default)]
@@ -138,6 +139,7 @@ impl BrowserData {
                             *route.state.lock().unwrap() = state; NativeEvent::Changed
                         }
                         b'M' => {let Ok(menu)=serde_json::from_slice(&data) else {continue;};NativeEvent::Menu(menu)}
+                        b'D' => {let Ok(download)=serde_json::from_slice(&data) else {continue;};NativeEvent::Download(download)}
                         b'C' => NativeEvent::Clipboard(String::from_utf8_lossy(&data).into_owned()),
                         b'N' => NativeEvent::NewTab(String::from_utf8_lossy(&data).into_owned()),
                         #[cfg(feature = "browser-fixture")]
@@ -147,7 +149,7 @@ impl BrowserData {
                     // At most one latest frame is retained per page. A busy UI
                     // never accumulates video frames or blocks the engine.
                     match event {
-                        NativeEvent::NewTab(_) | NativeEvent::Clipboard(_) | NativeEvent::Menu(_) => { let _ = route.tx.blocking_send(event); }
+                        NativeEvent::NewTab(_) | NativeEvent::Clipboard(_) | NativeEvent::Menu(_) | NativeEvent::Download(_) => { let _ = route.tx.blocking_send(event); }
                         _ => { let _ = route.tx.try_send(event); }
                     }
                 }
@@ -352,6 +354,7 @@ impl super::BrowserSurface {
             NativeEvent::Clipboard(text) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+            NativeEvent::Download(download) => self.download = Some(download),
             NativeEvent::Frame | NativeEvent::Changed => {
                 let mut page = native.state();
                 if page.url.is_none() {

@@ -172,7 +172,11 @@ static void loaded(WebKitWebView *web, WebKitLoadEvent event, Page *p) {
 }
 static gboolean failed(WebKitWebView *web, WebKitLoadEvent event, const char *uri, GError *error,
                        Page *p) {
-    if (g_error_matches(error, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED))
+    // A response saved as a download, or withheld by policy, interrupts its
+    // load while the current page stays in place.
+    if (g_error_matches(error, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED) ||
+        g_error_matches(error, WEBKIT_POLICY_ERROR,
+                        WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE))
         return TRUE;
     g_free(p->error);
     p->error = g_strdup(error->message);
@@ -224,16 +228,39 @@ static gboolean in_scope(Page *p, const char *uri) {
     g_uri_unref(u);
     return ok;
 }
+// A page's own Blob or data export. WebKitGTK does not expose the download
+// attribute, so these may proceed until their response, which is never shown.
+static gboolean page_export(const char *uri) {
+    if (g_str_has_prefix(uri, "data:"))
+        return TRUE;
+    return g_str_has_prefix(uri, "blob:") && allowed(uri + strlen("blob:"));
+}
 static gboolean policy(WebKitWebView *web, WebKitPolicyDecision *decision,
                        WebKitPolicyDecisionType type, Page *p) {
+    if (type == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) {
+        WebKitResponsePolicyDecision *response = WEBKIT_RESPONSE_POLICY_DECISION(decision);
+        const char *uri = webkit_uri_response_get_uri(webkit_response_policy_decision_get_response(response));
+        if (!allowed(uri) && !in_scope(p, uri)) {
+            webkit_policy_decision_ignore(decision);
+            return TRUE;
+        }
+        // The page itself becomes a download; a frame's unsupported content
+        // keeps WebKit's default and never saves a file just by being embedded.
+        if (webkit_response_policy_decision_is_main_frame_main_resource(response) &&
+            !webkit_response_policy_decision_is_mime_type_supported(response)) {
+            webkit_policy_decision_download(decision);
+            return TRUE;
+        }
+        return FALSE;
+    }
     if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION ||
         type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
         WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(
             WEBKIT_NAVIGATION_POLICY_DECISION(decision));
         const char *uri = webkit_uri_request_get_uri(webkit_navigation_action_get_request(action));
         // Local pages stay in their own tab; only websites open new tabs.
-        if (!allowed(uri) &&
-            !(type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && in_scope(p, uri))) {
+        if (!allowed(uri) && !(type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION &&
+                               (in_scope(p, uri) || page_export(uri)))) {
             webkit_policy_decision_ignore(decision);
             return TRUE;
         }
@@ -316,7 +343,98 @@ static gboolean option_menu(WebKitWebView *web, WebKitOptionMenu *menu, GdkEvent
     send_menu(p, b);
     return TRUE;
 }
+static void download_update(WebKitDownload *item, const char *path, const char *error) {
+    guint id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(item), "luna-page"));
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    member_string(b, "name", g_object_get_data(G_OBJECT(item), "luna-name"));
+    member_string(b, "path", path);
+    member_string(b, "error", error);
+    json_builder_end_object(b);
+    send_json('D', id, b);
+}
+// A new file in the Downloads folder. Never overwrites: a taken name gets a
+// numbered suffix. The suggested name cannot leave the folder or hide the file.
+static gchar *download_path(const char *suggested) {
+    const char *special = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+    gchar *directory =
+        special ? g_strdup(special) : g_build_filename(g_get_home_dir(), "Downloads", NULL);
+    gchar *base = g_path_get_basename(suggested && *suggested ? suggested : "download");
+    for (char *c = base; *c; c++)
+        if ((unsigned char)*c < 0x20 || *c == 0x7f || *c == '/')
+            *c = '_';
+    const char *name = base;
+    while (*name == '.' || *name == ' ')
+        name++;
+    if (!*name)
+        name = "download";
+    const char *dot = strrchr(name, '.');
+    gchar *stem = dot && dot != name ? g_strndup(name, dot - name) : g_strdup(name);
+    const char *extension = dot && dot != name ? dot : "";
+    gchar *path = NULL;
+    if (g_mkdir_with_parents(directory, 0755) == 0) {
+        for (guint n = 0; n < 1000 && !path; n++) {
+            gchar *file = n ? g_strdup_printf("%s (%u)%s", stem, n, extension) : g_strdup(name);
+            path = g_build_filename(directory, file, NULL);
+            g_free(file);
+            if (g_file_test(path, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_SYMLINK))
+                g_clear_pointer(&path, g_free);
+        }
+    }
+    g_free(stem);
+    g_free(base);
+    g_free(directory);
+    return path;
+}
+static gboolean download_destination(WebKitDownload *item, gchar *suggested, gpointer data) {
+    gchar *path = download_path(suggested);
+    gchar *uri = path ? g_filename_to_uri(path, NULL, NULL) : NULL;
+    if (!uri) {
+        g_object_set_data(G_OBJECT(item), "luna-failed", GINT_TO_POINTER(TRUE));
+        download_update(item, NULL, "Your Downloads folder isn’t available.");
+        webkit_download_cancel(item);
+    } else {
+        g_object_set_data_full(G_OBJECT(item), "luna-name", g_path_get_basename(path), g_free);
+        g_object_set_data_full(G_OBJECT(item), "luna-path", g_strdup(path), g_free);
+        webkit_download_set_allow_overwrite(item, FALSE);
+        webkit_download_set_destination(item, uri);
+        download_update(item, NULL, NULL);
+    }
+    g_free(uri);
+    g_free(path);
+    return TRUE;
+}
+static void download_failed(WebKitDownload *item, GError *error, gpointer data) {
+    if (g_object_get_data(G_OBJECT(item), "luna-failed"))
+        return;
+    g_object_set_data(G_OBJECT(item), "luna-failed", GINT_TO_POINTER(TRUE));
+    download_update(item, NULL, error->message);
+}
+// WebKit also emits "finished" after "failed".
+static void download_finished(WebKitDownload *item, gpointer data) {
+    if (!g_object_get_data(G_OBJECT(item), "luna-failed"))
+        download_update(item, g_object_get_data(G_OBJECT(item), "luna-path"), NULL);
+}
 static void download(WebKitWebContext *ctx, WebKitDownload *item, gpointer data) {
+    WebKitWebView *web = webkit_download_get_web_view(item);
+    GHashTableIter it;
+    gpointer value;
+    g_hash_table_iter_init(&it, pages);
+    while (web && g_hash_table_iter_next(&it, NULL, &value)) {
+        Page *p = value;
+        if (p->web != web)
+            continue;
+        const char *uri = webkit_uri_request_get_uri(webkit_download_get_request(item));
+        gchar *name = allowed(uri) ? g_path_get_basename(uri) : NULL;
+        g_object_set_data(G_OBJECT(item), "luna-page", GUINT_TO_POINTER(p->id));
+        g_object_set_data_full(G_OBJECT(item), "luna-name",
+                               g_strdup(name && strcmp(name, "/") ? name : "download"), g_free);
+        g_free(name);
+        g_signal_connect(item, "decide-destination", G_CALLBACK(download_destination), NULL);
+        g_signal_connect(item, "failed", G_CALLBACK(download_failed), NULL);
+        g_signal_connect(item, "finished", G_CALLBACK(download_finished), NULL);
+        return;
+    }
     webkit_download_cancel(item);
 }
 static gboolean damaged(GtkWidget *widget, GdkEvent *event, Page *p) {

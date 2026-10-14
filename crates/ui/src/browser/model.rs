@@ -220,6 +220,19 @@ pub fn allowed_navigation(address: &str) -> bool {
     })
 }
 
+/// A tab's latest download, shown beneath its toolbar until dismissed. Files
+/// are saved to the user's Downloads folder, never displayed as a page.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct Download {
+    pub name: String,
+    /// Set once the whole file is saved.
+    #[serde(default)]
+    pub path: Option<std::path::PathBuf>,
+    /// Why the file was not saved.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Presentation {
     #[default]

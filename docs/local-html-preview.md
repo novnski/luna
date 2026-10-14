@@ -7,7 +7,7 @@ An HTML file in a project on this device (`.html` or `.htm`) shows **Preview** i
 The preview tab navigates only inside the HTML file's own folder. A report loads its own assets, subpages and hash routes. Links to sibling folders, parent folders, other files on disk, or a symlink inside the folder that resolves outside it are cancelled. A symlink that resolves outside the project is refused before anything loads. The tab can still open websites the report links to; `target=_blank` links to websites open in a new ordinary Browser tab.
 
 - macOS loads the page with `loadFileURL:allowingReadAccessToURL:`, so WebKit's content process can read that folder only, whatever a page or symlink asks for. The navigation delegate cancels any `file:` navigation that resolves outside it.
-- Linux passes the folder to the WebKitGTK helper, whose navigation policy and load command accept `file:` URIs only below it, after resolving symlinks. Images, scripts and stylesheets a page embeds are not filtered by folder there; WebKitGTK's default file-URL rules still stop a page's scripts from fetching other local files.
+- Linux passes the folder to the WebKitGTK helper, whose navigation and response policies and load command accept `file:` URIs only below it, after resolving symlinks. Images, scripts and stylesheets a page embeds are not filtered by folder there; WebKitGTK's default file-URL rules still stop a page's scripts from fetching other local files.
 - Other platforms open the file in the system default browser.
 
 Ordinary Browser tabs still accept only `http` and `https` addresses. Typing a `file:` address there explains that local files open from Files. The preview tab's address bar accepts addresses inside its folder and websites.
