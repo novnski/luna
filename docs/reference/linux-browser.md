@@ -18,6 +18,8 @@ Luna starts its browser helper when a page is first opened. The main application
 
 The helper sends live offscreen frames to GPUI, which draws the page alongside the rest of the app. Both X11 and Wayland use this path, including clipping, sidebar transitions, tooltips, and frosted overlays. It uses CPU-addressable frames rather than embedding a separate native browser window. Animated pages therefore incur frame-copy and texture-upload work.
 
+Downloads, including a page's own Blob exports, are saved to the XDG Downloads folder (`~/Downloads` when none is configured) without overwriting existing files. The tab shows where each file was saved, or why it was not.
+
 For development, install the development packages in addition to the normal GPUI build dependencies. These provide the `webkit2gtk-4.1` and `json-glib-1.0` pkg-config modules used to compile the helper.
 
 On Ubuntu or Debian:
