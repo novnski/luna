@@ -292,7 +292,8 @@ mod tests {
     fn tab_labels_fall_back_to_host_then_browser() {
         let mut page = PageState::default();
         assert_eq!(page.label(), "Browser");
-        page.url = Some("file:///work/report/index.html#?testId=1".into());
+        // A drive letter keeps this a valid file path on Windows as well.
+        page.url = Some("file:///C:/work/report/index.html#?testId=1".into());
         assert_eq!(page.label(), "index.html");
         page.url = Some("http://localhost:3000/path".into());
         assert_eq!(page.label(), "localhost");
