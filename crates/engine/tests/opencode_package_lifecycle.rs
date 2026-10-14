@@ -118,7 +118,9 @@ fn strings(value: &Value) -> BTreeSet<String> {
 /// served by the compiled adapter or by an engine-owned server; a steer
 /// dropped or queued as a new turn; Stop that leaves `opencode serve`
 /// running; a crash or lost start that completes, replays or resends the
-/// message; a Full run that parks an approval card.
+/// message; a crash shown as two identical error parts (the bridge's own
+/// end reported both as an error event and on its `Done`); a Full run that
+/// parks an approval card.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn turns_steer_stop_and_fail_honestly_through_the_package() {
     environment(true);
@@ -296,6 +298,13 @@ async fn turns_steer_stop_and_fail_honestly_through_the_package() {
     let (server, worker) = latest_server(&checkout, 1).await;
     kill(worker);
     let crash = wait_for_notice(&engine, chat, "the turn was not replayed").await;
+    assert!(crash.contains("the worker exited"), "{crash}");
+    wait_until(WAIT, "the crashed turn to settle", || engine.settled(chat)).await;
+    assert_eq!(
+        engine.errors(chat),
+        [crash.clone()],
+        "the crash is not the turn's one error part"
+    );
     assert!(
         wait_process_gone(server, WAIT).await,
         "the crashed worker's opencode serve survived"
