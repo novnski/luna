@@ -6702,6 +6702,9 @@ impl Pickers {
                         .into_any_element()
                 } else {
                     div()
+                        .id("codex-accounts")
+                        .role(gpui::Role::RadioGroup)
+                        .aria_label("Account")
                         .flex()
                         .flex_row()
                         .items_center()
@@ -6716,8 +6719,21 @@ impl Pickers {
                                 .or(account.display_name.clone())
                                 .unwrap_or_else(|| "Codex account".into())
                                 .into();
+                            let available = account.switchable || account.active;
                             div()
                                 .id(("codex-account", ix))
+                                .role(gpui::Role::RadioButton)
+                                .aria_label(label.clone())
+                                .aria_toggled(if is_selected {
+                                    gpui::Toggled::True
+                                } else {
+                                    gpui::Toggled::False
+                                })
+                                .when(!available, |el| {
+                                    el.a11y_synthetic_children(|builder| {
+                                        builder.parent_node().set_disabled()
+                                    })
+                                })
                                 .max_w(crate::typography::ui_rems(150.0))
                                 .truncate()
                                 .rounded(px(6.0))
@@ -6729,14 +6745,14 @@ impl Pickers {
                                 } else {
                                     theme.text_muted
                                 })
-                                .when(!(account.switchable || account.active), |el| {
+                                .when(!available, |el| {
                                     el.bg(if is_selected {
                                         theme.accent.opacity(0.14)
                                     } else {
                                         crate::theme::fill(crate::theme::FillTier::Quaternary)
                                     })
                                 })
-                                .when(account.switchable || account.active, |el| {
+                                .when(available, |el| {
                                     el.cursor_pointer()
                                         .hover_fill(
                                             format!("codex-account-{ix}"),
@@ -6757,9 +6773,7 @@ impl Pickers {
                                             this.pick_provider_account(account_id.clone(), cx);
                                         }))
                                 })
-                                .when(!account.switchable && !account.active, |el| {
-                                    el.opacity(0.45)
-                                })
+                                .when(!available, |el| el.opacity(0.45))
                                 .child(label)
                         }))
                         .into_any_element()
@@ -6935,6 +6949,9 @@ impl Pickers {
         //    hairline. Tabs never hide: a live search only filters the
         //    viewed tab's list, so switching tabs re-scopes the same query.
         let mut tabs = div()
+            .id("model-provider-tabs")
+            .role(gpui::Role::TabList)
+            .aria_label("Providers")
             .flex_none()
             .h(crate::typography::ui_rems(40.0))
             .px(px(popover::CARD_INSET))
@@ -6945,8 +6962,58 @@ impl Pickers {
             .items_center()
             .gap(px(2.0));
         tabs = tabs.child(
-            div()
-                .id("model-tab-favorites")
+            model_tab(
+                "model-tab-favorites",
+                "Favorites",
+                favorites_view,
+                theme.accent,
+            )
+            .relative()
+            .w(crate::typography::ui_rems(32.0))
+            .h(crate::typography::ui_rems(32.0))
+            .rounded(px(8.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .when(!favorites_view, |el| el.hover_wash("model-tab-favorites"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.setting_menu = None;
+                this.model_rail = ModelRail::Favorites;
+                // Anchor on the selected row when it's starred, else
+                // the top — never a stray second highlight.
+                this.active = this.selected_model_index(cx);
+                this.model_scroll_base().set_offset(gpui::Point::default());
+                this.model_scroll
+                    .scroll_to_item(this.active, gpui::ScrollStrategy::Nearest);
+                cx.notify();
+            }))
+            .child(
+                crate::icons::icon(crate::icons::STAR_BOLD)
+                    .size(crate::typography::ui_rems(15.0))
+                    .text_color(if favorites_view {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    }),
+            )
+            .when(favorites_view, |el| el.child(tab_indicator(theme.accent))),
+        );
+        for (ix, descriptor) in descriptors.iter().enumerate() {
+            let harness = descriptor.id;
+            let is_viewed = !favorites_view && effective == Some(harness);
+            let (icon_path, tint) = harness_brand_icon(harness);
+            let switch_only = locked && effective != Some(harness);
+            tabs = tabs.child(
+                model_tab(
+                    ("harness-tab", ix),
+                    descriptor.name.clone(),
+                    is_viewed,
+                    theme.accent,
+                )
+                .when(switch_only, |el| {
+                    el.aria_description("Switching provider asks for confirmation")
+                })
                 .relative()
                 .w(crate::typography::ui_rems(32.0))
                 .h(crate::typography::ui_rems(32.0))
@@ -6955,81 +7022,43 @@ impl Pickers {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(!favorites_view, |el| el.hover_wash("model-tab-favorites"))
-                .on_click(cx.listener(|this, _, _, cx| {
+                .when(switch_only, |el| el.opacity(0.7))
+                .when(!is_viewed, |el| el.hover_wash(format!("harness-tab-{ix}")))
+                .on_click(cx.listener(move |this, _, _, cx| {
                     this.setting_menu = None;
-                    this.model_rail = ModelRail::Favorites;
-                    // Anchor on the selected row when it's starred, else
-                    // the top — never a stray second highlight.
-                    this.active = this.selected_model_index(cx);
-                    this.model_scroll_base().set_offset(gpui::Point::default());
-                    this.model_scroll
-                        .scroll_to_item(this.active, gpui::ScrollStrategy::Nearest);
+                    this.model_rail = ModelRail::Harness;
+                    this.pick_harness(harness, cx);
                     cx.notify();
                 }))
                 .child(
-                    crate::icons::icon(crate::icons::STAR_BOLD)
-                        .size(crate::typography::ui_rems(15.0))
-                        .text_color(if favorites_view {
+                    crate::icons::icon(icon_path)
+                        .size(crate::typography::ui_rems(16.0))
+                        .text_color(tint.unwrap_or(if is_viewed {
                             theme.text
                         } else {
                             theme.text_muted
-                        }),
+                        })),
                 )
-                .when(favorites_view, |el| el.child(tab_indicator(theme.accent))),
-        );
-        for (ix, descriptor) in descriptors.iter().enumerate() {
-            let harness = descriptor.id;
-            let is_viewed = !favorites_view && effective == Some(harness);
-            let (icon_path, tint) = harness_brand_icon(harness);
-            tabs = tabs.child(
-                div()
-                    .id(("harness-tab", ix))
-                    .relative()
-                    .w(crate::typography::ui_rems(32.0))
-                    .h(crate::typography::ui_rems(32.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .when(locked && effective != Some(harness), |el| el.opacity(0.7))
-                    .when(!is_viewed, |el| el.hover_wash(format!("harness-tab-{ix}")))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.setting_menu = None;
-                        this.model_rail = ModelRail::Harness;
-                        this.pick_harness(harness, cx);
-                        cx.notify();
-                    }))
-                    .child(
-                        crate::icons::icon(icon_path)
-                            .size(crate::typography::ui_rems(16.0))
-                            .text_color(tint.unwrap_or(if is_viewed {
-                                theme.text
-                            } else {
-                                theme.text_muted
-                            })),
-                    )
-                    .when(is_viewed, |el| el.child(tab_indicator(theme.accent)))
-                    // A detached instance reports its rail tabs (QA).
-                    .when_some(
-                        self.binding
-                            .is_detached()
-                            .then(|| self.target_bounds.clone()),
-                        |el, bounds| {
-                            let name = rail_key(harness);
-                            el.child(
-                                gpui::canvas(
-                                    move |painted, _, _| {
-                                        bounds.borrow_mut().insert(name, painted);
-                                    },
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .inset_0(),
+                .when(is_viewed, |el| el.child(tab_indicator(theme.accent)))
+                // A detached instance reports its rail tabs (QA).
+                .when_some(
+                    self.binding
+                        .is_detached()
+                        .then(|| self.target_bounds.clone()),
+                    |el, bounds| {
+                        let name = rail_key(harness);
+                        el.child(
+                            gpui::canvas(
+                                move |painted, _, _| {
+                                    bounds.borrow_mut().insert(name, painted);
+                                },
+                                |_, _, _, _| {},
                             )
-                        },
-                    ),
+                            .absolute()
+                            .inset_0(),
+                        )
+                    },
+                ),
             );
         }
 
@@ -7325,9 +7354,9 @@ impl Pickers {
                         entity.update(app, |this, cx| {
                             range
                                 .filter_map(|ix| {
-                                    row_data
-                                        .get(ix)
-                                        .map(|row| this.render_model_row(ix, row, cx))
+                                    row_data.get(ix).map(|row| {
+                                        this.render_model_row(ix, row, row_data.len(), cx)
+                                    })
                                 })
                                 .collect::<Vec<AnyElement>>()
                         })
@@ -7336,6 +7365,9 @@ impl Pickers {
                 .size_full()
                 .px(px(popover::CARD_INSET))
                 .track_scroll(&model_scroll)
+                // Two viewports of rows past each edge for a screen reader;
+                // each row scrolls itself into view when it reaches one.
+                .a11y_overscan(16)
                 .into_any_element(),
             )
         } else {
@@ -7375,6 +7407,9 @@ impl Pickers {
         let model_scrollbar = popover::rail(self, "model-scrollbar", &theme, cx);
         let list_host = div()
             .id("model-list-scroll-host")
+            .when(!rows.is_empty(), |host| {
+                host.role(gpui::Role::ListBox).aria_label("Models")
+            })
             .relative()
             .flex_none()
             .h(px(list_height))
@@ -8061,6 +8096,14 @@ impl Pickers {
             .and_then(|capabilities| capabilities.compact_unavailable_reason.clone());
         let compact = div()
             .id("context-compact")
+            .role(gpui::Role::Button)
+            .aria_label(compact_label)
+            .when_some(compact_reason.clone(), |row, reason| {
+                row.aria_description(SharedString::from(reason))
+            })
+            .when(!compact_enabled, |row| {
+                row.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+            })
             .h(crate::typography::ui_rems(30.0))
             .px(crate::typography::ui_rems(8.0))
             .rounded(px(6.0))
@@ -8089,6 +8132,8 @@ impl Pickers {
         };
         let clear = div()
             .id("context-clear")
+            .role(gpui::Role::Button)
+            .aria_label(clear_label)
             .h(crate::typography::ui_rems(30.0))
             .px(crate::typography::ui_rems(8.0))
             .rounded(px(6.0))
@@ -8201,13 +8246,15 @@ impl Pickers {
     }
 
     /// One model row for the virtualized list. `ix` is the row's GLOBAL index
-    /// (⌘N chips, hover-cursor, and activation all key on it). The 2px
-    /// inter-row gap is baked into each item's bottom padding so every item
-    /// is the same height (uniform_list measures the first).
+    /// (⌘N chips, hover-cursor, and activation all key on it) out of
+    /// `set_size` rows. The 2px inter-row gap is baked into each item's
+    /// bottom padding so every item is the same height (uniform_list
+    /// measures the first).
     fn render_model_row(
         &mut self,
         ix: usize,
         row: &ModelRowData,
+        set_size: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
@@ -8241,8 +8288,52 @@ impl Pickers {
                 model_is_new(&row.model, catalog, chrono::Utc::now().timestamp_millis())
             });
         let compact = self.model_rail == ModelRail::Harness;
+        // The accessible name is the row's visible text, model first: the
+        // provider on the mixed favorites tab and the OpenCode attribution
+        // keep identically named models apart.
+        let mut name = label.to_string();
+        if !compact {
+            name = format!("{name}, {harness_name}");
+        }
+        if let Some(attribution) = &attribution {
+            name = format!("{name}, {attribution}");
+        }
+        let name = SharedString::from(name);
+        let row_entity = cx.entity().downgrade();
         let mut el = div()
-            .id(("model-row", ix))
+            // Keyed by the model, not its position: a star reorders the
+            // list, and a screen reader's cursor stays on the node it
+            // pressed, which must still be the same model.
+            .id(gpui::ElementId::NamedChild(
+                std::sync::Arc::new(gpui::ElementId::Name(format!("model-row-{harness}").into())),
+                row.model.id.clone().into(),
+            ))
+            .role(gpui::Role::ListBoxOption)
+            .aria_label(name.clone())
+            .aria_selected(is_selected)
+            .aria_position_in_set(ix + 1)
+            .aria_size_of_set(set_size)
+            .when(ix < 9, |el| el.aria_keyshortcuts(format!("⌘{}", ix + 1)))
+            .when(is_new, |el| el.aria_description("New"))
+            // Picked directly: a synthetic click at the row's centre misses
+            // a row the list clips at its edge.
+            .on_a11y_action(gpui::AccessibleAction::Click, {
+                let row_entity = row_entity.clone();
+                move |_, _, cx| {
+                    row_entity
+                        .update(cx, |this, cx| this.activate_model_index(ix, cx))
+                        .ok();
+                }
+            })
+            .on_a11y_action(gpui::AccessibleAction::ScrollIntoView, move |_, _, cx| {
+                row_entity
+                    .update(cx, |this, cx| {
+                        this.model_scroll
+                            .scroll_to_item(ix, gpui::ScrollStrategy::Nearest);
+                        cx.notify();
+                    })
+                    .ok();
+            })
             .px(crate::typography::ui_rems(8.0))
             .py(px(if compact { 5.0 } else { 6.0 }))
             .rounded(px(popover::MENU_ITEM_RADIUS))
@@ -8377,9 +8468,25 @@ impl Pickers {
         if ix < 9 {
             el = el.child(popover::kbd_hint(&theme, &format!("⌘{}", ix + 1)));
         }
+        let star_entity = cx.entity().downgrade();
+        let star_a11y_model = star_model.clone();
         el = el.child(
             div()
-                .id(("model-star", ix))
+                .id("model-star")
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!("Favorite {name}")))
+                .aria_toggled(if is_fav {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                    star_entity
+                        .update(cx, |this, cx| {
+                            this.toggle_model_favorite(harness, &star_a11y_model, cx)
+                        })
+                        .ok();
+                })
                 .flex_none()
                 .w(crate::typography::ui_rems(22.0))
                 .h(crate::typography::ui_rems(22.0))
@@ -8576,12 +8683,36 @@ impl Pickers {
             let exit_id = id.clone();
             let exit_entity = cx.entity().downgrade();
             let entity = cx.entity().downgrade();
+            let press_id = id.clone();
+            let press_entity = cx.entity().downgrade();
             let mut row = popover::menu_row(
                 &theme,
                 open || self.active == base_index + ix,
                 format!("model-setting-{ix}"),
             )
             .id(("model-setting", ix))
+            .role(gpui::Role::ComboBox)
+            .aria_label(SharedString::from(group.label.clone()))
+            .aria_value(SharedString::from(value.clone()))
+            .aria_expanded(open)
+            // The pointer opens the choices by hovering, and its click only
+            // dismisses them; a press from assistive tech opens or closes
+            // them, as Right/Enter and Left/Escape do from the keyboard.
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                press_entity
+                    .update(cx, |this, cx| {
+                        this.active = base_index + ix;
+                        if this.setting_menu.as_ref() == Some(&press_id) {
+                            this.cancel_setting_hover();
+                            this.setting_menu = None;
+                            this.setting_bounds = None;
+                            cx.notify();
+                        } else {
+                            this.open_setting(press_id.clone(), cx);
+                        }
+                    })
+                    .ok();
+            })
             .relative()
             .h(crate::typography::ui_rems(30.0))
             .py(px(0.0))
@@ -8686,6 +8817,7 @@ impl Pickers {
             );
             if open {
                 let entity = cx.entity().downgrade();
+                let choice_count = group.choices.len();
                 let menu = popover::popover_card(&theme)
                     .w(crate::typography::ui_rems(232.0))
                     .relative()
@@ -8693,6 +8825,8 @@ impl Pickers {
                     .child(
                         div()
                             .id("model-setting-choices")
+                            .role(gpui::Role::ListBox)
+                            .aria_label(SharedString::from(group.label.clone()))
                             .max_h(crate::typography::ui_rems(240.0))
                             .overflow_y_scroll()
                             .track_scroll(&self.setting_scroll)
@@ -8701,12 +8835,32 @@ impl Pickers {
                             .gap(px(2.0))
                             .children(group.choices.into_iter().enumerate().map(
                                 |(choice_ix, choice)| {
+                                    let choice_entity = cx.entity().downgrade();
                                     popover::menu_row(
                                         &theme,
                                         choice_ix == self.setting_active,
                                         format!("setting-choice-{ix}-{choice_ix}"),
                                     )
                                     .id(("setting-choice", choice_ix))
+                                    .role(gpui::Role::ListBoxOption)
+                                    .aria_label(SharedString::from(choice.label.clone()))
+                                    .aria_selected(choice.selected)
+                                    .aria_position_in_set(choice_ix + 1)
+                                    .aria_size_of_set(choice_count)
+                                    .when(choice.default, |el| el.aria_description("Default"))
+                                    // Picked directly: the choices scroll, so a
+                                    // synthetic click can miss a clipped one.
+                                    .on_a11y_action(
+                                        gpui::AccessibleAction::Click,
+                                        move |_, _, cx| {
+                                            choice_entity
+                                                .update(cx, |this, cx| {
+                                                    this.setting_active = choice_ix;
+                                                    this.activate_setting_choice(cx);
+                                                })
+                                                .ok();
+                                        },
+                                    )
                                     .h(crate::typography::ui_rems(30.0))
                                     .py(px(0.0))
                                     .flex_none()
@@ -8905,6 +9059,29 @@ pub(crate) fn new_model_badge(theme: &Theme) -> gpui::Div {
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(tone)
         .child(SharedString::from("New"))
+}
+
+/// A tab of the model menu's provider strip: an announced Tab with its
+/// selected state and a keyboard stop (Enter/Space through GPUI's keyboard
+/// click). A pointer press leaves focus in the search field, so typing after
+/// a click still filters.
+fn model_tab(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    focus: gpui::Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::Tab)
+        .aria_label(label)
+        .aria_selected(selected)
+        .tab_index(0)
+        .focus_visible(move |style| crate::theme::focus_ring(style, focus))
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            window.prevent_default()
+        })
+        .on_key_down(crate::swallow_activation_key)
 }
 
 /// Brand mark + optional tint for a harness (the Claude mark keeps its brand
@@ -10493,6 +10670,316 @@ mod tests {
             assert_eq!(resolved.model.as_deref(), Some("opus"));
             assert_eq!(resolved.model_options.get("contextWindow"), Some(&one_m));
         });
+    }
+
+    /// The model menu alone in a window, as the composer opens it.
+    struct ModelMenuHost {
+        pickers: Entity<Pickers>,
+    }
+
+    impl Render for ModelMenuHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let menu = self.pickers.update(cx, |pickers, cx| {
+                let content = pickers.render_harness_model_popover(cx);
+                pickers.popover_frame_flush(popover::MENU_W_L, content, cx)
+            });
+            div().size_full().relative().child(
+                div()
+                    .absolute()
+                    .top(px(100.0))
+                    .left(px(32.0))
+                    .w(px(popover::MENU_W_L))
+                    .child(menu),
+            )
+        }
+    }
+
+    /// Opens the model menu with assistive technology connected.
+    fn open_model_menu_for_assistive_tech(
+        cx: &mut gpui::TestAppContext,
+        setup: impl FnOnce(&mut Pickers, &mut Context<Pickers>) + 'static,
+    ) -> (gpui::WindowHandle<ModelMenuHost>, Entity<Pickers>) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let handle = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            let pickers = cx.new(|cx| Pickers::new(state, cx));
+            pickers.update(cx, |pickers, cx| {
+                setup(pickers, cx);
+                pickers.open.open(PickerKind::HarnessModel);
+            });
+            ModelMenuHost { pickers }
+        });
+        cx.simulate_a11y_activation(handle.into());
+        let pickers = handle
+            .read_with(cx, |host, _| host.pickers.clone())
+            .unwrap();
+        (handle, pickers)
+    }
+
+    /// The tree a screen reader would read now, after the frame settles.
+    fn a11y_tree(
+        cx: &mut gpui::TestAppContext,
+        handle: gpui::WindowHandle<ModelMenuHost>,
+    ) -> serde_json::Value {
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+            serde_json::from_str(&window.debug_a11y_tree_json().expect("accessibility active"))
+                .unwrap()
+        })
+        .unwrap()
+    }
+
+    /// Every node with `role`, as (id, aria) in set order.
+    fn a11y_nodes(
+        tree: &serde_json::Value,
+        role: &str,
+    ) -> Vec<(gpui::accesskit::NodeId, serde_json::Value)> {
+        let mut nodes = tree["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|node| node["aria"]["role"] == role)
+            .map(|node| {
+                let id = node["accesskit_id"].as_str().unwrap().parse().unwrap();
+                (gpui::accesskit::NodeId(id), node["aria"].clone())
+            })
+            .collect::<Vec<_>>();
+        nodes.sort_by_key(|(_, aria)| aria["position_in_set"].as_u64());
+        nodes
+    }
+
+    fn a11y_node(
+        tree: &serde_json::Value,
+        role: &str,
+        label: &str,
+    ) -> (gpui::accesskit::NodeId, serde_json::Value) {
+        a11y_nodes(tree, role)
+            .into_iter()
+            .find(|(_, aria)| aria["label"] == label)
+            .unwrap_or_else(|| panic!("no {role} named {label:?} in the accessibility tree"))
+    }
+
+    // Issue #11: the menu read back only its search field, so a screen
+    // reader could neither find nor press the tabs, models, stars and
+    // settings. Fails if any of them loses its role, name or state, or if
+    // pressing it from assistive technology stops doing what a click does.
+    #[gpui::test]
+    fn model_menu_controls_are_named_and_pressable_from_assistive_tech(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let press = gpui::AccessibleAction::Click;
+        let (handle, pickers) = open_model_menu_for_assistive_tech(cx, |pickers, cx| {
+            let mut model = bare_model("test", "Test model");
+            model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
+            model.options.push(ModelOption {
+                id: "contextWindow".into(),
+                label: "Context window".into(),
+                choices: ["200k", "1m"]
+                    .map(|id| ModelOptionChoice {
+                        id: id.into(),
+                        label: id.into(),
+                    })
+                    .into(),
+                default_choice: "200k".into(),
+            });
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.harnesses = Loadable::Ready(vec![
+                descriptor(HarnessId::ClaudeCode, "Claude Code"),
+                descriptor(HarnessId::Codex, "Codex"),
+            ]);
+            pickers.models.insert(
+                HarnessId::ClaudeCode,
+                Loadable::Ready(vec![model, bare_model("other", "Other model")]),
+            );
+            pickers.models.insert(
+                HarnessId::Codex,
+                Loadable::Ready(vec![bare_model("gpt", "GPT model")]),
+            );
+            let account = |id: &str, email: &str, active: bool| -> luna_proto::AgentAccount {
+                serde_json::from_value(serde_json::json!({
+                    "id": id, "harness": "codex", "email": email,
+                    "planLabel": null, "active": active, "switchable": active,
+                }))
+                .unwrap()
+            };
+            pickers.accounts = Loadable::Ready(AgentAccountsSnapshot {
+                accounts: vec![
+                    account("a1", "one@example.com", true),
+                    account("a2", "two@example.com", false),
+                ],
+                warnings: Vec::new(),
+            });
+            pickers.pick_model("test".into(), cx);
+        });
+        let tree = a11y_tree(cx, handle);
+
+        a11y_node(&tree, "TabList", "Providers");
+        let tabs = a11y_nodes(&tree, "Tab");
+        let tabs: Vec<_> = tabs
+            .iter()
+            .map(|(_, tab)| (tab["label"].as_str().unwrap(), tab["selected"] == true))
+            .collect();
+        assert_eq!(
+            tabs,
+            [
+                ("Favorites", false),
+                ("Claude Code", true),
+                ("Codex", false)
+            ]
+        );
+        a11y_node(&tree, "ListBox", "Models");
+        let models: Vec<_> = a11y_nodes(&tree, "ListBoxOption")
+            .into_iter()
+            .map(|(_, option)| {
+                (
+                    option["label"].as_str().unwrap().to_string(),
+                    option["selected"] == true,
+                    option["position_in_set"].as_u64(),
+                    option["size_of_set"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            models,
+            [
+                ("Test model".to_string(), true, Some(1), Some(2)),
+                ("Other model".to_string(), false, Some(2), Some(2)),
+            ]
+        );
+        let (reasoning, aria) = a11y_node(&tree, "ComboBox", "Reasoning");
+        assert_eq!(aria["value"], "High");
+        assert_eq!(aria["expanded"], false);
+
+        // A setting opens on a press (the pointer's click only dismisses it)
+        // and lists its choices; pressing one applies it.
+        cx.simulate_a11y_action(handle.into(), reasoning, press);
+        let tree = a11y_tree(cx, handle);
+        assert_eq!(
+            a11y_node(&tree, "ComboBox", "Reasoning").1["expanded"],
+            true
+        );
+        a11y_node(&tree, "ListBox", "Reasoning");
+        let (low, low_aria) = a11y_node(&tree, "ListBoxOption", "Low");
+        assert_eq!(low_aria["selected"], false);
+        assert_eq!(
+            a11y_node(&tree, "ListBoxOption", "High").1["selected"],
+            true
+        );
+        cx.simulate_a11y_action(handle.into(), low, press);
+        pickers.read_with(cx, |pickers, cx| {
+            assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::Low));
+            assert!(pickers.setting_menu.is_none());
+        });
+        // A second press on an open setting closes it.
+        let tree = a11y_tree(cx, handle);
+        let context = a11y_node(&tree, "ComboBox", "Context window").0;
+        cx.simulate_a11y_action(handle.into(), context, press);
+        assert!(pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_some()));
+        let tree = a11y_tree(cx, handle);
+        let context = a11y_node(&tree, "ComboBox", "Context window").0;
+        cx.simulate_a11y_action(handle.into(), context, press);
+        assert!(pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_none()));
+
+        // The star toggles the favorite, and the row picks its model. The
+        // star floats its row to the top, and the pressed nodes stay on
+        // that model (PR #26 review): pressing them again must not reach
+        // the row that took its place.
+        let tree = a11y_tree(cx, handle);
+        let (star, star_aria) = a11y_node(&tree, "Button", "Favorite Other model");
+        assert_eq!(star_aria["toggled"], "False");
+        let other = a11y_node(&tree, "ListBoxOption", "Other model").0;
+        cx.simulate_a11y_action(handle.into(), star, press);
+        let tree = a11y_tree(cx, handle);
+        let by_id = |role, id| {
+            a11y_nodes(&tree, role)
+                .into_iter()
+                .find(|(node, _)| *node == id)
+                .unwrap_or_else(|| panic!("no {role} {id:?} in the accessibility tree"))
+                .1
+        };
+        let star_aria = by_id("Button", star);
+        assert_eq!(star_aria["label"], "Favorite Other model");
+        assert_eq!(star_aria["toggled"], "True");
+        let other_aria = by_id("ListBoxOption", other);
+        assert_eq!(other_aria["label"], "Other model");
+        assert_eq!(other_aria["position_in_set"], 1);
+        cx.simulate_a11y_action(handle.into(), other, press);
+        assert_eq!(
+            pickers.read_with(cx, |pickers, cx| pickers.current_model_id(cx)),
+            Some("other".to_string())
+        );
+
+        // A provider tab switches provider; Codex then offers its accounts,
+        // the unavailable one without a press.
+        let tree = a11y_tree(cx, handle);
+        let codex = a11y_node(&tree, "Tab", "Codex").0;
+        cx.simulate_a11y_action(handle.into(), codex, press);
+        let tree = a11y_tree(cx, handle);
+        assert_eq!(a11y_node(&tree, "Tab", "Codex").1["selected"], true);
+        a11y_node(&tree, "RadioGroup", "Account");
+        let (_, one) = a11y_node(&tree, "RadioButton", "one@example.com");
+        let (_, two) = a11y_node(&tree, "RadioButton", "two@example.com");
+        assert_eq!(one["toggled"], "True");
+        assert_eq!(two["toggled"], "False");
+        assert!(two["on_action"].is_null());
+    }
+
+    // The model list is virtualized, so only the rows in view existed and a
+    // screen reader stopped at the viewport's edge (PR #26 review). Fails if
+    // the list stops exposing rows past its edge while assistive tech is
+    // connected, or a row stops scrolling itself into view when reached.
+    #[gpui::test]
+    fn screen_readers_reach_every_row_of_a_long_model_list(cx: &mut gpui::TestAppContext) {
+        let (handle, pickers) = open_model_menu_for_assistive_tech(cx, |pickers, cx| {
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.harnesses =
+                Loadable::Ready(vec![descriptor(HarnessId::ClaudeCode, "Claude Code")]);
+            pickers.models.insert(
+                HarnessId::ClaudeCode,
+                Loadable::Ready(
+                    (1..=60)
+                        .map(|n| bare_model(&format!("m{n}"), &format!("Model {n}")))
+                        .collect(),
+                ),
+            );
+            pickers.pick_model("m1".into(), cx);
+        });
+        let positions = |tree: &serde_json::Value| {
+            a11y_nodes(tree, "ListBoxOption")
+                .into_iter()
+                .map(|(_, option)| {
+                    assert_eq!(option["size_of_set"], 60);
+                    option["position_in_set"].as_u64().unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut tree = a11y_tree(cx, handle);
+        let exposed = positions(&tree);
+        // Still virtualized: a window of rows, not the whole catalog.
+        assert_eq!(exposed.first(), Some(&1));
+        assert!(exposed.len() < 60, "{exposed:?}");
+        // Walking onto the last exposed row scrolls it into view, which
+        // exposes the next ones, until the end of the catalog.
+        for _ in 0..60 {
+            if positions(&tree).last() == Some(&60) {
+                break;
+            }
+            let (last, _) = a11y_nodes(&tree, "ListBoxOption").pop().unwrap();
+            cx.simulate_a11y_action(handle.into(), last, gpui::AccessibleAction::ScrollIntoView);
+            tree = a11y_tree(cx, handle);
+        }
+        assert_eq!(positions(&tree).last(), Some(&60));
+        // A row clipped above the viewport still picks its model.
+        let (first, aria) = a11y_nodes(&tree, "ListBoxOption").remove(0);
+        let n = aria["position_in_set"].as_u64().unwrap();
+        assert!(n > 1, "the walk scrolled the list");
+        cx.simulate_a11y_action(handle.into(), first, gpui::AccessibleAction::Click);
+        assert_eq!(
+            pickers.read_with(cx, |pickers, cx| pickers.current_model_id(cx)),
+            Some(format!("m{n}"))
+        );
     }
 
     fn descriptor(id: HarnessId, name: &str) -> HarnessDescriptor {

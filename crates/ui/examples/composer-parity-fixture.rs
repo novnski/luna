@@ -106,6 +106,14 @@
 //! 39. Refresh while an apply is in flight or unknown replaces the flow,
 //!     drops the retained command id, or enables a second apply.
 //!
+//! Model menu accessibility (issue #11, where the native tree held only the
+//! search field):
+//! 40. The model menu's provider tabs, model options, favorite toggles or
+//!     settings are missing from the native accessibility tree, unnamed,
+//!     without their selected/toggled/current value, or not pressable; or
+//!     opening a setting from the keyboard leaves its choices out of the tree
+//!     or marks no current choice.
+//!
 //! The host refuses a second preview from a source whose earlier transfer is
 //! still planned; steps first let the destination send (consuming it).
 //!
@@ -323,6 +331,86 @@ fn move_mouse(
         window.refresh();
     })?;
     Ok(())
+}
+
+/// AccessKit's macOS adapter activates on the first AX query to the window's
+/// content view; a headless fixture has no screen reader, so it asks itself.
+#[cfg(target_os = "macos")]
+fn activate_accessibility(window: &gpui::Window) -> anyhow::Result<()> {
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("window handle unavailable: {error}"))?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        anyhow::bail!("fixture window is not an AppKit window");
+    };
+    let view = appkit.ns_view.as_ptr().cast::<AnyObject>();
+    // SAFETY: the view belongs to this live window on the main thread; each
+    // returned pointer is checked before it is messaged.
+    let ns_window: *mut AnyObject = unsafe { objc2::msg_send![view, window] };
+    anyhow::ensure!(!ns_window.is_null(), "fixture view has no NSWindow");
+    let content: *mut AnyObject = unsafe { objc2::msg_send![ns_window, contentView] };
+    anyhow::ensure!(!content.is_null(), "fixture NSWindow has no content view");
+    let _children: *mut AnyObject = unsafe { objc2::msg_send![content, accessibilityChildren] };
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_accessibility(_: &gpui::Window) -> anyhow::Result<()> {
+    anyhow::bail!("AccessKit activation readback is implemented for macOS only")
+}
+
+/// The AccessKit tree GPUI last sent for the window.
+fn a11y_tree(
+    window: WindowHandle<shell::Shell>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<serde_json::Value> {
+    let json = gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window.draw(cx).clear();
+        window.debug_a11y_tree_json()
+    })?;
+    let json = json.ok_or_else(|| anyhow::anyhow!("AccessKit tree was not built"))?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+/// The semantics of every `role` node: its `aria`, with its children's
+/// `aria` nested under `children`, in tree order.
+fn a11y_nodes(tree: &serde_json::Value, role: &str) -> Vec<serde_json::Value> {
+    let nodes = tree["nodes"].as_object().cloned().unwrap_or_default();
+    let children = |node: &serde_json::Value| -> Vec<serde_json::Value> {
+        node["children"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|key| nodes.get(key.as_str()?))
+            .map(|child| child["aria"].clone())
+            .collect()
+    };
+    nodes
+        .values()
+        .filter(|node| node["aria"]["role"] == role)
+        .map(|node| {
+            let mut aria = node["aria"].clone();
+            aria["children"] = serde_json::Value::Array(children(node));
+            aria
+        })
+        .collect()
+}
+
+/// The children of the `role` node labelled `label`.
+fn a11y_children(tree: &serde_json::Value, role: &str, label: &str) -> Vec<serde_json::Value> {
+    a11y_nodes(tree, role)
+        .into_iter()
+        .find(|node| node["label"] == label)
+        .and_then(|node| node["children"].as_array().cloned())
+        .unwrap_or_default()
+}
+
+fn has_action(aria: &serde_json::Value, action: &str) -> bool {
+    aria["on_action"]
+        .as_array()
+        .is_some_and(|actions| actions.iter().any(|value| value == action))
 }
 
 /// Both composers' readbacks (main, pane bound to `side`).
@@ -905,6 +993,134 @@ fn main() -> anyhow::Result<()> {
                         "the model menu must offer Speed: Standard / Fast: {options:?}"
                     );
                     record.insert("modelMenu".into(), serde_json::json!(options));
+                    window.update(cx, |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_close(cx));
+                    })?;
+                    settle(cx, 500).await;
+
+                    // c09b (case 40). The same menu in the native accessibility
+                    // tree. The pointer rests off the menu, so the keyboard
+                    // cursor opens on the selected row.
+                    move_mouse(window, cx, 1.0, 1.0)?;
+                    let rows = window.update(cx, |shell, window, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
+                        let pickers = pickers.read(cx);
+                        (pickers.fixture_model_rows(cx), pickers.current_model_id(cx))
+                    })?;
+                    settle(cx, 800).await;
+                    gpui::AnyWindowHandle::from(window)
+                        .update(cx, |_, window, _| activate_accessibility(window))??;
+                    let tree = a11y_tree(window, cx)?;
+                    let (rows, current) = rows;
+                    let rows = rows.as_array().cloned().unwrap_or_default();
+                    let tabs = a11y_children(&tree, "TabList", "Providers");
+                    anyhow::ensure!(
+                        tabs.len() >= 2
+                            && tabs[0]["label"] == "Favorites"
+                            && tabs.iter().all(|tab| {
+                                tab["role"] == "Tab"
+                                    && tab["label"].as_str().is_some_and(|label| !label.is_empty())
+                                    && has_action(tab, "Click")
+                                    && has_action(tab, "Focus")
+                            })
+                            && tabs.iter().filter(|tab| tab["selected"] == true).count() == 1,
+                        "the model menu's provider tabs are not named, selectable, keyboard-reachable tabs: {tabs:?}"
+                    );
+                    let models = a11y_children(&tree, "ListBox", "Models");
+                    anyhow::ensure!(
+                        models.len() == rows.len()
+                            && models.iter().filter(|option| option["selected"] == true).count() == 1,
+                        "the model menu's rows are not one listbox option each with one selected: {models:?} for {rows:?}"
+                    );
+                    for (ix, (option, row)) in models.iter().zip(&rows).enumerate() {
+                        let label = row["label"].as_str().unwrap_or_default();
+                        let name = option["label"].as_str().unwrap_or_default();
+                        let star = &option["children"][0];
+                        anyhow::ensure!(
+                            option["role"] == "ListBoxOption"
+                                && (name == label || name.starts_with(&format!("{label}, ")))
+                                && option["selected"] == (row["id"].as_str() == current.as_deref())
+                                && option["position_in_set"] == ix + 1
+                                && option["size_of_set"] == rows.len()
+                                && has_action(option, "Click")
+                                && has_action(option, "ScrollIntoView")
+                                && option["children"].as_array().map_or(0, Vec::len) == 1
+                                && star["role"] == "Button"
+                                && star["label"] == format!("Favorite {name}")
+                                && (star["toggled"] == "True" || star["toggled"] == "False")
+                                && has_action(star, "Click"),
+                            "model option {ix} does not expose {label}, its selection and its favorite toggle: {option}"
+                        );
+                    }
+                    let settings = a11y_nodes(&tree, "ComboBox");
+                    let mut named: Vec<&str> =
+                        settings.iter().filter_map(|setting| setting["label"].as_str()).collect();
+                    let mut expected: Vec<&str> =
+                        options.iter().map(|(label, _)| label.as_str()).collect();
+                    named.sort_unstable();
+                    expected.sort_unstable();
+                    anyhow::ensure!(
+                        named == expected
+                            && settings.iter().all(|setting| {
+                                setting["expanded"] == false
+                                    && has_action(setting, "Click")
+                                    && options.iter().any(|(label, choices)| {
+                                        setting["label"] == label.as_str()
+                                            && choices.iter().any(|choice| setting["value"] == choice.as_str())
+                                    })
+                            }),
+                        "the model menu's settings are not closed pop-up buttons naming their current choice: {settings:?} for {options:?}"
+                    );
+                    // The first setting opens from the keyboard (down past the
+                    // model rows, then right) and lists its choices.
+                    let (first, choices) = options.first().cloned().unwrap_or_default();
+                    let start = rows
+                        .iter()
+                        .position(|row| row["id"].as_str() == current.as_deref())
+                        .unwrap_or(0);
+                    for stroke in std::iter::repeat_n("down", rows.len() - start).chain(["right"]) {
+                        let keystroke = gpui::Keystroke::parse(stroke)
+                            .map_err(|error| anyhow::anyhow!("keystroke {stroke}: {error:?}"))?;
+                        gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+                            window.dispatch_keystroke(keystroke, cx);
+                        })?;
+                    }
+                    settle(cx, 300).await;
+                    let open_tree = a11y_tree(window, cx)?;
+                    let opened = a11y_nodes(&open_tree, "ComboBox")
+                        .into_iter()
+                        .find(|setting| setting["label"] == first.as_str())
+                        .unwrap_or_default();
+                    let listed = a11y_children(&open_tree, "ListBox", &first);
+                    let listed_labels: Vec<&str> =
+                        listed.iter().filter_map(|choice| choice["label"].as_str()).collect();
+                    let current_choice: Vec<&serde_json::Value> = listed
+                        .iter()
+                        .filter(|choice| choice["selected"] == true)
+                        .map(|choice| &choice["label"])
+                        .collect();
+                    anyhow::ensure!(
+                        opened["expanded"] == true
+                            && listed_labels == choices
+                            && listed.iter().all(|choice| {
+                                choice["role"] == "ListBoxOption" && has_action(choice, "Click")
+                            })
+                            && current_choice == [&opened["value"]],
+                        "opening {first} does not expose its choices with the current one selected: {opened} {listed:?}"
+                    );
+                    record.insert(
+                        "modelMenuAccessibility".into(),
+                        serde_json::json!({
+                            "tabs": tabs,
+                            "models": models,
+                            "settings": settings,
+                            "opened": {"setting": opened, "choices": listed},
+                        }),
+                    );
                     window.update(cx, |shell, _, cx| {
                         let (main, _) = shell.fixture_composers(None, cx);
                         let pickers = main.read(cx).pickers().clone();
@@ -1844,7 +2060,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("composer-parity.pass"),
-                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group squeezed below 320 px sharing the viewport with no outer scroll, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified; Send findings goes only from a fork to its living source, previews without writing, stores a Planned receipt without starting a turn or touching the draft, refuses a stale or earlier-connection preview, shows a lost answer as unknown and settles it by Check status without resending, refreshes to only new findings; the provider switch has no default choice, drops a preview on a target change, stores a handoff without a turn; Details read without error; receipts survive the fork's deletion; Start new task with context previews into a reserved id kept across refreshes, creates nothing on preview or Cancel, and on apply (a lost answer recovered by Check status) creates exactly one ordinary task on the source's config with a Planned context copy, no child, no native session or turn, opens it, and leaves the source's draft untouched; apply and Check status answers arriving after the engine connection changed settle, open or notify nothing; Refresh and re-targeting refuse while an apply is in flight or unknown, keeping its command id\n",
+                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group squeezed below 320 px sharing the viewport with no outer scroll, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast, and its provider tabs, model options, favorite toggles and settings (a setting's choices once opened) are named, stateful and pressable in the native accessibility tree; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified; Send findings goes only from a fork to its living source, previews without writing, stores a Planned receipt without starting a turn or touching the draft, refuses a stale or earlier-connection preview, shows a lost answer as unknown and settles it by Check status without resending, refreshes to only new findings; the provider switch has no default choice, drops a preview on a target change, stores a handoff without a turn; Details read without error; receipts survive the fork's deletion; Start new task with context previews into a reserved id kept across refreshes, creates nothing on preview or Cancel, and on apply (a lost answer recovered by Check status) creates exactly one ordinary task on the source's config with a Planned context copy, no child, no native session or turn, opens it, and leaves the source's draft untouched; apply and Check status answers arriving after the engine connection changed settle, open or notify nothing; Refresh and re-targeting refuse while an apply is in flight or unknown, keeping its command id\n",
                             )
                         });
                         if let Err(error) = written {

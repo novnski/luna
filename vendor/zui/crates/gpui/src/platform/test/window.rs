@@ -38,6 +38,7 @@ pub(crate) struct TestWindowState {
     is_fullscreen: bool,
     frame_requested: Rc<Cell<bool>>,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
+    a11y_callbacks: Option<crate::A11yCallbacks>,
 }
 
 #[derive(Clone)]
@@ -92,6 +93,7 @@ impl TestWindow {
             is_fullscreen: false,
             frame_requested: Rc::new(Cell::new(true)),
             request_frame_callback: None,
+            a11y_callbacks: None,
         })))
     }
 
@@ -123,6 +125,23 @@ impl TestWindow {
         self.0.lock().resize_callback = Some(callback);
     }
 
+    /// Connect an assistive technology, as a screen reader does when it
+    /// starts reading the window: the window builds its accessibility tree
+    /// from the next frame on.
+    pub(crate) fn simulate_a11y_activation(&self) {
+        if let Some(callbacks) = &self.0.lock().a11y_callbacks {
+            (callbacks.activation)();
+        }
+    }
+
+    /// Deliver an action request from an assistive technology, such as a
+    /// screen reader pressing a node.
+    pub(crate) fn simulate_a11y_action(&self, request: accesskit::ActionRequest) {
+        if let Some(callbacks) = &self.0.lock().a11y_callbacks {
+            (callbacks.action)(request);
+        }
+    }
+
     pub(crate) fn simulate_active_status_change(&self, active: bool) {
         let mut lock = self.0.lock();
         let Some(mut callback) = lock.active_status_change_callback.take() else {
@@ -146,6 +165,10 @@ impl TestWindow {
 }
 
 impl PlatformWindow for TestWindow {
+    fn a11y_init(&self, callbacks: crate::A11yCallbacks) {
+        self.0.lock().a11y_callbacks = Some(callbacks);
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         self.0.lock().bounds
     }
