@@ -246,16 +246,13 @@ impl PeerState {
         if lane == "stdin" && state == "held" && !self.turn_open {
             let who = name.unwrap_or_else(|| "a child chat".into());
             let why = cause.unwrap_or_else(|| "receive policy".into());
-            let message = format!(
-                "Claude held the report from {who} ({why}) instead of delivering it; it has not reached the model. LUNA will not resend it. Review the child chat and continue manually."
-            );
-            out.push(AgentEvent::Error {
-                message: message.clone(),
-            });
+            // The hold is the turn's terminal error: shown once, on Done.
             out.push(AgentEvent::Done {
                 status: DoneStatus::Errored,
                 result: None,
-                error: Some(message),
+                error: Some(format!(
+                    "Claude held the report from {who} ({why}) instead of delivering it; it has not reached the model. LUNA will not resend it. Review the child chat and continue manually."
+                )),
                 session_id: None,
             });
         }
