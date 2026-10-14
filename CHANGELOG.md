@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.3.1 — 2026-10-14
+
+- Make the warnings in **Board → From GitHub issue** readable. A message such as "This project's checkout has no GitHub remote." was printed in near-white text on a bright yellow bar in dark appearance, and in dark text on dark amber in light appearance. It now shows amber text on a faint amber background that stays at least 4.5:1 in every built-in theme. The issue-update dialog's warnings use the same style.
+
 ## 0.3.0 — 2026-10-14
 
 - LUNA no longer supports Windows. Releases ship for macOS and Linux only, and the Windows build, portable package, CI job and Windows-specific code paths are removed. Existing Windows installs stop receiving updates; their data in `%LOCALAPPDATA%\LUNA` is left untouched.

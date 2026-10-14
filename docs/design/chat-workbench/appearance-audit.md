@@ -168,6 +168,7 @@ color.
   inventory below): theme-import failure and appearance error on their 8%
   washes over a settings card, file-watch and preview warnings on their
   washes over the canvas, history restore error on its wash over a menu,
+  the Board GitHub import warning on its wash over the modal picker card,
   validation/warning/success/accent copy on cards, dialogs, menus and inputs
   [text].
 - **States**: focus edge on chrome and canvas, accent focus ring on chrome,
