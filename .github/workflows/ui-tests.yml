@@ -155,8 +155,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-ci
-      - name: Check macOS application
-        run: cargo check --release --locked -p luna
+      # A real app build checks linking too and seeds reusable library objects.
+      # `cargo check` emits metadata only, which sccache cannot reuse here.
+      - name: Build macOS application
+        run: cargo build --release --locked -p luna
       - name: Native diff font geometry regression
         run: cargo test --release --locked -p luna-ui --lib native_diff_font_geometry -- --test-threads=1
       - name: Native notification click regressions

@@ -53,6 +53,8 @@ The existing local mbx cache is independent.
 The `UI tests` workflow overrides only its release test profile: optimization
 level 1, LTO off, 16 codegen units, and no debug information. All existing test
 targets, feature variants, assertions, fixture runs and evidence uploads remain.
+The macOS application compile check is a full build, so it verifies linking and
+shares compiled libraries instead of generating a separate metadata-only graph.
 Release and TestFlight packaging retain their original profiles and thin LTO.
 This is CI tooling only; it does not require a product version bump or a local
 app refresh.
