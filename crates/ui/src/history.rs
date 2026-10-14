@@ -1332,9 +1332,11 @@ pub struct GitHistory {
     /// in for "not loaded yet": that re-requested the page on every render
     /// and pinned the pane on its spinner (user report).
     loaded: bool,
-    /// The diff watch's revision for this checkout (see
+    /// The diff watch's latest revision for this checkout (see
     /// [`Self::note_checkout_revision`]).
     checkout_revision: Option<String>,
+    /// `checkout_revision` when the latest first-page read was requested.
+    read_revision: Option<String>,
     error: Option<SharedString>,
     graph: GraphLayout,
     graph_lane_capacity: usize,
@@ -1982,6 +1984,7 @@ impl GitHistory {
             loading: false,
             loaded: false,
             checkout_revision: None,
+            read_revision: None,
             error: None,
             graph: GraphLayout::default(),
             graph_lane_capacity: 0,
@@ -2067,6 +2070,7 @@ impl GitHistory {
             self.loading = false;
             self.loaded = false;
             self.checkout_revision = None;
+            self.read_revision = None;
             return;
         };
         if self.target_key.as_deref() == Some(key.as_str()) {
@@ -2083,6 +2087,7 @@ impl GitHistory {
         self.loading = false;
         self.loaded = false;
         self.checkout_revision = None;
+        self.read_revision = None;
         self.target_key = Some(key.clone());
         self.commits.clear();
         self.visible_commits.clear();
@@ -2126,19 +2131,23 @@ impl GitHistory {
 
     /// Follow the checkout's diff-watch revision, whose checksum covers HEAD.
     /// Loaded history otherwise waits for an explicit refresh, but an empty
-    /// one (an unborn branch) has no rows to keep stable: re-read it when the
-    /// checkout moves so the first commit appears on its own. The first
-    /// revision seen for a target is an observation, not a move.
+    /// one (an unborn branch) has no rows to keep stable: it is current only
+    /// for the revision its read was requested at, so the first commit
+    /// appears on its own. A move during a read is caught up when the read
+    /// lands ([`Self::catch_up_empty_page`]), never by cancelling it.
     pub fn note_checkout_revision(&mut self, revision: Option<String>, cx: &mut Context<Self>) {
-        if self.checkout_revision == revision {
+        // No diff (yet, or for a moment) says nothing about HEAD.
+        if revision.is_none() || self.checkout_revision == revision {
             return;
         }
-        let moved = self.checkout_revision.is_some();
         self.checkout_revision = revision;
-        if moved && self.loaded && self.commits.is_empty() {
-            // A read already in flight may predate the move.
-            self.request_task = None;
-            self.loading = false;
+        if !self.loading {
+            self.catch_up_empty_page(cx);
+        }
+    }
+
+    fn catch_up_empty_page(&mut self, cx: &mut Context<Self>) {
+        if self.loaded && self.commits.is_empty() && self.read_revision != self.checkout_revision {
             self.refresh(cx);
         }
     }
@@ -2699,6 +2708,9 @@ impl GitHistory {
         };
         self.loading = true;
         self.error = None;
+        if reset {
+            self.read_revision = self.checkout_revision.clone();
+        }
         cx.notify();
         self.request_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::Map::new();
@@ -2788,6 +2800,7 @@ impl GitHistory {
                         if let Some(query) = restart_search {
                             history.request_search_page(query, 0, true, Duration::ZERO, cx);
                         }
+                        history.catch_up_empty_page(cx);
                     }
                     Err(error) => history.error = Some(error.to_string().into()),
                 }
