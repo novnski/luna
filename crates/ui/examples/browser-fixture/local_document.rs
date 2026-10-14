@@ -64,6 +64,12 @@ pub(super) async fn exercise(
     });
     pause(cx, 200).await;
 
+    // The source opens in Files, whose header offers the rendered preview.
+    window.update(cx, |shell, w, cx| {
+        shell.fixture_open_file("playwright-report/index.html", w, cx)
+    })?;
+    pause(cx, 1500).await;
+    capture(output, "browser-local-source")?;
     window.update(cx, |shell, w, cx| {
         shell.fixture_open_rendered_preview("playwright-report/index.html", w, cx)
     })?;
