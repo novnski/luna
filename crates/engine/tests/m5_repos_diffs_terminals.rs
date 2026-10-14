@@ -837,6 +837,82 @@ async fn diff_sync_publishes_without_rewriting_chat_branch() {
     core.shutdown().await;
 }
 
+/// A task started in a plain folder has no checkout to diff. When `git init`
+/// turns its project into a repository mid-task, the project's Git stamp is
+/// the signal: the task's diff must not wait for an unrelated chat-row edit or
+/// the two-minute repair tick (user report: Changes stuck on "Preparing diff…"
+/// until the next turn).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diff_sync_discovers_a_repository_initialized_mid_task() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let folder = tmp.path().join("plain-project");
+    std::fs::create_dir_all(&folder).expect("folder");
+    std::fs::write(folder.join("app.js"), "console.log('habits');\n").expect("source file");
+
+    let core = assemble(&tmp.path().join("data"));
+    core.workspace
+        .create_space(
+            "space-plain",
+            &core.device_id,
+            &folder.to_string_lossy(),
+            None,
+            false,
+        )
+        .expect("space row");
+    core.workspace
+        .create_chat("chat-plain", Some("space-plain"), None, None, None)
+        .expect("chat row");
+    let mut chats_rx = core.workspace.watch_chats();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !chats_rx
+        .borrow_and_update()
+        .iter()
+        .any(|chat| chat.id == "chat-plain")
+    {
+        tokio::time::timeout_at(deadline, chats_rx.changed())
+            .await
+            .expect("chat row reached the watch before timeout")
+            .expect("watch alive");
+    }
+    core.diff_sync.reconcile_now().await;
+    assert!(
+        core.diff_sync.watch_diffs().borrow().is_empty(),
+        "a plain folder has no checkout diff"
+    );
+
+    // The terminal's `git init`; the explicit recheck stands in for the
+    // project folder watcher's kick, as in the stamping test above.
+    git(&folder, &["init", "-b", "main"]).await;
+    core.spaces_sync.reconcile_now().await;
+
+    let mut diffs_rx = core.diff_sync.watch_diffs();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let diff = loop {
+        {
+            let diffs = diffs_rx.borrow().clone();
+            if let Some(diff) = diffs.first() {
+                break diff.clone();
+            }
+        }
+        tokio::time::timeout_at(deadline, diffs_rx.changed())
+            .await
+            .expect("new repository diff published before timeout")
+            .expect("watch alive");
+    };
+    assert!(
+        diff.files.iter().any(|file| file.path == "app.js"),
+        "the unborn repository's untracked file is in the diff: {:?}",
+        diff.files
+    );
+    let chat = core
+        .workspace
+        .chat("chat-plain")
+        .expect("read chat")
+        .expect("row");
+    assert_eq!(chat.checkout_id.as_deref(), Some(diff.checkout_id.as_str()));
+    core.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkout_file_diff_text_rpc_fits_the_default_worker_stack() {
     let tmp = tempfile::tempdir().expect("tempdir");
