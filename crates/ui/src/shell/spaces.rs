@@ -1323,20 +1323,54 @@ impl Shell {
                 .get(crate::settings::ShortcutId::NewSession),
         );
         let route = self.route;
-        let rows = SidebarNavItem::ALL.into_iter().map(|item| {
-            let id = format!("sidebar-nav-{}", item.key());
+        // CORE-12: the rows come from the contribution registry: the built-in
+        // ones in their shipped order, then the enabled extensions' pages.
+        // Built-in rows keep their keys (element ids and QA probes).
+        let listed: Vec<(
+            SidebarNavItem,
+            String,
+            SharedString,
+            SharedString,
+            &'static str,
+        )> = self
+            .contributions
+            .registry
+            .placed(luna_proto::UiPlacement::SidebarSection)
+            .filter_map(|contribution| {
+                let item = contribution.sidebar_item()?;
+                let key = match contribution.entry() {
+                    None => item.key().to_owned(),
+                    Some(_) => format!("ext-{}", contribution.key.slug()),
+                };
+                Some((
+                    item,
+                    key,
+                    contribution.title.clone(),
+                    contribution.accessible_label(),
+                    contribution.icon,
+                ))
+            })
+            .collect();
+        let labels: Vec<String> = listed
+            .iter()
+            .map(|(_, key, ..)| format!("nav-{key}"))
+            .collect();
+        let rows = listed.into_iter().map(|(item, key, label, aria, glyph)| {
+            let id = format!("sidebar-nav-{key}");
             let current = matches!(item, SidebarNavItem::Page(page) if route == Route::Page(page));
             let hint = (item == SidebarNavItem::NewThread && !new_thread_combo.is_empty())
                 .then(|| new_thread_combo.clone());
             #[cfg(feature = "appshots-fixture")]
-            self.sidebar_mark(format!("nav:{}", item.key()), || {
-                vec![item.label().to_owned(), format!("current={current}")]
+            self.sidebar_mark(format!("nav:{key}"), || {
+                vec![label.to_string(), format!("current={current}")]
             });
+            let selector = id.clone();
             div()
                 .id(SharedString::from(id.clone()))
+                .debug_selector(move || selector)
                 .group(SharedString::from(id.clone()))
                 .role(gpui::Role::Button)
-                .aria_label(item.label())
+                .aria_label(aria)
                 .aria_selected(current)
                 .tab_index(0)
                 .w_full()
@@ -1369,7 +1403,7 @@ impl Shell {
                 .on_click(cx.listener(move |this, _, _, cx| this.activate_sidebar_nav(item, cx)))
                 .on_key_down(crate::swallow_activation_key)
                 .child(
-                    icon(item.icon())
+                    icon(glyph)
                         .size(crate::typography::ui_rems(16.0))
                         .flex_none()
                         .text_color(if current {
@@ -1378,7 +1412,7 @@ impl Shell {
                             theme.text_muted
                         }),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(item.label()))
+                .child(div().flex_1().min_w_0().truncate().child(label))
                 .when_some(hint, |row, hint| {
                     // The shortcut shows under the pointer only.
                     row.child(
@@ -1395,10 +1429,6 @@ impl Shell {
                 })
                 .into_any_element()
         });
-        let labels: Vec<String> = SidebarNavItem::ALL
-            .iter()
-            .map(|item| format!("nav-{}", item.key()))
-            .collect();
         let list = div()
             .flex_none()
             .flex()

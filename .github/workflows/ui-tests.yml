@@ -87,6 +87,19 @@ jobs:
       - name: Provider extensions (CORE-08)
         if: ${{ !cancelled() }}
         run: cargo test --locked -p luna-engine --test extension_providers -- --nocapture
+      # CORE-11 E11: OpenCode through its first-party provider package (the
+      # luna-opencode-worker binary Cargo builds for these targets, scripted
+      # OpenCode 2 servers), against the retained in-process baseline.
+      - name: OpenCode provider package (CORE-11)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p luna-engine --test opencode_package_parity \
+            --test opencode_package_lifecycle --test board_tools_opencode_package_e2e -- --nocapture
+      # CORE-12 E12: UI contributions of installed packages over the real
+      # install, enable, update, safe-mode and disable path (Python peer).
+      - name: UI contributions (CORE-12)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p luna-engine --test extension_ui -- --nocapture
       # AW-09: read-only storage accounting and engine diagnostics over a
       # disposable profile, checked against an independent walk.
       - name: Diagnostics and storage accounting (AW-09)

@@ -1255,11 +1255,13 @@ mod claude_history;
 mod context_transfer;
 mod diagnostics;
 mod extension_providers;
+mod extension_ui;
 mod extensions;
 mod host_capacity;
 mod native_extensions;
 mod prompt_stash;
 mod provider_defaults;
+mod remote_commands;
 mod remote_projections;
 mod side_chats;
 mod task_work;
@@ -3027,10 +3029,32 @@ impl EngineRpc {
 
     async fn execute_task_command_with_fences(
         &self,
+        command: TaskCommandParams,
+        legacy: bool,
+        send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
+        automation_fence: Option<automations::AutomationCommandFence<'_>>,
+    ) -> Result<CommandReceipt, RpcError> {
+        Box::pin(self.execute_task_command_with_identity(
+            command,
+            legacy,
+            send_fence,
+            automation_fence,
+            None,
+        ))
+        .await
+    }
+
+    /// The task command pipeline. `payload_identity`, when given, is the
+    /// receipt's `payloadHash` in place of the intent's own hash: RM-04 binds
+    /// a remote command's id to its remote payload, which a host translation
+    /// (such as a first message's run configuration) must not change.
+    async fn execute_task_command_with_identity(
+        &self,
         mut command: TaskCommandParams,
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
         automation_fence: Option<automations::AutomationCommandFence<'_>>,
+        payload_identity: Option<String>,
     ) -> Result<CommandReceipt, RpcError> {
         if self.derived_fork_document(&command.task_id) {
             return Err(RpcError::Failed(
@@ -3100,8 +3124,11 @@ impl EngineRpc {
                 command.expected_turn_id = current.active_turn_id.clone();
             }
         }
-        let payload_hash = canonical_payload_hash(&command.intent)
-            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let payload_hash = match payload_identity {
+            Some(identity) => identity,
+            None => canonical_payload_hash(&command.intent)
+                .map_err(|error| RpcError::Failed(error.to_string()))?,
+        };
         let now = crate::now_ms();
         let pending = CommandReceipt {
             command_id: command.command_id.clone(),
@@ -9399,6 +9426,23 @@ impl RpcService for EngineRpc {
             }
         })
     }
+
+    /// RM-04: a paired device session's command (`remote_commands`). Only
+    /// the per-connection remote guard calls this, with the principal it
+    /// validated; the local owner's `handle` refuses the same method.
+    fn handle_remote<'async_trait>(
+        self: std::sync::Arc<Self>,
+        principal: luna_rpc::remote_auth::RemotePrincipal,
+        method: String,
+        params: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<RpcReply, RpcError>> + Send + 'async_trait>,
+    >
+    where
+        Self: 'async_trait,
+    {
+        Box::pin(remote_commands::admit(self, principal, method, params))
+    }
 }
 
 /// Whether `method` runs the task command pipeline: those methods are
@@ -9441,11 +9485,22 @@ impl EngineRpc {
         if extension_providers::handles(method) {
             return self.handle_extension_providers(&params);
         }
+        if extension_ui::handles(method) {
+            return self.handle_extension_ui(method, params).await;
+        }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
         if remote_projections::handles(method) {
             return self.handle_remote_projection(method, params);
+        }
+        if remote_commands::handles(method) {
+            // RM-04: admitted only for a paired device session, through
+            // `handle_remote`. No caller here has one, and parameters
+            // cannot carry one.
+            return Err(RpcError::Failed(
+                "remote authorization denied: remote task commands are admitted only for a paired device session".into(),
+            ));
         }
         if context_transfer::handles(method) {
             return self.handle_context_transfer(method, params);

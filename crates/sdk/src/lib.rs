@@ -15,10 +15,13 @@
 //!   paired host's task projections ([`Client::watch_remote_tasks`]).
 //! - [`SdkError`]: typed errors whose [`SdkError::kind`] the TypeScript SDK
 //!   shares. A domain refusal is a receipt, not an error.
+//! - [`outbox`]: RM-04's host-keyed outbox of paired-device task commands
+//!   ([`Client::execute_remote`]), settled only by the host's own receipts.
 
 mod client;
 mod error;
 pub mod ops;
+pub mod outbox;
 mod projection;
 #[cfg(feature = "schema")]
 pub mod schema;

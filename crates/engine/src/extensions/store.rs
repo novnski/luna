@@ -277,7 +277,8 @@ impl PackageStore {
         let path = self.package_dir(package_hash).join(EXTENSION_MANIFEST_FILE);
         let bytes = read_regular_file(&path, MAX_MANIFEST_BYTES as u64)
             .map_err(|error| format!("the installed manifest could not be read: {error}"))?;
-        let validated = manifest::validate(&bytes)?;
+        // An installed package may be LUNA's own (CORE-11, reserved namespace).
+        let validated = manifest::validate_installed(&bytes)?;
         if validated.package_hash != package_hash {
             return Err("the installed manifest changed after installation".into());
         }

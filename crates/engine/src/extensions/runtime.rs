@@ -268,6 +268,21 @@ fn isolation(runtime: ExtensionRuntimeKind) -> ExtensionIsolation {
     }
 }
 
+/// [`isolation`] for one package: LUNA's own native workers inherit the
+/// engine's environment (CORE-11), so the allow-list is not enforced there.
+fn isolation_of(runtime: ExtensionRuntimeKind, extension_id: &ExtensionId) -> ExtensionIsolation {
+    let mut isolation = isolation(runtime);
+    if runtime == ExtensionRuntimeKind::Native
+        && super::providers::first_party::is_first_party(extension_id)
+    {
+        isolation
+            .enforced
+            .retain(|mechanism| mechanism != "environmentAllowList");
+        isolation.not_enforced.push("environmentAllowList".into());
+    }
+    isolation
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Starting,
@@ -1323,7 +1338,7 @@ fn view(instance: &Instance) -> ExtensionInstanceView {
             .unwrap_or_default(),
         portable: handshake.and_then(|handshake| handshake.portable.clone()),
         limits: instance.shared.limits.view(),
-        isolation: isolation(principal.runtime),
+        isolation: isolation_of(principal.runtime, &principal.extension_id),
         usage: instance
             .shared
             .usage

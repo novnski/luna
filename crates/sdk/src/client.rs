@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use luna_proto::remote_command::RemoteTaskCommand;
 use luna_proto::remote_projection::{
     ProjectionCursor, RemoteTaskItem, RemoteTaskParams, RemoteTasksItem, RemoteTasksParams,
 };
@@ -15,9 +16,9 @@ use serde::de::DeserializeOwned;
 
 use crate::SdkError;
 use crate::ops::{
-    self, CommandIntent, DescribeApi, EmptyParams, ExecuteTaskCommand, ExecuteTaskCommandParams,
-    GetEngineInfo, GetTaskCommandReceipt, GetTaskCommandSnapshot, Operation,
-    TaskCommandReceiptParams, TaskCommandSnapshotParams, TaskIntent,
+    self, CommandIntent, DescribeApi, EmptyParams, ExecuteRemoteTaskCommand, ExecuteTaskCommand,
+    ExecuteTaskCommandParams, GetEngineInfo, GetTaskCommandReceipt, GetTaskCommandSnapshot,
+    Operation, TaskCommandReceiptParams, TaskCommandSnapshotParams, TaskIntent,
 };
 use crate::projection::ProjectionStream;
 use crate::watch::TaskCommandWatch;
@@ -392,6 +393,94 @@ impl<T: Transport> Client<T> {
         Ok(receipt)
     }
 
+    /// RM-04: admit one paired-device command and return its durable receipt.
+    ///
+    /// `actor_id` is the receipt actor this connection's device session
+    /// produces (`luna_proto::remote_command::remote_actor_id`). The host
+    /// binds the command id to that actor and to the command's payload
+    /// identity; a receipt naming another actor, task or payload is never
+    /// taken for this command's. As with [`Client::execute`], a refusal is a
+    /// receipt and `pending` is not success. When the reply is lost the
+    /// receipt is read back by the same id first; only when the host has
+    /// none is the identical command sent once more (the host deduplicates
+    /// it). If the receipt cannot be read either, the result is
+    /// [`SdkError::UnknownOutcome`]. A refusal the host answered (denied,
+    /// bad params, unsupported) is returned as it is.
+    pub async fn execute_remote(
+        &self,
+        command: &RemoteTaskCommand,
+        actor_id: &str,
+    ) -> Result<CommandReceipt, SdkError> {
+        self.require::<ExecuteRemoteTaskCommand>()?;
+        command
+            .validate()
+            .map_err(|message| SdkError::InvalidRequest {
+                operation: ExecuteRemoteTaskCommand::NAME,
+                message,
+            })?;
+        let first = match self.submit_remote(command, actor_id).await {
+            Ok(receipt) => return Ok(receipt),
+            Err(error) if !error.may_have_been_admitted() => return Err(error),
+            Err(error) => error,
+        };
+        match self.remote_receipt(command, actor_id).await? {
+            Some(receipt) => Ok(receipt),
+            None => match self.submit_remote(command, actor_id).await {
+                Ok(receipt) => Ok(receipt),
+                Err(error) if !error.may_have_been_admitted() => Err(error),
+                // No receipt after a second failure means it was not admitted.
+                Err(_) => self.remote_receipt(command, actor_id).await?.ok_or(first),
+            },
+        }
+    }
+
+    /// RM-04: the durable receipt of a paired-device command, read by its id:
+    /// `None` when the host never admitted it. A read that fails leaves the
+    /// outcome unknown. A receipt under this id for another actor, task or
+    /// payload is not this command's and is refused, never returned.
+    pub async fn remote_receipt(
+        &self,
+        command: &RemoteTaskCommand,
+        actor_id: &str,
+    ) -> Result<Option<CommandReceipt>, SdkError> {
+        let unknown = |error: SdkError| SdkError::UnknownOutcome {
+            command_id: command.command_id.clone(),
+            source: Box::new(error),
+        };
+        let receipt = self
+            .task_command_receipt(&command.command_id, None)
+            .await
+            .map_err(unknown)?;
+        if let Some(receipt) = &receipt {
+            // Not this command's: a definite answer, not an unknown one.
+            validate_remote_receipt(GetTaskCommandReceipt::NAME, command, actor_id, receipt)?;
+        }
+        Ok(receipt)
+    }
+
+    async fn submit_remote(
+        &self,
+        command: &RemoteTaskCommand,
+        actor_id: &str,
+    ) -> Result<CommandReceipt, SdkError> {
+        let params = serde_json::to_value(command).map_err(|error| {
+            SdkError::Engine(format!(
+                "serialize {}: {error}",
+                ExecuteRemoteTaskCommand::NAME
+            ))
+        })?;
+        let value = self
+            .send(
+                ExecuteRemoteTaskCommand::NAME,
+                ExecuteRemoteTaskCommand::METHOD,
+                params,
+            )
+            .await?;
+        let receipt: CommandReceipt = decode(ExecuteRemoteTaskCommand::NAME, value)?;
+        validate_remote_receipt(ExecuteRemoteTaskCommand::NAME, command, actor_id, &receipt)?;
+        Ok(receipt)
+    }
+
     /// Rename one task through the published intent, fenced from its
     /// current snapshot.
     pub async fn rename_task(
@@ -526,6 +615,42 @@ fn validate_receipt<I>(
             format!(
                 "receipt is for command {} on task {}, not {} on {}",
                 receipt.command_id, receipt.task_id, command.command_id, command.task_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// RM-04: a receipt is this paired-device command's: its id and task, the
+/// session's actor and the command's payload identity (also on a
+/// `commandIdConflict` receipt, which records the conflicting payload).
+pub(crate) fn validate_remote_receipt(
+    operation: &'static str,
+    command: &RemoteTaskCommand,
+    actor_id: &str,
+    receipt: &CommandReceipt,
+) -> Result<(), SdkError> {
+    if receipt.command_id != command.command_id || receipt.task_id != command.task_id {
+        return Err(SdkError::invalid(
+            operation,
+            format!(
+                "receipt is for command {} on task {}, not {} on {}",
+                receipt.command_id, receipt.task_id, command.command_id, command.task_id
+            ),
+        ));
+    }
+    if receipt.actor_id != actor_id {
+        return Err(SdkError::invalid(
+            operation,
+            format!("command {} belongs to another client", command.command_id),
+        ));
+    }
+    if receipt.payload_hash != luna_rpc::remote_auth::remote_command_identity(command) {
+        return Err(SdkError::invalid(
+            operation,
+            format!(
+                "command {} names another payload on the host",
+                command.command_id
             ),
         ));
     }

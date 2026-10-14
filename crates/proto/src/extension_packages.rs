@@ -39,8 +39,10 @@ pub struct ExtensionContractVersion {
 /// kinds and the capability vocabulary). 1.1 (CORE-07) adds
 /// `runtime.limits` and the broker operations in `extension_runtime`. 1.2
 /// (CORE-19) adds `data.migratesFrom`, the `data.read`/`data.write` broker
-/// operations and the `luna.migrate`/`luna.reconcile` worker operations.
-pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 2 };
+/// operations and the `luna.migrate`/`luna.reconcile` worker operations. 1.3
+/// (CORE-12) adds the `luna-ui.json` declaration that places `command`,
+/// `settingsSection`, `sidebarSection` and `panel` contributions.
+pub const EXTENSION_API: ExtensionContractVersion = ExtensionContractVersion { major: 1, minor: 3 };
 /// The native worker handshake (CORE-00: JSON lines, major/minor).
 pub const EXTENSION_WORKER_PROTOCOL: ExtensionContractVersion =
     ExtensionContractVersion { major: 1, minor: 0 };

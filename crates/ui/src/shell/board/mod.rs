@@ -113,12 +113,18 @@ impl Shell {
     /// Keep the persisted sidebar page in step with the route, so a restart
     /// reopens the page that was open (and a chat route clears it).
     pub(super) fn sync_restored_page(&mut self, cx: &mut Context<Self>) {
+        // CORE-12: a saved contributed page waits on its first snapshot.
+        if self.contributions.restore_pending() && self.route == Route::Chat {
+            return;
+        }
         let page = match self.route {
-            Route::Page(page) => Some(page.key()),
+            // Saved by its contribution id, never by the in-memory handle.
+            Route::Page(SidebarPage::Contributed(key)) => self.contributions.saved_page(key),
+            Route::Page(page) => Some(page.key().to_owned()),
             Route::Chat | Route::Settings(_) => None,
         };
-        if self.settings.last_sidebar_page.as_deref() != page {
-            self.settings.last_sidebar_page = page.map(str::to_owned);
+        if self.settings.last_sidebar_page != page {
+            self.settings.last_sidebar_page = page;
             self.schedule_save(cx);
         }
     }

@@ -3,6 +3,7 @@
 //! kind and reply shape, plus the Rust types that are its runtime validation
 //! and the source of the published JSON Schemas and TypeScript types.
 
+use luna_proto::remote_command::RemoteTaskCommand;
 use luna_proto::remote_projection::{
     RemoteTaskItem, RemoteTaskParams, RemoteTasksItem, RemoteTasksParams,
 };
@@ -39,6 +40,10 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     (WatchTaskCommands::NAME, WatchTaskCommands::METHOD),
     (WatchRemoteTasks::NAME, WatchRemoteTasks::METHOD),
     (WatchRemoteTask::NAME, WatchRemoteTask::METHOD),
+    (
+        ExecuteRemoteTaskCommand::NAME,
+        ExecuteRemoteTaskCommand::METHOD,
+    ),
 ];
 
 /// Parameters of an operation that takes none.
@@ -253,4 +258,16 @@ impl Operation for WatchRemoteTask {
     const METHOD: &'static str = methods::WATCH_REMOTE_TASK;
     type Params = RemoteTaskParams;
     type Output = RemoteTaskItem;
+}
+
+/// RM-04: a paired device session's typed task command (`tasks-operate`).
+/// The reply is its durable receipt, whose `actorId` is that session and
+/// whose `payloadHash` is the command's payload identity
+/// (`luna_rpc::remote_auth::remote_command_identity`).
+pub struct ExecuteRemoteTaskCommand;
+impl Operation for ExecuteRemoteTaskCommand {
+    const NAME: &'static str = "executeRemoteTaskCommand";
+    const METHOD: &'static str = methods::EXECUTE_REMOTE_TASK_COMMAND;
+    type Params = RemoteTaskCommand;
+    type Output = CommandReceipt;
 }

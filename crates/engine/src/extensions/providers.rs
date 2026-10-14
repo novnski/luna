@@ -13,16 +13,28 @@
 //! Static facts (identity, profile, optional profiles, permission modes) come
 //! only from the reviewed, hash-pinned declaration. A native provider worker
 //! is user-level code without an OS sandbox (CORE-07); every view says so.
+//!
+//! CORE-11: a provider profile 2.0 declaration registers a `hosted`
+//! provider (one worker per run hosting a whole adapter), and LUNA's own
+//! packages (`first_party`) are installed and enabled through this same path.
+//! A first-party contribution named by a built-in's canonical id
+//! (`luna.provider/opencode`) registers under the built-in's exact spelling
+//! (`opencode`), which existing chats are bound to.
 
 mod bridge;
 mod declaration;
 mod declared;
+/// CORE-11: LUNA's own provider packages.
+pub(super) mod first_party;
+/// CORE-11: provider profile 2.0.
+mod hosted;
 
 pub(crate) use declared::{declared_mapping, declared_permissions};
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+use luna_harness::Harness;
 use luna_proto::{ExtensionRuntimeKind, ExtensionTrust, HarnessId, PermissionMode};
 use serde::Serialize;
 
@@ -46,14 +58,60 @@ struct HostState {
     registered: BTreeMap<HarnessId, Registered>,
     /// Provider contributions of enabled packages that are not registered.
     refused: Vec<ProviderEntryView>,
+    /// CORE-11: LUNA's own provider packages, as of the engine's open.
+    first_party: Vec<first_party::FirstPartyStatus>,
 }
 
 struct Registered {
     package_hash: String,
     declaration: ProviderDeclaration,
-    provider: Arc<bridge::ExtensionProvider>,
+    provider: RegisteredProvider,
     /// Keeps the declared permission modes visible to the resolver.
     _declared: declared::DeclaredGuard,
+}
+
+/// The bridge serving a registered contribution: provider profile 1.0
+/// (one instance per discovery and run) or 2.0 (hosted adapter).
+enum RegisteredProvider {
+    Profile1(Arc<bridge::ExtensionProvider>),
+    Hosted(Arc<hosted::HostedProvider>),
+}
+
+impl RegisteredProvider {
+    fn harness(&self) -> Arc<dyn Harness> {
+        match self {
+            Self::Profile1(provider) => provider.clone() as Arc<dyn Harness>,
+            Self::Hosted(provider) => provider.clone() as Arc<dyn Harness>,
+        }
+    }
+
+    fn extension_id(&self) -> &luna_proto::contract::ExtensionId {
+        match self {
+            Self::Profile1(provider) => provider.extension_id(),
+            Self::Hosted(provider) => provider.extension_id(),
+        }
+    }
+
+    fn version(&self) -> &str {
+        match self {
+            Self::Profile1(provider) => provider.version(),
+            Self::Hosted(provider) => provider.version(),
+        }
+    }
+
+    fn runtime_kind(&self) -> ExtensionRuntimeKind {
+        match self {
+            Self::Profile1(provider) => provider.runtime_kind(),
+            Self::Hosted(provider) => provider.runtime_kind(),
+        }
+    }
+
+    fn last_describe(&self) -> Option<bridge::DescribeRecord> {
+        match self {
+            Self::Profile1(provider) => provider.last_describe(),
+            Self::Hosted(provider) => provider.last_describe(),
+        }
+    }
 }
 
 /// One provider contribution an enabled package wants registered.
@@ -71,6 +129,10 @@ struct Wanted {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ExtensionProvidersSnapshot {
     pub providers: Vec<ProviderEntryView>,
+    /// CORE-11: LUNA's own provider packages on this device: whether this
+    /// build bundles the worker, the installed and enabled package, and
+    /// whether it replaced the compiled registration of its provider.
+    pub first_party: Vec<first_party::FirstPartyStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -111,6 +173,9 @@ pub(crate) struct DeclarationView {
     pub reasoning_levels: Vec<luna_proto::ReasoningLevel>,
     pub omitted: Vec<declaration::Omission>,
     pub limitations: Vec<String>,
+    /// Provider profile 2.0's hosted section.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosted: Option<declaration::HostedDeclaration>,
 }
 
 impl DeclarationView {
@@ -125,8 +190,23 @@ impl DeclarationView {
             reasoning_levels: declaration.reasoning_levels.clone(),
             omitted: declaration.omitted.clone(),
             limitations: declaration.limitations.clone(),
+            hosted: declaration.hosted.clone(),
         }
     }
+}
+
+/// The exact spelling a provider id registers under: a canonical built-in
+/// id (`luna.provider/opencode`, which only LUNA's reserved namespace can
+/// contribute) becomes the legacy spelling chats are bound to (`opencode`).
+/// Every other id is unchanged.
+pub(super) fn legacy_spelling(id: HarnessId) -> HarnessId {
+    if id.kind() == luna_proto::BuiltinHarnessId::Other {
+        return id;
+    }
+    id.as_str()
+        .split_once('/')
+        .and_then(|(_, name)| HarnessId::parse(name).ok())
+        .unwrap_or(id)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -136,11 +216,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl ExtensionManager {
     /// Connect the engine's registry and register this profile's enabled
     /// providers. Called once while the engine assembles; starts nothing.
+    ///
+    /// CORE-11: LUNA's own packages are installed (and, the first time,
+    /// enabled) first; an installed one replaces the compiled registration
+    /// of its provider id, so the package is that provider's only path.
     pub(crate) fn attach_providers(&self, registry: Arc<HarnessRegistry>) {
-        if self.0.providers.registry.set(registry).is_err() {
+        let mut first_party = self.ensure_first_party();
+        if self.0.providers.registry.set(registry.clone()).is_err() {
             tracing::warn!("extension providers were already attached");
             return;
         }
+        self.displace_builtins(&registry, &mut first_party);
+        lock(&self.0.providers.state).first_party = first_party;
         self.providers_changed();
     }
 
@@ -187,16 +274,35 @@ impl ExtensionManager {
                 want.declaration.permissions(),
                 want.declaration.modes.clone(),
             );
-            let provider = Arc::new(bridge::ExtensionProvider::new(
-                want.id,
-                want.extension_id.clone(),
-                want.version.clone(),
-                want.package_hash.clone(),
-                want.runtime,
-                want.declaration.clone(),
-                Arc::downgrade(&self.0),
-            ));
-            match registry.try_register(provider.clone()) {
+            let provider = if want.declaration.hosted.is_some() {
+                hosted::HostedProvider::new(
+                    want.id,
+                    want.extension_id.clone(),
+                    want.version.clone(),
+                    want.package_hash.clone(),
+                    want.runtime,
+                    want.declaration.clone(),
+                    Arc::downgrade(&self.0),
+                )
+                .map(|provider| RegisteredProvider::Hosted(Arc::new(provider)))
+            } else {
+                Some(RegisteredProvider::Profile1(Arc::new(
+                    bridge::ExtensionProvider::new(
+                        want.id,
+                        want.extension_id.clone(),
+                        want.version.clone(),
+                        want.package_hash.clone(),
+                        want.runtime,
+                        want.declaration.clone(),
+                        Arc::downgrade(&self.0),
+                    ),
+                )))
+            };
+            let Some(provider) = provider else {
+                drop(guard);
+                continue;
+            };
+            match registry.try_register(provider.harness()) {
                 Ok(()) => {
                     tracing::info!(
                         provider = %want.id,
@@ -253,7 +359,10 @@ impl ExtensionManager {
             })
             .collect();
         providers.extend(state.refused.iter().cloned());
-        ExtensionProvidersSnapshot { providers }
+        ExtensionProvidersSnapshot {
+            providers,
+            first_party: state.first_party.clone(),
+        }
     }
 
     /// Whether `package_hash` is still the enabled package of `extension_id`
@@ -340,6 +449,7 @@ impl ExtensionManager {
             };
             for (id, declaration) in declarations {
                 let parsed = HarnessId::parse(&id)
+                    .map(legacy_spelling)
                     .map_err(|error| format!("{id} is not a provider id: {error}"));
                 match (parsed, declaration) {
                     (Ok(provider_id), Ok(declaration)) => wanted.push(Wanted {

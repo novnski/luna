@@ -36,7 +36,9 @@ impl Shell {
             SettingsSection::Devices => self.devices_page.is_some(),
             SettingsSection::Automations => self.automations_settings.is_some(),
             // Rendered by the Shell itself; there is no page entity.
-            SettingsSection::Usage | SettingsSection::Updates => true,
+            SettingsSection::Usage | SettingsSection::Updates | SettingsSection::Contributed(_) => {
+                true
+            }
         });
         let automations = self
             .automations_settings

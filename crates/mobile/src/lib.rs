@@ -7,7 +7,8 @@
 //! phone in [`pairing`], and IOS-00's [`session`] runs the public SDK
 //! (`luna-sdk`) over the platform's pinned socket. RM-03 makes that session
 //! the reconnecting runtime that follows the Mac's task projections
-//! ([`follow`]).
+//! ([`follow`]); RM-04 gives it the Mac's task commands and their outbox
+//! ([`session::commands`]).
 //!
 //! The Swift-visible contract is versioned by [`FACADE_VERSION`]; UniFFI's
 //! own contract version and per-function checksums refuse a binding compiled
@@ -28,7 +29,10 @@ pub mod session;
 ///
 /// 2 (RM-03): `SocketTransport::close_socket`, the runtime session
 /// (`RemoteSession::following`), its lifecycle calls, states and projections.
-pub const FACADE_VERSION: u16 = 2;
+/// 3 (RM-04): the runtime's task commands and outbox
+/// (`session::commands`: create, send, stop, queue actions, archive,
+/// `outbox`, `outbox_bytes`/`restore_outbox`); the `tasks-operate` scope.
+pub const FACADE_VERSION: u16 = 3;
 
 /// What the running core library is, for build and support evidence.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]

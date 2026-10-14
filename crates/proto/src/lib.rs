@@ -43,6 +43,8 @@ pub use provider_catalog::*;
 pub mod provider_mcp;
 pub mod provider_updates;
 pub mod recovery;
+/// RM-04 paired-phone task commands; used by path, not re-exported.
+pub mod remote_command;
 pub mod remote_control;
 /// RM-03 host task projections; used by path, not re-exported.
 pub mod remote_projection;
@@ -50,6 +52,8 @@ pub mod runtime_contract;
 pub mod task_command;
 pub mod task_identity;
 pub mod task_work;
+/// CORE-12 native UI contributions and their declarative view models.
+pub mod ui_contributions;
 pub mod usage;
 pub mod view;
 pub mod workspace;
@@ -93,6 +97,7 @@ pub use runtime_contract::*;
 pub use task_command::*;
 pub use task_identity::*;
 pub use task_work::*;
+pub use ui_contributions::*;
 pub use usage::*;
 pub use workspace::*;
 

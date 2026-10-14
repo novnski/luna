@@ -227,7 +227,8 @@ impl ConnectionsPage {
                 .client()
                 .call_as::<IssuedPairing>(
                     methods::CREATE_REMOTE_PAIRING,
-                    json!({"label":"Phone", "scopes":["environment-read","tasks-read"],
+                    json!({"label":"Phone",
+                    "scopes":["environment-read","tasks-read","tasks-operate"],
                     "pairingTtlSecs":300,"sessionTtlSecs":2_592_000}),
                 )
                 .await;
@@ -278,7 +279,11 @@ impl ConnectionsPage {
                             pairing_id: issued.pairing.id,
                             credential: issued.credential,
                             expires_at_ms: issued.pairing.expires_at_ms,
-                            scopes: vec!["environment-read".into(), "tasks-read".into()],
+                            scopes: vec![
+                                "environment-read".into(),
+                                "tasks-read".into(),
+                                "tasks-operate".into(),
+                            ],
                         };
                         match ticket
                             .encode()
@@ -525,6 +530,7 @@ impl Render for ConnectionsPage {
                         luna_rpc::remote_auth::RemoteScope::TasksRead => "Read tasks",
                         luna_rpc::remote_auth::RemoteScope::FilesRead => "Read files",
                         luna_rpc::remote_auth::RemoteScope::TerminalOperate => "Terminal access",
+                        luna_rpc::remote_auth::RemoteScope::TasksOperate => "Operate tasks",
                     })
                     .collect::<Vec<_>>()
                     .join(", ")

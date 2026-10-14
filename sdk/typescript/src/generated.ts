@@ -132,7 +132,8 @@ export const MANIFEST: Manifest = {
         "transactionFailed",
         "unsupportedOperation",
         "operationRejected",
-        "operationFailed"
+        "operationFailed",
+        "permissionModeRequired"
       ],
       "type": "string"
     },
@@ -507,6 +508,21 @@ export const MANIFEST: Manifest = {
       ],
       "type": "object"
     },
+    "RemoteFollowUp": {
+      "description": "How a message sent while a turn runs waits.",
+      "oneOf": [
+        {
+          "const": "queue",
+          "description": "Wait for the running turn to end, then start the next one.",
+          "type": "string"
+        },
+        {
+          "const": "steer",
+          "description": "Steer the running turn when its provider takes prompts mid-turn;\notherwise it stays queued until an explicit send.",
+          "type": "string"
+        }
+      ]
+    },
     "RemoteHistoryEntry": {
       "description": "One transcript entry, reduced to what a list shows.",
       "properties": {
@@ -564,6 +580,28 @@ export const MANIFEST: Manifest = {
       ],
       "type": "object"
     },
+    "RemoteNewWorktree": {
+      "additionalProperties": false,
+      "description": "A task's first message runs in a new git worktree of its project.",
+      "properties": {
+        "base": {
+          "description": "The ref the worktree's new branch starts from; the project's current\n`HEAD` when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RemotePermissionMode": {
+      "description": "The permission mode a phone may choose for a task it creates. New work\nhas only these two: Full access never asks, and Auto lets the provider's\nown reviewer decide. Legacy Ask is not representable (it is refused as a\nmalformed command).",
+      "enum": [
+        "full",
+        "auto"
+      ],
+      "type": "string"
+    },
     "RemoteProject": {
       "description": "One project, by display name only.",
       "properties": {
@@ -577,6 +615,62 @@ export const MANIFEST: Manifest = {
       "required": [
         "projectId",
         "name"
+      ],
+      "type": "object"
+    },
+    "RemoteTaskCommand": {
+      "additionalProperties": false,
+      "description": "`ExecuteRemoteTaskCommand` parameters: one phone command. Unknown fields\n(an `actorId`, a `clientId`, a raw engine intent) are refused, never\nignored: the principal comes only from the authenticated connection.",
+      "properties": {
+        "commandId": {
+          "description": "Stable idempotency key: minted once before the first send, reused\nfor every retry and receipt read. 1-128 bytes of `[A-Za-z0-9._:-]`.",
+          "type": "string"
+        },
+        "expectedBindingGeneration": {
+          "description": "`expectedBindingGeneration`: required once the task has a provider\nbinding, except for `createTask` and `cancelCapacityWait`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expectedTaskRevision": {
+          "description": "`expectedTaskRevision`: required by `setArchived`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expectedTurnId": {
+          "description": "`expectedTurnId`: required by `stop` and `steerQueuedNow`, and by\n`sendQueuedNow` while a turn runs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "$ref": "#/$defs/RemoteTaskIntent"
+        },
+        "issuedAtMs": {
+          "description": "The phone's issue time (Unix ms); the host clamps it to its own clock.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "taskId": {
+          "description": "The target task. For `createTask`, the new task's id: a UUID the\nphone mints, so a retried create names the same task.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "commandId",
+        "taskId",
+        "intent"
       ],
       "type": "object"
     },
@@ -706,6 +800,189 @@ export const MANIFEST: Manifest = {
         "totalEntries"
       ],
       "type": "object"
+    },
+    "RemoteTaskIntent": {
+      "description": "What a paired phone may ask its Mac to do with one task.",
+      "oneOf": [
+        {
+          "description": "Create the command's task in a project this host lists. Its folder\nand provider come from the host, never the phone. `permissionMode`\n(`full` or `auto`) is recorded in the task's configuration; without\none the host uses Auto when its provider and model support it, and\notherwise refuses the create (`permissionModeRequired`) before any\nprovider work.",
+          "properties": {
+            "kind": {
+              "const": "createTask",
+              "type": "string"
+            },
+            "permissionMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RemotePermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Send a message (its id becomes the transcript message id). To an\nidle task it starts the next turn, as a desktop send does; while the\ntask is busy (a running turn, or an earlier send still preparing its\nturn or worktree) it waits in the host's durable queue (`queue`) or\nsteers the running turn (`steer`). With `newWorktree` (only for a task\nthat has never run) it starts the task's first turn in a fresh\nworktree; later messages wait behind that worktree's setup and are\nheld if the setup fails or is cancelled.",
+          "properties": {
+            "followUp": {
+              "$ref": "#/$defs/RemoteFollowUp",
+              "default": "queue"
+            },
+            "kind": {
+              "const": "send",
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "newWorktree": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RemoteNewWorktree"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "messageId",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Remove a queued message, fenced by its queue revision.",
+          "properties": {
+            "expectedQueueRevision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "removeQueued",
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "messageId",
+            "expectedQueueRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Interrupt the running turn (if any) and send this queued message now.",
+          "properties": {
+            "expectedQueueRevision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "sendQueuedNow",
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "messageId",
+            "expectedQueueRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Steer this queued message into the running turn without stopping it.",
+          "properties": {
+            "expectedQueueRevision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "steerQueuedNow",
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "messageId",
+            "expectedQueueRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop the expected running turn. Accepted work elsewhere is untouched.",
+          "properties": {
+            "kind": {
+              "const": "stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Archive or restore the task.",
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "setArchived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "archived"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Withdraw a send that started a turn (its receipt is `run`) while it\nwaits for a free turn on the host. A send that started is refused.",
+          "properties": {
+            "commandId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cancelCapacityWait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "commandId"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RemoteTaskItem": {
       "description": "One `WatchRemoteTask` item.",
@@ -1672,6 +1949,20 @@ export const MANIFEST: Manifest = {
       },
       "reply": "stream",
       "version": 1
+    },
+    {
+      "id": "luna.core/execute-remote-task-command",
+      "kind": "command",
+      "method": "ExecuteRemoteTaskCommand",
+      "name": "executeRemoteTaskCommand",
+      "output": {
+        "$ref": "#/$defs/CommandReceipt"
+      },
+      "params": {
+        "$ref": "#/$defs/RemoteTaskCommand"
+      },
+      "reply": "unary",
+      "version": 1
     }
   ],
   "sdkVersion": "0.1.0",
@@ -1699,7 +1990,7 @@ export type ClientFrame = {
   params?: unknown;
 };
 
-export type CommandReasonCode = "commandIdConflict" | "staleTaskRevision" | "staleBindingGeneration" | "staleTurn" | "queueRevisionConflict" | "queueClaimed" | "queueMissing" | "activeTurnConflict" | "foreignActive" | "invalidDestination" | "incompatibleWorkspace" | "incompatibleEnvironment" | "providerAcceptanceUnknown" | "transactionFailed" | "unsupportedOperation" | "operationRejected" | "operationFailed";
+export type CommandReasonCode = "commandIdConflict" | "staleTaskRevision" | "staleBindingGeneration" | "staleTurn" | "queueRevisionConflict" | "queueClaimed" | "queueMissing" | "activeTurnConflict" | "foreignActive" | "invalidDestination" | "incompatibleWorkspace" | "incompatibleEnvironment" | "providerAcceptanceUnknown" | "transactionFailed" | "unsupportedOperation" | "operationRejected" | "operationFailed" | "permissionModeRequired";
 
 export type CommandReceipt = {
   acceptedAtMs: number;
@@ -1808,6 +2099,9 @@ export type ProviderReadiness = {
   name: string;
 };
 
+/** How a message sent while a turn runs waits. */
+export type RemoteFollowUp = "queue" | "steer";
+
 /** One transcript entry, reduced to what a list shows. */
 export type RemoteHistoryEntry = {
   createdAtMs: number;
@@ -1826,10 +2120,36 @@ export type RemoteHistoryEntry = {
   tools: Array<string>;
 };
 
+/** A task's first message runs in a new git worktree of its project. */
+export type RemoteNewWorktree = {
+  /** The ref the worktree's new branch starts from; the project's current `HEAD` when absent. */
+  base?: string | null;
+};
+
+/** The permission mode a phone may choose for a task it creates. New work has only these two: Full access never asks, and Auto lets the provider's own reviewer decide. Legacy Ask is not representable (it is refused as a malformed command). */
+export type RemotePermissionMode = "full" | "auto";
+
 /** One project, by display name only. */
 export type RemoteProject = {
   name: string;
   projectId: string;
+};
+
+/** `ExecuteRemoteTaskCommand` parameters: one phone command. Unknown fields (an `actorId`, a `clientId`, a raw engine intent) are refused, never ignored: the principal comes only from the authenticated connection. */
+export type RemoteTaskCommand = {
+  /** Stable idempotency key: minted once before the first send, reused for every retry and receipt read. 1-128 bytes of `[A-Za-z0-9._:-]`. */
+  commandId: string;
+  /** `expectedBindingGeneration`: required once the task has a provider binding, except for `createTask` and `cancelCapacityWait`. */
+  expectedBindingGeneration?: number | null;
+  /** `expectedTaskRevision`: required by `setArchived`. */
+  expectedTaskRevision?: number | null;
+  /** `expectedTurnId`: required by `stop` and `steerQueuedNow`, and by `sendQueuedNow` while a turn runs. */
+  expectedTurnId?: string | null;
+  intent: RemoteTaskIntent;
+  /** The phone's issue time (Unix ms); the host clamps it to its own clock. */
+  issuedAtMs?: number | null;
+  /** The target task. For `createTask`, the new task's id: a UUID the phone mints, so a retried create names the same task. */
+  taskId: string;
 };
 
 /** A task's changes from `base` to `cursor`. */
@@ -1861,6 +2181,39 @@ export type RemoteTaskDetail = {
   taskSequence: number;
   /** Every entry in the transcript; more than `entries.len()` when bounded. */
   totalEntries: number;
+};
+
+/** What a paired phone may ask its Mac to do with one task. */
+export type RemoteTaskIntent = {
+  kind: "createTask";
+  permissionMode?: RemotePermissionMode | null;
+  projectId: string;
+} | {
+  followUp?: RemoteFollowUp;
+  kind: "send";
+  messageId: string;
+  newWorktree?: RemoteNewWorktree | null;
+  text: string;
+} | {
+  expectedQueueRevision: number;
+  kind: "removeQueued";
+  messageId: string;
+} | {
+  expectedQueueRevision: number;
+  kind: "sendQueuedNow";
+  messageId: string;
+} | {
+  expectedQueueRevision: number;
+  kind: "steerQueuedNow";
+  messageId: string;
+} | {
+  kind: "stop";
+} | {
+  archived: boolean;
+  kind: "setArchived";
+} | {
+  commandId: string;
+  kind: "cancelCapacityWait";
 };
 
 /** One `WatchRemoteTask` item. */
@@ -2059,6 +2412,7 @@ export interface Operations {
   watchTaskCommands: { params: TaskCommandSnapshotParams; output: TaskCommandWatchItem };
   watchRemoteTasks: { params: RemoteTasksParams; output: RemoteTasksItem };
   watchRemoteTask: { params: RemoteTaskParams; output: RemoteTaskItem };
+  executeRemoteTaskCommand: { params: RemoteTaskCommand; output: CommandReceipt };
 }
 
 export type OperationName = keyof Operations;

@@ -62,6 +62,8 @@ enum ScopeArg {
     TasksRead,
     FilesRead,
     TerminalOperate,
+    /// RM-04: create, send to, queue, steer, stop and archive tasks.
+    TasksOperate,
 }
 
 impl From<ScopeArg> for RemoteScope {
@@ -71,6 +73,7 @@ impl From<ScopeArg> for RemoteScope {
             ScopeArg::TasksRead => Self::TasksRead,
             ScopeArg::FilesRead => Self::FilesRead,
             ScopeArg::TerminalOperate => Self::TerminalOperate,
+            ScopeArg::TasksOperate => Self::TasksOperate,
         }
     }
 }

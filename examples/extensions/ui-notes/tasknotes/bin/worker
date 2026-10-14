@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""CORE-12 example worker: a task panel's view and a ping action.
+
+Worker protocol 1.0 (JSON lines on stdio). LUNA starts one instance per view
+request or action, bound by the server to the task the panel is shown for
+(`hello.instance.target`), calls one method with a deadline and stops it.
+This is native, user-level code: LUNA does not sandbox it. It only answers
+with data; LUNA draws every control.
+"""
+import json
+import os
+import sys
+import time
+
+VERSION = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")).read().strip()
+
+
+def send(frame):
+    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def view(task, note):
+    nodes = [
+        {"heading": {"text": "Live task notes"}},
+        {"field": {"label": "Task", "value": str(task)}},
+        {"field": {"label": "Worker", "value": "v%s, pid %d" % (VERSION, os.getpid())}},
+        {"field": {"label": "Asked at", "value": time.strftime("%H:%M:%S")}},
+    ]
+    if note:
+        nodes.append({"text": {"text": note, "tone": "success"}})
+    nodes.append("divider")
+    nodes.append({"button": {"action": "ping", "label": "Ping", "style": "primary"}})
+    nodes.append({"button": {"action": "settings", "label": "Open extensions"}})
+    return {"nodes": nodes}
+
+
+first = sys.stdin.readline()
+if not first:
+    sys.exit(0)
+hello = json.loads(first)
+target = hello["instance"].get("target") or {}
+send({
+    "type": "hello",
+    "id": hello["id"],
+    "protocol": {"major": 1, "minor": 0},
+    "extensionId": hello["instance"]["extensionId"],
+    "packageHash": hello["instance"]["packageHash"],
+    "operations": ["ui.view", "ui.ping"],
+})
+
+for line in sys.stdin:
+    frame = json.loads(line)
+    kind = frame.get("type")
+    if kind == "shutdown":
+        sys.exit(0)
+    if kind != "call":
+        continue
+    fid, method, params = frame["id"], frame["method"], frame.get("params") or {}
+    # The task LUNA bound this instance to, never one a caller names.
+    task = target.get("taskId")
+    if method == "ui.view":
+        send({"type": "response", "id": fid, "ok": True, "result": view(task, None)})
+    elif method == "ui.ping":
+        note = "Pong for task %s at %s" % (task, time.strftime("%H:%M:%S"))
+        result = {"message": note}
+        # Only the panel has a view to replace; a command has none.
+        if params.get("contributionId") == "core12.qa/tasknotes.panel":
+            result["view"] = view(task, note)
+        send({"type": "response", "id": fid, "ok": True, "result": result})
+    else:
+        send({"type": "response", "id": fid, "ok": False,
+              "error": {"code": "unknownOperation", "message": method}})

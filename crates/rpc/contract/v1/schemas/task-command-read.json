@@ -56,7 +56,8 @@
         "transactionFailed",
         "unsupportedOperation",
         "operationRejected",
-        "operationFailed"
+        "operationFailed",
+        "permissionModeRequired"
       ]
     },
     "CommandReceipt": {

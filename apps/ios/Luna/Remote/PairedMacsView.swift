@@ -143,7 +143,8 @@ struct PairedMacsView: View {
     }()
     private func scopeName(_ scope: String) -> String {
         switch scope { case "environment-read": "Host information"; case "tasks-read": "Read tasks"
-        case "files-read": "Read files"; case "terminal-operate": "Terminal access"; default: "Unsupported access" }
+        case "files-read": "Read files"; case "terminal-operate": "Terminal access"
+        case "tasks-operate": "Operate tasks"; default: "Unsupported access" }
     }
 }
 

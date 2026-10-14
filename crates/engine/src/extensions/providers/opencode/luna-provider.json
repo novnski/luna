@@ -1,0 +1,51 @@
+{
+  "declarationVersion": 1,
+  "providers": [
+    {
+      "id": "luna.provider/opencode",
+      "displayName": "OpenCode",
+      "profile": {"major": 2, "minor": 0},
+      "permissionModes": {
+        "ask": "session rules: reads allow; shell, edits, web and external paths ask; configured denies stay",
+        "full": "session rules: allow all except configured denies; stray requests allow once"
+      },
+      "reasoningLevels": ["low", "medium", "high", "xhigh", "max"],
+      "hosted": {
+        "steeringMode": "step-boundary",
+        "deterministicTurnEnd": true,
+        "safeRecovery": false,
+        "fork": "checkpoint",
+        "nativeChildStop": true,
+        "runtimeDelivery": "openCodeMcpTools",
+        "operations": ["title", "commands", "extensions", "mcp", "fork", "history", "rewind", "compact"],
+        "permissions": {
+          "supportedModes": ["ask", "full"],
+          "supportsWorkspaceSandbox": true,
+          "supportsAutomaticReviewer": false,
+          "supportsLiveModeChange": false,
+          "supportsTaskAllowance": false,
+          "approvalKinds": ["command", "fileChange", "network", "externalPath", "tool"],
+          "networkControl": "OpenCode session permission rules (web fetch and search ask in Ask), read back before each run",
+          "knownLimitations": [
+            "OpenCode has no automatic reviewer, so Approve for me is unavailable.",
+            "OpenCode has no OS sandbox: Ask confines tools with OpenCode's own permission rules, and an approved shell command runs unconfined.",
+            "Allow for session is a LUNA-owned rule on the chat's OpenCode session, never an OpenCode saved rule: it lasts until LUNA restarts or the chat's permission mode changes, and covers the session that asked (a sub-agent's grant stays with that sub-agent).",
+            "Native sub-agents are capped at the chat's mode when OpenCode creates them; their own agent restrictions and your configured OpenCode denies stay in force."
+          ]
+        }
+      },
+      "unsupported": [
+        {"capability": "auto", "reason": "OpenCode has no automatic reviewer, so Approve for me is unavailable."},
+        {"capability": "fileRewind", "reason": "OpenCode keeps no file checkpoints LUNA can restore; a rewind keeps the files."},
+        {"capability": "nativeGoals", "reason": "OpenCode has no native goals."},
+        {"capability": "liveReconfiguration", "reason": "A model or effort change applies to the chat's next turn."}
+      ],
+      "limitations": [
+        "The worker hosts LUNA's own OpenCode 2 adapter (HTTP and SSE to `opencode serve --stdio`). OpenCode 1.x and ACP are not supported.",
+        "Each turn runs in its own worker with its own `opencode serve` process and port; Stop, a crash or a resource limit ends only that turn. Model discovery, titles, commands, history, fork, rewind and the compaction of an idle chat share one worker.",
+        "The worker inherits LUNA's environment like the built-in adapter it replaces, so OpenCode sees the same provider keys, configuration and data directories, and signs in with its own accounts (`opencode auth login`).",
+        "A turn's worker group may use at most 4 GiB of memory and 64 processes; past that LUNA ends that turn."
+      ]
+    }
+  ]
+}

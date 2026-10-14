@@ -1,0 +1,27 @@
+{
+  "declarationVersion": 1,
+  "contributions": [
+    {
+      "id": "core12.qa/tasknotes.panel",
+      "placement": "panel",
+      "title": "Live task notes",
+      "icon": "bolt",
+      "context": "task",
+      "view": {"worker": {"method": "ui.view"}},
+      "actions": [
+        {"id": "ping", "title": "Ping", "run": {"worker": {"method": "ui.ping"}}},
+        {"id": "settings", "title": "Open extensions", "run": {"host": {"openSettings": {"section": "extensions"}}}}
+      ]
+    },
+    {
+      "id": "core12.qa/tasknotes.ping",
+      "placement": "command",
+      "title": "Ping this task's notes",
+      "icon": "bolt",
+      "context": "task",
+      "actions": [
+        {"id": "ping", "title": "Ping this task's notes", "run": {"worker": {"method": "ui.ping"}}}
+      ]
+    }
+  ]
+}

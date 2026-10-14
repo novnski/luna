@@ -1267,6 +1267,54 @@
       "forwardDeadlineSecs": 30
     },
     {
+      "method": "ListUiContributions",
+      "id": "luna.core/list-ui-contributions",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "WatchUiContributions",
+      "id": "luna.core/watch-ui-contributions",
+      "version": 1,
+      "kind": "watch",
+      "reply": "streamAfterReady",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "GetUiContributionView",
+      "id": "luna.core/get-ui-contribution-view",
+      "version": 1,
+      "kind": "query",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "InvokeUiAction",
+      "id": "luna.core/invoke-ui-action",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "localOnly"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
       "method": "ListComposerCatalog",
       "id": "luna.core/list-composer-catalog",
       "version": 1,
@@ -2383,6 +2431,19 @@
       "authority": {
         "kind": "remote",
         "scope": "tasks-read"
+      },
+      "forwardDeadlineSecs": 30
+    },
+    {
+      "method": "ExecuteRemoteTaskCommand",
+      "id": "luna.core/execute-remote-task-command",
+      "version": 1,
+      "kind": "command",
+      "reply": "unary",
+      "target": "local",
+      "authority": {
+        "kind": "remote",
+        "scope": "tasks-operate"
       },
       "forwardDeadlineSecs": 30
     },

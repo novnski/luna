@@ -1091,6 +1091,44 @@ pub const OPERATIONS: &[OperationSpec] = &[
         LocalOnly,
         30,
     ),
+    // CORE-12: the shell's UI contributions from enabled packages. Views
+    // and actions may start a supervised worker, so they stay owner-only.
+    op(
+        methods::LIST_UI_CONTRIBUTIONS,
+        "luna.core/list-ui-contributions",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::WATCH_UI_CONTRIBUTIONS,
+        "luna.core/watch-ui-contributions",
+        Watch,
+        StreamAfterReady,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::GET_UI_CONTRIBUTION_VIEW,
+        "luna.core/get-ui-contribution-view",
+        Query,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
+    op(
+        methods::INVOKE_UI_ACTION,
+        "luna.core/invoke-ui-action",
+        Command,
+        Unary,
+        Local,
+        LocalOnly,
+        30,
+    ),
     op(
         methods::LIST_COMPOSER_CATALOG,
         "luna.core/list-composer-catalog",
@@ -1920,6 +1958,17 @@ pub const OPERATIONS: &[OperationSpec] = &[
         Stream,
         Local,
         Remote(RemoteScope::TasksRead),
+        30,
+    ),
+    // RM-04: a paired phone's typed task command, admitted for the device
+    // session the guard validated; never forwarded to another device.
+    op(
+        methods::EXECUTE_REMOTE_TASK_COMMAND,
+        "luna.core/execute-remote-task-command",
+        Command,
+        Unary,
+        Local,
+        Remote(RemoteScope::TasksOperate),
         30,
     ),
     op(

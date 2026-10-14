@@ -88,6 +88,11 @@ impl ProfileGrants {
         }
     }
 
+    /// The profile store root (CORE-11 keeps its first-party record there).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn empty(&self) -> GrantsFile {
         GrantsFile {
             version: GRANTS_VERSION,

@@ -1,0 +1,87 @@
+{
+  "declarationVersion": 1,
+  "contributions": [
+    {
+      "id": "core12.qa/notes.open",
+      "placement": "command",
+      "title": "Open notes appearance",
+      "icon": "notebook",
+      "actions": [
+        {
+          "id": "run",
+          "title": "Open notes appearance",
+          "run": {"host": {"openSettings": {"section": "appearance"}}}
+        }
+      ]
+    },
+    {
+      "id": "core12.qa/notes.settings",
+      "placement": "settingsSection",
+      "title": "Notes",
+      "icon": "notebook",
+      "view": {
+        "static": {
+          "nodes": [
+            {"heading": {"text": "Notes settings"}},
+            {"text": {"text": "This section is data from the CORE-12 notes package. LUNA draws it; the package runs no code.", "tone": "muted"}},
+            {"field": {"label": "Storage", "value": "This profile"}},
+            {"button": {"action": "page", "label": "Show recent notes"}}
+          ]
+        }
+      },
+      "actions": [
+        {
+          "id": "page",
+          "title": "Show recent notes",
+          "run": {"host": {"openContribution": {"contributionId": "core12.qa/notes.page"}}}
+        }
+      ]
+    },
+    {
+      "id": "core12.qa/notes.page",
+      "placement": "sidebarSection",
+      "title": "Notes",
+      "icon": "list",
+      "order": 10,
+      "view": {
+        "static": {
+          "nodes": [
+            {"heading": {"text": "Recent notes"}},
+            {"item": {"id": "n1", "title": "Write the CORE-12 QA notes", "detail": "Today", "badge": "new", "action": "settings"}},
+            {"item": {"id": "n2", "title": "Check the panel beside a task", "detail": "Yesterday"}},
+            "divider",
+            {"button": {"action": "settings", "label": "Open notes settings", "style": "primary"}},
+            {"button": {"action": "task", "label": "Start a task"}}
+          ]
+        }
+      },
+      "actions": [
+        {
+          "id": "settings",
+          "title": "Open notes settings",
+          "run": {"host": {"openContribution": {"contributionId": "core12.qa/notes.settings"}}}
+        },
+        {
+          "id": "task",
+          "title": "Start a task",
+          "run": {"host": "newTask"}
+        }
+      ]
+    },
+    {
+      "id": "core12.qa/notes.panel",
+      "placement": "panel",
+      "title": "Task notes",
+      "icon": "clipboard",
+      "context": "task",
+      "view": {
+        "static": {
+          "nodes": [
+            {"text": {"text": "Static notes for the shown task.", "tone": "muted"}},
+            {"field": {"label": "Kind", "value": "Data package"}}
+          ]
+        }
+      }
+    }
+  ]
+}

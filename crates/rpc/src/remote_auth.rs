@@ -42,6 +42,92 @@ pub enum RemoteScope {
     TasksRead,
     FilesRead,
     TerminalOperate,
+    // RM-04: create, send to, queue, steer, stop and archive this host's
+    // tasks through `ExecuteRemoteTaskCommand`. Every call of a method with
+    // this scope carries the typed `RemotePrincipal` the guard validated.
+    // (A plain comment: a doc comment would change the published schema.)
+    TasksOperate,
+}
+
+/// RM-04: who a remote command comes from. Only [`RemoteRpcService`] builds
+/// it, from the device session it validated for that very call, and hands it
+/// to [`crate::RpcService::handle_remote`] as a Rust value: no caller can put
+/// one in parameters, and the local owner's IPC never carries one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RemotePrincipal {
+    pub session_id: String,
+    pub pairing_id: Option<String>,
+    pub client_label: String,
+    pub scopes: Vec<RemoteScope>,
+    pub expires_at_ms: u64,
+    /// The host environment the session belongs to.
+    pub environment: RemoteEnvironment,
+}
+
+impl RemotePrincipal {
+    fn of(session: &SessionView, environment: RemoteEnvironment) -> Self {
+        Self {
+            session_id: session.id.clone(),
+            pairing_id: session.pairing_id.clone(),
+            client_label: session.client_label.clone(),
+            scopes: session.scopes.clone(),
+            expires_at_ms: session.expires_at_ms,
+            environment,
+        }
+    }
+
+    /// The receipt actor of this session's commands, stable for its life.
+    pub fn actor_id(&self) -> String {
+        luna_proto::remote_command::remote_actor_id(&self.session_id)
+    }
+}
+
+/// RM-04: a remote command's payload identity, recorded as its receipt's
+/// `payloadHash`: SHA-256 of the canonical (sorted-key) JSON of its task id
+/// and intent. Host and phone compute it the same way whatever their
+/// `serde_json` map ordering, so a phone can tell its own receipt from
+/// another payload's under the same command id. Fences, issue time and the
+/// command id itself are not part of it.
+pub fn remote_command_identity(command: &luna_proto::remote_command::RemoteTaskCommand) -> String {
+    let value = serde_json::json!({
+        "v": 1,
+        "taskId": command.task_id,
+        "intent": command.intent,
+    });
+    let mut encoded = String::new();
+    canonical_json(&value, &mut encoded);
+    format!("remote-v1:{}", hex(&Sha256::digest(encoded.as_bytes())))
+}
+
+fn canonical_json(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::Value::String(key.clone()).to_string());
+                out.push(':');
+                canonical_json(&map[key.as_str()], out);
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(values) => {
+            out.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                canonical_json(value, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -664,6 +750,20 @@ impl RpcService for RemoteRpcService {
             .is_some_and(|value| value.as_str() != Some(&self.auth.environment().device_id))
         {
             return Err(denied("target device mismatch"));
+        }
+        if required_scope == RemoteScope::TasksOperate {
+            // RM-04: a principal-bound command. The engine admits it with
+            // this session as its receipt's actor and re-checks the grant;
+            // nothing in the parameters can name another principal. Its
+            // reply is the durable receipt of an admission made under a
+            // valid grant, so a later revocation does not turn it into an
+            // error (the next call is refused instead).
+            let principal = RemotePrincipal::of(&session, self.auth.environment());
+            return self
+                .inner
+                .clone()
+                .handle_remote(principal, method.to_owned(), params)
+                .await;
         }
         let reply = self.inner.handle(method, params).await?;
         match reply {

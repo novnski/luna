@@ -2,11 +2,18 @@
 //! provider contributions. It is a listed (hash-pinned) package file and is
 //! read without running any code. The worker's runtime `describe` reports
 //! availability and its executable; it can never widen these facts.
+//!
+//! CORE-11 adds provider profile 2.0, the hosted harness profile: a
+//! `hosted` section declares the adapter's own capabilities, its job
+//! operations and its permission facts (`ProviderPermissionCapabilities`,
+//! taken verbatim), and legacy Ask may be declared for chats that already
+//! use it. Profile 1.0 declarations are read exactly as before.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use luna_proto::{
-    ApprovalActionKind, PermissionMode, ProviderPermissionCapabilities, ReasoningLevel,
+    ApprovalActionKind, PermissionMode, ProviderForkCapability, ProviderPermissionCapabilities,
+    ReasoningLevel, RuntimeDelivery, SteeringMode,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +23,8 @@ const DECLARATION_VERSION: u32 = 1;
 /// Provider profile this host implements.
 pub(super) const PROFILE_MAJOR: u32 = 1;
 pub(super) const PROFILE_MINOR: u32 = 0;
+/// Provider profile 2.0, the hosted harness profile (CORE-11).
+pub(super) const HOSTED_PROFILE_MAJOR: u32 = 2;
 
 const MAX_PROVIDERS: usize = 16;
 const MAX_NAME_CHARS: usize = 64;
@@ -47,6 +56,121 @@ struct RawProvider {
     unsupported: Vec<RawOmission>,
     #[serde(default)]
     limitations: Vec<String>,
+    /// Provider profile 2.0 only.
+    #[serde(default)]
+    hosted: Option<RawHosted>,
+}
+
+/// The `hosted` section of a provider profile 2.0 declaration.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawHosted {
+    /// Absent: no mid-turn input.
+    #[serde(default)]
+    steering_mode: Option<SteeringMode>,
+    #[serde(default)]
+    deterministic_turn_end: bool,
+    #[serde(default)]
+    safe_recovery: bool,
+    #[serde(default = "no_fork")]
+    fork: ProviderForkCapability,
+    #[serde(default)]
+    native_child_stop: bool,
+    #[serde(default = "no_delivery")]
+    runtime_delivery: RuntimeDelivery,
+    /// Job operations beyond `models` and `run`.
+    #[serde(default)]
+    operations: Vec<String>,
+    /// The resolver's facts, verbatim.
+    permissions: ProviderPermissionCapabilities,
+}
+
+fn no_fork() -> ProviderForkCapability {
+    ProviderForkCapability::None
+}
+
+fn no_delivery() -> RuntimeDelivery {
+    RuntimeDelivery::Unsupported
+}
+
+/// The optional job operations of provider profile 2.0 (`models` and `run`
+/// are always served).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HostedOperation {
+    Title,
+    Commands,
+    Extensions,
+    Mcp,
+    Fork,
+    History,
+    Rewind,
+    Compact,
+}
+
+impl HostedOperation {
+    const ALL: [Self; 8] = [
+        Self::Title,
+        Self::Commands,
+        Self::Extensions,
+        Self::Mcp,
+        Self::Fork,
+        Self::History,
+        Self::Rewind,
+        Self::Compact,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Commands => "commands",
+            Self::Extensions => "extensions",
+            Self::Mcp => "mcp",
+            Self::Fork => "fork",
+            Self::History => "history",
+            Self::Rewind => "rewind",
+            Self::Compact => "compact",
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|operation| operation.name() == name)
+    }
+
+    fn missing_reason(self) -> &'static str {
+        match self {
+            Self::Title => "the provider has no restricted title generation",
+            Self::Commands => "the provider lists no slash commands",
+            Self::Extensions => "the provider reports no native extension inventory",
+            Self::Mcp => "the provider reports no MCP status",
+            Self::Fork => "the provider has no native fork",
+            Self::History => "the provider has no native history readback",
+            Self::Rewind => "the provider has no native rewind",
+            Self::Compact => "the provider has no native compaction",
+        }
+    }
+}
+
+/// A validated provider profile 2.0 section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostedDeclaration {
+    pub steering_mode: Option<SteeringMode>,
+    pub deterministic_turn_end: bool,
+    pub safe_recovery: bool,
+    pub fork: ProviderForkCapability,
+    pub native_child_stop: bool,
+    pub runtime_delivery: RuntimeDelivery,
+    pub operations: BTreeSet<HostedOperation>,
+    pub permissions: ProviderPermissionCapabilities,
+}
+
+impl HostedDeclaration {
+    pub fn offers(&self, operation: HostedOperation) -> bool {
+        self.operations.contains(&operation)
+    }
 }
 
 #[derive(Deserialize)]
@@ -171,6 +295,8 @@ pub(super) struct ProviderDeclaration {
     /// host dropped or profile 1.0 lacks.
     pub omitted: Vec<Omission>,
     pub limitations: Vec<String>,
+    /// Provider profile 2.0's hosted section.
+    pub hosted: Option<HostedDeclaration>,
 }
 
 impl ProviderDeclaration {
@@ -191,10 +317,18 @@ impl ProviderDeclaration {
     /// omitted is stated as a known limitation.
     pub fn permissions(&self) -> ProviderPermissionCapabilities {
         use ApprovalActionKind::{Command, ExternalPath, FileChange, Network, Other, Tool};
-        let mut known_limitations = vec![format!(
+        let trust = format!(
             "{} runs as a native extension worker with your account's access; LUNA does not sandbox it.",
             self.display_name
-        )];
+        );
+        if let Some(hosted) = &self.hosted {
+            // Profile 2.0 declares the adapter's own facts; only the trust
+            // statement is added.
+            let mut permissions = hosted.permissions.clone();
+            permissions.known_limitations.insert(0, trust);
+            return permissions;
+        }
+        let mut known_limitations = vec![trust];
         for (mode, mapping) in &self.modes {
             let label = match mode {
                 PermissionMode::Full => "Full access",
@@ -283,11 +417,14 @@ pub(super) fn parse(
 
 fn validate(raw: &RawProvider) -> Result<ProviderDeclaration, String> {
     let display_name = bounded("displayName", &raw.display_name, MAX_NAME_CHARS)?;
-    if raw.profile.major != PROFILE_MAJOR {
+    if raw.profile.major != PROFILE_MAJOR && raw.profile.major != HOSTED_PROFILE_MAJOR {
         return Err(format!(
-            "declares provider profile {}.{}; this LUNA implements provider profile {PROFILE_MAJOR}.{PROFILE_MINOR}",
+            "declares provider profile {}.{}; this LUNA implements provider profiles {PROFILE_MAJOR}.{PROFILE_MINOR} and {HOSTED_PROFILE_MAJOR}.0",
             raw.profile.major, raw.profile.minor
         ));
+    }
+    if raw.profile.major == PROFILE_MAJOR && raw.hosted.is_some() {
+        return Err("declares a hosted section, which belongs to provider profile 2.0".into());
     }
     if raw.unsupported.len() > MAX_LIST || raw.limitations.len() > MAX_LIST {
         return Err(format!(
@@ -306,6 +443,9 @@ fn validate(raw: &RawProvider) -> Result<ProviderDeclaration, String> {
         .iter()
         .map(|limitation| bounded("limitations", limitation, MAX_TEXT_CHARS))
         .collect::<Result<Vec<_>, _>>()?;
+    if raw.profile.major == HOSTED_PROFILE_MAJOR {
+        return validate_hosted(raw, display_name, omitted, limitations);
+    }
     let note = |omitted: &mut Vec<Omission>, capability: &str, reason: String| {
         if !omitted.iter().any(|entry| entry.capability == capability) {
             omitted.push(Omission {
@@ -392,5 +532,137 @@ fn validate(raw: &RawProvider) -> Result<ProviderDeclaration, String> {
         reasoning_levels,
         omitted,
         limitations,
+        hosted: None,
+    })
+}
+
+/// Provider profile 2.0. The adapter in the worker settles its own
+/// approvals (Full answers stray asks once; legacy Ask shows its cards);
+/// the bridge refuses any approval card in Full or Auto.
+fn validate_hosted(
+    raw: &RawProvider,
+    display_name: String,
+    mut omitted: Vec<Omission>,
+    limitations: Vec<String>,
+) -> Result<ProviderDeclaration, String> {
+    let Some(hosted) = &raw.hosted else {
+        return Err(format!(
+            "declares provider profile {}.{} without a hosted section; provider profile 2.0 is the hosted harness profile",
+            raw.profile.major, raw.profile.minor
+        ));
+    };
+    if !raw.optional.is_empty() {
+        return Err(
+            "lists optional profiles, which belong to provider profile 1.0; profile 2.0 lists hosted.operations"
+                .into(),
+        );
+    }
+    let note = |omitted: &mut Vec<Omission>, capability: &str, reason: String| {
+        if !omitted.iter().any(|entry| entry.capability == capability) {
+            omitted.push(Omission {
+                capability: capability.to_owned(),
+                reason,
+            });
+        }
+    };
+    let mut modes = BTreeMap::new();
+    for (mode, mapping) in &raw.permission_modes {
+        let mapping = bounded("permissionModes", mapping, MAX_TEXT_CHARS)?;
+        match mode.as_str() {
+            "full" => {
+                modes.insert(PermissionMode::Full, mapping);
+            }
+            // Legacy Ask, for chats that already use it; never a user mode
+            // (docs/pending-tasks/permission-modes).
+            "ask" => {
+                modes.insert(PermissionMode::Ask, mapping);
+            }
+            "auto" if hosted.permissions.supports_automatic_reviewer => {
+                modes.insert(PermissionMode::Auto, mapping);
+            }
+            "auto" => note(
+                &mut omitted,
+                "auto",
+                "Approve for me needs the provider's own automatic reviewer; LUNA never turns Auto into a human question".into(),
+            ),
+            other => note(
+                &mut omitted,
+                &bounded("permissionModes", other, MAX_NAME_CHARS)?,
+                "a permission mode this LUNA does not know".into(),
+            ),
+        }
+    }
+    if !modes.contains_key(&PermissionMode::Full) && !modes.contains_key(&PermissionMode::Auto) {
+        return Err(
+            "declares no permission mode LUNA can run: Full access, or Approve for me with an automatic reviewer"
+                .into(),
+        );
+    }
+    let declared: BTreeSet<PermissionMode> = modes.keys().copied().collect();
+    let advertised: BTreeSet<PermissionMode> =
+        hosted.permissions.supported_modes.iter().copied().collect();
+    if declared != advertised {
+        return Err(
+            "hosted.permissions.supportedModes must list exactly the declared permission modes"
+                .into(),
+        );
+    }
+    let mut operations = BTreeSet::new();
+    for name in &hosted.operations {
+        match HostedOperation::parse(name) {
+            Some(operation) => {
+                operations.insert(operation);
+            }
+            None => note(
+                &mut omitted,
+                &bounded("hosted.operations", name, MAX_NAME_CHARS)?,
+                "an operation this LUNA does not know; it is not used".into(),
+            ),
+        }
+    }
+    if hosted.fork != ProviderForkCapability::None && !operations.contains(&HostedOperation::Fork) {
+        return Err("declares a fork capability without the fork operation".into());
+    }
+    for operation in HostedOperation::ALL {
+        if !operations.contains(&operation) {
+            note(
+                &mut omitted,
+                operation.name(),
+                operation.missing_reason().into(),
+            );
+        }
+    }
+    if hosted.steering_mode.is_none() {
+        note(
+            &mut omitted,
+            "steer",
+            "the provider takes no input during a turn".into(),
+        );
+    }
+    let mut reasoning_levels = Vec::new();
+    for level in &raw.reasoning_levels {
+        if !reasoning_levels.contains(level) {
+            reasoning_levels.push(*level);
+        }
+    }
+    Ok(ProviderDeclaration {
+        display_name,
+        profile: raw.profile,
+        optional: BTreeSet::new(),
+        modes,
+        automatic_reviewer: hosted.permissions.supports_automatic_reviewer,
+        reasoning_levels,
+        omitted,
+        limitations,
+        hosted: Some(HostedDeclaration {
+            steering_mode: hosted.steering_mode,
+            deterministic_turn_end: hosted.deterministic_turn_end,
+            safe_recovery: hosted.safe_recovery,
+            fork: hosted.fork,
+            native_child_stop: hosted.native_child_stop,
+            runtime_delivery: hosted.runtime_delivery,
+            operations,
+            permissions: hosted.permissions.clone(),
+        }),
     })
 }

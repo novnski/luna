@@ -34,6 +34,7 @@ use luna_rpc::methods;
 
 use crate::changes::{Changes, ChangesEvent};
 use crate::composer::{Composer, ComposerEvent, ComposerInput, ComposerInputEvent};
+use crate::contributions::ContributionKey;
 use crate::files::{FilesCloseDisposition, FilesEvent, FilesSurface, WorkspacePathDrag};
 use crate::icons::{self, icon};
 use crate::interaction::HoverFill;
@@ -81,6 +82,11 @@ mod automations_pane;
 pub(crate) mod board;
 pub(crate) mod child_chats;
 mod command_palette;
+/// CORE-12: extension commands, settings sections, sidebar pages and task
+/// panels through the shared contribution registry.
+mod contributions;
+#[cfg(test)]
+mod contributions_tests;
 mod findings;
 mod native_file_rewind;
 mod native_review;
@@ -545,6 +551,9 @@ pub enum SettingsSection {
     Archived,
     Usage,
     Updates,
+    /// A settings section an enabled extension contributes (CORE-12),
+    /// listed after every built-in section and rendered by the host.
+    Contributed(ContributionKey),
 }
 
 impl SettingsSection {
@@ -615,6 +624,63 @@ impl SettingsSection {
             SettingsSection::Archived => "Archived sessions",
             SettingsSection::Usage => "Usage",
             SettingsSection::Updates => "Updates",
+            // Its own title comes from the contribution registry.
+            SettingsSection::Contributed(_) => "Extension",
+        }
+    }
+
+    /// Stable key for built-in contribution ids and host actions
+    /// (`openSettings`); a contributed section has its own id instead.
+    pub fn key(self) -> &'static str {
+        match self {
+            SettingsSection::General => "general",
+            SettingsSection::Projects => "projects",
+            SettingsSection::Devices => "devices",
+            SettingsSection::Connections => "connections",
+            SettingsSection::Providers => "providers",
+            SettingsSection::Extensions => "extensions",
+            SettingsSection::Appearance => "appearance",
+            SettingsSection::Files => "files",
+            SettingsSection::Backups => "backups",
+            SettingsSection::Diagnostics => "diagnostics",
+            SettingsSection::Notifications => "notifications",
+            SettingsSection::Shortcuts => "shortcuts",
+            SettingsSection::Appshots => "appshots",
+            SettingsSection::Automations => "automations",
+            SettingsSection::Archived => "archived",
+            SettingsSection::Usage => "usage",
+            SettingsSection::Updates => "updates",
+            SettingsSection::Contributed(_) => "contribution",
+        }
+    }
+
+    /// The built-in section with `key`.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|section| section.key() == key)
+    }
+
+    /// The navigation glyph.
+    pub fn icon(self) -> &'static str {
+        match self {
+            SettingsSection::General => icons::SETTINGS,
+            SettingsSection::Projects => icons::FOLDER_WITH_FILES,
+            SettingsSection::Devices => icons::MONITOR,
+            SettingsSection::Connections => icons::GLOBAL,
+            SettingsSection::Providers => icons::SERVER_2,
+            SettingsSection::Extensions => icons::WIDGET,
+            SettingsSection::Appearance => icons::PAINT_BRUSH,
+            SettingsSection::Files => icons::FOLDER,
+            SettingsSection::Backups => icons::DATABASE,
+            SettingsSection::Diagnostics => icons::HARD_DRIVE,
+            SettingsSection::Notifications => icons::BELL,
+            SettingsSection::Shortcuts => icons::KEYBOARD,
+            // Appshots are captured window images; Devices keeps the monitor.
+            SettingsSection::Appshots => icons::CAMERA_MINIMALISTIC,
+            SettingsSection::Automations => icons::STOPWATCH_PLAY,
+            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
+            SettingsSection::Usage => icons::CHART,
+            SettingsSection::Updates => icons::ROUND_ARROW_DOWN,
+            SettingsSection::Contributed(_) => icons::WIDGET,
         }
     }
 }
@@ -636,6 +702,10 @@ pub enum SidebarPage {
     Automations,
     /// Project board tickets (directly below Automations).
     Board,
+    /// A page an enabled extension contributes (CORE-12), listed after the
+    /// built-in pages and rendered by the host. A saved layout records its
+    /// id (`contribution:<id>`), never this handle.
+    Contributed(ContributionKey),
 }
 
 impl SidebarPage {
@@ -643,14 +713,18 @@ impl SidebarPage {
         match self {
             Self::Automations => "Automations",
             Self::Board => "Board",
+            // Its own title comes from the contribution registry.
+            Self::Contributed(_) => "Extension",
         }
     }
 
-    /// Stable key for element ids, QA probes and restart restoration.
+    /// Stable key for element ids, QA probes and restart restoration. A
+    /// contributed page is restored by its contribution id instead.
     pub fn key(self) -> &'static str {
         match self {
             Self::Automations => "automations",
             Self::Board => "board",
+            Self::Contributed(_) => "contribution",
         }
     }
 
@@ -688,6 +762,7 @@ impl SidebarNavItem {
             Self::NewThread => icons::PEN_NEW_SQUARE,
             Self::Page(SidebarPage::Automations) => icons::STOPWATCH_PLAY,
             Self::Page(SidebarPage::Board) => icons::CLIPBOARD_LIST,
+            Self::Page(SidebarPage::Contributed(_)) => icons::WIDGET,
         }
     }
 
@@ -728,6 +803,10 @@ pub enum RightPlace {
     Changes,
     Terminal,
     Browser,
+    /// A task panel an enabled extension contributes (CORE-12), on the rail
+    /// after the workspace tools and rendered by the host for the shown
+    /// task only.
+    Contributed(ContributionKey),
 }
 
 impl RightPlace {
@@ -754,6 +833,7 @@ impl RightPlace {
             Self::Changes => "changes",
             Self::Terminal => "terminal",
             Self::Browser => "browser",
+            Self::Contributed(_) => "contribution",
         }
     }
 
@@ -767,6 +847,8 @@ impl RightPlace {
             Self::Changes => "Changes",
             Self::Terminal => "Terminal",
             Self::Browser => "Browser",
+            // Its own title comes from the contribution registry.
+            Self::Contributed(_) => "Extension",
         }
     }
 
@@ -780,6 +862,7 @@ impl RightPlace {
             Self::Changes => icons::GIT_DIFF,
             Self::Terminal => icons::TERMINAL,
             Self::Browser => icons::WINDOW_FRAME,
+            Self::Contributed(_) => icons::WIDGET,
         }
     }
 
@@ -2639,6 +2722,9 @@ pub struct Shell {
     history_search_next_cursor: Option<luna_proto::HistoryCursor>,
     history_search_scope_key: Option<HistorySearchScopeKey>,
     activity: activity_center::ActivityUi,
+    /// CORE-12: the contribution registry (host and extension entries), the
+    /// engine watch that feeds it, and the views fetched for its entries.
+    pub(super) contributions: contributions::ShellContributions,
     keep_awake: crate::power::KeepAwake<crate::power::SystemPower>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
@@ -2955,6 +3041,14 @@ impl Shell {
         crate::appshots::set_capture_sound_enabled(settings.appshot_sound_enabled);
         // Bind the customizable shortcuts from the persisted keymap.
         apply_keymap(cx, &settings.keymap, settings.composer_send_behavior);
+        // CORE-12: a saved contributed page is restored once the engine's
+        // first contribution snapshot says it still exists; until then (and
+        // when it does not) the shell stays on its known-good default.
+        let contribution_restore = std::env::var("LUNA_OPEN_ROUTE")
+            .is_err()
+            .then(|| settings.last_sidebar_page.clone())
+            .flatten()
+            .filter(|saved| crate::contributions::saved_contribution_id(saved).is_some());
         // Dev/testing knob: `LUNA_OPEN_ROUTE=settings[/<section>]` boots
         // straight into a settings section — these pages have no deep link and
         // synthetic input can't reach them on headless compositors.
@@ -3192,6 +3286,7 @@ impl Shell {
             history_search_next_cursor: None,
             history_search_scope_key: None,
             activity: activity_center::ActivityUi::default(),
+            contributions: contributions::ShellContributions::restoring(contribution_restore),
             keep_awake: crate::power::KeepAwake::new(crate::power::SystemPower),
             space_boot_applied: false,
             sidebar_notice: None,
@@ -4068,6 +4163,13 @@ impl Shell {
     /// render a dead surface, and never leave the place the rail shows.
     fn resolved_right_active(&self, cx: &App) -> RightSurface {
         let picked = self.panels.get(&self.panel_key(cx)).right_active;
+        // CORE-12: a contributed panel that is no longer placed falls back
+        // to the Overview, the known-good default.
+        if let RightSurface::Home(RightPlace::Contributed(key)) = picked
+            && !self.contribution_placed(key, luna_proto::UiPlacement::Panel)
+        {
+            return RightSurface::Home(RightPlace::Overview);
+        }
         if matches!(picked, RightSurface::Home(_)) {
             return picked;
         }
@@ -5604,6 +5706,13 @@ impl Shell {
             self.open_sidebar_page(SidebarPage::Automations, cx);
             return;
         }
+        // CORE-12: a contributed section opens only while it is placed.
+        if let SettingsSection::Contributed(key) = section
+            && !self.contribution_placed(key, luna_proto::UiPlacement::SettingsSection)
+        {
+            return;
+        }
+        self.contributions.drop_restore();
         self.dismiss_command_palette(cx);
         if section == SettingsSection::Providers
             && let Some(page) = &self.accounts_page
@@ -5642,6 +5751,13 @@ impl Shell {
     /// Open a sidebar navigation page in the main outlet, keeping the
     /// thread list in the sidebar and recording it for back/forward.
     pub(super) fn open_sidebar_page(&mut self, page: SidebarPage, cx: &mut Context<Self>) {
+        // CORE-12: a contributed page opens only while it is placed.
+        if let SidebarPage::Contributed(key) = page
+            && !self.contribution_placed(key, luna_proto::UiPlacement::SidebarSection)
+        {
+            return;
+        }
+        self.contributions.drop_restore();
         self.dismiss_command_palette(cx);
         self.route = Route::Page(page);
         if *self.nav.current() != NavEntry::Page(page) {
@@ -5670,6 +5786,10 @@ impl Shell {
                 self.automations_outlet(scope, true, cx).into_any_element()
             }
             SidebarPage::Board => self.board_page(cx).into_any_element(),
+            // CORE-12: the host renders the extension's declarative view.
+            SidebarPage::Contributed(key) => {
+                self.render_contribution_page(key, luna_proto::UiPlacement::SidebarSection, cx)
+            }
         }
     }
 
@@ -5708,6 +5828,7 @@ impl Shell {
     /// this triggers dedups against `current()` in [`Self::on_state_changed`].
     fn apply_nav(&mut self, entry: NavEntry, cx: &mut Context<Self>) {
         self.suspend_file_images(cx);
+        self.contributions.drop_restore();
         match entry {
             NavEntry::Chat(chat_id) => {
                 self.route = Route::Chat;
@@ -6128,6 +6249,10 @@ impl Shell {
                     self.begin_update_check(cx);
                 }
                 self.render_updates_page(cx)
+            }
+            // CORE-12: the host renders the extension's declarative view.
+            SettingsSection::Contributed(key) => {
+                self.render_contribution_page(key, luna_proto::UiPlacement::SettingsSection, cx)
             }
         }
     }
@@ -8980,54 +9105,75 @@ impl Shell {
                     .into_any_element(),
             )
         });
-        let section_icon = |item: SettingsSection| match item {
-            SettingsSection::General => icons::SETTINGS,
-            SettingsSection::Projects => icons::FOLDER_WITH_FILES,
-            SettingsSection::Devices => icons::MONITOR,
-            SettingsSection::Connections => icons::GLOBAL,
-            SettingsSection::Providers => icons::SERVER_2,
-            SettingsSection::Extensions => icons::WIDGET,
-            SettingsSection::Appearance => icons::PAINT_BRUSH,
-            SettingsSection::Files => icons::FOLDER,
-            SettingsSection::Backups => icons::DATABASE,
-            SettingsSection::Diagnostics => icons::HARD_DRIVE,
-            SettingsSection::Notifications => icons::BELL,
-            SettingsSection::Shortcuts => icons::KEYBOARD,
-            // Appshots are captured window images; Devices keeps the monitor.
-            SettingsSection::Appshots => icons::CAMERA_MINIMALISTIC,
-            SettingsSection::Automations => icons::STOPWATCH_PLAY,
-            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
-            SettingsSection::Usage => icons::CHART,
-            SettingsSection::Updates => icons::ROUND_ARROW_DOWN,
-        };
+        // CORE-12: the sections come from the contribution registry: the
+        // built-in ones in their shipped order (Automations has its own page
+        // in the chat sidebar; Appshots is desktop only), then the enabled
+        // extensions' sections as their own group. Nothing can displace
+        // Extensions, the recovery route.
+        let listed: Vec<(
+            SettingsSection,
+            SharedString,
+            &'static str,
+            SharedString,
+            String,
+        )> = self
+            .contributions
+            .registry
+            .placed(luna_proto::UiPlacement::SettingsSection)
+            .filter_map(|contribution| {
+                let item = contribution.settings_section()?;
+                let (aria, id) = match contribution.entry() {
+                    None => (
+                        SharedString::from(format!("{} settings", item.label())),
+                        format!("settings-nav-{}", item.label()),
+                    ),
+                    Some(_) => (
+                        SharedString::from(format!("{} settings", contribution.accessible_label())),
+                        format!("settings-nav-ext-{}", contribution.key.slug()),
+                    ),
+                };
+                Some((
+                    item,
+                    contribution.title.clone(),
+                    contribution.icon,
+                    aria,
+                    id,
+                ))
+            })
+            .collect();
         // Groups read as groups through space, not rules: a group opens with
         // a 16 pt gap above its first row, rows inside it sit 2 pt apart.
-        let starts_group = |item: SettingsSection| {
+        let first_contributed = listed
+            .iter()
+            .position(|(item, ..)| matches!(item, SettingsSection::Contributed(_)));
+        let starts_group = move |index: usize, item: SettingsSection| {
             matches!(item, SettingsSection::Files | SettingsSection::Archived)
+                || Some(index) == first_contributed
         };
-        let listed = SettingsSection::ALL
-            .into_iter()
-            .filter(|item| *item != SettingsSection::Appshots || crate::appshots::is_desktop())
-            // Automations has its own page in the chat sidebar.
-            .filter(|item| *item != SettingsSection::Automations);
         #[cfg(feature = "appshots-fixture")]
         if let Some(probe) = self.sidebar_probe.as_mut() {
             probe.texts.insert(
                 "settings-nav".into(),
-                listed.clone().map(|item| item.label().to_owned()).collect(),
+                listed
+                    .iter()
+                    .map(|(_, label, ..)| label.to_string())
+                    .collect(),
             );
         }
-        let rows = listed.map(|item| {
-            let selected = item == section;
-            let id = format!("settings-nav-{}", item.label());
-            Self::settings_nav_row(id, section_icon(item), item.label(), selected, theme)
-                .aria_label(format!("{} settings", item.label()))
-                .aria_selected(selected)
-                .when(starts_group(item), |row| {
-                    row.mt(crate::typography::ui_rems(16.0))
-                })
-                .on_click(cx.listener(move |this, _, _, cx| this.open_settings(item, cx)))
-        });
+        let rows = listed
+            .into_iter()
+            .enumerate()
+            .map(|(index, (item, label, glyph, aria, id))| {
+                let selected = item == section;
+                Self::settings_nav_row(id.clone(), glyph, label, selected, theme)
+                    .debug_selector(move || id.clone())
+                    .aria_label(aria)
+                    .aria_selected(selected)
+                    .when(starts_group(index, item), |row| {
+                        row.mt(crate::typography::ui_rems(16.0))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_settings(item, cx)))
+            });
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
@@ -9121,10 +9267,11 @@ impl Shell {
     fn settings_nav_row(
         id: impl Into<SharedString>,
         glyph: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         selected: bool,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
+        let label: SharedString = label.into();
         let id: SharedString = id.into();
         let ring = theme.focus_ring();
         let selected_fill = crate::theme::glass_selected_bg();
@@ -9183,13 +9330,7 @@ impl Shell {
             // Section names are short; at the narrowest sidebar and the
             // largest Interface size a label ellipsizes instead of wrapping
             // the row or pushing past the sidebar's edge.
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(label)),
-            )
+            .child(div().flex_1().min_w_0().truncate().child(label))
     }
 
     fn activate_account_action(&mut self, action: AccountAction, cx: &mut Context<Self>) {
@@ -15827,6 +15968,10 @@ impl Render for Shell {
         let _perf = crate::perf_counters::Timer::start("shell.render", || "shell".into());
         self.reconcile_splash(cx);
         self.render_time = Some(self.frame_clock());
+        // CORE-12: follow the engine's contributions (a spawn, once per
+        // engine) and leave any route whose contribution is gone.
+        self.ensure_contribution_watch(cx);
+        self.reconcile_contribution_routes(cx);
         self.sync_route_sidebar();
         self.sync_restored_page(cx);
         if !matches!(self.route, Route::Settings(SettingsSection::Connections)) {

@@ -1810,6 +1810,102 @@ public protocol RemoteSessionProtocol: AnyObject, Sendable {
      */
     func watchTaskCommands(taskId: String, cancel: Cancellation?) async throws  -> TaskCommandWatchHandle
 
+    /**
+     * RM-04: withdraw a send that started a turn (receipt `run`) while it
+     * waits for a free turn on the Mac. A send that started is refused.
+     */
+    func cancelCapacityWait(taskId: String, commandId: String) throws  -> String
+
+    /**
+     * RM-04: create a task in one of the Mac's projects. Returns the new
+     * task's id (minted here, so a retried create names the same task).
+     * Messages sent to it before the Mac created it stay drafts. Without
+     * `permission_mode` the Mac uses Auto when its provider and model offer
+     * it; otherwise the create is refused with `permissionModeRequired`
+     * (offer Full access, then create again).
+     */
+    func createTask(projectId: String, permissionMode: TaskPermissionMode?) throws  -> String
+
+    /**
+     * RM-04: remove a command the Mac does not own: never sent, or settled.
+     * Discarding a refused command releases the later ones it held.
+     */
+    func discardOutboxEntry(commandId: String) throws
+
+    /**
+     * RM-04: every outbox command, oldest first.
+     */
+    func outbox()  -> [OutboxEntryRecord]
+
+    /**
+     * RM-04: the outbox to keep for the next run, bounded. Save it whenever
+     * [`RemoteSession::outbox_revision`] moved, in protected,
+     * non-synchronized storage scoped to this saved Mac, and delete it when
+     * the Mac is forgotten or paired again. Empty for an IOS-00 session.
+     */
+    func outboxBytes()  -> Data
+
+    /**
+     * RM-04: why the outbox is not being delivered on this connection (an
+     * older Mac, or access without task control), if it is not.
+     */
+    func outboxIssue()  -> String?
+
+    /**
+     * RM-04: moves whenever the outbox changed; re-read it (and save
+     * [`RemoteSession::outbox_bytes`]) only when this moved.
+     */
+    func outboxRevision()  -> UInt64
+
+    /**
+     * RM-04: remove a queued message, fenced by its queue revision (a
+     * message this phone queued and nobody edited is at revision 1).
+     */
+    func removeQueued(taskId: String, messageId: String, expectedQueueRevision: UInt64) throws  -> String
+
+    /**
+     * RM-04: restore what [`RemoteSession::outbox_bytes`] saved for this
+     * same Mac and session, before any command is added. Commands that were
+     * in flight come back uncertain and are read back by id on the next
+     * socket. Returns why it was not restored, if it was not.
+     */
+    func restoreOutbox(bytes: Data)  -> String?
+
+    /**
+     * RM-04: send a message to a task; returns its command id, which is
+     * also its message id on the Mac. To an idle task it starts the next
+     * turn; while the task is busy it waits in the Mac's queue, or with
+     * `steer` steers the running turn (a live control: it needs an open
+     * connection and a running turn). With `new_worktree` (only a task's
+     * first message) the turn runs in a fresh worktree of the task's
+     * project, from `worktree_base` or the project's `HEAD`; later messages
+     * wait behind its setup and are held if the setup fails or is cancelled.
+     */
+    func sendMessage(taskId: String, text: String, steer: Bool, newWorktree: Bool, worktreeBase: String?, cancel: Cancellation?) async throws  -> String
+
+    /**
+     * RM-04: interrupt the running turn (if any) and send this queued
+     * message now (a live control).
+     */
+    func sendQueuedNow(taskId: String, messageId: String, expectedQueueRevision: UInt64, cancel: Cancellation?) async throws  -> String
+
+    /**
+     * RM-04: archive or restore a task.
+     */
+    func setTaskArchived(taskId: String, archived: Bool) throws  -> String
+
+    /**
+     * RM-04: steer this queued message into the running turn (a live
+     * control). Refused at once when nothing runs.
+     */
+    func steerQueuedNow(taskId: String, messageId: String, expectedQueueRevision: UInt64, cancel: Cancellation?) async throws  -> String
+
+    /**
+     * RM-04: stop the task's running turn (a live control). Refused at
+     * once when nothing runs or the connection is not open.
+     */
+    func stopTask(taskId: String, cancel: Cancellation?) async throws  -> String
+
 }
 /**
  * One saved Mac's SDK session. See the module documentation.
@@ -2212,6 +2308,238 @@ open func watchTaskCommands(taskId: String, cancel: Cancellation?)async throws  
             completeFunc: ffi_luna_mobile_rust_future_complete_u64,
             freeFunc: ffi_luna_mobile_rust_future_free_u64,
             liftFunc: FfiConverterTypeTaskCommandWatchHandle_lift,
+            errorHandler: FfiConverterTypeRemoteSessionError_lift
+        )
+}
+
+    /**
+     * RM-04: withdraw a send that started a turn (receipt `run`) while it
+     * waits for a free turn on the Mac. A send that started is refused.
+     */
+open func cancelCapacityWait(taskId: String, commandId: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_cancel_capacity_wait(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),
+        FfiConverterString.lower(commandId),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: create a task in one of the Mac's projects. Returns the new
+     * task's id (minted here, so a retried create names the same task).
+     * Messages sent to it before the Mac created it stay drafts. Without
+     * `permission_mode` the Mac uses Auto when its provider and model offer
+     * it; otherwise the create is refused with `permissionModeRequired`
+     * (offer Full access, then create again).
+     */
+open func createTask(projectId: String, permissionMode: TaskPermissionMode?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_create_task(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(projectId),
+        FfiConverterOptionTypeTaskPermissionMode.lower(permissionMode),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: remove a command the Mac does not own: never sent, or settled.
+     * Discarding a refused command releases the later ones it held.
+     */
+open func discardOutboxEntry(commandId: String)throws   {try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_discard_outbox_entry(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(commandId),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * RM-04: every outbox command, oldest first.
+     */
+open func outbox() -> [OutboxEntryRecord]  {
+    return try!  FfiConverterSequenceTypeOutboxEntryRecord.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_outbox(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: the outbox to keep for the next run, bounded. Save it whenever
+     * [`RemoteSession::outbox_revision`] moved, in protected,
+     * non-synchronized storage scoped to this saved Mac, and delete it when
+     * the Mac is forgotten or paired again. Empty for an IOS-00 session.
+     */
+open func outboxBytes() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_outbox_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: why the outbox is not being delivered on this connection (an
+     * older Mac, or access without task control), if it is not.
+     */
+open func outboxIssue() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_outbox_issue(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: moves whenever the outbox changed; re-read it (and save
+     * [`RemoteSession::outbox_bytes`]) only when this moved.
+     */
+open func outboxRevision() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_outbox_revision(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: remove a queued message, fenced by its queue revision (a
+     * message this phone queued and nobody edited is at revision 1).
+     */
+open func removeQueued(taskId: String, messageId: String, expectedQueueRevision: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_remove_queued(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),
+        FfiConverterString.lower(messageId),
+        FfiConverterUInt64.lower(expectedQueueRevision),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: restore what [`RemoteSession::outbox_bytes`] saved for this
+     * same Mac and session, before any command is added. Commands that were
+     * in flight come back uncertain and are read back by id on the next
+     * socket. Returns why it was not restored, if it was not.
+     */
+open func restoreOutbox(bytes: Data) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_restore_outbox(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(bytes),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: send a message to a task; returns its command id, which is
+     * also its message id on the Mac. To an idle task it starts the next
+     * turn; while the task is busy it waits in the Mac's queue, or with
+     * `steer` steers the running turn (a live control: it needs an open
+     * connection and a running turn). With `new_worktree` (only a task's
+     * first message) the turn runs in a fresh worktree of the task's
+     * project, from `worktree_base` or the project's `HEAD`; later messages
+     * wait behind its setup and are held if the setup fails or is cancelled.
+     */
+open func sendMessage(taskId: String, text: String, steer: Bool, newWorktree: Bool, worktreeBase: String?, cancel: Cancellation?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_luna_mobile_fn_method_remotesession_send_message(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(taskId),FfiConverterString.lower(text),FfiConverterBool.lower(steer),FfiConverterBool.lower(newWorktree),FfiConverterOptionString.lower(worktreeBase),FfiConverterOptionTypeCancellation.lower(cancel)
+                )
+            },
+            pollFunc: ffi_luna_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_luna_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_luna_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeRemoteSessionError_lift
+        )
+}
+
+    /**
+     * RM-04: interrupt the running turn (if any) and send this queued
+     * message now (a live control).
+     */
+open func sendQueuedNow(taskId: String, messageId: String, expectedQueueRevision: UInt64, cancel: Cancellation?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_luna_mobile_fn_method_remotesession_send_queued_now(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(taskId),FfiConverterString.lower(messageId),FfiConverterUInt64.lower(expectedQueueRevision),FfiConverterOptionTypeCancellation.lower(cancel)
+                )
+            },
+            pollFunc: ffi_luna_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_luna_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_luna_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeRemoteSessionError_lift
+        )
+}
+
+    /**
+     * RM-04: archive or restore a task.
+     */
+open func setTaskArchived(taskId: String, archived: Bool)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeRemoteSessionError_lift) {
+        uniffiCallStatus in
+    uniffi_luna_mobile_fn_method_remotesession_set_task_archived(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(taskId),
+        FfiConverterBool.lower(archived),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * RM-04: steer this queued message into the running turn (a live
+     * control). Refused at once when nothing runs.
+     */
+open func steerQueuedNow(taskId: String, messageId: String, expectedQueueRevision: UInt64, cancel: Cancellation?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_luna_mobile_fn_method_remotesession_steer_queued_now(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(taskId),FfiConverterString.lower(messageId),FfiConverterUInt64.lower(expectedQueueRevision),FfiConverterOptionTypeCancellation.lower(cancel)
+                )
+            },
+            pollFunc: ffi_luna_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_luna_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_luna_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeRemoteSessionError_lift
+        )
+}
+
+    /**
+     * RM-04: stop the task's running turn (a live control). Refused at
+     * once when nothing runs or the connection is not open.
+     */
+open func stopTask(taskId: String, cancel: Cancellation?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_luna_mobile_fn_method_remotesession_stop_task(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(taskId),FfiConverterOptionTypeCancellation.lower(cancel)
+                )
+            },
+            pollFunc: ffi_luna_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_luna_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_luna_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
             errorHandler: FfiConverterTypeRemoteSessionError_lift
         )
 }
@@ -3201,6 +3529,157 @@ public func FfiConverterTypeEnrollmentRequest_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeEnrollmentRequest_lower(_ value: EnrollmentRequest) -> RustBuffer {
     return FfiConverterTypeEnrollmentRequest.lower(value)
+}
+
+
+/**
+ * One outbox command as the phone shows it.
+ */
+public struct OutboxEntryRecord: Equatable, Hashable {
+    public var commandId: String
+    public var taskId: String
+    /**
+     * The command's wire kind (`createTask`, `send`, `stop`, ...).
+     */
+    public var kind: String
+    /**
+     * A message's text (sends only); its id is the command id.
+     */
+    public var text: String?
+    public var status: OutboxEntryStatus
+    /**
+     * The earlier command of the same task this one waits for or is held by.
+     */
+    public var blockedBy: String?
+    /**
+     * The Mac receipt's status wire name, once it answered.
+     */
+    public var receiptStatus: String?
+    public var reasonCode: String?
+    /**
+     * Why it was refused, is unknown, or was not sent.
+     */
+    public var detail: String?
+    /**
+     * What the Mac suggests doing next.
+     */
+    public var recovery: String?
+    public var delivery: OutboxDeliveryState?
+    public var deliveryDetail: String?
+    /**
+     * Times it was sent (always the same id and payload).
+     */
+    public var sends: UInt32
+    public var createdAtMs: Int64
+    public var updatedAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(commandId: String, taskId: String,
+        /**
+         * The command's wire kind (`createTask`, `send`, `stop`, ...).
+         */kind: String,
+        /**
+         * A message's text (sends only); its id is the command id.
+         */text: String?, status: OutboxEntryStatus,
+        /**
+         * The earlier command of the same task this one waits for or is held by.
+         */blockedBy: String?,
+        /**
+         * The Mac receipt's status wire name, once it answered.
+         */receiptStatus: String?, reasonCode: String?,
+        /**
+         * Why it was refused, is unknown, or was not sent.
+         */detail: String?,
+        /**
+         * What the Mac suggests doing next.
+         */recovery: String?, delivery: OutboxDeliveryState?, deliveryDetail: String?,
+        /**
+         * Times it was sent (always the same id and payload).
+         */sends: UInt32, createdAtMs: Int64, updatedAtMs: Int64) {
+        self.commandId = commandId
+        self.taskId = taskId
+        self.kind = kind
+        self.text = text
+        self.status = status
+        self.blockedBy = blockedBy
+        self.receiptStatus = receiptStatus
+        self.reasonCode = reasonCode
+        self.detail = detail
+        self.recovery = recovery
+        self.delivery = delivery
+        self.deliveryDetail = deliveryDetail
+        self.sends = sends
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OutboxEntryRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutboxEntryRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutboxEntryRecord {
+        return
+            try OutboxEntryRecord(
+                commandId: FfiConverterString.read(from: &buf),
+                taskId: FfiConverterString.read(from: &buf),
+                kind: FfiConverterString.read(from: &buf),
+                text: FfiConverterOptionString.read(from: &buf),
+                status: FfiConverterTypeOutboxEntryStatus.read(from: &buf),
+                blockedBy: FfiConverterOptionString.read(from: &buf),
+                receiptStatus: FfiConverterOptionString.read(from: &buf),
+                reasonCode: FfiConverterOptionString.read(from: &buf),
+                detail: FfiConverterOptionString.read(from: &buf),
+                recovery: FfiConverterOptionString.read(from: &buf),
+                delivery: FfiConverterOptionTypeOutboxDeliveryState.read(from: &buf),
+                deliveryDetail: FfiConverterOptionString.read(from: &buf),
+                sends: FfiConverterUInt32.read(from: &buf),
+                createdAtMs: FfiConverterInt64.read(from: &buf),
+                updatedAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OutboxEntryRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.commandId, into: &buf)
+        FfiConverterString.write(value.taskId, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterOptionString.write(value.text, into: &buf)
+        FfiConverterTypeOutboxEntryStatus.write(value.status, into: &buf)
+        FfiConverterOptionString.write(value.blockedBy, into: &buf)
+        FfiConverterOptionString.write(value.receiptStatus, into: &buf)
+        FfiConverterOptionString.write(value.reasonCode, into: &buf)
+        FfiConverterOptionString.write(value.detail, into: &buf)
+        FfiConverterOptionString.write(value.recovery, into: &buf)
+        FfiConverterOptionTypeOutboxDeliveryState.write(value.delivery, into: &buf)
+        FfiConverterOptionString.write(value.deliveryDetail, into: &buf)
+        FfiConverterUInt32.write(value.sends, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+        FfiConverterInt64.write(value.updatedAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxEntryRecord_lift(_ buf: RustBuffer) throws -> OutboxEntryRecord {
+    return try FfiConverterTypeOutboxEntryRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxEntryRecord_lower(_ value: OutboxEntryRecord) -> RustBuffer {
+    return FfiConverterTypeOutboxEntryRecord.lower(value)
 }
 
 
@@ -4626,6 +5105,252 @@ public func FfiConverterTypeEnrollmentError_lower(_ value: EnrollmentError) -> R
 }
 
 
+/**
+ * A queued message's delivery on the Mac.
+ */
+
+public enum OutboxDeliveryState: Equatable, Hashable {
+
+    /**
+     * In the Mac's queue (behind the running turn or worktree setup).
+     */
+    case queued
+    case dispatching
+    case delivered
+    /**
+     * Held on the Mac, for example after a failed worktree setup; it stays
+     * queued there until an explicit send.
+     */
+    case held
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OutboxDeliveryState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutboxDeliveryState: FfiConverterRustBuffer {
+    typealias SwiftType = OutboxDeliveryState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutboxDeliveryState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .queued
+
+        case 2: return .dispatching
+
+        case 3: return .delivered
+
+        case 4: return .held
+
+        case 5: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OutboxDeliveryState, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .queued:
+            writeInt(&buf, Int32(1))
+
+
+        case .dispatching:
+            writeInt(&buf, Int32(2))
+
+
+        case .delivered:
+            writeInt(&buf, Int32(3))
+
+
+        case .held:
+            writeInt(&buf, Int32(4))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(5))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxDeliveryState_lift(_ buf: RustBuffer) throws -> OutboxDeliveryState {
+    return try FfiConverterTypeOutboxDeliveryState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxDeliveryState_lower(_ value: OutboxDeliveryState) -> RustBuffer {
+    return FfiConverterTypeOutboxDeliveryState.lower(value)
+}
+
+
+
+/**
+ * Where one command stands, as the phone shows it. Only the Mac's own
+ * receipts move it past `uncertain`.
+ */
+
+public enum OutboxEntryStatus: Equatable, Hashable {
+
+    /**
+     * Kept on this phone for a task the Mac has not created yet.
+     */
+    case draft
+    /**
+     * Waiting behind an earlier command for the same task.
+     */
+    case waiting
+    /**
+     * Not sent: an earlier command for the same task was refused
+     * (`blocked_by`). Discard that one to release it.
+     */
+    case held
+    /**
+     * Sent on the next verified connection.
+     */
+    case ready
+    case sending
+    /**
+     * The answer was lost; its receipt is read by id before any resend.
+     */
+    case uncertain
+    /**
+     * The Mac admitted it and owns it now.
+     */
+    case accepted
+    /**
+     * Admitted, but the Mac could not prove its provider accepted it:
+     * check the task on the Mac before sending it again.
+     */
+    case unknown
+    case applied
+    case refused
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OutboxEntryStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutboxEntryStatus: FfiConverterRustBuffer {
+    typealias SwiftType = OutboxEntryStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutboxEntryStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .draft
+
+        case 2: return .waiting
+
+        case 3: return .held
+
+        case 4: return .ready
+
+        case 5: return .sending
+
+        case 6: return .uncertain
+
+        case 7: return .accepted
+
+        case 8: return .unknown
+
+        case 9: return .applied
+
+        case 10: return .refused
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OutboxEntryStatus, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .draft:
+            writeInt(&buf, Int32(1))
+
+
+        case .waiting:
+            writeInt(&buf, Int32(2))
+
+
+        case .held:
+            writeInt(&buf, Int32(3))
+
+
+        case .ready:
+            writeInt(&buf, Int32(4))
+
+
+        case .sending:
+            writeInt(&buf, Int32(5))
+
+
+        case .uncertain:
+            writeInt(&buf, Int32(6))
+
+
+        case .accepted:
+            writeInt(&buf, Int32(7))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(8))
+
+
+        case .applied:
+            writeInt(&buf, Int32(9))
+
+
+        case .refused:
+            writeInt(&buf, Int32(10))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxEntryStatus_lift(_ buf: RustBuffer) throws -> OutboxEntryStatus {
+    return try FfiConverterTypeOutboxEntryStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutboxEntryStatus_lower(_ value: OutboxEntryStatus) -> RustBuffer {
+    return FfiConverterTypeOutboxEntryStatus.lower(value)
+}
+
+
+
 public
 enum ProbeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -5665,6 +6390,77 @@ public func FfiConverterTypeTaskCommandChange_lower(_ value: TaskCommandChange) 
 
 
 
+/**
+ * The permission mode of a task this phone creates. New work has only
+ * these: Full access never asks; Auto lets the provider's own reviewer
+ * decide. Legacy Ask cannot be chosen.
+ */
+
+public enum TaskPermissionMode: Equatable, Hashable {
+
+    case full
+    case auto
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension TaskPermissionMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskPermissionMode: FfiConverterRustBuffer {
+    typealias SwiftType = TaskPermissionMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskPermissionMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .full
+
+        case 2: return .auto
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TaskPermissionMode, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .full:
+            writeInt(&buf, Int32(1))
+
+
+        case .auto:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskPermissionMode_lift(_ buf: RustBuffer) throws -> TaskPermissionMode {
+    return try FfiConverterTypeTaskPermissionMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskPermissionMode_lower(_ value: TaskPermissionMode) -> RustBuffer {
+    return FfiConverterTypeTaskPermissionMode.lower(value)
+}
+
+
+
 
 public enum TransportFailure: Equatable, Hashable {
 
@@ -6040,6 +6836,30 @@ fileprivate struct FfiConverterOptionTypeRouteObservation: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeOutboxDeliveryState: FfiConverterRustBuffer {
+    typealias SwiftType = OutboxDeliveryState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeOutboxDeliveryState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeOutboxDeliveryState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeTaskCommandChange: FfiConverterRustBuffer {
     typealias SwiftType = TaskCommandChange?
 
@@ -6056,6 +6876,30 @@ fileprivate struct FfiConverterOptionTypeTaskCommandChange: FfiConverterRustBuff
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeTaskCommandChange.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeTaskPermissionMode: FfiConverterRustBuffer {
+    typealias SwiftType = TaskPermissionMode?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTaskPermissionMode.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTaskPermissionMode.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -6081,6 +6925,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeOutboxEntryRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [OutboxEntryRecord]
+
+    public static func write(_ value: [OutboxEntryRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOutboxEntryRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OutboxEntryRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OutboxEntryRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeOutboxEntryRecord.read(from: &buf))
         }
         return seq
     }
@@ -6405,6 +7274,48 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesession_watch_task_commands() != 43811) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_cancel_capacity_wait() != 36776) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_create_task() != 7724) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_discard_outbox_entry() != 51278) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_outbox() != 31722) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_outbox_bytes() != 58505) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_outbox_issue() != 29006) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_outbox_revision() != 60330) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_remove_queued() != 35311) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_restore_outbox() != 23032) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_send_message() != 13538) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_send_queued_now() != 4827) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_set_task_archived() != 58514) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_steer_queued_now() != 58207) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_luna_mobile_checksum_method_remotesession_stop_task() != 27422) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_luna_mobile_checksum_method_remotesessionlistener_on_change() != 37454) {

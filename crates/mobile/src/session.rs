@@ -46,6 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use luna_proto::remote_command::REMOTE_TASK_CONTROL_V1;
 use luna_proto::remote_control::{
     DESCRIPTOR_PATH, HostTicket, RemoteTarget, SOCKET_PATH, SOCKET_TICKET_PATH,
 };
@@ -53,6 +54,7 @@ use luna_proto::remote_projection::{MAX_ID_BYTES, REMOTE_PROJECTIONS_V1};
 use luna_proto::{CommandReceipt, EngineInfo, TaskCommandSnapshot};
 use luna_rpc::RpcClient;
 use luna_rpc::remote_auth::SocketTicket;
+use luna_sdk::outbox::Outbox;
 use luna_sdk::{HostKey, ProjectionError, ProjectionStore, SdkError, TaskCommandUpdate};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -65,6 +67,9 @@ use crate::probe::{
     verify_descriptor,
 };
 use crate::runtime::{Cancellation, run, runtime};
+
+/// RM-04: the runtime's command outbox and its FFI (`session/commands.rs`).
+pub mod commands;
 
 /// Every SDK call over the socket is bounded; a host that stops answering is
 /// `timeout`, never a hung UI.
@@ -700,6 +705,11 @@ struct Follow {
     cache_note: Option<String>,
     issue: Option<String>,
     revision: u64,
+    /// RM-04: this Mac's command outbox, delivered by the current socket's
+    /// reconciler whether or not a view shows it.
+    outbox: Outbox,
+    /// RM-04: why the outbox is not being delivered on this connection.
+    outbox_issue: Option<String>,
 }
 
 struct Core {
@@ -715,6 +725,12 @@ struct Core {
     /// A change was signalled and the platform has not read the state since.
     pending: AtomicBool,
     inner: Mutex<Inner>,
+    /// RM-04: wakes the outbox reconciler when a command was added.
+    outbox_wake: tokio::sync::Notify,
+    /// RM-04: the receipt actor of this saved session's commands.
+    actor_id: String,
+    /// RM-04: the saved access includes `tasks-operate`.
+    operates: bool,
 }
 
 /// What the runtime's supervisor does next.
@@ -759,12 +775,15 @@ impl Core {
             .ok_or_else(|| RemoteSessionError::InvalidSession {
                 detail: format!("the saved Mac has no endpoint {endpoint_index}"),
             })?;
+        let actor_id = luna_proto::remote_command::remote_actor_id(&mac.session_id);
+        let operates = mac.scopes.iter().any(|scope| scope == "tasks-operate");
         let follow = follow.map(|cache| {
             let key = HostKey {
                 device_id: host.target.device_id.clone(),
                 environment_id: host.target.environment_id.clone(),
                 workspace_scope: host.target.workspace_scope,
             };
+            let outbox = Outbox::new(key.clone(), actor_id.clone());
             let (store, cache_note) = match cache {
                 None => (ProjectionStore::new(key), None),
                 Some(bytes) => match ProjectionStore::decode(&bytes, &key) {
@@ -784,6 +803,8 @@ impl Core {
                 cache_note,
                 issue: None,
                 revision: 1,
+                outbox,
+                outbox_issue: None,
             }
         });
         Ok(Self {
@@ -805,6 +826,9 @@ impl Core {
                 tasks: Vec::new(),
                 follow,
             }),
+            outbox_wake: tokio::sync::Notify::new(),
+            actor_id,
+            operates,
         })
     }
 
@@ -892,6 +916,9 @@ impl Core {
                 follow.store.end_epoch();
                 follow.followers.clear();
                 follow.revision += 1;
+                // RM-04: in-flight commands become uncertain (read back by id
+                // on a later session's socket); unsent live controls end.
+                follow.outbox.connection_ended(now_ms());
                 tasks.extend(follow.supervisor.take());
             }
             (
@@ -928,6 +955,9 @@ impl Core {
                 follow.store.end_epoch();
                 follow.followers.clear();
                 follow.revision += 1;
+                // RM-04: in-flight commands become uncertain and are read back
+                // by id on the next socket; unsent live controls end here.
+                follow.outbox.connection_ended(now_ms());
                 if reset_attempts {
                     follow.attempt = 0;
                 }
@@ -1334,21 +1364,50 @@ impl Core {
             follow.last_error = None;
             follow.store.begin_epoch(follow.epoch);
             follow.revision += 1;
+            // RM-04: anything still marked in flight belongs to an earlier
+            // socket: uncertain now, read back by id on this one.
+            follow.outbox.connection_ended(now_ms());
+            let commands = host
+                .capabilities
+                .iter()
+                .any(|capability| capability == REMOTE_TASK_CONTROL_V1);
+            follow.outbox_issue = if !self.operates {
+                Some(
+                    "This phone's access does not include operating tasks; pair again on the Mac"
+                        .into(),
+                )
+            } else if !commands {
+                Some(
+                    "This Mac's LUNA does not accept commands from the phone yet; update LUNA on the Mac"
+                        .into(),
+                )
+            } else {
+                None
+            };
+            let outbox_socket = (commands && self.operates).then(|| (client.clone(), follow.epoch));
             if host
                 .capabilities
                 .iter()
                 .any(|capability| capability == REMOTE_PROJECTIONS_V1)
             {
                 follow.issue = None;
-                Some((client, follow.epoch, follow.followed.clone()))
+                (
+                    Some((client, follow.epoch, follow.followed.clone())),
+                    outbox_socket,
+                )
             } else {
                 follow.issue = Some(
                     "This Mac's LUNA does not share task lists yet; update LUNA on the Mac".into(),
                 );
-                None
+                (None, outbox_socket)
             }
         };
         self.signal();
+        let (started, outbox_socket) = started;
+        if let Some((client, epoch)) = outbox_socket {
+            let outbox = runtime().spawn(commands::run_outbox(self.clone(), client, epoch));
+            self.track(outbox.abort_handle());
+        }
         let Some((client, epoch, followed)) = started else {
             return;
         };

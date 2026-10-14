@@ -1,6 +1,12 @@
 //! Project-aware command, conversation, and recorded-content search.
+//!
+//! CORE-12: the ordinary commands come from the shared contribution
+//! registry: LUNA's own first, in their shipped order, then enabled
+//! extensions' commands, each named with its extension.
 use super::*;
 use crate::appearance::AppearanceMode;
+use crate::contributions::{Builtin, BuiltinCommand, ContributionKey, ContributionRegistry};
+use luna_proto::UiPlacement;
 
 const CHAT_RESULT_LIMIT: usize = 30;
 const RESULTS_FADE_BAND: f32 = 18.0;
@@ -59,6 +65,7 @@ enum EntryIdentity {
     SearchCheckoutText,
     Workbench(super::workbench::WorkbenchAction),
     Board(super::board::chat_badges::palette::BoardPaletteEntry),
+    Contribution(ContributionKey),
     Chat(String),
     History(String),
     LoadOlder(ResultGroup),
@@ -93,6 +100,8 @@ pub(super) enum Entry {
     /// A board action on the current chat, a ticket, or a ticket's chat
     /// (by stable ids).
     Board(super::board::chat_badges::palette::BoardPaletteEntry),
+    /// An enabled extension's command (CORE-12), after the host's own.
+    Contribution(ContributionKey),
     Chat {
         id: String,
         group: ResultGroup,
@@ -115,6 +124,7 @@ impl Entry {
                 | Self::Activity
                 | Self::Theme(_)
                 | Self::Workbench(_)
+                | Self::Contribution(_)
         ) || matches!(self, Self::Board(entry) if !entry.is_result())
     }
 
@@ -136,6 +146,7 @@ impl Entry {
             Self::SearchCheckoutText => EntryIdentity::SearchCheckoutText,
             Self::Workbench(action) => EntryIdentity::Workbench(*action),
             Self::Board(entry) => EntryIdentity::Board(entry.clone()),
+            Self::Contribution(key) => EntryIdentity::Contribution(*key),
             Self::Chat { id, .. } => EntryIdentity::Chat(id.clone()),
             Self::History { event_id, .. } => EntryIdentity::History(event_id.clone()),
             Self::LoadOlder(group) => EntryIdentity::LoadOlder(*group),
@@ -166,7 +177,28 @@ impl Entry {
             }
             Self::Workbench(action) => Some((action.label(), action.icon())),
             Self::Board(entry) => entry.action(),
-            Self::Chat { .. } | Self::History { .. } | Self::LoadOlder(_) => None,
+            // Its title is the extension's (see `render_contributed_command_row`).
+            Self::Contribution(_)
+            | Self::Chat { .. }
+            | Self::History { .. }
+            | Self::LoadOlder(_) => None,
+        }
+    }
+
+    /// The palette entry of one of the host's own commands.
+    fn builtin(command: BuiltinCommand, is_dark: bool) -> Self {
+        match command {
+            BuiltinCommand::NewTask => Self::NewChat,
+            BuiltinCommand::NewProject => Self::NewProject,
+            BuiltinCommand::OpenBoard => Self::OpenBoard,
+            BuiltinCommand::OpenSettings => Self::Settings,
+            BuiltinCommand::ToggleActivity => Self::Activity,
+            // The theme command targets the opposite resolved appearance.
+            BuiltinCommand::ToggleTheme => Self::Theme(if is_dark {
+                AppearanceMode::Light
+            } else {
+                AppearanceMode::Dark
+            }),
         }
     }
 
@@ -184,22 +216,21 @@ fn matches_query(query: &str, text: &str) -> bool {
     query.split_whitespace().all(|word| text.contains(word))
 }
 
-fn actions_for(query: &str, is_dark: bool) -> Vec<Entry> {
-    [
-        Entry::NewChat,
-        Entry::NewProject,
-        Entry::OpenBoard,
-        Entry::Settings,
-        Entry::Activity,
-        Entry::Theme(if is_dark {
-            AppearanceMode::Light
-        } else {
-            AppearanceMode::Dark
-        }),
-    ]
-    .into_iter()
-    .filter(|entry| matches_query(query, entry.action().unwrap().0))
-    .collect()
+/// The host's own commands from the contribution registry, in its order,
+/// that match `query`.
+fn actions_for(registry: &ContributionRegistry, query: &str, is_dark: bool) -> Vec<Entry> {
+    registry
+        .placed(UiPlacement::Command)
+        .filter_map(|contribution| match contribution.host()? {
+            Builtin::Command(command) => Some(Entry::builtin(command, is_dark)),
+            Builtin::Settings(_) | Builtin::Sidebar(_) => None,
+        })
+        .filter(|entry| {
+            entry
+                .action()
+                .is_some_and(|(label, _)| matches_query(query, label))
+        })
+        .collect()
 }
 
 /// The truthful second line of a recorded-content result. Past work found
@@ -331,7 +362,11 @@ impl Shell {
             return Vec::new();
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
-        let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        let mut entries = actions_for(
+            &self.contributions.registry,
+            &query,
+            Theme::of(cx).appearance.is_dark(),
+        );
         // A focused side chat has no context fork (Board A10): its `+`
         // chooser entry opens the side chat's own card instead.
         let side_focus = self.board_palette_side_focus(cx);
@@ -352,6 +387,12 @@ impl Shell {
             self.board_palette_entries(&query, cx)
                 .into_iter()
                 .map(Entry::Board),
+        );
+        // CORE-12: enabled extensions' commands follow every host action.
+        entries.extend(
+            self.contributed_commands(&query)
+                .into_iter()
+                .map(Entry::Contribution),
         );
         if !query.is_empty() {
             entries.push(if self.history_search_global {
@@ -723,6 +764,7 @@ impl Shell {
             Entry::Theme(_) => unreachable!(),
             Entry::Workbench(action) => self.run_workbench_action(action, cx),
             Entry::Board(entry) => self.activate_board_palette_entry(entry, cx),
+            Entry::Contribution(key) => self.run_contribution_command(key, cx),
             Entry::Chat { id, .. } => self.open_chat(id, cx),
             Entry::History { .. } => {
                 if let Some(event) = history_event {
@@ -1050,6 +1092,15 @@ impl Shell {
                     .into_any_element()
             } else if let Entry::Board(board) = entry {
                 self.render_board_palette_row(board, active == Some(ix), ix, &query, &theme, cx)
+            } else if let Entry::Contribution(key) = entry {
+                self.render_contributed_command_row(
+                    *key,
+                    active == Some(ix),
+                    ix,
+                    &query,
+                    &theme,
+                    cx,
+                )
             } else if let Entry::Chat { id, .. } = entry {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| &chat.id == id)?;
@@ -1323,6 +1374,66 @@ impl Shell {
     }
 }
 
+impl Shell {
+    /// An extension command's row: the host's row anatomy, the extension's
+    /// title and glyph, and its extension's name beside it (and in its
+    /// accessible name), so it never reads as one of LUNA's own commands.
+    fn render_contributed_command_row(
+        &self,
+        key: ContributionKey,
+        active: bool,
+        ix: usize,
+        query: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(contribution) = self
+            .contributions
+            .registry
+            .extension(key, UiPlacement::Command)
+        else {
+            return div().into_any_element();
+        };
+        let extension = contribution
+            .entry()
+            .map(|entry| entry.extension_name.clone())
+            .unwrap_or_default();
+        let label = contribution.title.clone();
+        let glyph = contribution.icon;
+        let entry = Entry::Contribution(key);
+        popover::menu_row(theme, active, format!("command-action-{ix}"))
+            .id(("command-action", ix))
+            .debug_selector(move || format!("command-contribution-{}", key.slug()))
+            .rounded(px(popover::PALETTE_ITEM_RADIUS))
+            .role(gpui::Role::Button)
+            .aria_label(contribution.accessible_label())
+            .min_h(crate::typography::ui_rems(32.0))
+            .py(crate::typography::ui_rems(4.0))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.activate_command(entry.clone(), window, cx)
+            }))
+            .child(
+                icon(glyph)
+                    .size(crate::typography::ui_rems(16.0))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+            )
+            .child(div().flex_1().min_w_0().child(popover::search_highlight(
+                label,
+                Some(query),
+                theme,
+            )))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(extension)),
+            )
+            .into_any_element()
+    }
+}
+
 fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div {
     div()
         .flex()
@@ -1367,6 +1478,8 @@ mod tests {
 
     #[test]
     fn action_search_hides_empty_section_and_preserves_order() {
+        let registry = ContributionRegistry::new();
+        let actions_for = |query: &str, is_dark: bool| actions_for(&registry, query, is_dark);
         assert_eq!(
             actions_for("", true),
             vec![
@@ -1393,6 +1506,8 @@ mod tests {
 
     #[test]
     fn theme_action_targets_the_opposite_resolved_appearance() {
+        let registry = ContributionRegistry::new();
+        let actions_for = |query: &str, is_dark: bool| actions_for(&registry, query, is_dark);
         assert_eq!(
             actions_for("theme", true),
             vec![Entry::Theme(AppearanceMode::Light)]

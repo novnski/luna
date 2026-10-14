@@ -606,7 +606,72 @@ impl SessionGrants {
             }
         }
     }
+
+    /// Every session's grants as one JSON object keyed
+    /// `grants:<session id>` (CORE-11). A hosted provider worker runs one
+    /// turn; it exports them when its run ends and the next run's worker
+    /// imports them, so a chat's later turns keep them as one in-process
+    /// harness did. A session whose grants were dropped is absent.
+    pub(super) fn export(&self) -> Value {
+        let Ok(sets) = self.sets.lock() else {
+            return json!({});
+        };
+        let mut state = serde_json::Map::new();
+        for (session, set) in sets.iter() {
+            state.insert(
+                format!("{GRANT_STATE_PREFIX}{session}"),
+                json!({"mode": set.mode, "seq": set.seq, "rules": rules_json(&set.rules)}),
+            );
+        }
+        Value::Object(state)
+    }
+
+    /// Restore what [`Self::export`] wrote; unreadable entries are skipped
+    /// and the bounds still hold.
+    pub(super) fn import(&self, state: &Value) {
+        let Some(entries) = state.as_object() else {
+            return;
+        };
+        let Ok(mut sets) = self.sets.lock() else {
+            return;
+        };
+        for (key, entry) in entries {
+            let Some(session) = key.strip_prefix(GRANT_STATE_PREFIX) else {
+                continue;
+            };
+            let Some(mode) = entry
+                .get("mode")
+                .cloned()
+                .and_then(|mode| serde_json::from_value::<luna_proto::PermissionMode>(mode).ok())
+            else {
+                continue;
+            };
+            let rules: Vec<Rule> = entry
+                .get("rules")
+                .and_then(Value::as_array)
+                .map(|rules| {
+                    rules
+                        .iter()
+                        .filter_map(Rule::from_json)
+                        .take(MAX_SESSION_GRANT_RULES)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if session.is_empty() || rules.is_empty() {
+                continue;
+            }
+            if !sets.contains_key(session) && sets.len() >= MAX_GRANT_SESSIONS {
+                continue;
+            }
+            let seq = entry.get("seq").and_then(Value::as_u64).unwrap_or(0);
+            self.seq.fetch_max(seq.saturating_add(1), Ordering::Relaxed);
+            sets.insert(session.to_owned(), GrantSet { mode, rules, seq });
+        }
+    }
 }
+
+/// Key prefix of one session's grants in [`SessionGrants::export`].
+const GRANT_STATE_PREFIX: &str = "grants:";
 
 /// The rules LUNA applied to one owned session in this run.
 struct AppliedRules {

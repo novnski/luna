@@ -63,6 +63,7 @@ pub fn manifest() -> Value {
         entry::<ops::WatchTaskCommands>(&mut generator),
         entry::<ops::WatchRemoteTasks>(&mut generator),
         entry::<ops::WatchRemoteTask>(&mut generator),
+        entry::<ops::ExecuteRemoteTaskCommand>(&mut generator),
     ];
     let names: Vec<(&str, &str)> = operations
         .iter()

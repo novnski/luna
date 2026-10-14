@@ -245,6 +245,18 @@ impl OpencodeHarness {
         self
     }
 
+    /// CORE-11: LUNA's own "Allow for session" grants (legacy Ask) as JSON.
+    /// The first-party provider package runs each turn in its own worker
+    /// process; it carries them from one turn's worker to the next.
+    pub fn export_session_grants(&self) -> Value {
+        self.session_grants.export()
+    }
+
+    /// Restore grants [`Self::export_session_grants`] produced.
+    pub fn import_session_grants(&self, state: &Value) {
+        self.session_grants.import(state);
+    }
+
     /// The OpenCode 2 binary this harness launches: the explicit path (its
     /// existence validated like Codex and Claude overrides), else
     /// `OPENCODE_EXECUTABLE`, else the search. A 1.x-only machine gets

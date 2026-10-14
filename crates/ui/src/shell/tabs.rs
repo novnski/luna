@@ -142,8 +142,10 @@ impl Shell {
         from_activity: bool,
         cx: &mut Context<Self>,
     ) {
-        // Explicit navigation supersedes any delayed pane promotion.
+        // Explicit navigation supersedes any delayed pane promotion, and a
+        // saved contributed page still waiting to be restored (CORE-12).
         self.pending_open_main = None;
+        self.contributions.drop_restore();
         // A child opened directly stays visible in the sidebar, nested under
         // its parent, while selected (see `spaces::folded_child_chats`). The
         // legacy `collapsed_child_chats` preference is preserved untouched.

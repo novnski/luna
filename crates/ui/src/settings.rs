@@ -916,7 +916,9 @@ pub struct UiSettings {
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
     /// The sidebar page (`automations`, `board`) open when LUNA last ran, so
-    /// a restart lands there again. `None`: a chat or Settings was open.
+    /// a restart lands there again. `None`: a chat or Settings was open. An
+    /// extension's page is `contribution:<id>` (CORE-12): restored only once
+    /// the engine says it is still contributed, else LUNA stays on tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sidebar_page: Option<String>,
     /// Board presentation preferences (device-local; never ticket data).

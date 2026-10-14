@@ -176,6 +176,15 @@ pub mod methods {
     pub const REMOVE_EXTENSION: &str = "RemoveExtension";
     pub const ERASE_EXTENSION_DATA: &str = "EraseExtensionData";
     pub const SET_EXTENSION_SAFE_MODE: &str = "SetExtensionSafeMode";
+    /// CORE-12 native UI contributions (owner only): the enabled packages'
+    /// commands, settings sections, sidebar pages and task panels as data,
+    /// a watch of their changes, a contribution's bounded view, and one of
+    /// its actions. Each view and action names the exact package hash it was
+    /// rendered from and, for a task contribution, its exact task.
+    pub const LIST_UI_CONTRIBUTIONS: &str = "ListUiContributions";
+    pub const WATCH_UI_CONTRIBUTIONS: &str = "WatchUiContributions";
+    pub const GET_UI_CONTRIBUTION_VIEW: &str = "GetUiContributionView";
+    pub const INVOKE_UI_ACTION: &str = "InvokeUiAction";
     pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
@@ -354,6 +363,10 @@ pub mod methods {
     /// snapshot-or-current item and then deltas against a cursor.
     pub const WATCH_REMOTE_TASKS: &str = "WatchRemoteTasks";
     pub const WATCH_REMOTE_TASK: &str = "WatchRemoteTask";
+    /// RM-04 paired-phone task command (`tasks-operate`): one typed
+    /// `RemoteTaskCommand`, admitted for the connection's device session into
+    /// the durable receipt store. → `CommandReceipt`.
+    pub const EXECUTE_REMOTE_TASK_COMMAND: &str = "ExecuteRemoteTaskCommand";
     /// L08 composing-device-local durable draft surface. These methods are
     /// intentionally not relay-forwardable or synced across devices.
     pub const GET_COMPOSER_DRAFT: &str = "GetComposerDraft";
@@ -636,6 +649,10 @@ pub mod methods {
         REMOVE_EXTENSION,
         ERASE_EXTENSION_DATA,
         SET_EXTENSION_SAFE_MODE,
+        LIST_UI_CONTRIBUTIONS,
+        WATCH_UI_CONTRIBUTIONS,
+        GET_UI_CONTRIBUTION_VIEW,
+        INVOKE_UI_ACTION,
         LIST_COMMANDS,
         LIST_COMPOSER_CATALOG,
         GET_PROJECT_COMMANDS,
@@ -736,6 +753,7 @@ pub mod methods {
         WATCH_TASK_COMMANDS,
         WATCH_REMOTE_TASKS,
         WATCH_REMOTE_TASK,
+        EXECUTE_REMOTE_TASK_COMMAND,
         GET_COMPOSER_DRAFT,
         SAVE_COMPOSER_DRAFT,
         LIST_PROMPT_STASH,
@@ -962,6 +980,24 @@ impl RpcReply {
 #[async_trait]
 pub trait RpcService: Send + Sync + 'static {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError>;
+
+    /// RM-04: one call for an authenticated remote principal. Only
+    /// [`remote_auth::RemoteRpcService`] makes it, for a method whose catalog
+    /// row needs `tasks-operate`, after it validated the device session for
+    /// this very call. The service owns `self`, so it can finish a command it
+    /// admitted after the caller stopped waiting. A service that admits no
+    /// remote commands refuses it.
+    async fn handle_remote(
+        self: Arc<Self>,
+        principal: remote_auth::RemotePrincipal,
+        method: String,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
+        let _ = (principal, params);
+        Err(RpcError::Failed(format!(
+            "remote authorization denied: {method} is not admitted by this service"
+        )))
+    }
 }
 
 /// Deserialize typed params out of the envelope's `params` value.

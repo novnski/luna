@@ -132,8 +132,39 @@ impl RemoteProjections {
             profile_id: self.identity.profile_id.clone(),
             generation: self.generation.clone(),
             engine_version: env!("CARGO_PKG_VERSION").into(),
-            capabilities: vec![REMOTE_PROJECTIONS_V1.into()],
+            capabilities: vec![
+                REMOTE_PROJECTIONS_V1.into(),
+                luna_proto::remote_command::REMOTE_TASK_CONTROL_V1.into(),
+            ],
         }
+    }
+
+    /// RM-04: whether this host lists `task_id` (its own task, in one of its
+    /// listed projects): the only tasks a paired phone may command, by the
+    /// same rule its registry projection uses.
+    pub(crate) fn lists_task(&self, task_id: &str) -> bool {
+        let chats = self.workspace.watch_chats();
+        let spaces = self.workspace.watch_spaces();
+        let sessions = self.sessions.watch_sessions();
+        task_row(
+            &self.identity.device_id,
+            task_id,
+            &chats.borrow(),
+            &spaces.borrow(),
+            &sessions.borrow(),
+        )
+        .is_some()
+    }
+
+    /// RM-04: the listed (owned, not removed) project `project_id`, if any.
+    pub(crate) fn listed_project(&self, project_id: &str) -> Option<Space> {
+        let spaces = self.workspace.watch_spaces();
+        let spaces = spaces.borrow();
+        let listed = listed_spaces(&self.identity.device_id, &spaces);
+        spaces
+            .iter()
+            .find(|space| space.id == project_id && listed.contains(space.id.as_str()))
+            .cloned()
     }
 
     fn cursor(&self, revision: u64) -> ProjectionCursor {

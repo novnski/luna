@@ -620,13 +620,15 @@ fn secret(value: &str) -> bool {
 }
 fn scopes_valid(scopes: &[String]) -> bool {
     !scopes.is_empty()
-        && scopes.len() <= 4
+        && scopes.len() <= 5
         && scopes.iter().enumerate().all(|(i, s)| {
             [
                 "environment-read",
                 "tasks-read",
                 "files-read",
                 "terminal-operate",
+                // RM-04: task commands through ExecuteRemoteTaskCommand.
+                "tasks-operate",
             ]
             .contains(&s.as_str())
                 && !scopes[..i].contains(s)

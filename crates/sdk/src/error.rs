@@ -88,6 +88,22 @@ impl SdkError {
         }
     }
 
+    /// RM-04: whether a failed command call may have been admitted anyway (a
+    /// lost, late or unreadable reply), so its receipt must be read by id
+    /// before anything is resent. A refusal the host answered is definite.
+    pub fn may_have_been_admitted(&self) -> bool {
+        match self {
+            Self::Offline(_)
+            | Self::Timeout { .. }
+            | Self::InvalidResponse { .. }
+            | Self::UnknownOutcome { .. } => true,
+            Self::Engine(message) => !message.starts_with("remote authorization denied:"),
+            Self::Unsupported { .. } | Self::Incompatible { .. } | Self::InvalidRequest { .. } => {
+                false
+            }
+        }
+    }
+
     pub(crate) fn invalid(operation: &'static str, detail: impl Into<String>) -> Self {
         Self::InvalidResponse {
             operation,

@@ -41,6 +41,16 @@ struct Target {
     cwd: String,
     generation: String,
 }
+/// RM-04: where a task's checkout setup stands for a turn about to start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SetupGate {
+    /// No setup gates this checkout, or it succeeded.
+    Clear,
+    /// A setup this checkout waits for is still running.
+    Running,
+    /// The setup failed or was cancelled; the detail says how to recover.
+    Failed(String),
+}
 fn error(text: impl Into<String>) -> EngineError {
     EngineError::Other(text.into())
 }
@@ -762,6 +772,32 @@ impl ProjectCommands {
         self.launch_pending(run, &permit).map(Some)
     }
     pub async fn wait_for_setup(&self, chat: &str, cwd: &str) -> Result<(), EngineError> {
+        let Some(target) = self.setup_target(chat, cwd).await? else {
+            return Ok(());
+        };
+        loop {
+            match self.setup_state(chat, &target)? {
+                SetupGate::Clear => return Ok(()),
+                SetupGate::Failed(detail) => return Err(error(detail)),
+                SetupGate::Running => tokio::time::sleep(Duration::from_millis(200)).await,
+            }
+        }
+    }
+
+    /// RM-04: one look at the gate [`Self::wait_for_setup`] waits on, without
+    /// waiting. The queue drain asks it before a queued follow-up starts a
+    /// turn: a running setup holds the follow-up behind it, and a failed or
+    /// cancelled one holds it until an explicit send.
+    pub(crate) async fn setup_gate(&self, chat: &str, cwd: &str) -> Result<SetupGate, EngineError> {
+        match self.setup_target(chat, cwd).await? {
+            None => Ok(SetupGate::Clear),
+            Some(target) => self.setup_state(chat, &target),
+        }
+    }
+
+    /// The checkout a setup gate applies to; `None` when no setup can gate
+    /// this task (projectless, or no setup was ever recorded).
+    async fn setup_target(&self, chat: &str, cwd: &str) -> Result<Option<Target>, EngineError> {
         // Projectless tasks continue through the existing normal run path.
         if self
             .inner
@@ -770,44 +806,44 @@ impl ProjectCommands {
             .and_then(|c| c.space_id)
             .is_none()
         {
-            return Ok(());
+            return Ok(None);
         }
         if !self.runs()?.iter().any(|run| run.setup) {
-            return Ok(());
+            return Ok(None);
         }
         let target = self.target(chat).await?;
         if Path::new(cwd).canonicalize()? != Path::new(&target.cwd) {
             return Err(error("Selected checkout changed before setup gate"));
         }
-        loop {
-            let state = {
-                let _gate = self
-                    .inner
-                    .gate
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                let permit = self.admit()?;
-                self.recheck(chat, &target)?;
-                self.refresh(&permit)?.into_iter().find(|r| {
-                    r.setup
-                        && r.project_id == target.project
-                        && r.checkout_generation == target.generation
-                })
-            };
-            match state {
-                None => return Ok(()),
-                Some(run) if !run.action.wait_for_setup || run.status == Status::Succeeded => {
-                    return Ok(());
-                }
-                Some(run) if !run.status.is_active() => {
-                    return Err(error(format!(
-                        "Worktree setup {}. Open Terminal → Commands to inspect output and retry setup, then retry the task.",
-                        run.status.label().to_lowercase()
-                    )));
-                }
-                _ => tokio::time::sleep(Duration::from_millis(200)).await,
+        Ok(Some(target))
+    }
+
+    fn setup_state(&self, chat: &str, target: &Target) -> Result<SetupGate, EngineError> {
+        let state = {
+            let _gate = self
+                .inner
+                .gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let permit = self.admit()?;
+            self.recheck(chat, target)?;
+            self.refresh(&permit)?.into_iter().find(|r| {
+                r.setup
+                    && r.project_id == target.project
+                    && r.checkout_generation == target.generation
+            })
+        };
+        Ok(match state {
+            None => SetupGate::Clear,
+            Some(run) if !run.action.wait_for_setup || run.status == Status::Succeeded => {
+                SetupGate::Clear
             }
-        }
+            Some(run) if !run.status.is_active() => SetupGate::Failed(format!(
+                "Worktree setup {}. Open Terminal → Commands to inspect output and retry setup, then retry the task.",
+                run.status.label().to_lowercase()
+            )),
+            _ => SetupGate::Running,
+        })
     }
     fn matching(
         &self,

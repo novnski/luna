@@ -229,8 +229,10 @@ cd "$ROOT"
 echo "building $APP_NAME ($BUNDLE_ID); full output: $BUILD_LOG" >&2
 build_start=$SECONDS
 # The portable extension host runs Wasm packages in its own process (CORE-07);
-# the engine looks for it next to the luna executable.
-if "$ROOT/scripts/cargo.sh" build --locked -p luna -p luna-extension-host --target-dir "$ROOT/target" >"$BUILD_LOG" 2>&1; then
+# the engine looks for it next to the luna executable. So it does for
+# luna-opencode-worker (a luna-engine binary), the worker of LUNA's own
+# OpenCode provider package (CORE-11).
+if "$ROOT/scripts/cargo.sh" build --locked -p luna -p luna-extension-host -p luna-engine --target-dir "$ROOT/target" >"$BUILD_LOG" 2>&1; then
   echo "build succeeded in $((SECONDS - build_start))s" >&2
 else
   result_code=$?
@@ -247,6 +249,7 @@ staged_contents="$staged_app/Contents"
 mkdir -p "$staged_contents/MacOS" "$staged_contents/Resources" "$DATA_DIR"
 install -m 755 "$ROOT/target/debug/luna" "$staged_contents/MacOS/luna"
 install -m 755 "$ROOT/target/debug/luna-extension-host" "$staged_contents/MacOS/luna-extension-host"
+install -m 755 "$ROOT/target/debug/luna-opencode-worker" "$staged_contents/MacOS/luna-opencode-worker"
 sed -e "s/__UPSTREAM_VERSION__/$UPSTREAM_VERSION/g" \
   -e "s/__LUNA_REVISION__/$LUNA_REVISION/g" \
   "$ROOT/dist/macos/Info-dev.plist" >"$staged_contents/Info.plist"
@@ -283,9 +286,11 @@ if [[ -z "$IDENTITY" ]]; then
 fi
 if [[ -n "$IDENTITY" ]]; then
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID.extension-host" "$staged_contents/MacOS/luna-extension-host"
+  codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID.opencode-worker" "$staged_contents/MacOS/luna-opencode-worker"
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" "$staged_app"
 else
   codesign --force --sign - --identifier "$BUNDLE_ID.extension-host" "$staged_contents/MacOS/luna-extension-host"
+  codesign --force --sign - --identifier "$BUNDLE_ID.opencode-worker" "$staged_contents/MacOS/luna-opencode-worker"
   codesign --force --sign - --identifier "$BUNDLE_ID" "$staged_app"
   echo "warning: no Apple Development identity; macOS may ask for permissions again" >&2
 fi

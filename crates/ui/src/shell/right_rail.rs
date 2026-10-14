@@ -127,8 +127,12 @@ impl Shell {
             .gap(px(2.0))
             .pt(px(Theme::TITLEBAR_HEIGHT + 6.0))
             .pb(px(10.0));
-        for place in RightPlace::ALL {
-            if place == RightPlace::Files {
+        // CORE-12: the enabled extensions' task panels follow the workspace
+        // tools, after their own line; the host's places never move.
+        let contributed = self.contributed_panels();
+        let first_contributed = contributed.first().copied();
+        for place in RightPlace::ALL.into_iter().chain(contributed) {
+            if place == RightPlace::Files || Some(place) == first_contributed {
                 column = column.child(
                     div()
                         .w(px(18.0))
@@ -139,22 +143,23 @@ impl Shell {
             }
             let active = open && current == place;
             let badge = badges.get(&place).copied();
-            let key = place.key();
+            let key = self.place_key(place);
+            let label = self.place_label(place);
             let id = SharedString::from(format!("rail-{key}"));
             let accessible: SharedString = match badge {
                 Some(RailBadge::Count(n, RailTone::Accent)) => {
-                    format!("{}, {n} running", place.label()).into()
+                    format!("{label}, {n} running").into()
                 }
                 Some(RailBadge::Count(n, RailTone::Warning)) => {
-                    format!("{}, {n} need you", place.label()).into()
+                    format!("{label}, {n} need you").into()
                 }
-                Some(RailBadge::Dot) => format!("{}, active", place.label()).into(),
-                None => place.label().into(),
+                Some(RailBadge::Dot) => format!("{label}, active").into(),
+                None => self.place_accessible_label(place),
             };
             let tip: SharedString = if active {
-                format!("Hide {}", place.label()).into()
+                format!("Hide {label}").into()
             } else {
-                place.label().into()
+                label.clone()
             };
             let button = div()
                 .id(id.clone())
@@ -189,11 +194,15 @@ impl Shell {
                     this.toggle_right_place(place, window, cx);
                 }))
                 .on_key_down(crate::swallow_activation_key)
-                .child(icon(place.icon()).size(px(18.0)).text_color(if active {
-                    theme.text
-                } else {
-                    theme.readable_muted(0.75)
-                }))
+                .child(
+                    icon(self.place_icon(place))
+                        .size(px(18.0))
+                        .text_color(if active {
+                            theme.text
+                        } else {
+                            theme.readable_muted(0.75)
+                        }),
+                )
                 // The active place's marker on the rail's outer edge.
                 .when(active, |el| {
                     el.child(
@@ -340,7 +349,7 @@ impl Shell {
                     .text_size(crate::typography::ui_rems(13.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.text)
-                    .child(place.label())
+                    .child(self.place_label(place))
                     .children(self.right_probe_child(|| "header:title".to_string())),
             )
             .children(actions)
@@ -401,6 +410,10 @@ impl Shell {
             RightPlace::Automations => {
                 let scope = self.automations_conversation_scope(cx);
                 return self.automations_outlet(scope, false, cx).into_any_element();
+            }
+            // CORE-12: the host renders the extension's view for this task.
+            RightPlace::Contributed(key) => {
+                return self.render_contribution_panel(key, cx);
             }
             RightPlace::Files
             | RightPlace::Changes

@@ -188,7 +188,10 @@ pub struct LunaToolInvocationContext {
 }
 
 impl LunaToolInvocationContext {
-    pub(crate) fn new(thread_id: &str, turn_id: &str, call_id: &str) -> Self {
+    /// Adapters build it after matching a request to their live thread and
+    /// turn; the hosted provider bridge (CORE-11) rebuilds the context its
+    /// worker's adapter matched. It stays evidence, never a grant.
+    pub fn new(thread_id: &str, turn_id: &str, call_id: &str) -> Self {
         Self {
             provider_thread_id: thread_id.to_owned(),
             provider_turn_id: turn_id.to_owned(),
@@ -506,6 +509,9 @@ pub trait Harness: Send + Sync {
 pub mod claude;
 pub mod codex;
 pub(crate) mod executable;
+/// CORE-11: provider profile 2.0, which hosts an adapter in a supervised
+/// extension worker (the wire contract and the worker side).
+pub mod hosted;
 pub(crate) mod jsonrpc;
 pub mod mcp_control;
 pub mod mock;

@@ -65,6 +65,7 @@ pub enum CommandReasonCode {
     UnsupportedOperation,
     OperationRejected,
     OperationFailed,
+    PermissionModeRequired,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

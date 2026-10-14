@@ -99,6 +99,8 @@ const ATTACHMENT_WAIT_MAX_MS: i64 = ATTACHMENT_WAIT_MAX.as_millis() as i64;
 /// (the happy path is event-driven — UploadCommit kicks the drain — this
 /// timer only covers the give-up transition and missed kicks).
 const ATTACHMENT_WAIT_RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
+/// RM-04: how often a queued follow-up re-checks a running checkout setup.
+const SETUP_WAIT_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 /// Receipt reason for an accepted command whose doc row no longer matches the
 /// grant this device recorded at admission (its content or workspace
 /// association changed). The drain never dispatched it.
@@ -6088,6 +6090,25 @@ impl DocHost {
             // a fresh turn.
             return;
         }
+        // RM-04: a queued follow-up never overtakes this task's own pending
+        // send (a first message still materializing its new worktree and
+        // running its setup, or waiting for host capacity). That send's
+        // resolution changes the document, which re-drains.
+        if self.pending_local_send(handle) {
+            return;
+        }
+        // RM-04: nor does it start while the task's checkout setup runs
+        // (re-checked until it settles). A failed or cancelled setup holds
+        // it below, after the claim, with a rejected dispatch receipt: its
+        // turn would run in a checkout that was never prepared.
+        let setup_failed = match self.queue_setup_gate(handle).await {
+            crate::project_commands::SetupGate::Clear => None,
+            crate::project_commands::SetupGate::Running => {
+                self.arm_setup_wait(handle);
+                return;
+            }
+            crate::project_commands::SetupGate::Failed(detail) => Some(detail),
+        };
         // AW-10: a queued follow-up starts a new turn, so it takes a host
         // turn slot before it is claimed. While the host is full the row
         // stays Held and unclaimed (never unknown) and keeps its place in line.
@@ -6216,7 +6237,14 @@ impl DocHost {
                 return;
             }
         };
-        if let Err(err) = self.dispatch_queued(handle, &item, send).await {
+        let dispatched = match setup_failed {
+            // Held exactly like a dispatch preflight refusal: Held with
+            // `ExecutionUnavailable`, never sent, released only by an
+            // explicit Send now once setup was retried.
+            Some(detail) => Err(EngineError::DispatchPreflight(detail)),
+            None => self.dispatch_queued(handle, &item, send).await,
+        };
+        if let Err(err) = dispatched {
             tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
             if let EngineError::DispatchPreflight(detail) = &err {
                 match self.reject_queue_task(
@@ -7481,6 +7509,84 @@ impl DocHost {
                 None
             }
         }
+    }
+
+    /// RM-04: [`Self::pending_local_send`] for a task by id (its document is
+    /// opened), as remote admission asks before choosing how a send goes out.
+    pub(crate) fn has_pending_local_send(&self, task_id: &str) -> Result<bool, EngineError> {
+        let handle = self.open(task_id)?;
+        Ok(self.pending_local_send(&handle))
+    }
+
+    /// RM-04: this task has a locally admitted send (a Run command) that has
+    /// not resolved yet: still queued, waiting for host capacity or for its
+    /// attachment bytes, or materializing its worktree and running setup.
+    /// Untrusted synced rows never count, so they cannot stall the queue. An
+    /// unreadable command list holds the queue (it re-drains on change).
+    fn pending_local_send(&self, handle: &ChatDocHandle) -> bool {
+        let Ok(commands) = handle.doc.read_commands() else {
+            return true;
+        };
+        commands.iter().any(|entry| {
+            entry.status == SessionCommandStatus::Pending
+                && matches!(entry.payload, SessionCommandPayload::Run { .. })
+                && executable_row_hash(entry).is_ok_and(|hash| {
+                    self.inner
+                        .store
+                        .local_executable_matches(
+                            &handle.chat_id,
+                            LocalExecutableKind::Command,
+                            &entry.id,
+                            &hash,
+                        )
+                        .unwrap_or(false)
+                })
+        })
+    }
+
+    /// RM-04: the task's checkout setup gate for an automatic queued turn.
+    /// Without saved project commands or a checkout there is nothing to wait
+    /// for; a gate that cannot be read is logged and does not block (the
+    /// queue never consulted setup before, and the dispatch rechecks the
+    /// checkout itself).
+    async fn queue_setup_gate(&self, handle: &ChatDocHandle) -> crate::project_commands::SetupGate {
+        use crate::project_commands::SetupGate;
+        let Some(commands) = self.inner.project_commands.get() else {
+            return SetupGate::Clear;
+        };
+        let Some(cwd) = self
+            .workspace()
+            .and_then(|workspace| workspace.chat(&handle.chat_id).ok().flatten())
+            .and_then(|chat| chat.cwd)
+        else {
+            return SetupGate::Clear;
+        };
+        match commands.setup_gate(&handle.chat_id, &cwd).await {
+            Ok(gate) => gate,
+            Err(error) => {
+                tracing::debug!(chat = %handle.chat_id, %error,
+                    "setup gate unavailable for a queued turn");
+                SetupGate::Clear
+            }
+        }
+    }
+
+    /// RM-04: re-drain once after a short wait while the task's setup runs;
+    /// the drain re-arms it until the setup settles. One timer per task.
+    fn arm_setup_wait(&self, handle: &Arc<ChatDocHandle>) {
+        let key = format!("setup:{}", handle.chat_id);
+        if !lock(&self.inner.drain_waiting).insert(key.clone()) {
+            return;
+        }
+        let weak = Arc::downgrade(handle);
+        let host = self.clone();
+        self.spawn_worker(async move {
+            tokio::time::sleep(SETUP_WAIT_RECHECK).await;
+            lock(&host.inner.drain_waiting).remove(&key);
+            if let Some(handle) = weak.upgrade() {
+                host.drain_queue(&handle).await;
+            }
+        });
     }
 
     /// AW-10: one re-check loop per task and kind while its start waits. The

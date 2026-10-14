@@ -31,6 +31,8 @@ pub mod composer;
 mod composer_dock;
 pub(crate) mod context_transfer;
 pub mod context_usage;
+/// CORE-12 shell contribution registry (host and extension entries).
+pub mod contributions;
 pub mod drafts;
 pub mod edge_fade;
 mod empty_project_moon;

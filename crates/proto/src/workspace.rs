@@ -30,6 +30,8 @@ pub mod capabilities {
     pub const CONTEXT_TRANSFER_V1: &str = "context-transfer-v1";
     /// RM-03: `WatchRemoteTasks` and `WatchRemoteTask` for paired clients.
     pub const REMOTE_PROJECTIONS_V1: &str = crate::remote_projection::REMOTE_PROJECTIONS_V1;
+    /// RM-04: `ExecuteRemoteTaskCommand` for paired clients with `tasks-operate`.
+    pub const REMOTE_TASK_CONTROL_V1: &str = crate::remote_command::REMOTE_TASK_CONTROL_V1;
 
     pub const CURRENT: &[&str] = &[
         LUNA_OWNER_IPC_V1,
@@ -46,6 +48,7 @@ pub mod capabilities {
         CONTEXT_TRANSFER_V1,
         TASK_WORK_V1,
         REMOTE_PROJECTIONS_V1,
+        REMOTE_TASK_CONTROL_V1,
     ];
 
     pub fn current() -> Vec<String> {

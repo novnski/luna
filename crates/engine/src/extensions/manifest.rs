@@ -147,6 +147,17 @@ fn bounded(label: &str, value: &str, max_chars: usize, required: bool) -> Result
 /// Parse and validate a manifest for this host. Refusal messages name the
 /// field and the reason; they never include file contents.
 pub(super) fn validate(bytes: &[u8]) -> Result<ValidatedManifest, String> {
+    validate_with(bytes, false)
+}
+
+/// [`validate`] for a package already in the store, or LUNA's own package
+/// being installed (CORE-11): the reserved `luna` namespace is accepted,
+/// since only LUNA installs into it.
+pub(super) fn validate_installed(bytes: &[u8]) -> Result<ValidatedManifest, String> {
+    validate_with(bytes, true)
+}
+
+fn validate_with(bytes: &[u8], allow_reserved: bool) -> Result<ValidatedManifest, String> {
     if bytes.len() > MAX_MANIFEST_BYTES {
         return Err(format!(
             "{EXTENSION_MANIFEST_FILE} is larger than {} KiB",
@@ -164,8 +175,9 @@ pub(super) fn validate(bytes: &[u8]) -> Result<ValidatedManifest, String> {
 
     let id = &manifest.id.0;
     let namespace = id.namespace();
-    if namespace == RESERVED_EXTENSION_NAMESPACE
-        || namespace.starts_with(&format!("{RESERVED_EXTENSION_NAMESPACE}."))
+    if !allow_reserved
+        && (namespace == RESERVED_EXTENSION_NAMESPACE
+            || namespace.starts_with(&format!("{RESERVED_EXTENSION_NAMESPACE}.")))
     {
         return Err(format!(
             "the `{RESERVED_EXTENSION_NAMESPACE}` namespace is reserved for LUNA's own packages ({id})"

@@ -32,6 +32,8 @@ mod manifest;
 pub(crate) mod providers;
 mod runtime;
 mod store;
+/// CORE-12: enabled packages' UI contributions for the native shell.
+mod ui;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -90,6 +92,8 @@ struct Inner {
     transitions: Mutex<HashSet<String>>,
     /// CORE-08 provider contributions registered in the harness registry.
     providers: providers::ProviderHost,
+    /// CORE-12 change notifications for the shell's UI contributions.
+    ui: ui::UiHost,
 }
 
 /// An extension id claimed for one lifecycle change; released on drop.
@@ -220,6 +224,7 @@ impl ExtensionManager {
             lifecycle: tokio::sync::Mutex::new(()),
             transitions: Mutex::new(HashSet::new()),
             providers: providers::ProviderHost::default(),
+            ui: ui::UiHost::default(),
         }));
         if manager.0.unavailable.is_none() {
             manager.recover();
@@ -659,6 +664,7 @@ impl ExtensionManager {
             // Running instances lose their authority with the grant.
             self.0.runtime.revoke(&record.id, None);
             self.providers_changed();
+            self.ui_changed();
             let validated = self.0.packages.read_manifest(&record.package_hash).ok();
             let integrity = validated.as_ref().map_or_else(
                 || failed("the installed manifest could not be read".into()),
@@ -739,6 +745,7 @@ impl ExtensionManager {
             );
         }
         self.providers_changed();
+        self.ui_changed();
         Ok(view(
             record,
             Some(&validated),
@@ -926,12 +933,16 @@ impl ExtensionManager {
                         self.0.platform
                     )
                 })?;
-                Ok(runtime::native_launch(
-                    &package_dir,
-                    entry,
-                    runtime_spec.limits,
-                    require,
-                ))
+                let (mut spec, limits) =
+                    runtime::native_launch(&package_dir, entry, runtime_spec.limits, require);
+                // CORE-11: LUNA's own worker hosts an adapter that ran inside
+                // LUNA with its whole environment (provider keys, config and
+                // data directories, QA wrappers); it keeps it. Its instance
+                // reports the allow-list as not enforced.
+                if providers::first_party::is_first_party(&record.id) {
+                    spec.environment = std::env::vars_os().collect();
+                }
+                Ok((spec, limits))
             }
             ExtensionRuntimeKind::Wasm => {
                 let module = runtime_spec
@@ -1481,6 +1492,8 @@ impl ExtensionManager {
         }
         // CORE-08: provider contributions follow the enabled version.
         self.providers_changed();
+        // CORE-12: so do UI contributions.
+        self.ui_changed();
         let integrity = self.0.packages.integrity(&prepared.validated, false);
         let mut package = view(
             to,
@@ -1600,6 +1613,7 @@ impl ExtensionManager {
             file = self.0.grants.write(file)?;
             self.0.runtime.revoke(&record.id, None);
             self.providers_changed();
+            self.ui_changed();
         }
         self.0.packages.remove(&record.package_hash)?;
         let quarantine_released = match self.0.runtime.forget_package(&record.package_hash) {
@@ -1692,6 +1706,7 @@ impl ExtensionManager {
             blocking(move || {
                 // CORE-08: the provider registry re-reads what may run.
                 reader.providers_changed();
+                reader.ui_changed();
                 reader.snapshot()
             })
             .await

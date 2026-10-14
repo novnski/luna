@@ -34,6 +34,32 @@ fn assemble(root: &Path) -> EngineCore {
     .expect("assemble profile")
 }
 
+/// RM-04: the provider boundary for the mobile outbox campaign.
+#[cfg(unix)]
+mod remote_provider;
+
+/// RM-04: [`assemble`] with `registry` as the engine's providers.
+#[cfg(unix)]
+fn assemble_with(root: &Path, registry: Arc<HarnessRegistry>) -> EngineCore {
+    let accounts = AgentAccountsConfig {
+        data_dir: root.join("provider-state"),
+        claude_config_dir: root.join("synthetic-claude"),
+        claude_config_file: root.join("synthetic-claude.json"),
+        codex_home: root.join("synthetic-codex"),
+    };
+    accounts
+        .disable_claude_keychain_fallback()
+        .expect("seal synthetic Claude home");
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        profile(root),
+        registry,
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .expect("assemble profile")
+}
+
 fn authority_path(root: &Path) -> PathBuf {
     profile(root).store_root().join("remote-auth.json")
 }
@@ -2356,6 +2382,15 @@ mod gateway {
         socket: std::sync::Mutex<Option<(u64, tokio::sync::mpsc::UnboundedSender<Message>)>>,
         sockets: std::sync::atomic::AtomicUsize,
         closed: tokio::sync::watch::Sender<bool>,
+        /// RM-04: no network at all, as a phone out of coverage: every
+        /// request and socket fails at once.
+        offline: Arc<std::sync::atomic::AtomicBool>,
+        /// RM-04: the next reply to this method is lost with its socket
+        /// (and, with `true`, the phone then goes offline).
+        lose_reply_to: std::sync::Mutex<Option<(String, bool)>>,
+        lost: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
+        /// RM-04: the command id of every `ExecuteRemoteTaskCommand` sent.
+        commands_sent: std::sync::Mutex<Vec<String>>,
     }
 
     impl PlatformStandIn {
@@ -2368,7 +2403,33 @@ mod gateway {
                 socket: std::sync::Mutex::new(None),
                 sockets: std::sync::atomic::AtomicUsize::new(0),
                 closed: tokio::sync::watch::Sender::new(false),
+                offline: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                lose_reply_to: std::sync::Mutex::new(None),
+                lost: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+                commands_sent: std::sync::Mutex::new(Vec::new()),
             })
+        }
+
+        /// RM-04: lose the next reply to `method` together with its socket,
+        /// as a phone that walks out of coverage mid-call; `then_offline`
+        /// keeps it out of coverage afterwards.
+        fn lose_next_reply(&self, method: &str, then_offline: bool) {
+            *self.lose_reply_to.lock().unwrap() = Some((method.into(), then_offline));
+        }
+
+        fn set_offline(&self, offline: bool) {
+            self.offline
+                .store(offline, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        /// RM-04: how many times this transport sent `command_id`.
+        fn sent(&self, command_id: &str) -> usize {
+            self.commands_sent
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|sent| *sent == command_id)
+                .count()
         }
 
         fn attach(&self, session: &Arc<luna_mobile::session::RemoteSession>) {
@@ -2412,6 +2473,19 @@ mod gateway {
         fn send_request(&self, request: luna_mobile::pairing::EnrollmentRequest) {
             self.urls.lock().unwrap().push(request.url.clone());
             let session = self.session.lock().unwrap().clone();
+            if self.offline.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::spawn(async move {
+                    if let Some(session) = session.upgrade() {
+                        session.request_failed(
+                            request.request_id,
+                            luna_mobile::probe::TransportFailure::Network {
+                                detail: "This phone is offline".into(),
+                            },
+                        );
+                    }
+                });
+                return;
+            }
             let client = http(&self.pin);
             let route = self.route();
             tokio::spawn(async move {
@@ -2461,7 +2535,20 @@ mod gateway {
             // A new socket replaces (and so closes) any previous one.
             *self.socket.lock().unwrap() = Some((request.socket_id, frames));
             let tls = tls(&self.pin);
+            let offline = self.offline.clone();
+            let lost = self.lost.clone();
             tokio::spawn(async move {
+                if offline.load(std::sync::atomic::Ordering::SeqCst) {
+                    if let Some(session) = session.upgrade() {
+                        session.socket_closed(
+                            request.socket_id,
+                            luna_mobile::probe::TransportFailure::Network {
+                                detail: "This phone is offline".into(),
+                            },
+                        );
+                    }
+                    return;
+                }
                 let mut upgrade = request.url.as_str().into_client_request().unwrap();
                 upgrade
                     .headers_mut()
@@ -2502,6 +2589,16 @@ mod gateway {
                             }
                         },
                         message = stream.next() => match message {
+                            // RM-04: a reply chosen to be lost ends its socket
+                            // undelivered, as a phone leaving coverage does.
+                            Some(Ok(Message::Text(text)))
+                                if serde_json::from_str::<Value>(&text)
+                                    .ok()
+                                    .and_then(|frame| frame["id"].as_u64())
+                                    .is_some_and(|id| lost.lock().unwrap().remove(&id)) =>
+                            {
+                                break
+                            }
                             Some(Ok(Message::Text(text))) => match session.upgrade() {
                                 Some(session) => session.receive(request.socket_id, text).await,
                                 None => break,
@@ -2523,6 +2620,25 @@ mod gateway {
         }
 
         fn send_frame(&self, socket_id: u64, frame: String) {
+            if let Ok(value) = serde_json::from_str::<Value>(&frame)
+                && let Some(method) = value["method"].as_str()
+            {
+                if method == methods::EXECUTE_REMOTE_TASK_COMMAND
+                    && let Some(command_id) = value["params"]["commandId"].as_str()
+                {
+                    self.commands_sent.lock().unwrap().push(command_id.into());
+                }
+                let mut lose = self.lose_reply_to.lock().unwrap();
+                if lose.as_ref().is_some_and(|(lost, _)| lost == method)
+                    && let Some(id) = value["id"].as_u64()
+                {
+                    let (_, then_offline) = lose.take().unwrap();
+                    self.lost.lock().unwrap().insert(id);
+                    if then_offline {
+                        self.set_offline(true);
+                    }
+                }
+            }
             if let Some((id, frames)) = &*self.socket.lock().unwrap()
                 && *id == socket_id
             {
@@ -2581,5 +2697,427 @@ mod gateway {
         })
         .await
         .expect("native UI did not deliver its observation; inspect the XCTest artifact");
+    }
+
+    /// RM-04: a gateway pairing with `scopes`.
+    async fn pair_scoped(
+        local: &luna_rpc::RpcClient,
+        http: &reqwest::Client,
+        bind: &str,
+        label: &str,
+        scopes: &[&str],
+    ) -> IssuedSession {
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": label, "scopes": scopes,
+                    "pairingTtlSecs": 300, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let (status, session) = post(
+            http,
+            bind,
+            "/remote/v1/pair",
+            None,
+            &json!({"target": issued.target, "credential": issued.credential, "clientLabel": label}),
+        )
+        .await;
+        assert_eq!(status, 200, "pairing over the gateway: {session}");
+        serde_json::from_value(session).unwrap()
+    }
+
+    fn outbox_entry(
+        session: &luna_mobile::session::RemoteSession,
+        command_id: &str,
+    ) -> luna_mobile::session::commands::OutboxEntryRecord {
+        session
+            .outbox()
+            .into_iter()
+            .find(|entry| entry.command_id == command_id)
+            .unwrap_or_else(|| panic!("command {command_id} is in the outbox"))
+    }
+
+    /// Waits on the session's change notifications (never a timer) until
+    /// the outbox entry satisfies `done`.
+    async fn outboxed(
+        session: &luna_mobile::session::RemoteSession,
+        changes: &Changes,
+        command_id: &str,
+        done: impl Fn(&luna_mobile::session::commands::OutboxEntryRecord) -> bool,
+    ) -> luna_mobile::session::commands::OutboxEntryRecord {
+        let mut seen = changes.0.subscribe();
+        let waited = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let _ = session.state();
+                if let Some(entry) = session
+                    .outbox()
+                    .into_iter()
+                    .find(|entry| entry.command_id == command_id)
+                    && done(&entry)
+                {
+                    return entry;
+                }
+                seen.changed()
+                    .await
+                    .expect("the listener outlives the wait");
+            }
+        })
+        .await;
+        waited.unwrap_or_else(|_| {
+            panic!(
+                "command {command_id} did not reach the expected state; state {:?}, issue {:?}, outbox {:?}",
+                session.state(),
+                session.outbox_issue(),
+                session.outbox()
+            )
+        })
+    }
+
+    fn user_entries(task: &luna_mobile::follow::RemoteTaskProjection) -> Vec<String> {
+        task.entries
+            .iter()
+            .filter(|entry| entry.role == "user")
+            .map(|entry| entry.entry_id.clone())
+            .collect()
+    }
+
+    /// RM-04 F9, F16–F21 (RP-10, RP-15, RP-20), the client half: the mobile
+    /// runtime's outbox over the real gateway, TLS pin and remote guard, with
+    /// the provider boundary recorded. A message composed for a task the Mac
+    /// has not created yet stays a draft, through a phone restart, until the
+    /// create is applied; a live control is refused without a connection; a
+    /// reply lost with its socket is read back by id on the next socket and
+    /// never resent, also across a phone restart while out of coverage; a
+    /// queued message's delivery is followed while no view is open; the
+    /// host's transcript shows each message once, in order, after a
+    /// resnapshot; a live stop ends the running turn; and a message accepted
+    /// before a revocation still runs after it, while the revoked runtime
+    /// ends and refuses new commands. Failure contract:
+    /// docs/pending-tasks/control-this-mac/rm-04/README.md.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation()
+    {
+        use luna_mobile::follow::ProjectionFreshness;
+        use luna_mobile::session::commands::{OutboxDeliveryState, OutboxEntryStatus};
+        use luna_mobile::session::{
+            RemoteSession, RemoteSessionError, RemoteSessionState, SessionCloseReason,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let provider = super::remote_provider::Provider::new();
+        let core = assemble_with(root.path(), provider.registry(true));
+        let local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let status = enable(&local, &bind).await;
+        if firewalled(&bind).await {
+            shutdown(core).await;
+            return;
+        }
+        let pin = status["spkiSha256"].as_str().unwrap().to_owned();
+        let http = http(&pin);
+        let project = root.path().join("rm04-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        core.workspace
+            .create_space(
+                "rm04-space",
+                &core.device_id,
+                project.to_str().unwrap(),
+                Some("RM04 project".into()),
+                false,
+            )
+            .unwrap();
+        let issued = pair_scoped(
+            &local,
+            &http,
+            &bind,
+            "rm04",
+            &["environment-read", "tasks-read", "tasks-operate"],
+        )
+        .await;
+        let mac = saved_mac(&issued, &bind, &pin, "RM04 QA Mac");
+        let changes = Arc::new(Changes(tokio::sync::watch::Sender::new(0)));
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::following(
+            mac.clone(),
+            0,
+            transport.clone(),
+            Some(changes.clone()),
+            None,
+        )
+        .unwrap();
+        transport.attach(&session);
+        session.connect(None).await.unwrap();
+        assert_eq!(session.outbox_issue(), None);
+
+        // F17: composed while away, for a task the Mac has not created yet,
+        // the first message stays a draft behind its create.
+        session.suspend();
+        let task = session.create_task("rm04-space".into(), None).unwrap();
+        let first = session
+            .send_message(
+                task.clone(),
+                "rm04: drafted before create".into(),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let create = session.outbox()[0].clone();
+        assert_eq!(
+            (create.kind.as_str(), create.status),
+            ("createTask", OutboxEntryStatus::Ready)
+        );
+        let draft = outbox_entry(&session, &first);
+        assert_eq!(draft.status, OutboxEntryStatus::Draft);
+        assert_eq!(
+            draft.blocked_by.as_deref(),
+            Some(create.command_id.as_str())
+        );
+        // F20: a live control needs a live connection; nothing is queued.
+        assert!(matches!(
+            session.stop_task(task.clone(), None).await,
+            Err(RemoteSessionError::NotOpen)
+        ));
+        assert_eq!(session.outbox().len(), 2);
+
+        // F18: the outbox survives a phone restart; another session's copy
+        // of it is refused.
+        let saved = session.outbox_bytes();
+        drop(session);
+        transport.closed().await;
+        let mut stranger = mac.clone();
+        stranger.session_id = "rm04-another-session".into();
+        let other =
+            RemoteSession::following(stranger, 0, PlatformStandIn::new(&pin, &bind), None, None)
+                .unwrap();
+        assert!(other.restore_outbox(saved.clone()).is_some());
+        drop(other);
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::following(
+            mac.clone(),
+            0,
+            transport.clone(),
+            Some(changes.clone()),
+            None,
+        )
+        .unwrap();
+        transport.attach(&session);
+        assert_eq!(session.restore_outbox(saved), None);
+        assert_eq!(
+            outbox_entry(&session, &first).status,
+            OutboxEntryStatus::Draft
+        );
+        session.connect(None).await.unwrap();
+        outboxed(&session, &changes, &create.command_id, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        let started = outboxed(&session, &changes, &first, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        assert_eq!(started.receipt_status.as_deref(), Some("applied"));
+        provider.ran("rm04: drafted before create").await;
+        assert!(core.workspace.chat(&task).unwrap().is_some());
+
+        // F9 (RP-10): the reply is lost with its socket. The next socket
+        // reads the receipt back by id; the command is never resent.
+        transport.lose_next_reply(methods::EXECUTE_REMOTE_TASK_COMMAND, false);
+        let lost = session
+            .send_message(
+                task.clone(),
+                "rm04: reply lost".into(),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        outboxed(&session, &changes, &lost, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        assert_eq!(transport.sent(&lost), 1, "read back by id, never resent");
+
+        // F19: its delivery is followed with no view open: queued behind the
+        // running turn, delivered when that turn ends.
+        outboxed(&session, &changes, &lost, |entry| {
+            entry.delivery == Some(OutboxDeliveryState::Queued)
+        })
+        .await;
+        provider.finish("rm04: drafted before create");
+        provider.ran("rm04: reply lost").await;
+        outboxed(&session, &changes, &lost, |entry| {
+            entry.delivery == Some(OutboxDeliveryState::Delivered)
+        })
+        .await;
+
+        // F18: in flight when the phone leaves coverage and restarts. It
+        // comes back uncertain and is read back by id, never resent.
+        transport.lose_next_reply(methods::EXECUTE_REMOTE_TASK_COMMAND, true);
+        let at_restart = session
+            .send_message(
+                task.clone(),
+                "rm04: in flight at restart".into(),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        outboxed(&session, &changes, &at_restart, |entry| {
+            entry.status == OutboxEntryStatus::Uncertain
+        })
+        .await;
+        let saved = session.outbox_bytes();
+        drop(session);
+        transport.closed().await;
+        let transport = PlatformStandIn::new(&pin, &bind);
+        let session = RemoteSession::following(
+            mac.clone(),
+            0,
+            transport.clone(),
+            Some(changes.clone()),
+            None,
+        )
+        .unwrap();
+        transport.attach(&session);
+        assert_eq!(session.restore_outbox(saved), None);
+        assert_eq!(
+            outbox_entry(&session, &at_restart).status,
+            OutboxEntryStatus::Uncertain
+        );
+        session.connect(None).await.unwrap();
+        outboxed(&session, &changes, &at_restart, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        assert_eq!(transport.sent(&at_restart), 0, "read back, never resent");
+
+        // F21 (RP-20): the Mac's transcript holds each accepted message once,
+        // in order, and converges to the same after a resnapshot.
+        session.follow_task(task.clone()).unwrap();
+        provider.finish("rm04: reply lost");
+        provider.ran("rm04: in flight at restart").await;
+        let order = vec![first.clone(), lost.clone(), at_restart.clone()];
+        followed(&session, &changes, &task, |detail| {
+            detail.freshness == ProjectionFreshness::Live && user_entries(detail) == order
+        })
+        .await;
+        session.suspend();
+        session.resume();
+        followed(&session, &changes, &task, |detail| {
+            detail.freshness == ProjectionFreshness::Live && user_entries(detail) == order
+        })
+        .await;
+
+        // A live stop ends the running turn.
+        let stop = session.stop_task(task.clone(), None).await.unwrap();
+        outboxed(&session, &changes, &stop, |entry| {
+            matches!(
+                entry.status,
+                OutboxEntryStatus::Accepted | OutboxEntryStatus::Applied
+            )
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while core.sessions.active_turn_id(&task).is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the stop ended the running turn");
+
+        // F16 (RP-15): a message accepted before a revocation still runs
+        // after it; the revoked runtime ends and refuses new commands.
+        let held = session
+            .send_message(
+                task.clone(),
+                "rm04: held at revoke".into(),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        provider.ran("rm04: held at revoke").await;
+        outboxed(&session, &changes, &held, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        let behind = session
+            .send_message(
+                task.clone(),
+                "rm04: accepted before revoke".into(),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        outboxed(&session, &changes, &behind, |entry| {
+            entry.status == OutboxEntryStatus::Applied
+        })
+        .await;
+        local
+            .call(
+                methods::REVOKE_REMOTE_SESSION,
+                json!({"id": issued.session.id}),
+            )
+            .await
+            .unwrap();
+        let state = settled(&session, &changes, |state| {
+            matches!(state, RemoteSessionState::Closed { .. })
+        })
+        .await;
+        assert!(
+            matches!(
+                state,
+                RemoteSessionState::Closed {
+                    reason: SessionCloseReason::RePair | SessionCloseReason::Remote,
+                    ..
+                }
+            ),
+            "{state:?}"
+        );
+        assert!(matches!(
+            session
+                .send_message(
+                    task.clone(),
+                    "rm04: after revoke".into(),
+                    false,
+                    false,
+                    None,
+                    None
+                )
+                .await,
+            Err(RemoteSessionError::Closed { .. })
+        ));
+        provider.finish("rm04: held at revoke");
+        provider.ran("rm04: accepted before revoke").await;
+        for prompt in [
+            "rm04: drafted before create",
+            "rm04: reply lost",
+            "rm04: in flight at restart",
+            "rm04: held at revoke",
+            "rm04: accepted before revoke",
+        ] {
+            assert_eq!(
+                provider.runs_of(prompt).len(),
+                1,
+                "one provider run of {prompt}"
+            );
+        }
+        assert!(provider.runs_of("rm04: after revoke").is_empty());
+        provider.finish(super::remote_provider::ALL);
+        shutdown(core).await;
     }
 }
