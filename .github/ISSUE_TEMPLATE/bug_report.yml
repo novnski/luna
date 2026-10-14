@@ -1,0 +1,139 @@
+name: Bug report
+description: Report a problem with enough context to investigate it.
+title: "[Bug] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe one problem per report. Source paths and attachments are optional; you do not need to know the codebase.
+        Remove credentials and private information from public logs, screenshots, and recordings.
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched existing issues and did not find a report of this problem.
+          required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and how it affects your work.
+      placeholder: The conversation stops updating after I switch projects, but the agent is still running.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: What did you expect?
+      description: Describe the behavior you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce and preceding actions
+      description: Include what you did immediately before the issue. If reproduction is uncertain, describe the sequence you remember and what you tried.
+      placeholder: |
+        1. Open a project and start a conversation with...
+        2. While the agent is running, ...
+        3. Observe...
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time I follow these steps
+        - Intermittently
+        - Only once so far
+        - I am not sure yet
+    validations:
+      required: true
+  - type: textarea
+    id: patterns
+    attributes:
+      label: Patterns, workarounds, and recent changes
+      description: Optional. Does restarting help? Does it affect one project or provider? Did it begin after an update or configuration change?
+  - type: input
+    id: luna-version
+    attributes:
+      label: LUNA version or commit
+      description: Use the app version, release name, or source commit. Write unknown if you cannot find it.
+      placeholder: Release version, LUNA Dev plus commit hash, or unknown
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and hardware
+      description: Include OS version and CPU architecture if known.
+      placeholder: macOS 26 on Apple Silicon; Ubuntu 24.04 x64; Windows 11 x64; iOS 26
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation type
+      options:
+        - GitHub release
+        - LUNA Dev or source build
+        - iOS companion
+        - Other or unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Pick the closest area. A maintainer will apply labels after reviewing the report.
+      multiple: true
+      options:
+        - UI - layout, interaction, rendering, accessibility
+        - Core - engine, storage, RPC, SDK, extensions
+        - Providers - agent integration, login, permissions
+        - Sync - multi-device, remote access, SSH, relay
+        - Mobile - iOS or mobile core
+        - Build - installation, packaging, updates, CI
+        - I am not sure
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Agent provider and version
+      description: Optional. Include the provider, CLI version, and model if relevant. Do not include credentials.
+      placeholder: Claude Code, Codex, OpenCode, or an installed provider package
+  - type: dropdown
+    id: workspace-mode
+    attributes:
+      label: Workspace mode
+      options:
+        - Local only
+        - Account sync
+        - Paired or SSH remote host
+        - Not applicable or unknown
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Exact error message and relevant logs
+      description: Optional. Paste the original text, including nearby context if useful. If there is no error, leave this empty or say so. Remove secrets.
+      render: text
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or videos
+      description: Optional. Drag and drop screenshots or a short recording into this field, or link to evidence. Explain what the attachment shows. Remove private information.
+  - type: textarea
+    id: source-paths
+    attributes:
+      label: Relevant source files or paths
+      description: Optional. If you know the affected code, include repository-relative paths and line numbers. A guess is welcome if marked as a guess; finding source files is not required.
+      placeholder: "crates/ui/src/example.rs:123 (suspected; not confirmed)"
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Optional. Related reports, a small sanitized reproduction project, or anything else needed to understand the problem.

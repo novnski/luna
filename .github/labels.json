@@ -1,0 +1,16 @@
+[
+  {"name": "bug", "color": "d73a4a", "description": "Something isn't working"},
+  {"name": "enhancement", "color": "a2eeef", "description": "New feature or request"},
+  {"name": "documentation", "color": "0075ca", "description": "Improvements or additions to documentation"},
+  {"name": "area:ui", "color": "7057ff", "description": "Desktop layout, interaction, rendering, or accessibility"},
+  {"name": "area:core", "color": "1d76db", "description": "Engine, storage, RPC, SDK, or extension runtime"},
+  {"name": "area:providers", "color": "5319e7", "description": "Agent integrations, authentication, permissions, or protocols"},
+  {"name": "area:sync", "color": "006b75", "description": "Multi-device sync, remote access, SSH, or relay"},
+  {"name": "area:mobile", "color": "0e8a16", "description": "iOS app or mobile core integration"},
+  {"name": "area:build", "color": "bfd4f2", "description": "Packaging, installation, updates, CI, or build tooling"},
+  {"name": "needs-triage", "color": "ededed", "description": "New report awaiting maintainer review"},
+  {"name": "needs-info", "color": "fbca04", "description": "Necessary reproduction details or evidence are missing"},
+  {"name": "ready-for-agent", "color": "0e8a16", "description": "Reviewed, actionable issue eligible for an agent to investigate"},
+  {"name": "agent-in-progress", "color": "1d76db", "description": "Claimed by a specific agent; do not duplicate work"},
+  {"name": "blocked", "color": "b60205", "description": "Waiting for a named dependency before work can proceed"}
+]

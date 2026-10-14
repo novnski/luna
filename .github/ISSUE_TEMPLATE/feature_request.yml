@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose an improvement and explain the problem it solves.
+title: "[Feature] "
+labels: [enhancement, needs-triage]
+body:
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Existing requests
+      options:
+        - label: I searched existing issues and did not find the same request.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe what you are trying to accomplish and what makes it difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired behavior and a concrete example of success.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: A maintainer will apply area labels during triage.
+      multiple: true
+      options:
+        - UI
+        - Core
+        - Providers
+        - Sync or remote access
+        - Mobile
+        - Build or installation
+        - I am not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or current workaround
+      description: Optional. What do you do today, and what other approaches could solve the problem?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context or examples
+      description: Optional. Include relevant platform/version, links, source paths, mockups, or attachments. Remove private information.

@@ -1,86 +1,94 @@
-# Luna
+# LUNA
 
-Control Claude Code, Codex, and OpenCode locally by default, with optional multi-device sync.
+A native workspace for coding agents. Run Claude Code, Codex, and OpenCode from one desktop app, with your projects, conversations, files, terminals, and changes together.
 
-*English | [简体中文](README.zh-CN.md)*
+LUNA is built in Rust with GPUI. It starts in local-only mode: no LUNA account or sync service is required. Agents use their own installations and authentication, and may need an internet connection.
 
-![Luna driving a Claude Code session with a live branch diff sidebar](apps/landing/public/assets/app-screenshot.jpg)
+## What you can do
 
-Every device runs a small engine that stores sessions on that device. A new installation starts in local-only mode without an account or a network connection.
+- Organize projects and agent conversations, including tabs and split views.
+- Follow agent output, inspect tool calls, handle permission requests, and queue messages.
+- Browse workspace files, review diffs and history, and use terminals and browser panels alongside a conversation.
+- Configure providers, skills, MCP integrations, and installed extension packages.
+- Use LUNA Board to organize work and link GitHub issues.
+- Run the engine without the desktop UI, or use the CLI and SDK to interact with it.
 
-## Build and run locally (Linux)
+Provider capabilities vary; LUNA exposes the controls supported by the selected provider. Additional provider integrations use installed packages rather than requiring every agent to be part of the desktop binary.
 
-```bash
-scripts/cargo.sh build --locked -p luna
-./target/debug/luna daemon start
+## Get started
+
+Download an available build for your platform from [GitHub Releases](https://github.com/novnski/luna/releases), or build from source below. Install and authenticate the coding agent you want to use, then open LUNA, add a project folder, and start a conversation with that provider.
+
+The repository contains desktop code for macOS, Linux, and Windows, plus an iOS companion. Packaging, system dependencies, and feature support differ by platform. The [iOS guide](apps/ios/README.md) describes its current capabilities and migration limits.
+
+## Build from source
+
+Clone the repository and install stable Rust; [rust-toolchain.toml](rust-toolchain.toml) declares the toolchain and components. GPUI sources are included under `vendor/`.
+
+```sh
+git clone git@github.com:novnski/luna.git
+cd luna
+```
+
+### macOS
+
+Install Xcode Command Line Tools. Build and open the isolated development app:
+
+```sh
+scripts/run-macos-dev.sh --refresh
+```
+
+This creates **LUNA Dev** at `target/luna-macos-dev/LUNA Dev.app`, with separate data under `target/luna-macos-dev/data/`. The script builds first, gracefully quits the previous instance, and launches the replacement. Close any other LUNA GUI app before running it. Use `--build-only` to build without launching.
+
+### Linux
+
+Install the system dependencies listed in the [Linux packaging script](scripts/package-linux.sh) and [browser runtime guide](docs/reference/linux-browser.md), then:
+
+```sh
+scripts/cargo.sh build --locked -p luna -p luna-extension-host -p luna-engine
+./target/debug/luna
+```
+
+### Windows
+
+Follow [Windows development](docs/reference/windows-development.md) for the MSVC toolchain, Windows SDK, native dependencies, build commands, and portable release layout.
+
+On macOS and Linux, use `scripts/cargo.sh` for Rust commands. It applies the repository's build guard and uses the optional Mr Boxington cache when installed. See [build cache and disk limits](docs/reference/build-cache.md).
+
+## Local engine and data
+
+Run a foreground engine without the UI, or inspect a running instance:
+
+```sh
+./target/debug/luna headless
+# In another terminal, using the same data directory:
 ./target/debug/luna status
+./target/debug/luna --help
 ```
 
-The engine starts in local-only mode. Install a release from this project's [GitHub releases](https://github.com/novnski/luna/releases) when one is available. The build uses the GPUI source checked into `vendor/`; it does not fetch an older app fork.
+`luna daemon install` installs a background service on supported macOS/Linux systems; `luna daemon start`, `stop`, and `status` manage an installed service. Do not run two engines against the same data directory.
 
-The desktop sidebar browser also needs the [Linux browser runtime](docs/reference/linux-browser.md).
+Default application data lives in `~/.luna` on macOS/Linux and `%LOCALAPPDATA%\LUNA` on Windows. `LUNA_DATA_DIR` selects a different root. Provider credentials remain in their provider-owned locations. The development app's separate data directory is intentional: a CLI command aimed at it must use that same `LUNA_DATA_DIR` and `LUNA_IPC_PORT=59777`.
 
-Local Rust commands use `scripts/cargo.sh`, which adds the optional
-[Mr Boxington compilation cache](docs/reference/build-cache.md) when installed.
-The wrapper keeps this checkout's `target/` and incremental builds, and falls
-back to Cargo if `mbx` is unavailable. Set `LUNA_BUILD_CACHE=0` to bypass it.
-See the guide for installation, cache limits and repeatable verification.
+## Optional sync and remote access
 
-Day-to-day:
+Local use works without a hosted backend. Account sync requires a configured LUNA-owned service, including `LUNA_EDGE_URL` and `LUNA_WORKOS_CLIENT_ID`. A fresh clone does not come with a hosted service configured.
 
-```bash
-luna status      # local/synced mode and engine status
-luna daemon start|stop|restart|status
-```
+Signing in selects the synced profile for the next engine start; signing out returns to the local profile. Existing local conversations are not automatically uploaded or imported. Stop the app or daemon before changing authentication, then restart it.
 
-## macOS development app
+Synced devices are trusted with remote workspace access, including file reads and writes. Only enroll devices you trust with your workspace contents. Pairing, SSH, and relay support have their own access boundaries; see `luna remote --help`, `luna ssh --help`, and the [relay guide](docs/reference/luna-relay.md).
 
-For agent-led development, the agent runs `scripts/run-macos-dev.sh --refresh`
-after a meaningful code change. It builds with Cargo's existing debug cache,
-then gracefully quits and reopens the isolated **LUNA Dev** app. The build
-happens while the previous app is still open; a failed build leaves it running. A quit
-blocked by unsaved work leaves the existing bundle intact.
+## Contribute and report problems
 
-The script replaces the same app at `target/luna-macos-dev/LUNA Dev.app` and
-overwrites `target/luna-macos-dev/last-build.log` each time. It does not install
-a release or keep a history of development apps. With LUNA Dev closed,
-`--build-only` assembles the bundle without launching it. Rust UI and engine
-changes still need a rebuild and process restart; they cannot refresh inside
-the running app. Keep `target/debug` for fast incremental builds; follow
-`AGENTS.md` for size checks and scoped cleanup when it grows too large.
+- [Contribution guide](CONTRIBUTING.md): development workflow, verification, and issue triage.
+- [Report a bug](https://github.com/novnski/luna/issues/new?template=bug_report.yml): behavior, reproduction steps, environment, and optional logs, screenshots, videos, or source paths.
+- [Request a feature](https://github.com/novnski/luna/issues/new?template=feature_request.yml).
+- [Pull request template](.github/PULL_REQUEST_TEMPLATE.md): scope, linked issues, and verification evidence.
 
-## Optional multi-device sync
+New issues start with `needs-triage`. Maintainers add area labels and mark actionable work `ready-for-agent` after review. See the contribution guide for the filtering contract.
 
-Sync requires a service owned and configured for this project. Set `LUNA_EDGE_URL` and the service's `LUNA_WORKOS_CLIENT_ID` before signing in; a fresh clone has no hosted service configured.
+The [task queue](docs/pending-tasks/README.md) tracks repository implementation work. Its status is separate from LUNA Board's runtime state. [ARCHITECTURE.md](ARCHITECTURE.md) contains historical context and links to the current core work; it should not be read as a complete description of the current app.
 
-Sign in only when you want to open your account's synced workspace. Authentication changes the profile selected by the next engine start, so stop the daemon before changing it:
+## License
 
-```bash
-luna daemon stop
-luna login
-luna daemon start
-```
-
-You can then start an agent on one synced device and follow or drive it from another. An always-on machine such as a VPS can keep those agents working after you close your laptop.
-
-Devices signed in to the same synced account are trusted with remote workspace access. A device controlling a workspace on another device can list, read, and write its files; enabling `Show ignored files` also makes gitignored files such as `.env` available remotely. `.git` is always excluded. Only sign in devices you trust with the full contents of your workspaces.
-
-Signing in does not upload, move, or import existing local sessions. Local sessions and their attachments remain under the local profile and reappear when you return to local-only mode:
-
-```bash
-luna daemon stop
-luna logout
-luna daemon start
-```
-
-`luna login` and `luna logout` refuse to modify credentials while an engine owns the data directory. The desktop app follows the same next-restart profile boundary.
-
-On macOS: use a release from this project, or build `luna` from source and run `luna daemon install` to install the launchd service.
-
-On Windows: extract the portable release ZIP and run `luna.exe`. Keep `luna-update.json` beside it for in-app updates. See the [development notes](docs/reference/windows-development.md) for source builds.
-
----
-
-Developing or curious how it works? [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/novnski/luna) or check out [ARCHITECTURE.md](ARCHITECTURE.md).
-
-Licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).

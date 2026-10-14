@@ -7,7 +7,6 @@
 <meta name="description" content="Luna runs Claude Code, Codex, Grok, Hermes and Pi on your machines. Control them from any device, live." />
 <meta property="og:title" content="Luna" />
 <meta property="og:description" content="Control your coding agents from any of your devices." />
-<meta property="og:image" content="/assets/app-screenshot.jpg" />
 <link rel="icon" href="/assets/luna-favicon-v3.png" type="image/png" sizes="128x128" />
 
 <style>
@@ -865,14 +864,6 @@
     </div>
   </header>
 
-  <section class="shot">
-    <div class="dither dither-left" aria-hidden="true"><canvas></canvas></div>
-    <div class="dither dither-right" aria-hidden="true"><canvas></canvas></div>
-    <div class="wrap">
-      <img src="/assets/app-screenshot.jpg" alt="Luna driving a Claude Code session with a live branch diff sidebar" />
-    </div>
-  </section>
-
   <section class="panel-sect">
     <canvas class="reach-left" aria-hidden="true"></canvas>
     <canvas class="reach-right" aria-hidden="true"></canvas>
@@ -1483,6 +1474,7 @@ love the ui</p>
       cols: 0,
       rows: 0,
     }));
+    if (!panes.length) return;
     const dpr = Math.min(devicePixelRatio || 1, 2);
     const resize = () => {
       for (const p of panes) {
@@ -1524,9 +1516,8 @@ love the ui</p>
     resize();
     let last = 0;
     addEventListener("resize", () => { resize(); draw(last); });
-    // The panes stretch to the app-screenshot section, whose height isn't
-    // final until the image loads — re-measure whenever their box changes,
-    // or the canvases end up CSS-stretched into streaks.
+    // Re-measure whenever the decorative section changes size so the
+    // canvases do not end up CSS-stretched into streaks.
     if (typeof ResizeObserver !== "undefined") {
       const ro = new ResizeObserver(() => { resize(); draw(last); });
       for (const p of panes) ro.observe(p.el);

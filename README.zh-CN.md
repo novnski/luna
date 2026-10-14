@@ -1,10 +1,10 @@
 # Luna
 
+> 本文保留旧版说明。当前功能、安装步骤和贡献指南请参阅 [English README](README.md)；本文尚未与新版同步。
+
 在本地管理 Claude Code、Codex 和 OpenCode，也可以打开多设备同步。
 
 *[English](README.md) | 简体中文*
-
-![Luna 驱动一个 Claude Code 会话，侧边栏是实时的分支 diff](apps/landing/public/assets/app-screenshot.jpg)
 
 每台设备各跑一个小引擎，会话就存在这台设备上。装完默认是纯本地模式，不用账号，也不用联网。
 
