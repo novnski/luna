@@ -152,6 +152,31 @@ pub(super) async fn exercise(
     })
     .await?;
 
+    // A typed address inside the folder loads; a `localhost` authority is
+    // normalized away before it reaches WebKit.
+    let detail = root.join("playwright-report/data/detail.html");
+    let typed = format!("file://localhost{}", detail.display());
+    window.update(cx, |_, w, cx| {
+        report.update(cx, |b, cx| b.navigate(&typed, w, cx))
+    })?;
+    wait_until(cx, "typed report address did not load", 10, |cx| {
+        title(&report, cx) == "Report detail"
+    })
+    .await?;
+    anyhow::ensure!(
+        report.read_with(cx, |b, _| b.page.url.as_deref()
+            == url::Url::from_file_path(&detail)
+                .ok()
+                .as_ref()
+                .map(url::Url::as_str)),
+        "typed report address kept its localhost authority"
+    );
+    report.update(cx, |b, _| b.fixture_history(false));
+    wait_until(cx, "history did not return to the report", 10, |cx| {
+        title(&report, cx) == "Local report"
+    })
+    .await?;
+
     // Links out of the report folder, directly or through a symlink inside
     // it, are cancelled by the native policy; the address bar refuses the
     // same file.

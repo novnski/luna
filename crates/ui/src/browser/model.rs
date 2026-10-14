@@ -102,6 +102,15 @@ impl LocalDocument {
             .unwrap_or_else(|| self.root.display().to_string())
     }
 
+    /// `address` as WebKit should load it, when it is inside this folder.
+    /// The WHATWG form drops a `localhost` authority that GLib would keep.
+    pub fn page(&self, address: &str) -> Option<String> {
+        if !self.allows(address) {
+            return None;
+        }
+        url::Url::parse(address).ok().map(String::from)
+    }
+
     /// A `file:` address inside this document's folder. Paths are judged
     /// decoded: an escaped separator must not smuggle `..` past URL parsing,
     /// and a symlink inside the folder must not lead out of it.

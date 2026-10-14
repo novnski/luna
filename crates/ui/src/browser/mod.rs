@@ -334,9 +334,13 @@ impl BrowserSurface {
     pub fn navigate(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
         // A local document's tab may revisit its own folder (Enter on the
         // address, a pasted subpage); every other address is a website.
-        let url = match self.local.as_ref() {
-            Some(document) if document.allows(input.trim()) => Ok(input.trim().to_owned()),
-            _ => model::normalize_address(input),
+        let url = match self
+            .local
+            .as_ref()
+            .and_then(|document| document.page(input.trim()))
+        {
+            Some(page) => Ok(page),
+            None => model::normalize_address(input),
         };
         let url = match url {
             Ok(url) => url,
