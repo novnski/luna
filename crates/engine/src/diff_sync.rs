@@ -48,7 +48,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use luna_proto::{Chat, CheckoutDiff, DiffFileSummary};
+use luna_proto::{Chat, CheckoutDiff, DiffFileSummary, Space};
 
 use crate::EngineError;
 use crate::doc_host::EdgeConfig;
@@ -256,6 +256,7 @@ impl CheckoutDiffSync {
         let task = tokio::spawn(diff_sync_task(
             Arc::downgrade(&sync.inner),
             workspace.watch_chats(),
+            workspace.watch_spaces(),
             sync.inner.cancel.clone(),
         ));
         *lock(&sync.inner.supervisor) = Some(task);
@@ -947,11 +948,13 @@ fn publish_watch(inner: &Arc<DiffSyncInner>) {
     publish_watch_with(inner, None);
 }
 
-/// Chat-watch follower + repair tick. Holds only weak handles so dropping the
-/// service tears the loop down; the token ends it eagerly on shutdown.
+/// Chat- and space-watch follower + repair tick. Holds only weak handles so
+/// dropping the service tears the loop down; the token ends it eagerly on
+/// shutdown.
 async fn diff_sync_task(
     inner: Weak<DiffSyncInner>,
     mut chats_rx: watch::Receiver<Vec<Chat>>,
+    mut spaces_rx: watch::Receiver<Vec<Space>>,
     cancel: CancellationToken,
 ) {
     let mut repair = tokio::time::interval(REPAIR_INTERVAL);
@@ -968,6 +971,21 @@ async fn diff_sync_task(
                 let chats = chats_rx.borrow_and_update().clone();
                 // Memoized identities only: chat rows change constantly (the
                 // sync itself writes them) and must never fan out into git.
+                reconcile(&inner, chats, false).await;
+            }
+            changed = spaces_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let Some(inner) = inner.upgrade() else { break };
+                // SpacesSync stamps a project's Git presence the moment `.git`
+                // appears (a `git init` in a running task's terminal). Chat
+                // rows do not change then, so without this pass a task begun
+                // in the plain folder kept "Preparing diff…" until the repair
+                // tick or its next turn. Its cwd never resolved, so it has no
+                // memo and this pass resolves it afresh; bound chats stay
+                // memoized, and space rows are only written on change.
+                let chats = chats_rx.borrow().clone();
                 reconcile(&inner, chats, false).await;
             }
             _ = repair.tick() => {
