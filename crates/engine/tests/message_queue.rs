@@ -1005,7 +1005,12 @@ async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
     )
     .await;
     wait_for(
-        || core.doc_host.queued_message(CHAT, &second_id).unwrap().is_none(),
+        || {
+            core.doc_host
+                .queued_message(CHAT, &second_id)
+                .unwrap()
+                .is_none()
+        },
         "the explicitly sent row's durable correlation to settle",
     )
     .await;
@@ -2108,12 +2113,23 @@ async fn queue_rpc_reorders_and_streams() {
     let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
     let client = luna_rpc::memory_client(core.rpc_service());
 
-    core.doc_host
+    let opening_id = core
+        .doc_host
         .queue_message(CHAT, "opening", Vec::new())
         .expect("queue opening");
     wait_for(
         || prompts.lock().unwrap().iter().any(|p| p == "opening"),
         "the first turn to start",
+    )
+    .await;
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &opening_id)
+                .unwrap()
+                .is_none()
+        },
+        "the opening row's durable correlation to settle before subscribing",
     )
     .await;
 

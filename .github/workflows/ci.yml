@@ -29,6 +29,14 @@ jobs:
       ui-files: ${{ steps.paths.outputs.ui_files }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate every workflow without running its platform matrix
+        run: |
+          curl --fail --location --silent --show-error --max-time 20 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=
       - uses: dorny/paths-filter@v3
         id: paths
         with:
@@ -105,7 +113,7 @@ jobs:
       matrix:
         suite: ${{ fromJSON(needs.changes.outputs.suites) }}
     name: ${{ matrix.suite }}
-    runs-on: ${{ contains(fromJSON('["ui","macos","ios"]'), matrix.suite) && 'macos-latest' || 'ubuntu-24.04' }}
+    runs-on: ${{ contains(fromJSON('["macos","ios"]'), matrix.suite) && 'macos-latest' || 'ubuntu-24.04' }}
     # One minute for routing + eight for checks + one for the final gate.
     timeout-minutes: 8
     steps:
@@ -116,9 +124,9 @@ jobs:
           cache-group: ${{ contains(fromJSON('["ui","macos","linux"]'), matrix.suite) && 'desktop-ci' || matrix.suite == 'ios' && 'ios-ci' || matrix.suite == 'extensions' && 'extensions-ci' || 'core-ci' }}
           # The engine owns the largest core graph. Smaller jobs restore it,
           # rather than winning the immutable save with only their subset.
-          save-cache: ${{ contains(fromJSON('["engine","ui","linux","ios","extensions"]'), matrix.suite) }}
+          save-cache: ${{ contains(fromJSON('["engine","ui","macos","ios","extensions"]'), matrix.suite) }}
       - name: Linux platform headers
-        if: matrix.suite == 'linux'
+        if: matrix.suite == 'linux' || matrix.suite == 'ui'
         run: |
           sudo apt-get update -qq -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
           sudo apt-get install -y -qq \

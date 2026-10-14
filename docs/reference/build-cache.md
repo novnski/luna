@@ -49,8 +49,8 @@ the last required result; a timeout is a failure, not successful verification.
 
 The `ci` Cargo profile keeps development assertions and overflow checks, with
 no optimization, debug information or incremental output. It leaves local dev
-and release profiles unchanged. The full UI library suite compiles once in its
-own job. Separate macOS/Linux compile checks validate the application platform
+and release profiles unchanged. The full headless UI library suite compiles once
+in its original Linux test environment. Separate macOS/Linux compile checks validate the application platform
 contracts without serializing a second ordinary UI library build ahead of the
 UI test executable. Changed fixture examples run with their required features
 in the macOS compile job; unchanged screenshots and fixture executables stay
