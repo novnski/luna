@@ -140,11 +140,13 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
     let dialog = flat(theme.surface_dialog, flat(theme.scrim(), chrome));
     let popup = theme.for_popup();
     // A modal picker or dialog card (`popover::surface_bg`) over the
-    // `popover::modal` scrim (0.35 of the dark scrim) on the canvas.
+    // `popover::modal` scrim on the canvas.
     let modal_card = flat(
         popover::surface_bg(&popup),
         flat(
-            theme.scrim().opacity(0.35 / theme::SCRIM_ALPHA_DARK),
+            theme
+                .scrim()
+                .opacity(popover::MODAL_SCRIM / theme::SCRIM_ALPHA_DARK),
             canvas,
         ),
     );
@@ -1024,8 +1026,16 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             "status",
             "GitHub import warning (Board)",
             Kind::Text,
-            popup.text,
-            flat(popup.warning_muted, modal_card),
+            popup.readable_on_stacks(
+                popup.warning_muted,
+                &[&[
+                    theme::scrim(popover::MODAL_SCRIM),
+                    popover::surface_bg(&popup),
+                    popup.warning.opacity(0.08),
+                ]],
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            flat(popup.warning.opacity(0.08), modal_card),
         ),
         p(
             "status",

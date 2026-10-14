@@ -927,6 +927,10 @@ pub(crate) fn scrim_alpha(alpha_dark: f32) -> gpui::Hsla {
     crate::theme::scrim(alpha_dark)
 }
 
+/// The dark-appearance alpha of the light scrim [`modal`] and [`modal_glass`]
+/// lay behind their card (see [`scrim_alpha`] for the light side).
+pub const MODAL_SCRIM: f32 = 0.35;
+
 /// Full-window modal: dim scrim + centered card with the `dialog-in` entrance.
 /// The scrim swallows clicks; the caller wires its own dismiss/confirm.
 /// `viewport` is the window size (an `anchored` layer sizes to its children,
@@ -937,7 +941,7 @@ pub fn modal(
     viewport: gpui::Size<Pixels>,
     card: AnyElement,
 ) -> AnyElement {
-    modal_with(id, viewport, card, 16.0, 0.35)
+    modal_with(id, viewport, card, 16.0, MODAL_SCRIM)
 }
 
 /// [`modal`] with custom rounding for glass palettes. Both use a light
@@ -949,7 +953,7 @@ pub fn modal_glass(
     card: AnyElement,
     corner_radius: f32,
 ) -> AnyElement {
-    modal_with(id, viewport, card, corner_radius, 0.35)
+    modal_with(id, viewport, card, corner_radius, MODAL_SCRIM)
 }
 
 fn modal_with(
