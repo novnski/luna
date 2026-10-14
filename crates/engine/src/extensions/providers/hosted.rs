@@ -1628,6 +1628,9 @@ impl RunPump {
         let _ = self.tx.send(item).await;
     }
 
+    /// The bridge's own end of the run. Its reason is the turn's terminal
+    /// error, shown once, on this `Done`: an `Error` event before it would
+    /// be a second, identical error part.
     async fn done(&mut self, status: DoneStatus, error: String) {
         self.done_seen = true;
         let session_id = self.session_id.clone();
@@ -1875,15 +1878,12 @@ impl RunPump {
         let message = error_text(&hosted::decode_error(
             event.get("error").unwrap_or(&Value::Null),
         ));
-        if self.stop_deadline.is_some() {
-            self.done(DoneStatus::Interrupted, message).await;
+        let status = if self.stop_deadline.is_some() {
+            DoneStatus::Interrupted
         } else {
-            self.emit(Ok(AgentEvent::Error {
-                message: message.clone(),
-            }))
-            .await;
-            self.done(DoneStatus::Errored, message).await;
-        }
+            DoneStatus::Errored
+        };
+        self.done(status, message).await;
     }
 
     fn request_stop(&mut self) {
@@ -1928,10 +1928,6 @@ impl RunPump {
             return;
         }
         let message = format!("{label}: {reason} during the run; the turn was not replayed");
-        self.emit(Ok(AgentEvent::Error {
-            message: message.clone(),
-        }))
-        .await;
         self.done(DoneStatus::Errored, message).await;
     }
 
@@ -1946,10 +1942,6 @@ impl RunPump {
             .await;
         self.worker.close().await;
         if !self.done_seen {
-            self.emit(Ok(AgentEvent::Error {
-                message: reason.clone(),
-            }))
-            .await;
             self.done(DoneStatus::Errored, reason).await;
         }
     }

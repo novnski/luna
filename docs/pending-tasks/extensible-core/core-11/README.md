@@ -113,7 +113,8 @@ be declared for chats that already use it. Profile 1.0 is read as before.
   OpenCode, so LUNA does not send it again".
 - **Completion.** Only the adapter's `Done` ends a turn. The bridge adds one
   only when the worker ended without it: `Errored` with "… during the run; the
-  turn was not replayed", or `Interrupted` after a Stop.
+  turn was not replayed", or `Interrupted` after a Stop. Its reason rides only
+  on that `Done`, so the turn shows it as exactly one error part.
 - **Stop.** `provider.run.stop` cancels the adapter's own interrupt token
   (OpenCode `POST …/interrupt`, then its 2 s/3 s escalation); without the
   run's end within 8 s, the bridge stops the instance (every process in its
@@ -178,7 +179,7 @@ enabled hash, `enabledByDefault` and `replacesBuiltin`.
 | H8 | A start whose answer was lost is treated as accepted or resent | `rejected`/not sent → RejectedBeforeAcceptance; otherwise delivery-unknown, instance stopped, never resent |
 | H9 | A worker exit or abort reported as completion | Only the adapter's `Done`; the bridge's own ending is `Errored`/`Interrupted` with the reason |
 | H10 | Stop is cosmetic: `opencode serve` keeps running | Adapter interrupt, bounded wait, then the instance group is stopped |
-| H11 | A crash replays the turn or leaves the server behind | Never replayed; the group is killed; error part |
+| H11 | A crash replays the turn, leaves the server behind or shows its error twice | Never replayed; the group is killed; exactly one error part |
 | H12 | Permission drift: Full parks a card, Auto runs, stray asks unanswered, legacy Ask cards lost, session grants forgotten between turns, rules readback skipped | Same adapter in the worker; bridge declines cards in Full/Auto; declared facts equal the built-in; grants carried between turns |
 | H13 | A native child Stop or a live compaction hits a server that does not own the session | Live root-session → turn worker map |
 | H14 | LUNA tools claimed but not delivered, or their context forged | Tool calls relayed with the adapter-matched context; results returned verbatim; delivery narrowed when a turn reports it withdrawn |

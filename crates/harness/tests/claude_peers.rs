@@ -232,13 +232,13 @@ async fn held_child_report_ends_the_turn_visibly_instead_of_hanging() {
         AgentEvent::PeerMessage { state, lane, cause, host_injected: true, .. }
             if state == "held" && lane == "stdin" && cause.as_deref() == Some("managed-setting")
     ));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Error { message } if message.contains("has not reached the model"))));
     assert!(matches!(
         events.last(),
         Some(AgentEvent::Done {
             status: DoneStatus::Errored,
+            error: Some(message),
             ..
-        })
+        }) if message.contains("has not reached the model")
     ));
 }
 

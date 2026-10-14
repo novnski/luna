@@ -727,8 +727,9 @@ async fn conformance_failures_are_explicit_and_leave_nothing_running() {
 
 /// Stop and failures end the turn honestly. Regressions caught: Stop leaves
 /// the CLI running, including when the worker ignores both its stop and
-/// SIGTERM; a crash mid-run is reported as complete, replayed, or leaves the
-/// CLI behind; a start the worker refused is resent.
+/// SIGTERM; a crash mid-run is reported as complete, replayed, shown as two
+/// identical error parts, or leaves the CLI behind; a start the worker
+/// refused is resent.
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_and_crash_end_the_turn_honestly_and_end_the_cli() {
     let tmp = tempfile::tempdir().unwrap();
@@ -825,6 +826,15 @@ async fn stop_and_crash_end_the_turn_honestly_and_end_the_cli() {
     );
     let shown = wait_for_error(&engine, chat, "exited during the run").await;
     assert!(shown.contains("not replayed"), "{shown}");
+    wait_until(WAIT, "the crashed turn to end", || {
+        !engine.core.sessions.has_live_run(chat)
+    })
+    .await;
+    assert_eq!(
+        errors(&engine, chat),
+        [shown.clone()],
+        "the crash is not the turn's one error part"
+    );
     let cli = cli_pid(&checkout, WAIT).await;
     assert!(
         wait_process_gone(cli, WAIT).await,

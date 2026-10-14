@@ -911,12 +911,9 @@ impl Pump {
     }
 
     /// A conformance or delivery failure: the run ends `Errored`, the worker
-    /// is asked to stop the CLI, and its group is stopped regardless.
+    /// is asked to stop the CLI, and its group is stopped regardless. Like
+    /// every terminal error, the reason is shown once, on the `Done`.
     async fn fail(mut self, reason: String) {
-        self.emit(AgentEvent::Error {
-            message: reason.clone(),
-        })
-        .await;
         let params = json!({"runId": self.run_id});
         let _ = self.session.call(RUN_STOP, params, STOP_CALL_TIMEOUT).await;
         self.session.close().await;
@@ -952,10 +949,6 @@ impl Pump {
             "{}'s worker exited during the run{detail}; the turn was not replayed",
             self.label
         );
-        self.emit(AgentEvent::Error {
-            message: reason.clone(),
-        })
-        .await;
         self.emit(AgentEvent::Done {
             status: DoneStatus::Errored,
             result: None,
@@ -1276,7 +1269,8 @@ impl Pump {
         Ok(())
     }
 
-    /// The worker's terminal event; the only way a run completes.
+    /// The worker's terminal event; the only way a run completes. Its error
+    /// is shown once, on the `Done`.
     async fn finish(&mut self, done: DoneEvent) {
         let label = &self.label;
         let (status, error) = match done.status.as_str() {
@@ -1305,12 +1299,6 @@ impl Pump {
                 )),
             ),
         };
-        if let Some(message) = &error {
-            self.emit(AgentEvent::Error {
-                message: message.clone(),
-            })
-            .await;
-        }
         // Stop the worker before reporting the end, so a completed turn never
         // leaves its process behind.
         self.session.close().await;
