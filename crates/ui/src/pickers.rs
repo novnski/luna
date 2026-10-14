@@ -7365,6 +7365,9 @@ impl Pickers {
                 .size_full()
                 .px(px(popover::CARD_INSET))
                 .track_scroll(&model_scroll)
+                // Two viewports of rows past each edge for a screen reader;
+                // each row scrolls itself into view when it reaches one.
+                .a11y_overscan(16)
                 .into_any_element(),
             )
         } else {
@@ -8308,9 +8311,21 @@ impl Pickers {
             .when(is_new, |el| el.aria_description("New"))
             // Picked directly: a synthetic click at the row's centre misses
             // a row the list clips at its edge.
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+            .on_a11y_action(gpui::AccessibleAction::Click, {
+                let row_entity = row_entity.clone();
+                move |_, _, cx| {
+                    row_entity
+                        .update(cx, |this, cx| this.activate_model_index(ix, cx))
+                        .ok();
+                }
+            })
+            .on_a11y_action(gpui::AccessibleAction::ScrollIntoView, move |_, _, cx| {
                 row_entity
-                    .update(cx, |this, cx| this.activate_model_index(ix, cx))
+                    .update(cx, |this, cx| {
+                        this.model_scroll
+                            .scroll_to_item(ix, gpui::ScrollStrategy::Nearest);
+                        cx.notify();
+                    })
                     .ok();
             })
             .px(crate::typography::ui_rems(8.0))

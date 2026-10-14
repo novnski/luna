@@ -51,6 +51,7 @@ where
         scroll_handle: None,
         sizing_behavior: ListSizingBehavior::default(),
         horizontal_sizing_behavior: ListHorizontalSizingBehavior::default(),
+        a11y_overscan: 0,
     }
 }
 
@@ -66,6 +67,7 @@ pub struct UniformList {
     scroll_handle: Option<UniformListScrollHandle>,
     sizing_behavior: ListSizingBehavior,
     horizontal_sizing_behavior: ListHorizontalSizingBehavior,
+    a11y_overscan: usize,
 }
 
 /// Frame state used by the [UniformList].
@@ -478,20 +480,29 @@ impl Element for UniformList {
 
                     let visible_range = first_visible_element_ix
                         ..cmp::min(last_visible_element_ix, self.item_count);
+                    // Assistive technology walks the tree, not the viewport:
+                    // the overscan items sit clipped past each edge, where a
+                    // screen reader can reach them and scroll them into view.
+                    let rendered_range = if self.a11y_overscan > 0 && window.a11y.is_active() {
+                        visible_range.start.saturating_sub(self.a11y_overscan)
+                            ..cmp::min(visible_range.end + self.a11y_overscan, self.item_count)
+                    } else {
+                        visible_range.clone()
+                    };
 
                     let items = if y_flipped {
-                        let flipped_range = self.item_count.saturating_sub(visible_range.end)
-                            ..self.item_count.saturating_sub(visible_range.start);
+                        let flipped_range = self.item_count.saturating_sub(rendered_range.end)
+                            ..self.item_count.saturating_sub(rendered_range.start);
                         let mut items = (self.render_items)(flipped_range, window, cx);
                         items.reverse();
                         items
                     } else {
-                        (self.render_items)(visible_range.clone(), window, cx)
+                        (self.render_items)(rendered_range.clone(), window, cx)
                     };
 
                     let content_mask = ContentMask { bounds };
                     window.with_content_mask(Some(content_mask), |window| {
-                        for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
+                        for (mut item, ix) in items.into_iter().zip(rendered_range) {
                             let item_origin = padded_bounds.origin
                                 + scroll_offset
                                 + point(Pixels::ZERO, item_height * ix);
@@ -646,6 +657,15 @@ impl UniformList {
                 self.interactivity.base_style.overflow.x = Some(Overflow::Scroll);
             }
         }
+        self
+    }
+
+    /// While assistive technology is active, also renders up to `items`
+    /// items past each edge of the viewport. They stay clipped, but their
+    /// accessibility nodes let a screen reader move beyond the visible items
+    /// (and ask to scroll to them) instead of stopping at the viewport's edge.
+    pub fn a11y_overscan(mut self, items: usize) -> Self {
+        self.a11y_overscan = items;
         self
     }
 

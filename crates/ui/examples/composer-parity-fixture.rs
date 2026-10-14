@@ -1047,6 +1047,7 @@ fn main() -> anyhow::Result<()> {
                                 && option["position_in_set"] == ix + 1
                                 && option["size_of_set"] == rows.len()
                                 && has_action(option, "Click")
+                                && has_action(option, "ScrollIntoView")
                                 && option["children"].as_array().map_or(0, Vec::len) == 1
                                 && star["role"] == "Button"
                                 && star["label"] == format!("Favorite {name}")
