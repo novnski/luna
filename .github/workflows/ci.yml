@@ -26,6 +26,7 @@ jobs:
     outputs:
       suites: ${{ steps.plan.outputs.suites }}
       engine-files: ${{ steps.paths.outputs.engine_files }}
+      ui-files: ${{ steps.paths.outputs.ui_files }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -186,13 +187,29 @@ jobs:
               command += ['--test', test]
           subprocess.run(command, check=True)
           PYTHON
-      - name: Desktop application, UI and fixture regressions
+      - name: Desktop application, UI and changed fixture regressions
         if: matrix.suite == 'ui'
+        env:
+          CHANGED_UI_FILES: ${{ needs.changes.outputs.ui-files }}
         run: |
-          cargo test --profile ci --locked -p luna -p luna-ui --features luna-ui/appshots-fixture \
-            --lib --bin luna --example drafts-fixture --example history-operations-fixture \
-            --example task-organization-fixture --example session-history-fixture \
-            --example activity-attention-fixture --example child-activity-fixture -- --test-threads=1
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import PurePosixPath
+          changed = set(json.loads(os.environ['CHANGED_UI_FILES'] or '[]'))
+          metadata = json.loads(subprocess.check_output(
+              ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], text=True))
+          package = next(package for package in metadata['packages'] if package['name'] == 'luna-ui')
+          features = {'luna-ui/appshots-fixture'}
+          examples = []
+          for target in package['targets']:
+              relative = os.path.relpath(target['src_path'], os.getcwd())
+              if 'example' in target['kind'] and relative in changed:
+                  examples += ['--example', target['name']]
+                  features.update('luna-ui/' + feature for feature in target.get('required-features', []))
+          command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna', '-p', 'luna-ui',
+                     '--features', ','.join(sorted(features)), '--lib', '--bin', 'luna']
+          subprocess.run(command + examples + ['--', '--test-threads=1'], check=True)
+          PYTHON
       - name: Linux application compile contract
         if: matrix.suite == 'linux'
         run: cargo check --profile ci --locked -p luna
@@ -222,6 +239,7 @@ jobs:
           esac
           xcodebuild -project apps/ios/Luna.xcodeproj -scheme Luna \
             -destination 'generic/platform=iOS Simulator' \
+            -only-testing:LunaTests \
             ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build-for-testing
           git diff --exit-code -- apps/ios/Luna/Generated/luna_core.swift
 

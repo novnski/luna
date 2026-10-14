@@ -50,8 +50,8 @@ the last required result; a timeout is a failure, not successful verification.
 The `ci` Cargo profile keeps development assertions and overflow checks, with
 no optimization, debug information or incremental output. It leaves local dev
 and release profiles unchanged. The macOS job compiles the app test target,
-full UI library suite and six fixture suites in one Cargo invocation and one
-feature configuration. Linux checks the application platform contract without
+full UI library suite and any changed fixture examples in one Cargo invocation
+and one feature configuration. Linux checks the application platform contract without
 repeating the entire UI runtime suite. Core contracts, provider fixtures,
 engine lifecycle E2Es, preview networking and edge runtime checks have separate
 owners. iOS changes compile the Swift app and tests against freshly generated
@@ -71,7 +71,10 @@ dependency archive. Compatible core jobs share `core-ci`; desktop and iOS use
 environment and dependency manifests. Do not add a commit SHA or individual
 job name to a shared group. The engine job saves the largest core graph;
 smaller core jobs only restore it so they cannot win the immutable archive save
-with a partial dependency set. Manual/distribution profiles use separate groups.
+with a partial dependency set. Only successful main-branch jobs save caches:
+PRs read main's cache without duplicate archives or uploads extending the merge
+path. Failed/timed-out jobs do not spend cleanup time exporting build output.
+Manual/distribution profiles use separate groups.
 
 GitHub caches are reusable, not permanent: branch access restrictions, the
 repository storage limit and seven-day idle eviction still apply. Do not raise

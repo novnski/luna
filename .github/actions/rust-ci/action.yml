@@ -6,7 +6,7 @@ inputs:
     description: Compatible workload/profile group, never a job name or commit SHA
     default: core
   save-cache:
-    description: Let the largest job in a shared group save its dependency graph
+    description: Let the largest main-branch job save its dependency graph
     default: 'true'
   workspaces:
     description: Cargo workspace roots and target directories
@@ -19,6 +19,5 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         shared-key: ${{ inputs.cache-group }}
-        save-if: ${{ inputs.save-cache }}
-        cache-on-failure: true
+        save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}
         workspaces: ${{ inputs.workspaces }}
