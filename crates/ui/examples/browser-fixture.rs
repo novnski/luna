@@ -525,7 +525,7 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |_, w, cx| first.update(cx, |b, cx| b.navigate("javascript:alert(1)", w, cx)))?;
                 anyhow::ensure!(first.read_with(cx, |b, _| b.page.url == before), "unsupported address navigated");
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
-                local_document::exercise(window, state.clone(), &output, cx).await?;
+                local_document::exercise(window, &output, cx).await?;
                 window.update(cx, |shell, w, cx| shell.fixture_close_browser(first_id, w, cx))?;
                 pause(cx, 200).await;
                 anyhow::ensure!(!first.read_with(cx, |b, _| b.fixture_native_visible()), "closed tab retained its native view");

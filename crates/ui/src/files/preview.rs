@@ -2551,17 +2551,19 @@ impl FilesSurface {
                         .font_family(theme.font_sans.clone())
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
-                        .role(gpui::Role::Button)
                         .aria_label(label)
-                        .tab_index(0)
-                        .focus_visible(crate::theme::focus_visible_ring)
                         .tooltip(crate::popover::text_tooltip(label))
                         .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                             window.prevent_default()
                         })
+                        // Without the file on this device there is nothing
+                        // to activate: no button role and no tab stop.
                         .when(local, |element| {
                             element
+                                .role(gpui::Role::Button)
+                                .tab_index(0)
+                                .focus_visible(crate::theme::focus_visible_ring)
                                 .cursor_pointer()
                                 .hover_wash("files-rendered-preview")
                                 .on_click(cx.listener(move |this, _, _, cx| {

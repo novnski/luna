@@ -1,13 +1,13 @@
-//! Files' Open rendered preview on a generated local HTML report (#12), in
+//! A generated local HTML report (#12) in a folder-scoped Browser tab, in
 //! native WebKit: the report renders with its own assets and subpages, its
-//! links cannot leave the report folder, even through a symlink, reopening
-//! reloads the same tab from disk, and ordinary tabs still refuse `file:`
-//! addresses. The header's Preview control and its event are owned by the
-//! headless shell test; this scenario enters at that event.
+//! links cannot leave the report folder, even through a symlink, opening it
+//! again reloads it from disk, and ordinary tabs still refuse `file:`
+//! addresses. Files' Preview control, its event and the shell's tab reuse
+//! are owned by the headless `rendered_preview_regressions` test; this
+//! scenario starts where they hand the document to the tab.
 use super::*;
 use gpui::{Entity, WindowHandle};
 use luna_ui::browser::model::LocalDocument;
-use luna_ui::files::{FilesEvent, FilesSurface};
 
 const REPORT: &str = "<!doctype html><meta charset=utf-8><title>{{title}}</title><style>body{margin:0;padding:28px;background:#f6f7f9;color:#1d2433;font:14px/1.5 system-ui}h1{font-size:21px;margin:0 0 14px}.row{display:flex;gap:10px;padding:10px 14px;margin:6px 0;border:1px solid #d9dde5;border-radius:8px;background:#fff}.pass{color:#18794e;font-weight:600}a{color:#2453b8}</style><h1>3 passed · 0 failed</h1><div class=row><span class=pass>✓</span>renders the landing page</div><div class=row><span class=pass>✓</span>opens the workspace cards</div><div class=row><span class=pass>✓</span>keeps history between pages</div><p><img id=chart src='data/chart.svg' alt='Duration chart'></p><p><a id=detail href='data/detail.html'>Open test details</a> · <a id=outside href='../outside.html'>Outside the report</a> · <a id=linked href='data/linked.html'>Linked outside</a></p>";
 
@@ -29,21 +29,8 @@ fn title(browser: &Entity<browser::BrowserSurface>, cx: &mut AsyncApp) -> String
     browser.read_with(cx, |b, _| b.page.title.clone())
 }
 
-/// What Files' Preview control emits for `path`.
-fn preview(
-    files: &Entity<FilesSurface>,
-    workspace: &std::path::Path,
-    path: &str,
-    cx: &mut AsyncApp,
-) -> anyhow::Result<()> {
-    let document = LocalDocument::in_workspace(workspace, path).map_err(anyhow::Error::msg)?;
-    files.update(cx, |_, cx| cx.emit(FilesEvent::OpenLocalDocument(document)));
-    Ok(())
-}
-
 pub(super) async fn exercise(
     window: WindowHandle<shell::Shell>,
-    state: Entity<state::AppState>,
     output: &std::path::Path,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<()> {
@@ -68,47 +55,18 @@ pub(super) async fn exercise(
         root.join("outside.html"),
         root.join("playwright-report/data/linked.html"),
     )?;
-    let document = url::Url::from_file_path(&index)
-        .map_err(|_| anyhow::anyhow!("report path is not a file URL"))?
-        .to_string();
+    let preview = LocalDocument::in_workspace(&root, "playwright-report/index.html")
+        .map_err(anyhow::Error::msg)?;
+    let document = preview.url().to_owned();
     let outside = url::Url::from_file_path(root.join("outside.html"))
         .map_err(|_| anyhow::anyhow!("outside path is not a file URL"))?
         .to_string();
-    state.update(cx, |s, cx| {
-        for chat in &mut s.chats {
-            if chat.id == "browser-fixture" {
-                chat.cwd = Some(root.to_string_lossy().into_owned());
-            }
-        }
-        cx.notify();
-    });
-    pause(cx, 200).await;
 
-    // The source opens in Files, whose header offers the rendered preview.
-    let files = window
-        .update(cx, |shell, w, cx| {
-            shell.fixture_open_file("playwright-report/index.html", w, cx)
-        })?
-        .ok_or_else(|| anyhow::anyhow!("the report did not open in Files"))?;
-    pause(cx, 1500).await;
-    capture(output, "browser-local-source")?;
-    preview(&files, &root, "playwright-report/index.html", cx)?;
-    let mut opened = None;
-    wait_until(
-        cx,
-        "Open rendered preview did not open a local tab",
-        5,
-        |cx| {
-            opened = window
-                .update(cx, |shell, _, cx| shell.fixture_active_browser(cx))
-                .ok()
-                .flatten()
-                .filter(|(_, b)| b.read_with(cx, |b, _| b.local_document().is_some()));
-            opened.is_some()
-        },
-    )
-    .await?;
-    let (report_id, report) = opened.unwrap();
+    let (report_id, report) =
+        window.update(cx, |shell, w, cx| shell.fixture_open_browser(None, w, cx))?;
+    window.update(cx, |_, w, cx| {
+        report.update(cx, |b, cx| b.open_local(preview.clone(), w, cx))
+    })?;
     anyhow::ensure!(
         report.read_with(cx, |b, _| b.page.url.as_deref() == Some(document.as_str())),
         "preview opened {:?}, not the report",
@@ -201,20 +159,15 @@ pub(super) async fn exercise(
         "address bar opened a file outside the report folder"
     );
 
-    // A regenerated report: Open rendered preview again reuses this tab and
-    // reloads the file from disk.
+    // A regenerated report: opening the document again reloads it from disk.
     std::fs::write(&index, REPORT.replace("{{title}}", "Updated report"))?;
-    preview(&files, &root, "playwright-report/index.html", cx)?;
+    window.update(cx, |_, w, cx| {
+        report.update(cx, |b, cx| b.open_local(preview.clone(), w, cx))
+    })?;
     wait_until(cx, "reopening did not reload the report tab", 15, |cx| {
         title(&report, cx) == "Updated report"
     })
     .await?;
-    anyhow::ensure!(
-        window
-            .update(cx, |shell, _, cx| shell.fixture_active_browser(cx))?
-            .is_some_and(|(id, _)| id == report_id),
-        "reopening the report opened a second tab"
-    );
 
     // Ordinary tabs keep refusing local files.
     let (web_id, web) =

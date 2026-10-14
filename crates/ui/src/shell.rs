@@ -21648,28 +21648,6 @@ impl Shell {
         self.add_browser_surface(url, window, cx);
         (self.browser_seq, self.browsers[&self.browser_seq].clone())
     }
-    /// Opens `path` in a Files editor tab for the active chat and returns
-    /// that tab's surface; its events reach the shell as a click would.
-    pub fn fixture_open_file(
-        &mut self,
-        path: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Entity<FilesSurface>> {
-        if !self.right_pane_open(cx) {
-            self.toggle_right_pane(cx);
-        }
-        self.add_file_surface(path.to_owned(), window, cx);
-        let key = (
-            self.panel_key(cx),
-            self.active_chat.clone(),
-            path.to_owned(),
-        );
-        self.file_surface_keys
-            .get(&key)
-            .and_then(|id| self.file_surfaces.get(id))
-            .cloned()
-    }
     pub fn fixture_select_browser(&mut self, id: u64, cx: &mut Context<Self>) {
         self.set_right_active(RightSurface::Browser(id), cx);
     }
