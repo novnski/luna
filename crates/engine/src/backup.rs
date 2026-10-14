@@ -2922,7 +2922,32 @@ fn available_space(path: &Path) -> Result<u64> {
         let info = unsafe { info.assume_init() };
         Ok(u64::from(info.f_bavail).saturating_mul(info.f_frsize))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        if path[..path.len() - 1].contains(&0) {
+            return Err(BackupError::Invalid("NUL in staging path".into()));
+        }
+        let mut available = 0u64;
+        // SAFETY: `path` is NUL-terminated and outlives the call; `available`
+        // is writable and the optional total counters are null.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                path.as_ptr(),
+                &mut available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // The caller's quota-aware figure, like statvfs's f_bavail.
+        Ok(available)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         Err(BackupError::Unsupported(

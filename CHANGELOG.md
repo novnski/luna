@@ -2,6 +2,11 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.1.2 — 2026-10-14
+
+- Searching Git history for a commit hash prefix now shows only that commit. Previously a short hash could also match unrelated commits whose hashes happened to contain the same characters in order.
+- Restore local data backups on Windows. Restore previously stopped with "free-space preflight is unavailable on this platform"; it now checks the disk's free space as it does on macOS and Linux.
+
 ## 0.1.1 — 2026-10-14
 
 - Git History finishes loading in a repository with no commits yet: it shows "No commits yet" instead of staying on "Loading history…", and the first commit appears on its own once it lands.

@@ -136,7 +136,9 @@ mod tests {
                     "side-chat-persistence-v1",
                     "chat-workbench-v1",
                     "context-transfer-v1",
-                    "task-work-v1"
+                    "task-work-v1",
+                    "remote-projections-v1",
+                    "remote-task-control-v1"
                 ],
             })
         );
