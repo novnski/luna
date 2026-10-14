@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.2.2 — 2026-10-14
+
+- Pair remote devices with `luna remote pair` on Windows. It previously stopped with "remote authority was published but durability is uncertain". Saved SSH launches, the local credential vault and sign-in session details no longer fail the same way on Windows.
+
 ## 0.2.1 — 2026-10-14
 
 - Expose the model picker to assistive technology. VoiceOver and other native accessibility clients now see the provider tabs, each model with its selected state, the favorite toggles, the Reasoning and Speed settings with their current values and choices, the Codex account choice and the Compact and Clear buttons, and can press each one by name. Provider tabs are also keyboard tab stops, and a screen reader can move through a long model list past the rows in view.

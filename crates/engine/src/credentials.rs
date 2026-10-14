@@ -960,7 +960,12 @@ fn write_atomic_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::fs::rename(&temp, path)?;
         #[cfg(unix)]
         std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-        std::fs::File::open(parent)?.sync_all()
+        // Windows cannot open a directory to sync it; the rename commits.
+        if cfg!(unix) {
+            std::fs::File::open(parent)?.sync_all()
+        } else {
+            Ok(())
+        }
     })();
     if outcome.is_err() {
         let _ = std::fs::remove_file(temp);

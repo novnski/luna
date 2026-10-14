@@ -865,7 +865,10 @@ fn write_owned(path: &Path, value: &OwnedLaunch) -> anyhow::Result<()> {
         std::io::Write::write_all(&mut file, b"\n")?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
-        File::open(parent)?.sync_all()?;
+        // Windows cannot open a directory to sync it; the rename commits.
+        if cfg!(unix) {
+            File::open(parent)?.sync_all()?;
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -876,7 +879,9 @@ fn write_owned(path: &Path, value: &OwnedLaunch) -> anyhow::Result<()> {
 
 fn clear_owned(path: &Path) -> anyhow::Result<()> {
     fs::remove_file(path)?;
-    if let Some(parent) = path.parent() {
+    if cfg!(unix)
+        && let Some(parent) = path.parent()
+    {
         File::open(parent)?.sync_all()?;
     }
     Ok(())

@@ -907,9 +907,12 @@ fn persist(path: &Path, state: &State) -> Result<bool, RpcError> {
         file.write_all(b"\n").map_err(storage_error)?;
         file.sync_all().map_err(storage_error)?;
         fs::rename(&temp, path).map_err(storage_error)?;
-        Ok(File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .is_ok())
+        // Windows cannot open a directory to sync it; there the rename is the
+        // commit point, as for the engine's other durable stores.
+        Ok(!cfg!(unix)
+            || File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .is_ok())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
