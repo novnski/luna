@@ -1,12 +1,12 @@
 # Pending task checkpoint
 
-Generated 2026-10-14T02:03:42+03:00.
+Generated 2026-10-14T06:14:21+03:00.
 This is a saved checkpoint. Run `python3 scripts/pending_tasks.py status` for live ownership.
 
-Active scope: **46.3% accepted**, **36/79 Done**.
+Active scope: **50.8% accepted**, **39/79 Done**.
 Coverage measures accepted criteria, not elapsed time or estimated effort.
 
-Next eligible: none
+Next eligible: IOS-02, CORE-13, CORE-14, IOS-01, ZI-03, CORE-16, CORE-17
 
 Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-pending-tasks`.
 
@@ -36,8 +36,8 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [CORE-10 — Extract Claude Code into a first-party provider package](extensible-core/README.md) | deferred | 0.0% | — |
 | [CORE-08 — Prove a new provider plugin without updating the app](extensible-core/README.md) | done | 100.0% | claude-team/CORE-08 (orchestrator d19437b2) |
 | [CORE-19 — Complete plugin updates, rollback, removal and safe mode](extensible-core/README.md) | done | 100.0% | claude-team/CORE-19 (orchestrator d19437b2) |
-| [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-11 (orchestrator d19437b2) |
-| [CORE-12 — Introduce native UI contribution and view-model contracts](extensible-core/README.md) | in_progress | 0.0% | claude-team/CORE-12 (orchestrator d19437b2) |
+| [CORE-11 — Extract OpenCode into a first-party provider package](extensible-core/README.md) | done | 100.0% | claude-team/CORE-11 (orchestrator d19437b2) |
+| [CORE-12 — Introduce native UI contribution and view-model contracts](extensible-core/README.md) | done | 100.0% | claude-team/CORE-12 (orchestrator d19437b2) |
 
 ## Provider access, effective tools and skills
 
@@ -135,7 +135,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [RM-01 — Build headed direct gateway and scoped host authority](control-this-mac/README.md) | done | 100.0% | codex |
 | [RM-02 — Deliver desktop Connections and native phone pairing](control-this-mac/README.md) | done | 100.0% | codex |
 | [RM-03 — Stream authoritative host tasks into one native client runtime](control-this-mac/README.md) | done | 100.0% | claude-team/RM-03 (orchestrator d19437b2) |
-| [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | in_progress | 0.0% | claude-team/RM-04 (orchestrator d19437b2) |
+| [RM-04 — Admit remote task commands and reconcile uncertain delivery](control-this-mac/README.md) | blocked | 50.0% | claude-team/RM-04 (orchestrator d19437b2) |
 
 ## Native iOS parity and release
 
@@ -155,7 +155,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | [IOS-13 — Select and deliver owned push, Live Activities and widgets](ios-parity/README.md) | deferred | 0.0% | — |
 | [IOS-14 — Assess expanded iOS parity and release readiness](ios-parity/README.md) | ready | 0.0% | — |
 | [IOS-00 — Establish the owned iOS SDK facade and migration build](ios-parity/README.md) | done | 100.0% | claude-team/IOS-00 (orchestrator d19437b2) |
-| [IOS-02 — Build adaptive phone and iPad shell and appearance](ios-parity/README.md) | in_progress | 0.0% | claude-team/IOS-02 (orchestrator d19437b2) |
+| [IOS-02 — Build adaptive phone and iPad shell and appearance](ios-parity/README.md) | paused | 0.0% | claude-team/IOS-02 (orchestrator d19437b2) |
 
 ## Real operations and local recurrence
 
@@ -163,7 +163,7 @@ Live coordination store: `/Users/iulian/workspace/code/personal/luna/.git/luna-p
 | --- | --- | --- | --- |
 | [SW-08 — Bind browser/native computer use to exact targets](luna-only-workflows/README.md) | ready | 0.0% | — |
 | [SW-04 — Certify Moralis evidence-to-draft and guarded action journey](luna-only-workflows/README.md) | done | 100.0% | claude-orchestrator d19437b2 |
-| [SW-13 — Certify local recurrence and host lifecycle](luna-only-workflows/README.md) | in_progress | 0.0% | claude-team/SW-13 (orchestrator d19437b2) |
+| [SW-13 — Certify local recurrence and host lifecycle](luna-only-workflows/README.md) | done | 100.0% | claude-team/SW-13 (orchestrator d19437b2) |
 
 ## Integrated acceptance and release verification
 
