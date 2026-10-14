@@ -101,7 +101,11 @@ if (( COUNT == 0 )); then
   echo "error: no architectures to build" >&2
   exit 64
 fi
-scripts/cargo.sh build --locked -p luna-mobile --bin uniffi-bindgen --features bindgen
+# The bindgen tool is a host binary whose dependencies compile C (SQLite).
+# cc-rs adds no sysroot for macOS, and Xcode puts its bare toolchain clang
+# ahead of the /usr/bin shims, so name the macOS SDK for this build only.
+SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+  scripts/cargo.sh build --locked -p luna-mobile --bin uniffi-bindgen --features bindgen
 
 STAGED="$OUT/libluna_mobile.a.partial"
 if (( COUNT == 1 )); then

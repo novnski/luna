@@ -4432,11 +4432,58 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.add_browser_tab(url, None, window, cx);
+    }
+
+    /// Open rendered preview from Files. This panel's tab already showing the
+    /// document comes forward and reloads it from disk (a regenerated report);
+    /// otherwise a new tab opens, scoped to the document's folder.
+    fn open_local_document(
+        &mut self,
+        document: crate::browser::model::LocalDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_chat.is_empty() {
+            return;
+        }
+        if !self.right_pane_open(cx) {
+            self.toggle_right_pane(cx);
+        }
+        let key = self.panel_key(cx);
+        let existing = self.right_tabs.get(&key).and_then(|tabs| {
+            tabs.iter().find_map(|surface| match surface {
+                RightSurface::Browser(id) => self
+                    .browsers
+                    .get(id)
+                    .filter(|browser| browser.read(cx).local_document() == Some(&document))
+                    .cloned()
+                    .map(|browser| (*id, browser)),
+                _ => None,
+            })
+        });
+        if let Some((id, browser)) = existing {
+            self.set_right_active(RightSurface::Browser(id), cx);
+            browser.update(cx, |browser, cx| browser.open_local(document, window, cx));
+        } else {
+            self.add_browser_tab(None, Some(document), window, cx);
+        }
+    }
+
+    fn add_browser_tab(
+        &mut self,
+        url: Option<String>,
+        local: Option<crate::browser::model::LocalDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.active_chat.is_empty() {
             return;
         }
         let key = self.panel_key(cx);
-        let remote = {
+        // A local document is a file on this device, whichever host runs
+        // the chat.
+        let remote = local.is_none() && {
             let state = self.state.read(cx);
             state.selected_chat_row().is_some_and(|chat| {
                 Some(chat.device_id.as_str()) != state.local_device_id.as_deref()
@@ -4447,7 +4494,9 @@ impl Shell {
         let browser = cx.new(|cx| {
             crate::browser::BrowserSurface::new(self.browser_context.clone(), remote, window, cx)
         });
-        if let Some(handle) = self.state.read(cx).engine().cloned() {
+        if local.is_none()
+            && let Some(handle) = self.state.read(cx).engine().cloned()
+        {
             let chat_id = self.active_chat.clone();
             browser.update(cx, |browser, cx| {
                 browser.watch_previews(handle, chat_id, cx)
@@ -4475,7 +4524,9 @@ impl Shell {
         self.push_right_tab(&key, RightSurface::Browser(id));
         self.set_right_active(RightSurface::Browser(id), cx);
         browser.update(cx, |browser, cx| {
-            if let Some(url) = url {
+            if let Some(document) = local {
+                browser.open_local(document, window, cx);
+            } else if let Some(url) = url {
                 browser.navigate(&url, window, cx);
             } else {
                 browser.focus_address(window, cx);
@@ -4592,6 +4643,9 @@ impl Shell {
                             cx.open_url(&url);
                         }
                     }
+                    FilesEvent::OpenLocalDocument(document) => {
+                        this.open_local_document(document.clone(), window, cx)
+                    }
                     FilesEvent::TitleChanged => cx.notify(),
                     FilesEvent::FileRenamed { .. } => cx.notify(),
                     FilesEvent::WordWrapChanged(word_wrap) => {
@@ -4678,6 +4732,9 @@ impl Shell {
                     {
                         cx.open_url(&url);
                     }
+                }
+                FilesEvent::OpenLocalDocument(document) => {
+                    this.open_local_document(document.clone(), window, cx)
                 }
                 FilesEvent::TitleChanged => cx.notify(),
                 FilesEvent::FileRenamed { old_path, new_path } => this.rename_file_surface(
@@ -21628,6 +21685,159 @@ impl Shell {
 #[cfg(all(test, unix))]
 #[path = "files/tool_file_open_e2e.rs"]
 mod tool_file_open_e2e;
+
+/// #12: Files' Preview control, clicked where it is painted, opens a project
+/// HTML file in one folder-scoped Browser tab and reuses that tab; a project
+/// on another device offers no preview. What the native page may load is the
+/// browser fixture's (`examples/browser-fixture/local_document.rs`).
+#[cfg(all(test, unix))]
+mod rendered_preview_regressions {
+    use super::*;
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+
+    const THIS_MAC: &str = "this-mac";
+    const LOCAL_CHAT: &str = "preview-local";
+    const REMOTE_CHAT: &str = "preview-remote";
+    const REPORT: &str = "report/index.html";
+
+    /// The shell's active file tab, painted so its header can be clicked.
+    struct Host {
+        shell: Entity<Shell>,
+        _observe: Subscription,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let shell = self.shell.read(cx);
+            let file = match shell.resolved_right_active(cx) {
+                RightSurface::File(id) => shell.file_surfaces.get(&id).cloned(),
+                _ => None,
+            };
+            div()
+                .size_full()
+                .children(file.map(|file| div().size_full().child(file)))
+        }
+    }
+
+    fn chat(id: &str, device: &str, cwd: &std::path::Path) -> luna_proto::Chat {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "deviceId": device, "cwd": cwd.to_string_lossy(),
+            "title": id, "archived": false, "createdAt": "2026-10-14T00:00:00Z",
+        }))
+        .unwrap()
+    }
+
+    fn settle(cx: &mut VisualTestContext) {
+        for _ in 0..4 {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear());
+        }
+    }
+
+    /// Opens the report in `chat`'s Files tab and clicks its Preview control.
+    fn click_preview(shell: &Entity<Shell>, cx: &mut VisualTestContext, chat: &str) {
+        shell.update_in(cx, |shell, window, cx| {
+            shell.active_chat = chat.into();
+            shell
+                .state
+                .update(cx, |state, _| state.selected_chat = Some(chat.into()));
+            shell.add_file_surface(REPORT.into(), window, cx);
+        });
+        settle(cx);
+        let at = cx
+            .debug_bounds("files-rendered-preview")
+            .expect("an HTML file's header offers Preview")
+            .center();
+        cx.simulate_click(at, gpui::Modifiers::default());
+        settle(cx);
+    }
+
+    #[gpui::test]
+    fn preview_opens_and_reuses_one_folder_scoped_tab(cx: &mut TestAppContext) {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("report")).unwrap();
+        std::fs::write(root.join(REPORT), "<title>Report</title>").unwrap();
+        let data_dir = data.path().to_path_buf();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+            settings::init(settings::UiSettings::default(), data_dir.clone(), cx);
+            crate::motion::set_reduced_motion(cx, true);
+        });
+        let chats = vec![
+            chat(LOCAL_CHAT, THIS_MAC, &root),
+            chat(REMOTE_CHAT, "other-mac", &root),
+        ];
+        let (host, cx) = cx.add_window_view(move |_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    state.local_device_id = Some(THIS_MAC.into());
+                    state.chats = chats;
+                    state
+                });
+                Shell::new(
+                    state,
+                    EngineBootConfig {
+                        data_dir,
+                        ipc_port: 0,
+                        edge_url: "http://127.0.0.1:1".into(),
+                        edge_token: None,
+                        org_id: None,
+                        workos_client_id: None,
+                        default_harness: luna_proto::HarnessId::Mock,
+                    },
+                    cx,
+                )
+            });
+            let observe = cx.observe(&shell, |_, _, cx| cx.notify());
+            Host {
+                shell,
+                _observe: observe,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        let report = url::Url::from_file_path(root.join(REPORT))
+            .unwrap()
+            .to_string();
+        let active_browser = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, cx| match shell.resolved_right_active(cx) {
+                RightSurface::Browser(id) => Some((id, shell.browsers.len())),
+                _ => None,
+            })
+        };
+
+        click_preview(&shell, cx, LOCAL_CHAT);
+        let (id, count) = active_browser(&shell, cx).expect("Preview opened no Browser tab");
+        assert_eq!(count, 1);
+        let browser = shell.read_with(cx, |shell, _| shell.browsers[&id].clone());
+        browser.read_with(cx, |browser, _| {
+            assert_eq!(
+                browser.local_document().map(|document| document.url()),
+                Some(report.as_str()),
+                "the tab is scoped to the report's folder"
+            );
+            assert_eq!(browser.page.url.as_deref(), Some(report.as_str()));
+        });
+
+        // Preview again from the source tab brings the same tab back.
+        click_preview(&shell, cx, LOCAL_CHAT);
+        assert_eq!(
+            active_browser(&shell, cx),
+            Some((id, 1)),
+            "Preview again opened a second tab"
+        );
+
+        // The same file in a project on another device is not on this
+        // machine: the control stays inert and the source stays in front.
+        click_preview(&shell, cx, REMOTE_CHAT);
+        assert_eq!(active_browser(&shell, cx), None);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.browsers.len()), 1);
+    }
+}
 
 #[cfg(test)]
 mod right_tab_mouse_regressions {

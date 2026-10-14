@@ -1798,15 +1798,14 @@ fn fuzzy_score(query: &str, candidate: &str) -> Option<usize> {
 /// Match a history commit using the same semantics as the history UI.
 ///
 /// This remains the shared entry point so RPC filtering and client-side
-/// filtering cannot disagree about Unicode case normalization.
+/// filtering cannot disagree about Unicode case normalization. Each query term
+/// must be a SHA prefix or fuzzily match the subject. SHAs are never fuzzy
+/// candidates: a short hex query is a subsequence of many unrelated SHAs.
 pub fn git_history_matches(query: &str, commit: &GitHistoryCommit) -> bool {
-    let query = query.trim();
-    if query.is_empty() {
-        return true;
-    }
-    let normalized = query.to_ascii_lowercase();
-    commit.sha.to_ascii_lowercase().starts_with(&normalized)
-        || fuzzy_score(query, &format!("{} {}", commit.sha, commit.subject)).is_some()
+    let sha = commit.sha.to_ascii_lowercase();
+    query.split_whitespace().all(|term| {
+        sha.starts_with(&term.to_ascii_lowercase()) || fuzzy_score(term, &commit.subject).is_some()
+    })
 }
 
 /// Contract hidden commits to their nearest visible ancestors. Search results

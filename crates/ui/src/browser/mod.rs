@@ -17,7 +17,7 @@ use crate::composer::{ComposerInput, ComposerInputEvent};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
 };
-use model::{PageState, Presentation};
+use model::{LocalDocument, PageState, Presentation};
 gpui::actions!(
     browser,
     [Reload, FocusAddress, NewTab, CloseTab, Back, Forward]
@@ -94,6 +94,8 @@ pub struct BrowserSurface {
     address_edited: bool,
     validation: Option<String>,
     remote: bool,
+    /// Set once, by Open rendered preview: this tab's only local folder.
+    local: Option<LocalDocument>,
     previews: luna_proto::PreviewSnapshot,
     previews_loading: bool,
     /// The engine serving this chat has no preview discovery (an older or
@@ -175,6 +177,7 @@ impl BrowserSurface {
             address_edited: false,
             validation: None,
             remote,
+            local: None,
             previews: luna_proto::PreviewSnapshot::default(),
             previews_loading: true,
             previews_unsupported: false,
@@ -332,7 +335,17 @@ impl BrowserSurface {
     }
 
     pub fn navigate(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let url = match model::normalize_address(input) {
+        // A local document's tab may revisit its own folder (Enter on the
+        // address, a pasted subpage); every other address is a website.
+        let url = match self
+            .local
+            .as_ref()
+            .and_then(|document| document.page(input.trim()))
+        {
+            Some(page) => Ok(page),
+            None => model::normalize_address(input),
+        };
+        let url = match url {
             Ok(url) => url,
             Err(message) => {
                 self.validation = Some(message.into());
@@ -340,6 +353,31 @@ impl BrowserSurface {
                 return;
             }
         };
+        self.load(url, window, cx);
+    }
+
+    pub fn local_document(&self) -> Option<&LocalDocument> {
+        self.local.as_ref()
+    }
+
+    /// Render a local HTML file in this tab, or reload it from disk when the
+    /// tab already shows it. The folder scope is fixed for the tab's
+    /// lifetime: it can still open websites, never another local folder.
+    pub fn open_local(
+        &mut self,
+        document: LocalDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.local.as_ref() != Some(&document) && self.page.url.is_some() {
+            return;
+        }
+        let url = document.url().to_owned();
+        self.local = Some(document);
+        self.load(url, window, cx);
+    }
+
+    fn load(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         self.validation = None;
         self.address
             .update(cx, |input, cx| input.set_text(url.clone(), cx));
@@ -358,12 +396,17 @@ impl BrowserSurface {
             let result = if let Some(native) = &self.native {
                 native.load(&url)
             } else {
-                native::NativePage::new(window, &self.context.data, self.native_tx.clone())
-                    .map(|mut native| {
-                        native.present(self.presentation);
-                        self.native = Some(native);
-                    })
-                    .and_then(|_| self.native.as_ref().unwrap().load(&url))
+                native::NativePage::new(
+                    window,
+                    &self.context.data,
+                    self.native_tx.clone(),
+                    self.local.clone(),
+                )
+                .map(|mut native| {
+                    native.present(self.presentation);
+                    self.native = Some(native);
+                })
+                .and_then(|_| self.native.as_ref().unwrap().load(&url))
             };
             self.page.loading = result.is_ok();
             if let Err(error) = result {
@@ -403,12 +446,13 @@ impl BrowserSurface {
     }
 
     fn open_external(&self, cx: &mut Context<Self>) {
-        if let Some(url) = self
-            .page
-            .url
-            .as_deref()
-            .filter(|url| model::allowed_navigation(url))
-        {
+        if let Some(url) = self.page.url.as_deref().filter(|url| {
+            model::allowed_navigation(url)
+                || self
+                    .local
+                    .as_ref()
+                    .is_some_and(|document| document.allows(url))
+        }) {
             cx.open_url(url);
         }
     }

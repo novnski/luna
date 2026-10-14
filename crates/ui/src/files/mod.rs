@@ -148,6 +148,9 @@ pub enum FilesEvent {
         target: text_search::TextNavigationTarget,
     },
     OpenWebLink(crate::markdown::render::LinkActivation),
+    /// Open rendered preview: a local HTML file, rendered in a Browser tab
+    /// scoped to its folder, beside the source editor.
+    OpenLocalDocument(crate::browser::model::LocalDocument),
     TitleChanged,
     FileRenamed {
         old_path: String,
