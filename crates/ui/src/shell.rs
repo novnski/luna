@@ -21648,6 +21648,25 @@ impl Shell {
         self.add_browser_surface(url, window, cx);
         (self.browser_seq, self.browsers[&self.browser_seq].clone())
     }
+    /// Files' Open rendered preview on `path`, from its editor tab for the
+    /// active chat. The Browser tab opens when the Files event is delivered.
+    pub fn fixture_open_rendered_preview(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_file_surface(path.to_owned(), window, cx);
+        let key = (self.panel_key(cx), self.active_chat.clone(), path.to_owned());
+        if let Some(files) = self
+            .file_surface_keys
+            .get(&key)
+            .and_then(|id| self.file_surfaces.get(id))
+            .cloned()
+        {
+            files.update(cx, |files, cx| files.fixture_open_rendered_preview(path, cx));
+        }
+    }
     pub fn fixture_select_browser(&mut self, id: u64, cx: &mut Context<Self>) {
         self.set_right_active(RightSurface::Browser(id), cx);
     }

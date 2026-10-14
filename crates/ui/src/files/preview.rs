@@ -2701,6 +2701,12 @@ impl FilesSurface {
         cx.notify();
     }
 
+    /// The header's Open rendered preview, for the native browser fixture.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_open_rendered_preview(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.open_rendered_preview(path, cx);
+    }
+
     fn markdown_web_link_handler(cx: &Context<Self>) -> super::markdown_preview::WebLinkHandler {
         let owner = cx.weak_entity();
         Rc::new(move |activation, cx| {

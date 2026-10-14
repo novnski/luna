@@ -266,9 +266,105 @@ mod tests {
     fn tab_labels_fall_back_to_host_then_browser() {
         let mut page = PageState::default();
         assert_eq!(page.label(), "Browser");
+        page.url = Some("file:///work/report/index.html#?testId=1".into());
+        assert_eq!(page.label(), "index.html");
         page.url = Some("http://localhost:3000/path".into());
         assert_eq!(page.label(), "localhost");
         page.title = "Local preview".into();
         assert_eq!(page.label(), "Local preview");
+    }
+
+    /// Open rendered preview (#12): a report reaches its own pages and
+    /// assets; sibling folders, parents, escapes, other hosts and schemes do
+    /// not, and ordinary tabs still refuse every `file:` address.
+    #[cfg(unix)]
+    #[test]
+    fn local_documents_stay_inside_their_folder() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let secret = elsewhere.path().canonicalize().unwrap().join("secret.html");
+        std::fs::create_dir_all(root.join("report/data")).unwrap();
+        std::fs::create_dir_all(root.join("report-old")).unwrap();
+        for file in [
+            "report/index.html",
+            "report/data/attachment.html",
+            "report-old/index.html",
+            "outside.html",
+            "notes.txt",
+        ] {
+            std::fs::write(root.join(file), "<!doctype html>").unwrap();
+        }
+        std::fs::write(&secret, "<!doctype html>").unwrap();
+        std::os::unix::fs::symlink(&secret, root.join("escape.html")).unwrap();
+        std::os::unix::fs::symlink(root.join("report/index.html"), root.join("latest.html"))
+            .unwrap();
+
+        let document = LocalDocument::in_workspace(&root, "report/index.html").unwrap();
+        let page = |path: &str| {
+            format!(
+                "{}{path}",
+                url::Url::from_directory_path(&root).unwrap().as_str()
+            )
+        };
+        assert_eq!(document.url(), page("report/index.html"));
+        assert_eq!(document.folder_name(), "report");
+        assert_eq!(
+            LocalDocument::in_workspace(&root, "latest.html"),
+            Ok(document.clone()),
+            "an in-project symlink previews its real file and folder"
+        );
+        for (address, allowed) in [
+            (page("report/index.html#?testId=1"), true),
+            (page("report/index.html?q=a"), true),
+            (page("report/data/attachment.html"), true),
+            (page("report/data/not-yet-written.png"), true),
+            (
+                format!(
+                    "file://localhost{}",
+                    root.join("report/index.html").display()
+                ),
+                true,
+            ),
+            (page("report/"), false),
+            (page("report-old/index.html"), false),
+            (page("outside.html"), false),
+            (page("report/../outside.html"), false),
+            (page("report/%2E%2E/outside.html"), false),
+            (page("report/data%2F..%2F..%2Foutside.html"), false),
+            (url::Url::from_file_path(&secret).unwrap().into(), false),
+            (
+                format!(
+                    "file://example.com{}",
+                    root.join("report/index.html").display()
+                ),
+                false,
+            ),
+            ("https://example.com/report/index.html".into(), false),
+            ("javascript:alert(1)".into(), false),
+        ] {
+            assert_eq!(document.allows(&address), allowed, "{address}");
+        }
+        for relative in [
+            "missing.html",
+            "report",
+            "notes.txt",
+            "escape.html",
+            secret.to_str().unwrap(),
+        ] {
+            assert!(
+                LocalDocument::in_workspace(&root, relative).is_err(),
+                "{relative}"
+            );
+        }
+        assert!(
+            LocalDocument::in_workspace(&root.join("report"), "../outside.html").is_err(),
+            "a Files path cannot climb out of its project"
+        );
+        assert_eq!(
+            normalize_address(document.url()),
+            Err(LOCAL_FILE_ADDRESS),
+            "ordinary tabs point local files to Files instead of loading them"
+        );
     }
 }
