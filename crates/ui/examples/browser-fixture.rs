@@ -1,6 +1,9 @@
 #[cfg(target_os = "linux")]
 #[path = "browser-fixture/linux.rs"]
 mod linux;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "browser-fixture/local_document.rs"]
+mod local_document;
 #[path = "browser-fixture/transcript_links.rs"]
 mod transcript_links;
 // Real shell + native WebKit smoke test and screenshot fixture. Synthetic
@@ -521,10 +524,12 @@ fn main() -> anyhow::Result<()> {
                 let before = first.read_with(cx, |b, _| b.page.url.clone());
                 window.update(cx, |_, w, cx| first.update(cx, |b, cx| b.navigate("javascript:alert(1)", w, cx)))?;
                 anyhow::ensure!(first.read_with(cx, |b, _| b.page.url == before), "unsupported address navigated");
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                local_document::exercise(window, state.clone(), &output, cx).await?;
                 window.update(cx, |shell, w, cx| shell.fixture_close_browser(first_id, w, cx))?;
                 pause(cx, 200).await;
                 anyhow::ensure!(!first.read_with(cx, |b, _| b.fixture_native_visible()), "closed tab retained its native view");
-                std::fs::write(output.join("result.txt"), "PASS: real shell browser fixture; address rejection, tab switching/close, overlays, resizing, takeover and appearance. On macOS and Linux: live DOM navigation, history, same-document state, native visibility, rapid hover/tooltip focus and hit testing, overlay outside-click isolation/restoration, live resize/CSS reflow/native drag hit testing, interrupted sidebar clipping, frosted/light/opaque backdrop cleanup, and load failure.\n")?;
+                std::fs::write(output.join("result.txt"), "PASS: real shell browser fixture; address rejection, tab switching/close, overlays, resizing, takeover and appearance. On macOS and Linux: live DOM navigation, history, same-document state, native visibility, rapid hover/tooltip focus and hit testing, overlay outside-click isolation/restoration, live resize/CSS reflow/native drag hit testing, interrupted sidebar clipping, frosted/light/opaque backdrop cleanup, load failure, and Open rendered preview of a local HTML report scoped to its folder.\n")?;
                 Ok(())
             }.await;
             if let Err(error) = run { eprintln!("Browser fixture failed: {error:#}"); *result.lock().unwrap() = Some(error.to_string()); }
