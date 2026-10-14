@@ -829,6 +829,17 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
         || diag(&core, &[&parent], &project),
     )
     .await;
+    // The terminal error is shown once: a separate Error event repeating the
+    // Done's error would fold into a second, identical error card.
+    let hold_errors = entries(&core, &parent)
+        .iter()
+        .flat_map(|entry| &entry.parts)
+        .filter(|part| {
+            matches!(part, MessagePart::Error { message, .. }
+                if message.starts_with("Claude held the report from Held child"))
+        })
+        .count();
+    assert_eq!(hold_errors, 1, "{}", diag(&core, &[&parent], &project));
     assert_eq!(
         lines_with(&fake_log(&project), &format!("luna-child:{held_child}")).len(),
         1
