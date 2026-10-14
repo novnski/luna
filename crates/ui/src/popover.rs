@@ -346,6 +346,30 @@ pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     }
 }
 
+/// How a warning notice paints inside a [`modal`] card.
+pub struct ModalWarning {
+    pub wash: gpui::Hsla,
+    pub border: gpui::Hsla,
+    pub text: gpui::Hsla,
+}
+
+/// A faint amber wash with `warning_muted` copy floored where it is painted:
+/// on the wash over the card's [`surface_bg`] and the modal scrim. A light
+/// card shows the scrim through its translucent plate, darker than any
+/// reading surface, so flooring on the wash alone is not enough.
+pub fn modal_warning(theme: &Theme) -> ModalWarning {
+    let wash = theme.warning.opacity(0.08);
+    ModalWarning {
+        wash,
+        border: theme.warning.opacity(0.2),
+        text: theme.readable_on_stacks(
+            theme.warning_muted,
+            &[&[scrim_alpha(MODAL_SCRIM), surface_bg(theme), wash]],
+            crate::theme::TEXT_CONTRAST_TARGET,
+        ),
+    }
+}
+
 /// The shared card for every tooltip and rich hover card: an opaque
 /// [`Theme::tooltip_surface`] fill (never translucent, never frosted), a
 /// strong hairline and a soft shadow. Content sets its own padding/width.

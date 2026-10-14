@@ -932,9 +932,7 @@ fn meta_text(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
 /// A warning sits on a faint amber wash, like the Board card's attention
 /// line. `warning_muted` is a text tone: painted as the plate it put body
 /// text on bright amber-200 in dark appearance (issue #20) and on dark
-/// amber-800 in light. Its copy is floored where it is painted: on the wash
-/// over the modal card's translucent plate and scrim, which leave a light
-/// card darker than any reading surface.
+/// amber-800 in light.
 fn notice(theme: &Theme, text: impl Into<SharedString>, warning: bool) -> gpui::Div {
     let notice = div()
         .px(ui_rems(10.0))
@@ -943,21 +941,12 @@ fn notice(theme: &Theme, text: impl Into<SharedString>, warning: bool) -> gpui::
         .text_size(ui_rems(12.0))
         .child(text.into());
     if warning {
-        let wash = theme.warning.opacity(0.08);
-        let painted = [
-            crate::theme::scrim(crate::popover::MODAL_SCRIM),
-            crate::popover::surface_bg(theme),
-            wash,
-        ];
+        let paint = crate::popover::modal_warning(theme);
         notice
             .border_1()
-            .border_color(theme.warning.opacity(0.2))
-            .bg(wash)
-            .text_color(theme.readable_on_stacks(
-                theme.warning_muted,
-                &[&painted],
-                crate::theme::TEXT_CONTRAST_TARGET,
-            ))
+            .border_color(paint.border)
+            .bg(paint.wash)
+            .text_color(paint.text)
     } else {
         notice.bg(theme.element_hover).text_color(theme.text_muted)
     }

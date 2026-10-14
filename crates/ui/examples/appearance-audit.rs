@@ -150,6 +150,7 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             canvas,
         ),
     );
+    let modal_warning = popover::modal_warning(&popup);
     // The composer pill: the frosted sidebar tint, or the opaque input plate,
     // over the canvas it floats on (composer.rs `composer_surface`).
     let pill = if theme.is_frost() {
@@ -1022,20 +1023,14 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             ),
             flat(theme.warning.opacity(0.055), canvas),
         ),
+        // The production paint of the Board GitHub picker's warnings, on
+        // the card plate composited here rather than the helper's floor.
         p(
             "status",
             "GitHub import warning (Board)",
             Kind::Text,
-            popup.readable_on_stacks(
-                popup.warning_muted,
-                &[&[
-                    theme::scrim(popover::MODAL_SCRIM),
-                    popover::surface_bg(&popup),
-                    popup.warning.opacity(0.08),
-                ]],
-                theme::TEXT_CONTRAST_TARGET,
-            ),
-            flat(popup.warning.opacity(0.08), modal_card),
+            modal_warning.text,
+            flat(modal_warning.wash, modal_card),
         ),
         p(
             "status",
