@@ -177,23 +177,40 @@ def launch(app):
     preflight_apps()
     existing = [pid for pid, candidate in apps() if candidate == app]
     if existing:
-        if len(existing) != 1 or port_owner(port) != existing:
+        owners = port_owner(port)
+        if len(existing) != 1 or (owners and owners != existing):
             raise ValueError("running app does not own its expected IPC listener")
-        return existing[0]
-    if port_owner(port):
-        raise ValueError(f"IPC port {port} is occupied; no app was launched")
-    args = ["open", "-g", "-n"]
-    for key, value in env.items():
-        args += ["--env", f"{key}={value}"]
-    args.append(str(app))
-    run(*args)
+    else:
+        if port_owner(port):
+            raise ValueError(f"IPC port {port} is occupied; no app was launched")
+        args = ["open", "-g", "-n"]
+        for key, value in env.items():
+            args += ["--env", f"{key}={value}"]
+        args.append(str(app))
+        run(*args)
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         pids = [pid for pid, candidate in apps() if candidate == app]
         if len(pids) == 1 and port_owner(port) == pids:
-            return pids[0]
+            # A PID alone (or an accepting socket) is not a ready engine.
+            # The ordinary CLI proves the listener owns this data root too.
+            try:
+                probe = subprocess.run(
+                    [str(app / "Contents/MacOS/luna"), "inspect", "--json", "status"],
+                    env=dict(os.environ, **env),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if probe.returncode == 0 and json.loads(probe.stdout)["data"]["ready"]:
+                    return pids[0]
+            except (subprocess.TimeoutExpired, ValueError, KeyError):
+                pass
         time.sleep(1)
-    raise ValueError(f"{app.name} did not establish its process and IPC listener")
+    raise ValueError(
+        f"{app.name} did not establish its process, IPC listener, and ready engine"
+    )
 
 
 def build_alpha(update):
@@ -485,6 +502,13 @@ def main():
                 env=environment,
                 check=False,
             )
+            if result.returncode == 0:
+                with app_lock():
+                    print(
+                        json.dumps(
+                            {"bundle": str(DEV), "pid": launch(DEV), "ready": True}
+                        )
+                    )
             raise SystemExit(result.returncode)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"LUNA app workflow: {error}\n")

@@ -6,5 +6,6 @@ User-visible changes follow [Semantic Versioning](https://semver.org/) and the [
 
 - Start LUNA's own initial-development version line instead of the inherited `0.2.73` numbering. Preserve independently versioned SDK/API/schema contracts and existing user data.
 - Add an explicitly promoted LUNA Alpha snapshot for daily use, isolated from development app refreshes and data.
+- Wait for engine readiness when switching apps, so the first CLI/RPC read after a successful switch can connect.
 - Add consistent version-bump tooling, agent guidance, and checks before release builds. Initial `0.x` GitHub releases are prereleases; public publishing remains an explicit action.
 - Bundle the extension host and OpenCode provider worker with desktop release packages.
