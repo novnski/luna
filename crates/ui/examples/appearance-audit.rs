@@ -139,6 +139,15 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
     let card = flat(theme.card_glass_bg(), chrome);
     let dialog = flat(theme.surface_dialog, flat(theme.scrim(), chrome));
     let popup = theme.for_popup();
+    // A modal picker or dialog card (`popover::surface_bg`) over the
+    // `popover::modal` scrim (0.35 of the dark scrim) on the canvas.
+    let modal_card = flat(
+        popover::surface_bg(&popup),
+        flat(
+            theme.scrim().opacity(0.35 / theme::SCRIM_ALPHA_DARK),
+            canvas,
+        ),
+    );
     // The composer pill: the frosted sidebar tint, or the opaque input plate,
     // over the canvas it floats on (composer.rs `composer_surface`).
     let pill = if theme.is_frost() {
@@ -1010,6 +1019,13 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
                 theme::TEXT_CONTRAST_TARGET,
             ),
             flat(theme.warning.opacity(0.055), canvas),
+        ),
+        p(
+            "status",
+            "GitHub import warning (Board)",
+            Kind::Text,
+            popup.text,
+            flat(popup.warning_muted, modal_card),
         ),
         p(
             "status",

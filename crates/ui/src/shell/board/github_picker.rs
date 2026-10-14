@@ -929,23 +929,31 @@ fn meta_text(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
         .child(text.into())
 }
 
+/// A warning sits on a faint amber wash with its copy floored on that wash,
+/// like the Board card's attention line. `warning_muted` is a text tone:
+/// painted as the plate it put body text on bright amber-200 in dark
+/// appearance (issue #20) and on dark amber-800 in light.
 fn notice(theme: &Theme, text: impl Into<SharedString>, warning: bool) -> gpui::Div {
-    div()
+    let notice = div()
         .px(ui_rems(10.0))
         .py(ui_rems(6.0))
         .rounded(px(8.0))
-        .bg(if warning {
-            theme.warning_muted
-        } else {
-            theme.element_hover
-        })
         .text_size(ui_rems(12.0))
-        .text_color(if warning {
-            theme.text
-        } else {
-            theme.text_muted
-        })
-        .child(text.into())
+        .child(text.into());
+    if warning {
+        let wash = theme.warning.opacity(0.08);
+        notice
+            .border_1()
+            .border_color(theme.warning.opacity(0.2))
+            .bg(wash)
+            .text_color(theme.readable_on(
+                theme.warning_muted,
+                wash,
+                crate::theme::TEXT_CONTRAST_TARGET,
+            ))
+    } else {
+        notice.bg(theme.element_hover).text_color(theme.text_muted)
+    }
 }
 
 impl GitHubIssuePicker {
