@@ -465,6 +465,12 @@ impl Render for BrowserSurface {
         // the field (audit SS-21); a thin accent line rides the bottom edge
         // while the page loads.
         let loading = self.page.loading;
+        let local_page = self
+            .local
+            .as_ref()
+            .zip(self.page.url.as_deref())
+            .filter(|(document, url)| document.allows(url))
+            .map(|(document, _)| document.folder_name());
         let address = surface_chrome::input()
             .id("browser-address")
             .relative()
@@ -498,10 +504,14 @@ impl Render for BrowserSurface {
                 }),
             )
             .child(
-                icons::icon(icons::GLOBE)
-                    .size(crate::typography::ui_rems(12.0))
-                    .flex_none()
-                    .text_color(theme.text_faint),
+                icons::icon(if local_page.is_some() {
+                    icons::DOCUMENT
+                } else {
+                    icons::GLOBE
+                })
+                .size(crate::typography::ui_rems(12.0))
+                .flex_none()
+                .text_color(theme.text_faint),
             )
             .child(
                 div()
@@ -688,6 +698,9 @@ impl Render for BrowserSurface {
             .when(remote_loopback, |el| el.child(div().px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(8.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
+            .when_some(local_page, |el, folder| el.child(div().id("browser-local-scope").px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(6.0)).border_b_1().border_color(theme.border)
+                .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted).truncate()
+                .child(format!("Local file preview. Only files in “{folder}” can load here."))))
             .child(body)
             .when(external, |el| el.child(div().h(crate::typography::ui_rems(26.0)).px(crate::typography::ui_rems(10.0)).flex().items_center().gap(crate::typography::ui_rems(5.0)).border_t_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_faint)

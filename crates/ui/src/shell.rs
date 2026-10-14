@@ -4432,11 +4432,58 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.add_browser_tab(url, None, window, cx);
+    }
+
+    /// Open rendered preview from Files. This panel's tab already showing the
+    /// document comes forward and reloads it from disk (a regenerated report);
+    /// otherwise a new tab opens, scoped to the document's folder.
+    fn open_local_document(
+        &mut self,
+        document: crate::browser::model::LocalDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_chat.is_empty() {
+            return;
+        }
+        if !self.right_pane_open(cx) {
+            self.toggle_right_pane(cx);
+        }
+        let key = self.panel_key(cx);
+        let existing = self.right_tabs.get(&key).and_then(|tabs| {
+            tabs.iter().find_map(|surface| match surface {
+                RightSurface::Browser(id) => self
+                    .browsers
+                    .get(id)
+                    .filter(|browser| browser.read(cx).local_document() == Some(&document))
+                    .cloned()
+                    .map(|browser| (*id, browser)),
+                _ => None,
+            })
+        });
+        if let Some((id, browser)) = existing {
+            self.set_right_active(RightSurface::Browser(id), cx);
+            browser.update(cx, |browser, cx| browser.open_local(document, window, cx));
+        } else {
+            self.add_browser_tab(None, Some(document), window, cx);
+        }
+    }
+
+    fn add_browser_tab(
+        &mut self,
+        url: Option<String>,
+        local: Option<crate::browser::model::LocalDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.active_chat.is_empty() {
             return;
         }
         let key = self.panel_key(cx);
-        let remote = {
+        // A local document is a file on this device, whichever host runs
+        // the chat.
+        let remote = local.is_none() && {
             let state = self.state.read(cx);
             state.selected_chat_row().is_some_and(|chat| {
                 Some(chat.device_id.as_str()) != state.local_device_id.as_deref()
@@ -4447,7 +4494,9 @@ impl Shell {
         let browser = cx.new(|cx| {
             crate::browser::BrowserSurface::new(self.browser_context.clone(), remote, window, cx)
         });
-        if let Some(handle) = self.state.read(cx).engine().cloned() {
+        if local.is_none()
+            && let Some(handle) = self.state.read(cx).engine().cloned()
+        {
             let chat_id = self.active_chat.clone();
             browser.update(cx, |browser, cx| {
                 browser.watch_previews(handle, chat_id, cx)
@@ -4475,7 +4524,9 @@ impl Shell {
         self.push_right_tab(&key, RightSurface::Browser(id));
         self.set_right_active(RightSurface::Browser(id), cx);
         browser.update(cx, |browser, cx| {
-            if let Some(url) = url {
+            if let Some(document) = local {
+                browser.open_local(document, window, cx);
+            } else if let Some(url) = url {
                 browser.navigate(&url, window, cx);
             } else {
                 browser.focus_address(window, cx);
@@ -4592,6 +4643,9 @@ impl Shell {
                             cx.open_url(&url);
                         }
                     }
+                    FilesEvent::OpenLocalDocument(document) => {
+                        this.open_local_document(document.clone(), window, cx)
+                    }
                     FilesEvent::TitleChanged => cx.notify(),
                     FilesEvent::FileRenamed { .. } => cx.notify(),
                     FilesEvent::WordWrapChanged(word_wrap) => {
@@ -4678,6 +4732,9 @@ impl Shell {
                     {
                         cx.open_url(&url);
                     }
+                }
+                FilesEvent::OpenLocalDocument(document) => {
+                    this.open_local_document(document.clone(), window, cx)
                 }
                 FilesEvent::TitleChanged => cx.notify(),
                 FilesEvent::FileRenamed { old_path, new_path } => this.rename_file_surface(

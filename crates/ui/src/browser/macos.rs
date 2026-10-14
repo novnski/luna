@@ -1,7 +1,7 @@
 //! AppKit boundary for the browser. Wry owns the native child and its UI
 //! delegate; our navigation delegate supplies browser policy and state. All
 //! callbacks enqueue events, never re-enter GPUI. No page-to-engine IPC.
-use super::model::{PageState, Presentation, allowed_navigation};
+use super::model::{LocalDocument, PageState, Presentation, allowed_navigation};
 use gpui::{Bounds, Pixels, Window};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -11,7 +11,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSDictionary, NSError, NSKeyValueChangeKey, NSKeyValueObservingOptions, NSObject,
-    NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSString,
+    NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSString, NSURL,
 };
 use objc2_web_kit::{
     WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
@@ -154,6 +154,8 @@ struct ObserverState {
     pending: Cell<bool>,
     error: RefCell<Option<String>>,
     requested_url: RefCell<Option<String>>,
+    /// Open rendered preview's folder: the only `file:` pages this view loads.
+    local: Option<LocalDocument>,
 }
 
 define_class!(
@@ -173,10 +175,11 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         fn policy(&self, _view: &WKWebView, action: &WKNavigationAction, decision: &block2::Block<dyn Fn(WKNavigationActionPolicy)>) {
             let url = unsafe { action.request().URL() }.and_then(|u| u.absoluteString()).map(|u| u.to_string()).unwrap_or_default();
-            if allowed_navigation(&url) && unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() }) {
+            let allowed = self.allows(&url);
+            if allowed && unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() }) {
                 *self.ivars().requested_url.borrow_mut() = Some(url.clone());
             }
-            decision.call((if allowed_navigation(&url) { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel },));
+            decision.call((if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel },));
         }
         #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
         fn response(&self, _view: &WKWebView, response: &WKNavigationResponse, decision: &block2::Block<dyn Fn(WKNavigationResponsePolicy)>) {
@@ -218,14 +221,23 @@ define_class!(
 );
 
 impl Observer {
-    fn new(tx: Sender, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(tx: Sender, local: Option<LocalDocument>, mtm: MainThreadMarker) -> Retained<Self> {
         let object = mtm.alloc().set_ivars(ObserverState {
             tx,
             pending: Cell::new(false),
             error: RefCell::new(None),
             requested_url: RefCell::new(None),
+            local,
         });
         unsafe { msg_send![super(object), init] }
+    }
+    fn allows(&self, url: &str) -> bool {
+        allowed_navigation(url)
+            || self
+                .ivars()
+                .local
+                .as_ref()
+                .is_some_and(|document| document.allows(url))
     }
     fn changed(&self) {
         if !self.ivars().pending.replace(true) {
@@ -289,7 +301,12 @@ pub(super) struct Host {
 }
 
 impl NativePage {
-    pub fn new(window: &Window, data: &BrowserData, tx: Sender) -> Result<Self, String> {
+    pub fn new(
+        window: &Window,
+        data: &BrowserData,
+        tx: Sender,
+        local: Option<LocalDocument>,
+    ) -> Result<Self, String> {
         let mtm = MainThreadMarker::new().ok_or("Browser must be created on the main thread")?;
         let new_tab = tx.clone();
         let web = wry::WebViewBuilder::new()
@@ -344,7 +361,7 @@ impl NativePage {
         }
         clip.addSubview(&view);
 
-        let observer = Observer::new(tx.clone(), mtm);
+        let observer = Observer::new(tx.clone(), local, mtm);
         unsafe {
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
             for key in OBSERVED {
@@ -444,9 +461,30 @@ impl NativePage {
     }
     pub fn load(&self, url: &str) -> Result<(), String> {
         let host = self.0.borrow();
-        host.data.register_preview(url);
         host.observer.ivars().error.borrow_mut().take();
         *host.observer.ivars().requested_url.borrow_mut() = Some(url.into());
+        if let Some(document) = host
+            .observer
+            .ivars()
+            .local
+            .as_ref()
+            .filter(|document| document.allows(url))
+        {
+            // WebKit extends the page's read sandbox to this folder alone;
+            // the navigation delegate keeps the page from leaving it.
+            let page = NSURL::URLWithString(&NSString::from_str(url))
+                .ok_or("This file’s location can’t be opened as a page.")?;
+            let folder = NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&document.root().to_string_lossy()),
+                true,
+            );
+            unsafe {
+                host.view
+                    .loadFileURL_allowingReadAccessToURL(&page, &folder)
+            };
+            return Ok(());
+        }
+        host.data.register_preview(url);
         host.web.load_url(url).map_err(|e| e.to_string())
     }
     pub fn reload(&self) {

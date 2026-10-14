@@ -1,6 +1,6 @@
 //! WebKitGTK renders offscreen in an isolated helper process. GPUI composites
 //! its frames, so browser content uses the same clipping and blur as other UI.
-use super::model::{PageState, Presentation};
+use super::model::{LocalDocument, PageState, Presentation};
 use gpui::{Bounds, Pixels, RenderImage};
 use serde_json::{Value, json};
 use std::{
@@ -202,6 +202,7 @@ impl NativePage {
         _: &gpui::Window,
         data: &BrowserData,
         tx: Sender<NativeEvent>,
+        local: Option<LocalDocument>,
     ) -> Result<Self, String> {
         let worker = data.worker()?;
         let id = worker.next_id.fetch_add(1, Ordering::Relaxed);
@@ -218,7 +219,17 @@ impl NativePage {
             .lock()
             .unwrap()
             .insert(id, Arc::downgrade(&route));
-        worker.send(id, json!({"cmd":"create"}))?;
+        let mut create = json!({"cmd":"create"});
+        if let Some(document) = local {
+            // The helper loads and navigates `file:` pages only under this
+            // folder; the trailing separator keeps a sibling prefix out.
+            let mut root = document.root().to_string_lossy().into_owned();
+            if !root.ends_with('/') {
+                root.push('/');
+            }
+            create["root"] = root.into();
+        }
+        worker.send(id, create)?;
         Ok(Self {
             worker,
             route,

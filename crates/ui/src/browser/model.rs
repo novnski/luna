@@ -1,5 +1,10 @@
 //! Browser state shared by the chrome and platform host. No native handles.
 use std::net::IpAddr;
+use std::path::{Component, Path, PathBuf};
+
+/// Why an ordinary tab refuses a `file:` address, and where local pages open.
+pub const LOCAL_FILE_ADDRESS: &str =
+    "Local files open from Files: choose Open rendered preview on an HTML file.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct PageState {
@@ -19,9 +24,103 @@ impl PageState {
             self.url
                 .as_deref()
                 .and_then(|s| url::Url::parse(s).ok())
-                .and_then(|u| u.host_str().map(str::to_owned))
+                .and_then(|u| match u.scheme() {
+                    "file" => u
+                        .to_file_path()
+                        .ok()?
+                        .file_name()?
+                        .to_str()
+                        .map(str::to_owned),
+                    _ => u.host_str().map(str::to_owned),
+                })
                 .unwrap_or_else(|| "Browser".into())
         }
+    }
+}
+
+pub fn is_html(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        })
+}
+
+/// A workspace HTML file opened with Open rendered preview. Its tab may load
+/// and navigate `file:` pages only inside the file's own folder: a generated
+/// report reaches its assets and subpages, and nothing else on disk.
+/// Ordinary tabs never accept `file:` addresses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalDocument {
+    /// Canonical folder of the document; the page's whole local scope.
+    root: PathBuf,
+    url: String,
+}
+
+impl LocalDocument {
+    /// Resolve a Files path inside its local workspace. Both are canonical,
+    /// so a symlink cannot move the scope outside the project.
+    pub fn in_workspace(workspace: &Path, relative: &str) -> Result<Self, &'static str> {
+        let workspace = workspace
+            .canonicalize()
+            .map_err(|_| "This project folder isn’t available on this device.")?;
+        let file = workspace
+            .join(relative)
+            .canonicalize()
+            .ok()
+            .filter(|file| file.is_file())
+            .ok_or("This file isn’t on disk yet. Save it, then open the rendered preview.")?;
+        if !file.starts_with(&workspace) {
+            return Err("This file is outside the project, so it can’t be previewed here.");
+        }
+        if !file.to_str().is_some_and(is_html) {
+            return Err("Only HTML files have a rendered preview.");
+        }
+        let root = file
+            .parent()
+            .ok_or("This file has no folder to preview from.")?
+            .to_path_buf();
+        let url = url::Url::from_file_path(&file)
+            .map_err(|_| "This file’s location can’t be opened as a page.")?
+            .into();
+        Ok(Self { root, url })
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn folder_name(&self) -> String {
+        self.root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.root.display().to_string())
+    }
+
+    /// A `file:` address inside this document's folder. Paths are judged
+    /// decoded: an escaped separator must not smuggle `..` past URL parsing.
+    pub fn allows(&self, address: &str) -> bool {
+        let Ok(url) = url::Url::parse(address) else {
+            return false;
+        };
+        if url.scheme() != "file" || url.host().is_some() {
+            return false;
+        }
+        let Ok(path) = url.to_file_path() else {
+            return false;
+        };
+        path.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        }) && path.starts_with(&self.root)
+            && path != self.root
     }
 }
 
@@ -56,6 +155,9 @@ pub fn normalize_address(input: &str) -> Result<String, &'static str> {
         format!("https://{text}")
     })
     .map_err(|_| "Enter a valid website or localhost address.")?;
+    if parsed.scheme() == "file" {
+        return Err(LOCAL_FILE_ADDRESS);
+    }
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("Only http and https addresses are supported.");
     }
