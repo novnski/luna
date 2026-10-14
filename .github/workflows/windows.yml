@@ -45,7 +45,7 @@ defaults:
 jobs:
   tests:
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Rust toolchain
@@ -73,8 +73,11 @@ jobs:
           cargo test --release --locked -p luna-ui --lib -- --test-threads=1 --skip native_diff_font_geometry --nocapture
           $headlessResult = $LASTEXITCODE
           if ($nativeResult -ne 0 -or $headlessResult -ne 0) { exit 1 }
+      # Build exactly the package set that package-windows.ps1 builds. A
+      # different set unifies different dependency features, and the packaging
+      # step then recompiled most of the release graph (~20 min).
       - name: Build application
-        run: cargo build --release --locked -p luna
+        run: cargo build --release --locked -p luna -p luna-extension-host -p luna-engine
       - name: Verify portable packaging
         run: ./scripts/package-windows.ps1 -ReleasesUrl "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
       - name: Shader layout tests
