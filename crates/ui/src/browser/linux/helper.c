@@ -5,6 +5,7 @@
 #include <json-glib/json-glib.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <webkit2/webkit2.h>
@@ -22,6 +23,8 @@ typedef struct {
     double scale;
     WebKitOptionMenu *options;
     gchar *context_link;
+    // Open rendered preview's folder (trailing '/'): its only `file:` pages.
+    gchar *file_root;
 } Page;
 static GHashTable *pages;
 static WebKitWebContext *context;
@@ -195,6 +198,36 @@ static gboolean allowed(const char *uri) {
     g_uri_unref(u);
     return ok;
 }
+// A `file:` URI inside the page's document folder. The decoded path must keep
+// the folder prefix and hold no dot segment, so neither `..` nor an escaped
+// separator can step outside it.
+static gboolean in_scope(Page *p, const char *uri) {
+    if (!p->file_root)
+        return FALSE;
+    GUri *u = g_uri_parse(uri, G_URI_FLAGS_NONE, NULL);
+    if (!u)
+        return FALSE;
+    const char *scheme = g_uri_get_scheme(u), *host = g_uri_get_host(u), *path = g_uri_get_path(u);
+    gboolean ok = scheme && !strcmp(scheme, "file") && (!host || !*host) &&
+                  !g_uri_get_userinfo(u) && g_str_has_prefix(path, p->file_root) &&
+                  strlen(path) > strlen(p->file_root);
+    if (ok) {
+        gchar **segments = g_strsplit(path, "/", -1);
+        for (gchar **segment = segments; *segment; segment++)
+            if (!strcmp(*segment, ".") || !strcmp(*segment, ".."))
+                ok = FALSE;
+        g_strfreev(segments);
+    }
+    // A symlink inside the folder must not lead out of it. A missing file
+    // has nothing to follow; WebKit reports it as not found.
+    char *real = ok ? realpath(path, NULL) : NULL;
+    if (real) {
+        ok = g_str_has_prefix(real, p->file_root) && strlen(real) > strlen(p->file_root);
+        free(real);
+    }
+    g_uri_unref(u);
+    return ok;
+}
 // A page's own Blob or data export. WebKitGTK does not expose the download
 // attribute, so these may proceed until their response, which is never shown.
 static gboolean page_export(const char *uri) {
@@ -206,7 +239,8 @@ static gboolean policy(WebKitWebView *web, WebKitPolicyDecision *decision,
                        WebKitPolicyDecisionType type, Page *p) {
     if (type == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) {
         WebKitResponsePolicyDecision *response = WEBKIT_RESPONSE_POLICY_DECISION(decision);
-        if (!allowed(webkit_uri_response_get_uri(webkit_response_policy_decision_get_response(response)))) {
+        const char *uri = webkit_uri_response_get_uri(webkit_response_policy_decision_get_response(response));
+        if (!allowed(uri) && !in_scope(p, uri)) {
             webkit_policy_decision_ignore(decision);
             return TRUE;
         }
@@ -224,8 +258,9 @@ static gboolean policy(WebKitWebView *web, WebKitPolicyDecision *decision,
         WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(
             WEBKIT_NAVIGATION_POLICY_DECISION(decision));
         const char *uri = webkit_uri_request_get_uri(webkit_navigation_action_get_request(action));
-        if (!allowed(uri) &&
-            !(type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && page_export(uri))) {
+        // Local pages stay in their own tab; only websites open new tabs.
+        if (!allowed(uri) && !(type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION &&
+                               (in_scope(p, uri) || page_export(uri)))) {
             webkit_policy_decision_ignore(decision);
             return TRUE;
         }
@@ -415,11 +450,13 @@ static void free_page(gpointer data) {
     gtk_widget_destroy(p->window);
     g_free(p->error);
     g_free(p->context_link);
+    g_free(p->file_root);
     g_free(p);
 }
-static Page *new_page(guint id) {
+static Page *new_page(guint id, const char *root) {
     Page *p = g_new0(Page, 1);
     p->id = id;
+    p->file_root = root && *root == '/' && g_str_has_suffix(root, "/") ? g_strdup(root) : NULL;
     p->width = 800;
     p->height = 600;
     p->scale = 1;
@@ -594,7 +631,7 @@ static void command(JsonObject *o) {
     Page *p = g_hash_table_lookup(pages, GUINT_TO_POINTER(id));
     if (!strcmp(cmd, "create")) {
         if (!p)
-            new_page(id);
+            new_page(id, string(o, "root"));
         return;
     }
     if (!p)
@@ -605,7 +642,7 @@ static void command(JsonObject *o) {
     }
     if (!strcmp(cmd, "load")) {
         const char *url = string(o, "url");
-        if (allowed(url))
+        if (allowed(url) || in_scope(p, url))
             webkit_web_view_load_uri(p->web, url);
     } else if (!strcmp(cmd, "dismiss-menu")) {
         if (p->options) {

@@ -1,5 +1,10 @@
 //! Browser state shared by the chrome and platform host. No native handles.
 use std::net::IpAddr;
+use std::path::{Component, Path, PathBuf};
+
+/// Why an ordinary tab refuses a `file:` address, and where local pages open.
+pub const LOCAL_FILE_ADDRESS: &str =
+    "Local files open from Files: choose Open rendered preview on an HTML file.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct PageState {
@@ -19,9 +24,116 @@ impl PageState {
             self.url
                 .as_deref()
                 .and_then(|s| url::Url::parse(s).ok())
-                .and_then(|u| u.host_str().map(str::to_owned))
+                .and_then(|u| match u.scheme() {
+                    "file" => u
+                        .to_file_path()
+                        .ok()?
+                        .file_name()?
+                        .to_str()
+                        .map(str::to_owned),
+                    _ => u.host_str().map(str::to_owned),
+                })
                 .unwrap_or_else(|| "Browser".into())
         }
+    }
+}
+
+pub fn is_html(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        })
+}
+
+/// A workspace HTML file opened with Open rendered preview. Its tab may load
+/// and navigate `file:` pages only inside the file's own folder: a generated
+/// report reaches its assets and subpages, and nothing else on disk.
+/// Ordinary tabs never accept `file:` addresses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalDocument {
+    /// Canonical folder of the document; the page's whole local scope.
+    root: PathBuf,
+    url: String,
+}
+
+impl LocalDocument {
+    /// Resolve a Files path inside its local workspace. Both are canonical,
+    /// so a symlink cannot move the scope outside the project.
+    pub fn in_workspace(workspace: &Path, relative: &str) -> Result<Self, &'static str> {
+        let workspace = workspace
+            .canonicalize()
+            .map_err(|_| "This project folder isn’t available on this device.")?;
+        let file = workspace
+            .join(relative)
+            .canonicalize()
+            .ok()
+            .filter(|file| file.is_file())
+            .ok_or("This file isn’t on disk yet. Save it, then open the rendered preview.")?;
+        if !file.starts_with(&workspace) {
+            return Err("This file is outside the project, so it can’t be previewed here.");
+        }
+        if !file.to_str().is_some_and(is_html) {
+            return Err("Only HTML files have a rendered preview.");
+        }
+        let root = file
+            .parent()
+            .ok_or("This file has no folder to preview from.")?
+            .to_path_buf();
+        let url = url::Url::from_file_path(&file)
+            .map_err(|_| "This file’s location can’t be opened as a page.")?
+            .into();
+        Ok(Self { root, url })
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn folder_name(&self) -> String {
+        self.root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.root.display().to_string())
+    }
+
+    /// `address` as WebKit should load it, when it is inside this folder.
+    /// The WHATWG form drops a `localhost` authority that GLib would keep.
+    pub fn page(&self, address: &str) -> Option<String> {
+        if !self.allows(address) {
+            return None;
+        }
+        url::Url::parse(address).ok().map(String::from)
+    }
+
+    /// A `file:` address inside this document's folder. Paths are judged
+    /// decoded: an escaped separator must not smuggle `..` past URL parsing,
+    /// and a symlink inside the folder must not lead out of it.
+    pub fn allows(&self, address: &str) -> bool {
+        let Ok(url) = url::Url::parse(address) else {
+            return false;
+        };
+        if url.scheme() != "file" || url.host().is_some() {
+            return false;
+        }
+        let Ok(path) = url.to_file_path() else {
+            return false;
+        };
+        path.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        }) && path.starts_with(&self.root)
+            && path != self.root
+            && path.canonicalize().map_or(true, |real| {
+                real.starts_with(&self.root) && real != self.root
+            })
     }
 }
 
@@ -56,6 +168,9 @@ pub fn normalize_address(input: &str) -> Result<String, &'static str> {
         format!("https://{text}")
     })
     .map_err(|_| "Enter a valid website or localhost address.")?;
+    if parsed.scheme() == "file" {
+        return Err(LOCAL_FILE_ADDRESS);
+    }
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("Only http and https addresses are supported.");
     }
@@ -177,9 +292,112 @@ mod tests {
     fn tab_labels_fall_back_to_host_then_browser() {
         let mut page = PageState::default();
         assert_eq!(page.label(), "Browser");
+        page.url = Some("file:///work/report/index.html#?testId=1".into());
+        assert_eq!(page.label(), "index.html");
         page.url = Some("http://localhost:3000/path".into());
         assert_eq!(page.label(), "localhost");
         page.title = "Local preview".into();
         assert_eq!(page.label(), "Local preview");
+    }
+
+    /// Open rendered preview (#12): a report reaches its own pages and
+    /// assets; sibling folders, parents, escapes, other hosts and schemes do
+    /// not, and ordinary tabs still refuse every `file:` address.
+    #[cfg(unix)]
+    #[test]
+    fn local_documents_stay_inside_their_folder() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let secret = elsewhere.path().canonicalize().unwrap().join("secret.html");
+        std::fs::create_dir_all(root.join("report/data")).unwrap();
+        std::fs::create_dir_all(root.join("report-old")).unwrap();
+        for file in [
+            "report/index.html",
+            "report/data/attachment.html",
+            "report-old/index.html",
+            "outside.html",
+            "notes.txt",
+        ] {
+            std::fs::write(root.join(file), "<!doctype html>").unwrap();
+        }
+        std::fs::write(&secret, "<!doctype html>").unwrap();
+        std::os::unix::fs::symlink(&secret, root.join("escape.html")).unwrap();
+        std::os::unix::fs::symlink(root.join("report/index.html"), root.join("latest.html"))
+            .unwrap();
+        // Links inside the report folder: one out of it, one within it.
+        std::os::unix::fs::symlink(&secret, root.join("report/escape.html")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.join("report/linked")).unwrap();
+        std::os::unix::fs::symlink(root.join("report/data"), root.join("report/same")).unwrap();
+
+        let document = LocalDocument::in_workspace(&root, "report/index.html").unwrap();
+        let page = |path: &str| {
+            format!(
+                "{}{path}",
+                url::Url::from_directory_path(&root).unwrap().as_str()
+            )
+        };
+        assert_eq!(document.url(), page("report/index.html"));
+        assert_eq!(document.folder_name(), "report");
+        assert_eq!(
+            LocalDocument::in_workspace(&root, "latest.html"),
+            Ok(document.clone()),
+            "an in-project symlink previews its real file and folder"
+        );
+        for (address, allowed) in [
+            (page("report/index.html#?testId=1"), true),
+            (page("report/index.html?q=a"), true),
+            (page("report/data/attachment.html"), true),
+            (page("report/data/not-yet-written.png"), true),
+            (page("report/same/attachment.html"), true),
+            (
+                format!(
+                    "file://localhost{}",
+                    root.join("report/index.html").display()
+                ),
+                true,
+            ),
+            (page("report/"), false),
+            (page("report-old/index.html"), false),
+            (page("outside.html"), false),
+            (page("report/../outside.html"), false),
+            (page("report/%2E%2E/outside.html"), false),
+            (page("report/data%2F..%2F..%2Foutside.html"), false),
+            (url::Url::from_file_path(&secret).unwrap().into(), false),
+            (page("report/escape.html"), false),
+            (page("report/linked/secret.html"), false),
+            (
+                format!(
+                    "file://example.com{}",
+                    root.join("report/index.html").display()
+                ),
+                false,
+            ),
+            ("https://example.com/report/index.html".into(), false),
+            ("javascript:alert(1)".into(), false),
+        ] {
+            assert_eq!(document.allows(&address), allowed, "{address}");
+        }
+        for relative in [
+            "missing.html",
+            "report",
+            "notes.txt",
+            "escape.html",
+            secret.to_str().unwrap(),
+        ] {
+            assert!(
+                LocalDocument::in_workspace(&root, relative).is_err(),
+                "{relative}"
+            );
+        }
+        assert!(
+            LocalDocument::in_workspace(&root.join("report"), "../outside.html").is_err(),
+            "a Files path cannot climb out of its project"
+        );
+        assert_eq!(
+            normalize_address(document.url()),
+            Err(LOCAL_FILE_ADDRESS),
+            "ordinary tabs point local files to Files instead of loading them"
+        );
     }
 }

@@ -184,7 +184,8 @@ pub(super) struct FilePreviewState {
     active_comment: Option<String>,
     typography_generation: u32,
     text_navigation: Option<PendingTextNavigation>,
-    /// Why the last text-match navigation was not an exact hit, per path.
+    /// Why the last text-match navigation was not an exact hit, or why a
+    /// rendered preview could not open, per path.
     text_notice: Option<(String, SharedString)>,
     /// The read-only preview row of the last text-match navigation.
     text_highlight: Option<(String, usize)>,
@@ -2378,6 +2379,8 @@ impl FilesSurface {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let markdown = super::markdown_preview::is_markdown(path);
+        let html = crate::browser::model::is_html(path);
+        let local = self.local_workspace_root().is_some();
         let showing_markdown = self
             .preview
             .documents
@@ -2527,6 +2530,55 @@ impl FilesSurface {
                     ),
                 )
             })
+            .when(html, |element| {
+                let label = if local {
+                    "Open rendered preview"
+                } else {
+                    "Rendered previews open for projects on this device"
+                };
+                let preview_path = path.to_string();
+                element.child(
+                    div()
+                        .id("files-rendered-preview")
+                        .debug_selector(|| "files-rendered-preview".into())
+                        .h(px(crate::surface_chrome::CONTROL_SIZE))
+                        .px(crate::typography::ui_rems(6.0))
+                        .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(crate::typography::ui_rems(4.0))
+                        .font_family(theme.font_sans.clone())
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_muted)
+                        .aria_label(label)
+                        .tooltip(crate::popover::text_tooltip(label))
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+                        .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                            window.prevent_default()
+                        })
+                        // Without the file on this device there is nothing
+                        // to activate: no button role and no tab stop.
+                        .when(local, |element| {
+                            element
+                                .role(gpui::Role::Button)
+                                .tab_index(0)
+                                .focus_visible(crate::theme::focus_visible_ring)
+                                .cursor_pointer()
+                                .hover_wash("files-rendered-preview")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_rendered_preview(&preview_path, cx)
+                                }))
+                        })
+                        .when(!local, |element| element.opacity(0.5))
+                        .child(
+                            icon(icons::WINDOW_FRAME)
+                                .size(px(crate::surface_chrome::ICON_SIZE))
+                                .text_color(theme.text_muted),
+                        )
+                        .child("Preview"),
+                )
+            })
             .when_some(save_status, |element, (label, color, retry, detail)| {
                 element.child(
                     div()
@@ -2614,6 +2666,42 @@ impl FilesSurface {
                 ),
             )
             .into_any_element()
+    }
+
+    /// The project folder on this device, when the Files target is local.
+    fn local_workspace_root(&self) -> Option<&str> {
+        self.request_context
+            .as_ref()
+            .filter(|context| context.target_device_id.is_none())
+            .map(|context| context.cwd.as_str())
+    }
+
+    /// Open rendered preview: the saved file renders in a Browser tab whose
+    /// only local scope is the file's folder. Failures stay beside the file.
+    fn open_rendered_preview(&mut self, path: &str, cx: &mut Context<Self>) {
+        let document = match self.local_workspace_root() {
+            Some(root) => {
+                crate::browser::model::LocalDocument::in_workspace(std::path::Path::new(root), path)
+            }
+            None => Err("Rendered previews open for projects on this device."),
+        };
+        match document {
+            Ok(document) => {
+                if self
+                    .preview
+                    .text_notice
+                    .as_ref()
+                    .is_some_and(|(notice_path, _)| notice_path == path)
+                {
+                    self.preview.text_notice = None;
+                }
+                cx.emit(FilesEvent::OpenLocalDocument(document));
+            }
+            Err(message) => {
+                self.preview.text_notice = Some((path.to_string(), message.into()));
+            }
+        }
+        cx.notify();
     }
 
     fn markdown_web_link_handler(cx: &Context<Self>) -> super::markdown_preview::WebLinkHandler {
