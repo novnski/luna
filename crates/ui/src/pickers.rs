@@ -8301,7 +8301,13 @@ impl Pickers {
         let name = SharedString::from(name);
         let row_entity = cx.entity().downgrade();
         let mut el = div()
-            .id(("model-row", ix))
+            // Keyed by the model, not its position: a star reorders the
+            // list, and a screen reader's cursor stays on the node it
+            // pressed, which must still be the same model.
+            .id(gpui::ElementId::NamedChild(
+                std::sync::Arc::new(gpui::ElementId::Name(format!("model-row-{harness}").into())),
+                row.model.id.clone().into(),
+            ))
             .role(gpui::Role::ListBoxOption)
             .aria_label(name.clone())
             .aria_selected(is_selected)
@@ -8466,7 +8472,7 @@ impl Pickers {
         let star_a11y_model = star_model.clone();
         el = el.child(
             div()
-                .id(("model-star", ix))
+                .id("model-star")
                 .role(gpui::Role::Button)
                 .aria_label(SharedString::from(format!("Favorite {name}")))
                 .aria_toggled(if is_fav {
@@ -10876,17 +10882,29 @@ mod tests {
         cx.simulate_a11y_action(handle.into(), context, press);
         assert!(pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_none()));
 
-        // The star toggles the favorite, and the row picks its model.
+        // The star toggles the favorite, and the row picks its model. The
+        // star floats its row to the top, and the pressed nodes stay on
+        // that model (PR #26 review): pressing them again must not reach
+        // the row that took its place.
         let tree = a11y_tree(cx, handle);
         let (star, star_aria) = a11y_node(&tree, "Button", "Favorite Other model");
         assert_eq!(star_aria["toggled"], "False");
+        let other = a11y_node(&tree, "ListBoxOption", "Other model").0;
         cx.simulate_a11y_action(handle.into(), star, press);
         let tree = a11y_tree(cx, handle);
-        assert_eq!(
-            a11y_node(&tree, "Button", "Favorite Other model").1["toggled"],
-            "True"
-        );
-        let other = a11y_node(&tree, "ListBoxOption", "Other model").0;
+        let by_id = |role, id| {
+            a11y_nodes(&tree, role)
+                .into_iter()
+                .find(|(node, _)| *node == id)
+                .unwrap_or_else(|| panic!("no {role} {id:?} in the accessibility tree"))
+                .1
+        };
+        let star_aria = by_id("Button", star);
+        assert_eq!(star_aria["label"], "Favorite Other model");
+        assert_eq!(star_aria["toggled"], "True");
+        let other_aria = by_id("ListBoxOption", other);
+        assert_eq!(other_aria["label"], "Other model");
+        assert_eq!(other_aria["position_in_set"], 1);
         cx.simulate_a11y_action(handle.into(), other, press);
         assert_eq!(
             pickers.read_with(cx, |pickers, cx| pickers.current_model_id(cx)),
