@@ -6,6 +6,11 @@ User-visible changes follow [Semantic Versioning](https://semver.org/) and the [
 
 - Open a project's local HTML file, such as a Playwright report, as a rendered page: HTML files in Files show **Preview**, which opens the saved file in a Browser tab beside the conversation while the source editor stays available. The preview loads the report's own assets, subpages and hash routes but cannot navigate to files outside that file's folder, including through symlinks; on macOS, WebKit can read only that folder. Choosing Preview again reloads the same tab from disk. Ordinary Browser tabs still refuse `file:` addresses and now say that local files open from Files. Rendered previews are available on macOS and Linux for projects on this device.
 
+## 0.1.1 — 2026-10-14
+
+- Git History finishes loading in a repository with no commits yet: it shows "No commits yet" instead of staying on "Loading history…", and the first commit appears on its own once it lands.
+- Changes picks up a repository created with `git init` during a task right away, instead of staying on "Preparing diff…" until the task's next turn.
+
 ## 0.1.0 — 2026-10-14
 
 - Save downloads from the built-in browser to your Downloads folder instead of silently dropping them. Blob and `data:` exports from a web page (such as an "Export backup" button), attachment links, and files the browser can't display are all saved, the page stays where it was, and an existing file is never overwritten (`backup.json`, then `backup (1).json`).
