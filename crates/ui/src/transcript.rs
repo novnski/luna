@@ -147,6 +147,9 @@ const WORKING_STATUS_SIZE: f32 = 12.0;
 const WORKING_STATUS_LINE_HEIGHT: f32 = 16.0;
 /// The elapsed timer is one step quieter than the status itself.
 const WORKING_TIMER_SIZE: f32 = 11.0;
+/// Test bounds keys for the working line's status text and its timer.
+const WORKING_STATUS_TEXT: &str = "working-status-text";
+const WORKING_TIMER: &str = "working-timer";
 const TOOL_GROUP_SHIMMER_HALF_WIDTH: f32 = 0.36;
 const TOOL_GROUP_SHIMMER_STRIP_WIDTH: f32 = 2.0;
 const TOOL_ROW_REVEAL: motion::MotionSpec = motion::MotionSpec::new(360, motion::EASE_OUT_EXPO);
@@ -7708,9 +7711,10 @@ impl Transcript {
             })
             .map(|notice| provider_notice_label(&notice, now.timestamp_millis()));
         let theme = Theme::of(cx).clone();
-        // One line, three tones: the verb in secondary (with a slow shimmer
-        // while live), the object in primary, the timer in tertiary with
-        // tabular digits so ticking seconds never shift the line.
+        // One line (a long notice may wrap), three tones: the verb in
+        // secondary (with a slow shimmer while live), the object in primary,
+        // the timer in tertiary with tabular digits so ticking seconds never
+        // shift the line.
         let status = live_status(&self.rows);
         let (verb, object, tone): (SharedString, Option<SharedString>, Hsla) = if queued {
             (
@@ -7734,14 +7738,24 @@ impl Transcript {
             None => verb.clone(),
         };
         let view = cx.entity_id();
-        let shimmer = (!queued && notice.is_none() && !cx.reduce_motion())
+        // The queued line and a provider notice are sentences, not a status
+        // verb: in a narrow pane at a large interface size they outgrow the
+        // line, so they wrap in the width the timer leaves instead of
+        // painting over it. A status verb is one short word, kept on one
+        // line under its shimmer.
+        let sentence = queued || notice.is_some();
+        let shimmer = (!sentence && !cx.reduce_motion())
             .then(|| motion::pulse_delta(&motion::STATUS_SHIMMER, view, cx));
         let verb_el = {
             let text = div()
-                .flex_none()
-                .whitespace_nowrap()
+                .debug_selector(|| WORKING_STATUS_TEXT.into())
                 .text_color(tone)
                 .child(verb.clone());
+            let text = if sentence {
+                text.min_w_0()
+            } else {
+                text.flex_none().whitespace_nowrap()
+            };
             match shimmer {
                 Some(phase) => div()
                     .relative()
@@ -7800,15 +7814,25 @@ impl Transcript {
                 .group("working-trailer")
                 .flex()
                 .flex_row()
-                .items_center()
+                // Each item is one line box tall, so top alignment keeps the
+                // orb, timer and Stop on the first line of a wrapped sentence.
+                .items_start()
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .min_w_0()
-                .child(crate::loaders::breathing_orb(&theme, view, cx))
+                .child(
+                    div()
+                        .flex_none()
+                        .h(crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .child(crate::loaders::breathing_orb(&theme, view, cx)),
+                )
                 .child(status_line)
                 .when(!sending, |el| {
                     el.child(
                         div()
+                            .debug_selector(|| WORKING_TIMER.into())
                             .flex_none()
                             .whitespace_nowrap()
                             .text_size(crate::typography::ui_rems(WORKING_TIMER_SIZE))
@@ -16210,6 +16234,107 @@ mod tests {
         // No send in flight: never a bridge, whatever the row says.
         assert!(!sending_bridge(None, Some(before)));
         assert!(!sending_bridge(None, None));
+    }
+
+    /// Issue #8: in one chat of a split, the stall warning outgrows the
+    /// working line at large Interface sizes. At every offered size it must
+    /// stay clear of the elapsed timer, with the timer on its first line.
+    #[gpui::test]
+    fn stall_warning_wraps_clear_of_the_elapsed_timer_at_every_interface_size(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::typography::{FontAvailability, UiFontFamily, UiFontSize};
+        const CHAT: &str = "stalled-chat";
+        let _selection = crate::markdown::selection::test_state_lock();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+            crate::typography::init(
+                UiFontFamily::Geist,
+                UiFontSize::default(),
+                UiFontFamily::GeistMono,
+                crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
+                UiFontFamily::GeistMono,
+                crate::typography::CODE_FONT_SIZE_DEFAULT,
+                FontAvailability::all(),
+                cx,
+            );
+            crate::motion::set_reduced_motion(cx, true);
+        });
+        let now = chrono::Utc::now();
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.selected_chat = Some(CHAT.into());
+            state.sessions = vec![luna_proto::Session {
+                last_completed_turn: None,
+                chat_id: CHAT.into(),
+                device_id: "local".into(),
+                status: luna_proto::SessionStatus::Working,
+                started_at: Some(now - chrono::Duration::seconds(336)),
+                updated_at: now,
+                recovery: None,
+            }];
+            state.transcript_replayed = true;
+            state.transcript = vec![assistant(
+                "reply",
+                MessageStatus::Streaming,
+                vec![text_part("t", "Writing the habit tracker components.")],
+            )];
+            state.transcript_revision += 1;
+            // The engine's stall notice: nothing from the provider for 3m 39s.
+            state.provider_notice = Some(luna_proto::ProviderNotice {
+                kind: luna_proto::ProviderNoticeKind::Stalled,
+                message: String::new(),
+                at_ms: now.timestamp_millis() - 219_000,
+            });
+            state
+        });
+        /// A chat pane split beside another pane and the browser panel.
+        struct SplitPane(Entity<Transcript>);
+        impl Render for SplitPane {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .flex()
+                    .child(div().w(px(480.0)).h_full().child(self.0.clone()))
+            }
+        }
+        let (_, cx) =
+            cx.add_window_view(|_, cx| SplitPane(cx.new(|cx| Transcript::new(state.clone(), cx))));
+        for size in UiFontSize::ALL {
+            // The Settings → Appearance path, then frames to settle layout.
+            cx.update(|window, cx| crate::typography::set_font_size(size, window, cx));
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear());
+            }
+            let warning = cx
+                .debug_bounds(WORKING_STATUS_TEXT)
+                .expect("stall warning painted");
+            let timer = cx
+                .debug_bounds(WORKING_TIMER)
+                .expect("elapsed timer painted");
+            assert!(
+                warning.right() <= timer.left(),
+                "{size:?}: warning {warning:?} runs into timer {timer:?}"
+            );
+            assert_eq!(
+                warning.top(),
+                timer.top(),
+                "{size:?}: the timer left the warning's first line"
+            );
+            if size == UiFontSize::ALL[UiFontSize::ALL.len() - 1] {
+                let line = crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT)
+                    .to_pixels(px(size.pixels()));
+                assert!(
+                    warning.size.height > line,
+                    "at 20 px this pane cannot fit the warning on one line, so it must \
+                     wrap whole rather than clip: {warning:?}"
+                );
+            }
+        }
     }
 
     #[test]
