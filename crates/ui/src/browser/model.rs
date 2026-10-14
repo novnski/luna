@@ -103,7 +103,8 @@ impl LocalDocument {
     }
 
     /// A `file:` address inside this document's folder. Paths are judged
-    /// decoded: an escaped separator must not smuggle `..` past URL parsing.
+    /// decoded: an escaped separator must not smuggle `..` past URL parsing,
+    /// and a symlink inside the folder must not lead out of it.
     pub fn allows(&self, address: &str) -> bool {
         let Ok(url) = url::Url::parse(address) else {
             return false;
@@ -121,6 +122,9 @@ impl LocalDocument {
             )
         }) && path.starts_with(&self.root)
             && path != self.root
+            && path.canonicalize().map_or(true, |real| {
+                real.starts_with(&self.root) && real != self.root
+            })
     }
 }
 
@@ -299,6 +303,10 @@ mod tests {
         std::os::unix::fs::symlink(&secret, root.join("escape.html")).unwrap();
         std::os::unix::fs::symlink(root.join("report/index.html"), root.join("latest.html"))
             .unwrap();
+        // Links inside the report folder: one out of it, one within it.
+        std::os::unix::fs::symlink(&secret, root.join("report/escape.html")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.join("report/linked")).unwrap();
+        std::os::unix::fs::symlink(root.join("report/data"), root.join("report/same")).unwrap();
 
         let document = LocalDocument::in_workspace(&root, "report/index.html").unwrap();
         let page = |path: &str| {
@@ -319,6 +327,7 @@ mod tests {
             (page("report/index.html?q=a"), true),
             (page("report/data/attachment.html"), true),
             (page("report/data/not-yet-written.png"), true),
+            (page("report/same/attachment.html"), true),
             (
                 format!(
                     "file://localhost{}",
@@ -333,6 +342,8 @@ mod tests {
             (page("report/%2E%2E/outside.html"), false),
             (page("report/data%2F..%2F..%2Foutside.html"), false),
             (url::Url::from_file_path(&secret).unwrap().into(), false),
+            (page("report/escape.html"), false),
+            (page("report/linked/secret.html"), false),
             (
                 format!(
                     "file://example.com{}",

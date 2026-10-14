@@ -2540,6 +2540,7 @@ impl FilesSurface {
                 element.child(
                     div()
                         .id("files-rendered-preview")
+                        .debug_selector(|| "files-rendered-preview".into())
                         .h(px(crate::surface_chrome::CONTROL_SIZE))
                         .px(crate::typography::ui_rems(6.0))
                         .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
@@ -2699,12 +2700,6 @@ impl FilesSurface {
             }
         }
         cx.notify();
-    }
-
-    /// The header's Open rendered preview, for the native browser fixture.
-    #[cfg(feature = "browser-fixture")]
-    pub fn fixture_open_rendered_preview(&mut self, path: &str, cx: &mut Context<Self>) {
-        self.open_rendered_preview(path, cx);
     }
 
     fn markdown_web_link_handler(cx: &Context<Self>) -> super::markdown_preview::WebLinkHandler {

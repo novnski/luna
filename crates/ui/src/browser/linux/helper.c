@@ -5,6 +5,7 @@
 #include <json-glib/json-glib.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <webkit2/webkit2.h>
@@ -212,6 +213,13 @@ static gboolean in_scope(Page *p, const char *uri) {
             if (!strcmp(*segment, ".") || !strcmp(*segment, ".."))
                 ok = FALSE;
         g_strfreev(segments);
+    }
+    // A symlink inside the folder must not lead out of it. A missing file
+    // has nothing to follow; WebKit reports it as not found.
+    char *real = ok ? realpath(path, NULL) : NULL;
+    if (real) {
+        ok = g_str_has_prefix(real, p->file_root) && strlen(real) > strlen(p->file_root);
+        free(real);
     }
     g_uri_unref(u);
     return ok;

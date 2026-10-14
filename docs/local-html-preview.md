@@ -4,10 +4,10 @@ An HTML file in a project on this device (`.html` or `.htm`) shows **Preview** i
 
 ## Scope
 
-The preview tab can read and navigate only inside the HTML file's own folder. A report loads its own assets, subpages and hash routes. Links to sibling folders, parent folders or other files on disk are cancelled. A symlink that resolves outside the project is refused before anything loads. The tab can still open websites the report links to; `target=_blank` links to websites open in a new ordinary Browser tab.
+The preview tab navigates only inside the HTML file's own folder. A report loads its own assets, subpages and hash routes. Links to sibling folders, parent folders, other files on disk, or a symlink inside the folder that resolves outside it are cancelled. A symlink that resolves outside the project is refused before anything loads. The tab can still open websites the report links to; `target=_blank` links to websites open in a new ordinary Browser tab.
 
-- macOS loads the page with `loadFileURL:allowingReadAccessToURL:`, so WebKit's content process gets read access to that folder only. The navigation delegate cancels any `file:` navigation outside it.
-- Linux passes the folder to the WebKitGTK helper, whose navigation policy and load command accept `file:` URIs only below it.
+- macOS loads the page with `loadFileURL:allowingReadAccessToURL:`, so WebKit's content process can read that folder only, whatever a page or symlink asks for. The navigation delegate cancels any `file:` navigation that resolves outside it.
+- Linux passes the folder to the WebKitGTK helper, whose navigation policy and load command accept `file:` URIs only below it, after resolving symlinks. Images, scripts and stylesheets a page embeds are not filtered by folder there; WebKitGTK's default file-URL rules still stop a page's scripts from fetching other local files.
 - Other platforms open the file in the system default browser.
 
 Ordinary Browser tabs still accept only `http` and `https` addresses. Typing a `file:` address there explains that local files open from Files. The preview tab's address bar accepts addresses inside its folder and websites.
@@ -16,5 +16,6 @@ Choosing Preview again for the same file brings its tab forward and reloads the 
 
 ## Validation
 
-- `scripts/cargo.sh test --locked -p luna-ui --lib browser::model` checks the folder scope: its own pages, query and fragment routes, sibling and parent folders, encoded `..` and separators, other hosts and schemes, symlink escapes, and that ordinary tabs refuse `file:` addresses.
-- The native [browser fixture](../crates/ui/examples/browser-fixture/local_document.rs) runs on macOS and Linux CI. It opens a generated report through Files' Preview action, checks that a relative asset and a subpage load, that history works, that links and typed addresses outside the folder are refused, that reopening reloads the same tab, and that ordinary tabs keep refusing `file:` addresses. It saves a `browser-local-report.png` capture.
+- `scripts/cargo.sh test --locked -p luna-ui --lib browser::model` checks the folder scope: its own pages, query and fragment routes, sibling and parent folders, encoded `..` and separators, other hosts and schemes, symlink escapes from the project and from the folder, and that ordinary tabs refuse `file:` addresses.
+- `scripts/cargo.sh test --locked -p luna-ui --lib rendered_preview_regressions` clicks the painted Preview control in a headless shell: it opens one folder-scoped Browser tab, Preview again reuses it, and a project on another device opens nothing.
+- The native [browser fixture](../crates/ui/examples/browser-fixture/local_document.rs) runs on macOS and Linux CI. Entering at the Files event that Preview emits, it checks that a relative asset and a subpage load, that history works, that links (direct or through a symlink) and typed addresses outside the folder are refused, that reopening reloads the same tab, and that ordinary tabs keep refusing `file:` addresses. It saves `browser-local-source.png` and `browser-local-report.png` captures.

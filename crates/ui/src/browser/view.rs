@@ -700,7 +700,7 @@ impl Render for BrowserSurface {
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
             .when_some(local_page, |el, folder| el.child(div().id("browser-local-scope").px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(6.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted).truncate()
-                .child(format!("Local file preview. Only files in “{folder}” can load here."))))
+                .child(format!("Local file preview. Only pages in “{folder}” open here."))))
             .child(body)
             .when(external, |el| el.child(div().h(crate::typography::ui_rems(26.0)).px(crate::typography::ui_rems(10.0)).flex().items_center().gap(crate::typography::ui_rems(5.0)).border_t_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_faint)
