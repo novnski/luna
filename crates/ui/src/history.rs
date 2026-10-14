@@ -2066,6 +2066,7 @@ impl GitHistory {
             self.avatar_images.clear();
             self.loading = false;
             self.loaded = false;
+            self.checkout_revision = None;
             return;
         };
         if self.target_key.as_deref() == Some(key.as_str()) {
@@ -2081,6 +2082,7 @@ impl GitHistory {
         self.fetch_error = None;
         self.loading = false;
         self.loaded = false;
+        self.checkout_revision = None;
         self.target_key = Some(key.clone());
         self.commits.clear();
         self.visible_commits.clear();
@@ -2125,13 +2127,18 @@ impl GitHistory {
     /// Follow the checkout's diff-watch revision, whose checksum covers HEAD.
     /// Loaded history otherwise waits for an explicit refresh, but an empty
     /// one (an unborn branch) has no rows to keep stable: re-read it when the
-    /// checkout moves so the first commit appears on its own.
+    /// checkout moves so the first commit appears on its own. The first
+    /// revision seen for a target is an observation, not a move.
     pub fn note_checkout_revision(&mut self, revision: Option<String>, cx: &mut Context<Self>) {
         if self.checkout_revision == revision {
             return;
         }
+        let moved = self.checkout_revision.is_some();
         self.checkout_revision = revision;
-        if self.loaded && !self.loading && self.commits.is_empty() {
+        if moved && self.loaded && self.commits.is_empty() {
+            // A read already in flight may predate the move.
+            self.request_task = None;
+            self.loading = false;
             self.refresh(cx);
         }
     }

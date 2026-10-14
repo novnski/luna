@@ -91,6 +91,13 @@ fn commit_count(pane: &Changes, cx: &App) -> Option<usize> {
 #[gpui::test]
 fn unborn_history_settles_then_shows_the_first_commit(cx: &mut TestAppContext) {
     cx.update(|cx| {
+        crate::history::init(
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            cx,
+        );
         gpui_base::init(cx);
         cx.set_global(Theme::dark());
     });
@@ -158,28 +165,23 @@ fn unborn_history_settles_then_shows_the_first_commit(cx: &mut TestAppContext) {
         .update(cx, |pane, _, cx| pane.ensure_content(cx))
         .unwrap();
 
-    pump(
-        cx,
-        &runtime,
-        window,
-        "the empty first page and the checkout's diff",
-        |pane, cx| commit_count(pane, cx) == Some(0) && pane.resolved(cx).is_some(),
-    );
-    // Let any read the first diff frame started finish.
-    for _ in 0..20 {
-        frame(cx, &runtime, window);
-    }
-    let settled = reads();
-
+    pump(cx, &runtime, window, "the empty first page", |pane, cx| {
+        commit_count(pane, cx) == Some(0)
+    });
     // Frames and app-state churn (a streaming turn notifies constantly) must
     // not re-ask for a page the engine already answered with no commits.
-    for _ in 0..10 {
+    for _ in 0..20 {
         window
             .update(cx, |pane, _, cx| pane.state.update(cx, |_, cx| cx.notify()))
             .unwrap();
         frame(cx, &runtime, window);
     }
-    assert_eq!(reads(), settled, "History re-read an empty page");
+    assert_eq!(reads(), 1, "History re-read an empty page");
+
+    pump(cx, &runtime, window, "the checkout's diff", |pane, cx| {
+        pane.resolved(cx).is_some()
+    });
+    assert_eq!(reads(), 1, "the first diff revision is not a checkout move");
 
     // The issue's recovery step: the first commit lands from the terminal.
     git(
