@@ -36,9 +36,14 @@ menus blur the live browser pixels. Their bounds and rounded corners follow the
 GPUI blur regions; opaque appearance and menu dismissal remove the effects.
 
 The browser accepts HTTP(S) addresses only and has no engine IPC bridge.
-Downloads and non-displayable responses are unsupported in the preview; users
-can open the current address externally. Browser tabs are not restored after
-restart. Linux uses the same chrome with an explicit external-browser message.
+Downloads save to the user's Downloads folder without overwriting existing
+files: download links (including a page's own Blob and data exports),
+attachment responses and pages WebKit cannot display. Blob and data URLs are
+only ever saved, never shown as pages. A status line under the toolbar names
+the saved file with a button to show it in Finder or the file manager, or says
+why it was not saved with a button to open the page in the default browser.
+macOS marks website downloads as quarantined, as other browsers do. Browser
+tabs are not restored after restart. Linux uses the same chrome with an explicit external-browser message.
 Localhost addresses always refer to the UI device, with a hint for remote chats.
 
 `browser-fixture` runs the actual shell with isolated synthetic chat data and a
@@ -46,8 +51,11 @@ loopback HTML server. It captures the empty state, live native page, an open men
 light appearance and a load failure. Native checks cover DOM navigation,
 back/forward availability, SPA URL/title updates, independent tabs, shared
 nonpersistent cookies, rapid hover, tooltip focus and hit testing, menu outside-click
-isolation and input restoration, visibility, resizing/takeover and
-teardown. It is gated behind an opt-in feature and is excluded from app builds.
+isolation and input restoration, visibility, resizing/takeover,
+downloads and teardown. The download check saves a Blob export twice, an
+attachment and a non-displayable response to the real Downloads folder,
+compares their contents, then deletes those files. It is gated behind an
+opt-in feature and is excluded from app builds.
 
 ```sh
 cargo test --locked -p luna-ui --lib -- --test-threads=1

@@ -19,6 +19,12 @@ async fn pause(cx: &mut AsyncApp, ms: u64) {
         .await;
 }
 
+// Downloads the fixture website offers: a page's own Blob export, an
+// attachment response, and a response WebKit cannot display.
+const EXPORT_JSON: &str = r#"{"habits":["water the garden"]}"#;
+const EXPORT_CSV: &str = "date,habit\n2026-10-14,water the garden\n";
+const EXPORT_ZIP: &[u8] = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
 fn capture(directory: &std::path::Path, name: &str) -> anyhow::Result<()> {
     let path = directory.join(format!("{name}.png"));
     #[cfg(target_os = "macos")]
@@ -165,6 +171,26 @@ fn main() -> anyhow::Result<()> {
             let mut request = [0; 4096];
             let n = stream.read(&mut request).unwrap_or(0);
             let request = String::from_utf8_lossy(&request[..n]);
+            let file = if request.starts_with("GET /export.csv ") {
+                Some((
+                    "text/csv",
+                    "Content-Disposition: attachment; filename=\"fieldnotes-export.csv\"\r\n",
+                    EXPORT_CSV.as_bytes(),
+                ))
+            } else if request.starts_with("GET /export.zip ") {
+                Some(("application/zip", "", EXPORT_ZIP))
+            } else {
+                None
+            };
+            if let Some((mime, headers, body)) = file {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+                continue;
+            }
             let (title, html) = if request.starts_with("GET /two ") {
                 (
                     "Details",
@@ -521,10 +547,55 @@ fn main() -> anyhow::Result<()> {
                 let before = first.read_with(cx, |b, _| b.page.url.clone());
                 window.update(cx, |_, w, cx| first.update(cx, |b, cx| b.navigate("javascript:alert(1)", w, cx)))?;
                 anyhow::ensure!(first.read_with(cx, |b, _| b.page.url == before), "unsupported address navigated");
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                {
+                    // Each download lands in the Downloads folder and the tab
+                    // says where. Exporting twice must keep both files; the
+                    // page stays put. Files are removed again afterwards.
+                    window.update(cx, |_, w, cx| first.update(cx, |b, cx| b.navigate(&_origin, w, cx)))?;
+                    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                    while !first.read_with(cx, |b, _| b.page.title == "Fieldnotes" && !b.page.loading && b.fixture_native_visible()) {
+                        anyhow::ensure!(std::time::Instant::now() < deadline, "page did not reload before downloads"); pause(cx, 50).await;
+                    }
+                    let export = format!("(() => {{ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([{EXPORT_JSON:?}], {{type: 'application/json'}})); a.download = 'fieldnotes-backup.json'; document.body.append(a); a.click(); a.remove(); }})()");
+                    let mut saved: Vec<PathBuf> = Vec::new();
+                    let result: anyhow::Result<()> = async {
+                        for (script, contents, kind) in [
+                            (export.as_str(), EXPORT_JSON.as_bytes(), "Blob export"),
+                            (export.as_str(), EXPORT_JSON.as_bytes(), "repeated Blob export"),
+                            ("location.href = '/export.csv'", EXPORT_CSV.as_bytes(), "attachment"),
+                            ("location.href = '/export.zip'", EXPORT_ZIP, "non-displayable response"),
+                        ] {
+                            first.read_with(cx, |b, _| b.fixture_eval(script));
+                            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                            let download = loop {
+                                let download = first.read_with(cx, |b, _| b.download.clone());
+                                if let Some(download) = download.as_ref().filter(|d| d.error.is_some() || d.path.as_ref().is_some_and(|p| !saved.contains(p))) {
+                                    break download.clone();
+                                }
+                                anyhow::ensure!(std::time::Instant::now() < deadline, "{kind} did not download: {download:?}");
+                                pause(cx, 50).await;
+                            };
+                            let path = download.path.clone().ok_or_else(|| anyhow::anyhow!("{kind} failed: {download:?}"))?;
+                            saved.push(path.clone());
+                            anyhow::ensure!(std::fs::read(&path)? == contents, "{kind} saved the wrong contents to {}", path.display());
+                            anyhow::ensure!(path.file_name().is_some_and(|name| name.to_string_lossy() == download.name), "{kind} reported {} for {}", download.name, path.display());
+                        }
+                        anyhow::ensure!(saved[1].file_name().is_some_and(|name| name.to_string_lossy().starts_with("fieldnotes-backup (")), "repeated export did not get a new name: {saved:?}");
+                        anyhow::ensure!(std::fs::read(&saved[0])? == EXPORT_JSON.as_bytes(), "repeated export overwrote the first file");
+                        anyhow::ensure!(first.read_with(cx, |b, _| b.page.title == "Fieldnotes" && b.page.error.is_none() && b.fixture_native_visible()), "a download replaced the page");
+                        pause(cx, 300).await;
+                        capture(&output, "browser-download-light")
+                    }.await;
+                    for path in &saved {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    result?;
+                }
                 window.update(cx, |shell, w, cx| shell.fixture_close_browser(first_id, w, cx))?;
                 pause(cx, 200).await;
                 anyhow::ensure!(!first.read_with(cx, |b, _| b.fixture_native_visible()), "closed tab retained its native view");
-                std::fs::write(output.join("result.txt"), "PASS: real shell browser fixture; address rejection, tab switching/close, overlays, resizing, takeover and appearance. On macOS and Linux: live DOM navigation, history, same-document state, native visibility, rapid hover/tooltip focus and hit testing, overlay outside-click isolation/restoration, live resize/CSS reflow/native drag hit testing, interrupted sidebar clipping, frosted/light/opaque backdrop cleanup, and load failure.\n")?;
+                std::fs::write(output.join("result.txt"), "PASS: real shell browser fixture; address rejection, tab switching/close, overlays, resizing, takeover and appearance. On macOS and Linux: live DOM navigation, history, same-document state, native visibility, rapid hover/tooltip focus and hit testing, overlay outside-click isolation/restoration, live resize/CSS reflow/native drag hit testing, interrupted sidebar clipping, frosted/light/opaque backdrop cleanup, load failure, and downloads (Blob exports with unique names, attachment and non-displayable responses).\n")?;
                 Ok(())
             }.await;
             if let Err(error) = run { eprintln!("Browser fixture failed: {error:#}"); *result.lock().unwrap() = Some(error.to_string()); }
