@@ -1029,11 +1029,6 @@ struct Capture {
 /// the cap is hit, so an arbitrarily large repository diff never buffers fully.
 async fn capture_git(cwd: &Path, args: &[&str], max_bytes: usize) -> Result<Capture, EngineError> {
     let mut cmd = tokio::process::Command::new("git");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.as_std_mut().creation_flags(0x08000000);
-    }
     cmd.arg("-C").arg(cwd).args(args);
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());

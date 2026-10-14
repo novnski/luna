@@ -82,23 +82,20 @@ fn sniff_image(bytes: &[u8]) -> ImageKind {
 
 /// Raster inputs the standard Codex CLI release decodes on THIS execution host.
 /// Codex 0.159 (`rust-v0.159.0`) links one unified `image` 0.25: its image
-/// utility enables PNG/JPEG/GIF/WebP and the TUI's `arboard` adds TIFF on macOS
-/// and BMP on Windows. Codex decodes and re-encodes the original bytes; this
+/// utility enables PNG/JPEG/GIF/WebP and the TUI's `arboard` adds TIFF on macOS.
+/// Codex decodes and re-encodes the original bytes; this
 /// header check is admission only, never a decode or a transcode.
 fn host_decodes(kind: ImageKind) -> bool {
     match kind {
         ImageKind::Png | ImageKind::Jpeg | ImageKind::Gif | ImageKind::WebP => true,
         ImageKind::Tiff => cfg!(target_os = "macos"),
-        ImageKind::Bmp => cfg!(windows),
-        ImageKind::Svg | ImageKind::Unknown => false,
+        ImageKind::Bmp | ImageKind::Svg | ImageKind::Unknown => false,
     }
 }
 
 fn host_image_formats() -> &'static str {
     if cfg!(target_os = "macos") {
         "PNG, JPEG, GIF, WebP or TIFF"
-    } else if cfg!(windows) {
-        "PNG, JPEG, GIF, WebP or BMP"
     } else {
         "PNG, JPEG, GIF or WebP"
     }

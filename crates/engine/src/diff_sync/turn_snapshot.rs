@@ -87,9 +87,6 @@ const LOCATION_ENV: &[&str] = &[
     "GIT_NAMESPACE",
 ];
 
-#[cfg(windows)]
-const ALTERNATES_SEPARATOR: &str = ";";
-#[cfg(not(windows))]
 const ALTERNATES_SEPARATOR: &str = ":";
 
 pub(super) fn unavailable(reason: &str) -> EngineError {
@@ -897,11 +894,6 @@ async fn run_git(
     max_stdout: usize,
 ) -> Result<GitRun, EngineError> {
     let mut cmd = tokio::process::Command::new("git");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.as_std_mut().creation_flags(0x08000000);
-    }
     cmd.arg("-C").arg(root);
     for setting in HARDENING {
         cmd.arg("-c").arg(setting);

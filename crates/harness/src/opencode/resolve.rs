@@ -31,9 +31,6 @@ const FAILED_PROBE_TTL: Duration = Duration::from_secs(60);
 
 pub(super) fn opencode_install_paths() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    // `crate::executable::home_dir` checks USERPROFILE too, so the Unix-style
-    // install locations resolve on Windows (`~/.local/bin/opencode.exe`, the
-    // bun layout) instead of silently vanishing with an unset HOME.
     if let Some(home) = crate::executable::home_dir() {
         dirs.push(home.join(".opencode").join("bin").join("opencode"));
         dirs.push(home.join(".local").join("bin").join("opencode"));
@@ -47,8 +44,7 @@ pub(super) fn opencode_install_paths() -> Vec<PathBuf> {
 
 pub(super) const INSTALL_HINT: &str = "opencode 2 (searched PATH, the login shell's PATH, \
      ~/.opencode/bin, ~/.local/bin, ~/.bun/bin, ~/.npm-global/bin, /opt/homebrew/bin, \
-     /usr/local/bin, and fnm/nvm/volta/pnpm/bun install dirs; Windows also checks USERPROFILE, \
-     %APPDATA%\\npm, and explicit NVM_SYMLINK/VOLTA_HOME/PNPM_HOME; install with \
+     /usr/local/bin, and fnm/nvm/volta/pnpm/bun install dirs; install with \
      `curl -fsSL https://opencode.ai/install | bash`, then `opencode auth login`; set \
      OPENCODE_EXECUTABLE to override)";
 

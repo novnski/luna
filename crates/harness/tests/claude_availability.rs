@@ -21,18 +21,7 @@ fn availability_child() {
 fn probe(path: &std::path::Path, override_path: Option<&std::path::Path>, expected: bool) {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command.args(["--exact", "availability_child", "--nocapture"]);
-    for key in [
-        "HOME",
-        "USERPROFILE",
-        "FNM_DIR",
-        "FNM_MULTISHELL_PATH",
-        "LOCALAPPDATA",
-        "NVM_SYMLINK",
-        "VOLTA_HOME",
-        "PNPM_HOME",
-        "APPDATA",
-        "CLAUDE_CODE_EXECUTABLE",
-    ] {
+    for key in ["HOME", "FNM_DIR", "CLAUDE_CODE_EXECUTABLE"] {
         command.env_remove(key);
     }
     // The login-shell PATH snapshot would otherwise carry this machine's shell.
@@ -58,13 +47,8 @@ fn probe(path: &std::path::Path, override_path: Option<&std::path::Path>, expect
 #[test]
 fn claude_availability_honors_override_without_path_cli() {
     let dir = tempfile::tempdir().unwrap();
-    let name = if cfg!(windows) {
-        "claude-custom.exe"
-    } else {
-        "claude-custom"
-    };
-    let exe = dir.path().join(name);
-    std::fs::write(&exe, if cfg!(windows) { b"MZ" } else { b"sh" }).unwrap();
+    let exe = dir.path().join("claude-custom");
+    std::fs::write(&exe, b"sh").unwrap();
     // PATH without any claude: only the override makes Claude installed.
     probe(dir.path(), Some(&exe), true);
     if !system_wide_claude_present() {

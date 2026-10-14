@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.3.0 — 2026-10-14
+
+- LUNA no longer supports Windows. Releases ship for macOS and Linux only, and the Windows build, portable package, CI job and Windows-specific code paths are removed. Existing Windows installs stop receiving updates; their data in `%LOCALAPPDATA%\LUNA` is left untouched.
+
 ## 0.2.2 — 2026-10-14
 
 - Pair remote devices with `luna remote pair` on Windows. It previously stopped with "remote authority was published but durability is uncertain". Saved SSH launches, the local credential vault and sign-in session details no longer fail the same way on Windows.

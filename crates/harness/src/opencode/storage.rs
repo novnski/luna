@@ -173,15 +173,9 @@ impl OpencodeStorage {
         }
     }
 
-    /// `os.homedir()` for the server: `HOME` (Windows: `USERPROFILE`).
+    /// `os.homedir()` for the server: `HOME`.
     pub fn home(&self) -> Result<Option<PathBuf>, StorageIndeterminate> {
-        if let Some(home) = self.var("HOME")? {
-            return Ok(Some(PathBuf::from(home)));
-        }
-        if cfg!(windows) {
-            return Ok(self.var("USERPROFILE")?.map(PathBuf::from));
-        }
-        Ok(None)
+        Ok(self.var("HOME")?.map(PathBuf::from))
     }
 
     /// OpenCode's data root (`Global.Path.data`): database, `auth.json`,

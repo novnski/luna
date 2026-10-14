@@ -70,7 +70,7 @@ body:
     attributes:
       label: Operating system and hardware
       description: Include OS version and CPU architecture if known.
-      placeholder: macOS 26 on Apple Silicon; Ubuntu 24.04 x64; Windows 11 x64; iOS 26
+      placeholder: macOS 26 on Apple Silicon; Ubuntu 24.04 x64; iOS 26
     validations:
       required: true
   - type: dropdown

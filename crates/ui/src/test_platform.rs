@@ -32,11 +32,6 @@ pub(crate) fn headless() -> gpui::Application {
     serialized(gpui_platform::headless)
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn application() -> gpui::Application {
-    serialized(gpui_platform::application)
-}
-
 pub(crate) fn background_executor() -> gpui::BackgroundExecutor {
     serialized(gpui_platform::background_executor)
 }

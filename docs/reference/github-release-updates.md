@@ -49,7 +49,7 @@ GitHub download URLs used by the app cannot work.
    `python3 scripts/version.py release-plan`. Only when publishing is explicitly
    requested, create and push a new annotated `v<version>` tag at that commit.
    Never replace a previously published version.
-3. The release workflow builds Linux, macOS, and Windows artifacts. After all
+3. The release workflow builds Linux and macOS artifacts. After all
    builds pass, it checks that their names match the tag, creates and signs the
    manifest, and publishes all assets in one GitHub Release.
 4. Confirm the Release contains both `manifest.json` and `manifest.sig`, plus

@@ -7,7 +7,6 @@ publish.workspace = true
 
 [features]
 browser-fixture = []
-windows-render-fixture = []
 appshots-fixture = ["gpui_platform/test-support"]
 resource-profile = ["gpui/bench", "gpui_platform/test-support"]
 
@@ -35,10 +34,6 @@ required-features = ["browser-fixture"]
 [[example]]
 name = "ic0-find-feasibility"
 required-features = ["browser-fixture"]
-
-[[example]]
-name = "windows-render-fixture"
-required-features = ["windows-render-fixture"]
 
 [[example]]
 name = "appshots-fixture"
@@ -320,6 +315,3 @@ tracing-subscriber.workspace = true
 # Unix fixtures check that their root is owned by the current user.
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }

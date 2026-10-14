@@ -10,8 +10,7 @@ uses the existing in-app browser; it does not imply the server is ready.
 Commands use the host's `/bin/sh -c` and inherited engine environment. They get a
 shell intentionally so pipelines, redirections and environment expansion work.
 Checkout paths are passed as process cwd, never interpolated into shell text.
-Interactive login profiles are not sourced. POSIX hosts are supported; Windows
-reports an explicit unsupported-host error. Use foreground dev servers: detached
+Interactive login profiles are not sourced. Use foreground dev servers: detached
 processes that escape their process group cannot be controlled by Stop.
 
 Saving requires the original action list as an `expectedActions` snapshot.

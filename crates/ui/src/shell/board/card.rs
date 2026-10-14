@@ -638,14 +638,12 @@ impl BoardPage {
                     }
                 }),
             )
-            .when(crate::click_activation_drag_enabled(), |card| {
-                card.on_drag(drag, |drag, _offset, _window, cx| {
-                    cx.stop_propagation();
-                    let drag = drag.clone();
-                    cx.new(|_| BoardCardGhost {
-                        key: drag.key,
-                        title: drag.title,
-                    })
+            .on_drag(drag, |drag, _offset, _window, cx| {
+                cx.stop_propagation();
+                let drag = drag.clone();
+                cx.new(|_| BoardCardGhost {
+                    key: drag.key,
+                    title: drag.title,
                 })
             })
             .child(top)

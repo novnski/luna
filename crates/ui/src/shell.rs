@@ -287,7 +287,7 @@ pub fn titlebar_cluster_start(fullscreen: bool) -> f32 {
 
 /// Width of the spacer ahead of the control cluster for a strip that already
 /// carries `container_pad` px of its own left padding. macOS only — on
-/// Linux/Windows there are no traffic lights and the cluster hugs the edge.
+/// Linux there are no traffic lights and the cluster hugs the edge.
 pub fn titlebar_spacer_width(is_macos: bool, fullscreen: bool, container_pad: f32) -> f32 {
     if !is_macos {
         return 0.0;
@@ -8747,56 +8747,6 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Native Windows caption controls integrated into Luna's unified
-    /// titlebar. `WindowControlArea` maps these hit targets to HTMINBUTTON,
-    /// HTMAXBUTTON, and HTCLOSE, so Windows owns their behavior (including
-    /// Snap Layouts) while GPUI renders the system Segoe caption glyphs.
-    fn render_windows_caption_controls(&self, window: &Window, cx: &App) -> Option<AnyElement> {
-        if !cfg!(target_os = "windows") {
-            return None;
-        }
-
-        let theme = Theme::of(cx);
-        let (maximize_id, maximize_glyph) = if window.is_maximized() {
-            ("window-restore", "\u{e923}")
-        } else {
-            ("window-maximize", "\u{e922}")
-        };
-        Some(
-            div()
-                .id("windows-window-controls")
-                .absolute()
-                .top_0()
-                .right_0()
-                .h(px(Theme::TITLEBAR_HEIGHT))
-                .flex()
-                .flex_row()
-                .font_family("Segoe Fluent Icons")
-                .child(windows_caption_button(
-                    "window-minimize",
-                    "\u{e921}",
-                    WindowControlArea::Min,
-                    theme,
-                    false,
-                ))
-                .child(windows_caption_button(
-                    maximize_id,
-                    maximize_glyph,
-                    WindowControlArea::Max,
-                    theme,
-                    false,
-                ))
-                .child(windows_caption_button(
-                    "window-close",
-                    "\u{e8bb}",
-                    WindowControlArea::Close,
-                    theme,
-                    true,
-                ))
-                .into_any_element(),
-        )
-    }
-
     /// Which caption buttons luna itself must draw on Linux: under
     /// client-side decorations (the Wayland default) nobody else will —
     /// without these the window has NO minimize/maximize/close at all.
@@ -8857,18 +8807,14 @@ impl Shell {
             .map_or(0, |l| l.right.iter().flatten().count())
     }
 
-    /// Right padding titlebar content needs to clear the platform's caption
-    /// controls (native Windows cluster / luna-drawn Linux buttons).
+    /// Right padding titlebar content needs to clear luna-drawn Linux caption
+    /// buttons.
     pub(super) fn titlebar_right_pad(&self, base: f32) -> f32 {
-        titlebar_right_padding(
-            cfg!(target_os = "windows"),
-            self.linux_right_caption_count(),
-            base,
-        )
+        titlebar_right_padding(self.linux_right_caption_count(), base)
     }
 
     /// Luna-drawn Linux caption controls, one overlay per populated side.
-    /// Shell-level chrome like the Windows cluster: mounted at the root so
+    /// Shell-level chrome: mounted at the root so
     /// they stay above the splash and every auth/org/error gate.
     fn render_linux_caption_controls(&self, window: &Window, cx: &App) -> Vec<AnyElement> {
         let Some(layout) = self.linux_captions else {
@@ -10076,23 +10022,19 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            // Reorder by dragging the whole row (Windows click jitter would
-            // turn clicks into drags; see `click_activation_drag_enabled`).
+            // Reorder by dragging the whole row.
             .when(dragging, |row| row.opacity(0.35))
-            .when_some(
-                drag.filter(|_| crate::click_activation_drag_enabled()),
-                |row, payload| {
-                    let width = self.settings.sidebar_width - SIDEBAR_GUTTER;
-                    row.on_drag(payload, move |payload, _offset, _window, cx| {
-                        cx.new(|_| SidebarChatGhost {
-                            title: payload.title.clone(),
-                            project: payload.project.clone(),
-                            harness: payload.harness,
-                            width,
-                        })
+            .when_some(drag, |row, payload| {
+                let width = self.settings.sidebar_width - SIDEBAR_GUTTER;
+                row.on_drag(payload, move |payload, _offset, _window, cx| {
+                    cx.new(|_| SidebarChatGhost {
+                        title: payload.title.clone(),
+                        project: payload.project.clone(),
+                        harness: payload.harness,
+                        width,
                     })
-                },
-            )
+                })
+            })
             .when_some(details, |row, details| {
                 let height = details.estimated_height(theme.ui_scale());
                 // Exclude the actual control cluster, not the full status
@@ -14832,10 +14774,6 @@ impl Shell {
             .min_w_0()
             .overflow_x_scroll()
             .track_scroll(&self.right_tab_scroll)
-            // Windows caption hit-testing includes the scroll-only hitboxes
-            // behind each chip. Stop at the scroller so the titlebar cannot
-            // claim tab clicks, while wheel events still reach this scroller.
-            .when(cfg!(target_os = "windows"), |strip| strip.occlude())
             .on_drag_move::<RightTabDrag>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<RightTabDrag>, _, cx| {
                     let payload = event.drag(cx);
@@ -14981,21 +14919,19 @@ impl Shell {
                         cx.notify();
                     }),
                 )
-                .when(crate::click_activation_drag_enabled(), |el| {
-                    el.on_drag(
-                        RightTabDrag {
-                            panel_key: self.panel_key(cx),
-                            from: ix,
-                            title: ghost_title,
-                            workspace_path,
-                        },
-                        |payload, _point, _, cx| {
-                            let title = payload.title.clone();
-                            cx.stop_propagation();
-                            cx.new(|_| SurfaceTabGhost { title })
-                        },
-                    )
-                })
+                .on_drag(
+                    RightTabDrag {
+                        panel_key: self.panel_key(cx),
+                        from: ix,
+                        title: ghost_title,
+                        workspace_path,
+                    },
+                    |payload, _point, _, cx| {
+                        let title = payload.title.clone();
+                        cx.stop_propagation();
+                        cx.new(|_| SurfaceTabGhost { title })
+                    },
+                )
                 .child(
                     // Leading slot: icon normally, ✕ on tab hover — two
                     // stacked layers opacity-swapped by the group hover.
@@ -15820,7 +15756,7 @@ fn window_control_button(
         // quick click zooms NATIVELY on macOS), and the `click_count == 2`
         // zoom handler — never fires with the pointer over a button. It also
         // removes the button's rect from the native Drag control-area
-        // hit-test on Windows/Linux. The click-level stop_propagation is
+        // hit-test on Linux. The click-level stop_propagation is
         // zed's ButtonLike belt on top. Double-click on EMPTY strip space
         // still zooms — nothing occludes it there.
         .occlude()
@@ -15836,72 +15772,19 @@ fn window_control_button(
         )
 }
 
-const WINDOWS_CAPTION_BUTTON_WIDTH: f32 = 36.0;
-const WINDOWS_CAPTION_WIDTH: f32 = WINDOWS_CAPTION_BUTTON_WIDTH * 3.0;
-
-/// Right padding for titlebar content: past the native Windows caption
-/// cluster, or past luna's own Linux caption buttons (10px edge inset +
-/// the button row) when the layout puts any on the right.
-fn titlebar_right_padding(is_windows: bool, linux_right_captions: usize, base: f32) -> f32 {
-    base + if is_windows {
-        WINDOWS_CAPTION_WIDTH
-    } else if linux_right_captions > 0 {
+/// Right padding for titlebar content: past luna's own Linux caption buttons
+/// (10px edge inset + the button row) when the layout puts any on the right.
+fn titlebar_right_padding(linux_right_captions: usize, base: f32) -> f32 {
+    base + if linux_right_captions > 0 {
         10.0 + caption_buttons_width(linux_right_captions)
     } else {
         0.0
     }
 }
 
-/// A Windows-owned caption target using the same system glyphs and native
-/// non-client hit-test areas as GPUI/Zed's platform titlebar.
-fn windows_caption_button(
-    id: &'static str,
-    glyph: &'static str,
-    area: WindowControlArea,
-    theme: &Theme,
-    close: bool,
-) -> impl IntoElement {
-    let (hover_bg, hover_fg, active_bg, active_fg) = if close {
-        let red: gpui::Hsla = gpui::rgb(0xe81123).into();
-        (
-            red,
-            gpui::white(),
-            red.opacity(0.8),
-            gpui::white().opacity(0.8),
-        )
-    } else {
-        (
-            theme.glass_hover(),
-            theme.text,
-            theme.glass_hover().opacity(0.7),
-            theme.text,
-        )
-    };
-    div()
-        .id(id)
-        .w(px(WINDOWS_CAPTION_BUTTON_WIDTH))
-        .h_full()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(crate::typography::ui_rems(11.0))
-        .hover_fill_fg(
-            id,
-            gpui::transparent_black(),
-            hover_bg,
-            theme.text,
-            hover_fg,
-        )
-        .active(move |style| style.bg(active_bg).text_color(active_fg))
-        .occlude()
-        .window_control_area(area)
-        .child(glyph)
-}
-
 /// A Linux caption button in luna's own cluster style (24px, rounded-6,
 /// 16px linear icon). gpui's `WindowControlArea` hit-testing is inert on
-/// Linux, so unlike the Windows cluster these carry explicit click handlers
+/// Linux, so these carry explicit click handlers
 /// (`minimize_window` / `zoom_window` / `remove_window`), the same calls
 /// zed's Linux titlebar makes. `occlude` + `prevent_default` keep them out
 /// of the drag strip's event surface (see [`window_control_button`]).
@@ -16076,7 +15959,7 @@ impl Render for Shell {
         self.settings.surface = crate::appearance::surface(cx);
         self.sync_independent_settings(cx);
         let theme = Theme::of(cx);
-        // The shell frost sits over native desktop blur on macOS and Windows.
+        // The shell frost sits over native desktop blur on macOS.
         // Content surfaces add their own backgrounds over this shared tint.
         let (frost, text, font) = (theme.glass(), theme.text, theme.font_sans.clone());
         let (workspace_scope, auth) = {
@@ -16790,8 +16673,7 @@ impl Render for Shell {
         // Caption controls are shell-level chrome, not Ready-page content:
         // keep them above the splash and every auth/org/error gate as well as
         // the full application. Gate pages also need a drag surface because
-        // they do not render the unified tabs/settings titlebar — on Windows
-        // the native `Drag` control area, on Linux the explicit
+        // they do not render the unified tabs/settings titlebar — on Linux the explicit
         // `start_window_move` strip (the control-area hit-test is inert
         // there); macOS drags gate windows natively.
         let root = if (!restart_required && matches!(gate, GatePhase::Ready))
@@ -16813,7 +16695,6 @@ impl Render for Shell {
             )
         };
         let root = root
-            .children(self.render_windows_caption_controls(window, cx))
             .children(self.render_linux_caption_controls(window, cx))
             // Last so the invisible CSD resize strips sit above every other
             // element at the window edges.
@@ -17721,7 +17602,7 @@ mod tests {
         // strip's own padding already exceeds the 12px cluster start).
         assert_eq!(titlebar_spacer_width(true, true, 10.0), 2.0);
         assert_eq!(titlebar_spacer_width(true, true, 26.0), 0.0);
-        // Linux / Windows: never any inset.
+        // Linux: never any inset.
         assert_eq!(titlebar_spacer_width(false, false, 10.0), 0.0);
         assert_eq!(titlebar_spacer_width(false, true, 10.0), 0.0);
         assert_eq!(
@@ -17732,12 +17613,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_caption_controls_reserve_titlebar_space() {
-        assert_eq!(titlebar_right_padding(true, 0, 16.0), 124.0);
-        assert_eq!(titlebar_right_padding(false, 0, 16.0), 16.0);
-    }
-
-    #[test]
     fn linux_caption_controls_reserve_titlebar_space() {
         // 24px buttons on the cluster's 2px rhythm.
         assert_eq!(caption_buttons_width(0), 0.0);
@@ -17745,9 +17620,9 @@ mod tests {
         assert_eq!(caption_buttons_width(3), 76.0);
         // Right-side captions (the Linux default: minimize,maximize,close):
         // content pads past the 10px edge inset + the button row.
-        assert_eq!(titlebar_right_padding(false, 3, 16.0), 16.0 + 10.0 + 76.0);
+        assert_eq!(titlebar_right_padding(3, 16.0), 16.0 + 10.0 + 76.0);
         // GNOME-vanilla ":close" — a single right button.
-        assert_eq!(titlebar_right_padding(false, 1, 16.0), 16.0 + 10.0 + 24.0);
+        assert_eq!(titlebar_right_padding(1, 16.0), 16.0 + 10.0 + 24.0);
         // Left-side captions ("close:…" layouts) shift the app cluster right
         // by the button row + one 2px gap.
         assert_eq!(cluster_buttons_start(false, false, 0), 10.0);
@@ -21972,41 +21847,13 @@ mod right_tab_mouse_regressions {
             Some(MouseButton::Left),
             gpui::Modifiers::default(),
         );
-        cx.update(|_, cx| {
-            assert_eq!(
-                cx.has_active_drag(),
-                crate::click_activation_drag_enabled(),
-                "tab drag policy does not match the current platform"
-            )
-        });
+        cx.update(|_, cx| assert!(cx.has_active_drag(), "an 8 px tab move starts a drag"));
         cx.simulate_mouse_up(start, MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_down(start, MouseButton::Middle, gpui::Modifiers::default());
         cx.simulate_mouse_up(start, MouseButton::Middle, gpui::Modifiers::default());
         shell.read_with(cx, |shell, _| {
             assert!(!shell.subagent_tabs.contains_key(&1));
             assert!(shell.subagent_tabs.contains_key(&2));
-        });
-    }
-
-    #[cfg(target_os = "windows")]
-    #[gpui::test]
-    fn subagent_tab_click_jitter_selects_without_starting_a_drag(cx: &mut TestAppContext) {
-        let (shell, cx) = setup(cx);
-        let start = cx.debug_bounds("right-surface-tab-0").unwrap().center();
-        let end = start + gpui::point(px(8.), px(0.));
-
-        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::default());
-        cx.simulate_mouse_move(end, Some(MouseButton::Left), gpui::Modifiers::default());
-        cx.update(|_, cx| {
-            assert!(
-                !cx.has_active_drag(),
-                "ordinary Windows click jitter started a tab drag"
-            )
-        });
-        cx.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::default());
-
-        shell.read_with(cx, |shell, cx| {
-            assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(1));
         });
     }
 }

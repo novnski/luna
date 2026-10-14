@@ -1271,19 +1271,15 @@ impl Theme {
     }
 
     // ---- numbers drive layout (px) ----
-    /// Frost translucency over the blurred window background (macOS vibrancy
-    /// or Windows Acrylic). Linux stays opaque because compositor blur is not
+    /// Frost translucency over the blurred window background (macOS
+    /// vibrancy). Linux stays opaque because compositor blur is not
     /// guaranteed; a merely transparent window would expose the raw desktop.
     /// Darkness matched by eye to a reference Electron app's dark glass. That
     /// scrim is 0.76 over `hsl(0 0% 3%)`, but it sits on Electron's
     /// `under-window` vibrancy MATERIAL, which pre-darkens the blur; our bare
     /// backdrop blur has no material layer, so the scrim runs heavier to land
     /// on the same perceived tone (see [`Theme::glass`]).
-    pub const GLASS_ALPHA: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.80
-    } else {
-        1.0
-    };
+    pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
     /// Light-mode frost alpha. A near-solid tint keeps thin metadata readable
     /// over a changing desktop while retaining a little of the native material.
     ///
@@ -1294,11 +1290,7 @@ impl Theme {
     /// vibrancy material is mostly white). Floating cards compensate further:
     /// see [`Self::glass_overlay`], where light coverage steps up to keep menu
     /// text legible over an unknown backdrop.
-    pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.94
-    } else {
-        1.0
-    };
+    pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(target_os = "macos") { 0.94 } else { 1.0 };
     /// The unified window titlebar (traffic lights + cluster + tabs). Content
     /// rides [`Self::TITLEBAR_TOP_PAD`] lower than center so the air above
     /// matches the perceived gap to the inset card below (border + card body).
@@ -1443,16 +1435,10 @@ impl Theme {
     /// backdrop blur and translucent tints. Unlike [`Self::is_glass`] this is
     /// scene-level: the blur runs on in-app content inside the window, not on
     /// the desktop behind it, so it needs no compositor vibrancy — macOS
-    /// rasterizes it in Metal, Linux in wgpu, and Windows in Direct3D.
-    /// Windows window chrome uses native Acrylic independently of these
-    /// scene-level blurs.
+    /// rasterizes it in Metal and Linux in wgpu.
     pub fn is_frost(&self) -> bool {
         self.surface_treatment == SurfaceTreatment::Frosted
-            && cfg!(any(
-                target_os = "macos",
-                target_os = "linux",
-                target_os = "windows"
-            ))
+            && cfg!(any(target_os = "macos", target_os = "linux"))
     }
 
     /// Hover wash for chrome that sits on glass (sidebar rows, tabs,
@@ -2358,8 +2344,6 @@ impl Global for Theme {}
 fn system_sans() -> &'static str {
     if cfg!(target_os = "macos") {
         "Helvetica"
-    } else if cfg!(target_os = "windows") {
-        "Segoe UI"
     } else {
         "DejaVu Sans"
     }
@@ -2368,8 +2352,6 @@ fn system_sans() -> &'static str {
 fn system_mono() -> &'static str {
     if cfg!(target_os = "macos") {
         "Menlo"
-    } else if cfg!(target_os = "windows") {
-        "Consolas"
     } else {
         "DejaVu Sans Mono"
     }
@@ -3037,15 +3019,6 @@ mod tests {
         assert_eq!(frosted.glass().h, frosted.surface.h);
         assert_eq!(frosted.glass().s, frosted.surface.s);
         assert_eq!(frosted.glass().l, frosted.surface.l);
-        #[cfg(target_os = "windows")]
-        {
-            assert!(frosted.is_glass());
-            assert_eq!(
-                frosted.window_background_appearance(),
-                gpui::WindowBackgroundAppearance::Blurred
-            );
-            assert!(frosted.is_frost());
-        }
 
         let opaque_luna = Theme::for_selection(
             Appearance::Dark,
@@ -3616,7 +3589,7 @@ mod tests {
         set_current_appearance(Appearance::Dark);
     }
 
-    /// Both appearances are glass-forward on macOS and Windows. Light frost
+    /// Both appearances are glass-forward on macOS. Light frost
     /// runs heavier than dark's (a light tint controls the blur less), and floating cards
     /// step their tint coverage up in light so menu text stays on a
     /// known-enough background — assert both relationships so the frost and

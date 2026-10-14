@@ -120,16 +120,6 @@ pub(crate) fn init_appearance(data_dir: &std::path::Path, cx: &mut App) -> setti
     ui_settings
 }
 
-/// Whether a control whose primary action is click activation may also start
-/// a GPUI drag from the same hitbox. GPUI promotes pointer travel above 2 px
-/// to a drag. Normal Windows click jitter can cross that threshold, cancel the
-/// click, and leave the drag ghost following the pointer instead of activating
-/// the control. Drag-first controls (resize handles, scrollbars, queue rows)
-/// intentionally do not use this policy.
-pub(crate) const fn click_activation_drag_enabled() -> bool {
-    !cfg!(target_os = "windows")
-}
-
 /// Key-down listener for a focusable `on_click` control. GPUI already turns
 /// Enter/Space on the focused element into exactly one keyboard click on
 /// key-up (`ClickEvent::Keyboard`), and its key-down recorder runs before any
@@ -553,12 +543,11 @@ fn open_main_window(
                 // the titlebar, not the menu bar.
                 // macOS: frameless-inset chrome like the original Electron app
                 // (`titleBarStyle: "hiddenInset"`, traffic lights at 14,15 —
-                // feature-inventory §1.1). The strip is custom-drawn. Windows
-                // still needs a native title for taskbar previews and Alt+Tab. On
-                // Linux/Windows `appears_transparent` hides the system titlebar
-                // for our custom-drawn chrome; harmless where unsupported.
+                // feature-inventory §1.1). The strip is custom-drawn. On Linux
+                // `appears_transparent` hides the system titlebar for our
+                // custom-drawn chrome; harmless where unsupported.
                 titlebar: Some(TitlebarOptions {
-                    title: cfg!(target_os = "windows").then(|| "LUNA".into()),
+                    title: None,
                     appears_transparent: true,
                     // Native lights are 14px tall: top 14 → center 21, matching
                     // the 38px titlebar row with 4px top-only content padding.

@@ -118,7 +118,7 @@ pub fn resolve_codex_executable() -> Option<PathBuf> {
 /// A ready-to-spawn `codex login` command for the engine's account flow.
 ///
 /// Shares the harness's full resolution (`CODEX_EXECUTABLE`, PATH, login-shell
-/// snapshot, install locations — including the Windows npm payload layout) and
+/// snapshot, install locations) and
 /// its child-PATH composition, so "Add account" launches exactly the binary
 /// the harness itself would run. `CODEX_HOME` isolates the login from the live
 /// `~/.codex` session; the caller owns stdio wiring and cancellation.
@@ -198,9 +198,7 @@ impl CodexHarness {
             HarnessError::NotInstalled(
                 "codex (searched PATH, the login shell's PATH, ~/.local/bin, \
                  ~/.codex/bin, ~/.npm-global/bin, /opt/homebrew/bin, /usr/local/bin, \
-                 and fnm/nvm/volta/pnpm/bun install dirs; Windows also checks USERPROFILE \
-                 and explicit NVM_SYMLINK/VOLTA_HOME/PNPM_HOME; set CODEX_EXECUTABLE \
-                 to override)"
+                 and fnm/nvm/volta/pnpm/bun install dirs; set CODEX_EXECUTABLE to override)"
                     .into(),
             )
         })

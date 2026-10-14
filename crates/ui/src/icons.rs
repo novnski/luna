@@ -252,8 +252,8 @@ icon_assets![
     (CLOSE, "close"),
     // Hand-drawn Linux caption glyphs (minimize dash, maximize square,
     // restore stacked squares) in the same style as `close` — drawn for the
-    // client-side-decoration window controls; no system glyph font exists on
-    // Linux the way Segoe Fluent Icons does on Windows.
+    // client-side-decoration window controls; Linux has no system caption
+    // glyph font.
     (WINDOW_MINIMIZE, "window-minimize"),
     (WINDOW_MAXIMIZE, "window-maximize"),
     (WINDOW_RESTORE, "window-restore"),

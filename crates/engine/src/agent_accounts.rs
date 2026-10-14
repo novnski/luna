@@ -1984,16 +1984,6 @@ fn create_symlink(target: &Path, link: &Path) -> Result<(), EngineError> {
     Ok(())
 }
 
-#[cfg(windows)]
-fn create_symlink(target: &Path, link: &Path) -> Result<(), EngineError> {
-    if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)?;
-    } else {
-        std::os::windows::fs::symlink_file(target, link)?;
-    }
-    Ok(())
-}
-
 fn read_json(file: &Path) -> Option<serde_json::Value> {
     let mut raw = std::fs::read(file).ok()?;
     let parsed = serde_json::from_slice(&raw)

@@ -518,8 +518,6 @@ pub mod mock;
 pub mod opencode;
 pub mod process;
 pub mod shell_env;
-#[cfg(windows)]
-pub mod windows_process;
 
 /// Add the login shell's PATH to a child process while preserving the PATH of
 /// the current process. This lets GUI/service launches find user-installed
@@ -642,30 +640,19 @@ pub use opencode::OpencodeHarness;
 // Child lifecycle (shared by the codex and ACP harnesses)
 // ---------------------------------------------------------------------------
 
-/// Reap the child: Unix sends SIGTERM then SIGKILL after `kill_grace`;
-/// Windows terminates the owned job after protocol shutdown has finished.
+/// Reap the child: send SIGTERM, then SIGKILL after `kill_grace`.
 pub(crate) async fn shutdown_child(child: &mut process::Child, kill_grace: std::time::Duration) {
-    #[cfg(windows)]
-    {
-        let _ = kill_grace;
-        let _ = child.start_kill();
-        let _ = child.wait().await;
+    if matches!(child.try_wait(), Ok(Some(_))) {
         return;
     }
-    #[cfg(not(windows))]
-    {
-        if matches!(child.try_wait(), Ok(Some(_))) {
+    if let Some(pid) = child.id() {
+        send_signal(&pid, Signal::Term);
+        if tokio::time::timeout(kill_grace, child.wait()).await.is_ok() {
             return;
         }
-        if let Some(pid) = child.id() {
-            send_signal(&pid, Signal::Term);
-            if tokio::time::timeout(kill_grace, child.wait()).await.is_ok() {
-                return;
-            }
-        }
-        let _ = child.start_kill();
-        let _ = child.wait().await;
     }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 #[derive(Clone, Copy)]
@@ -683,13 +670,6 @@ pub(crate) fn send_signal(pid: &u32, signal: Signal) {
     // SAFETY: plain kill(2) on a pid we spawned and have not yet reaped.
     unsafe {
         libc::kill(*pid as libc::pid_t, sig);
-    }
-}
-
-#[cfg(windows)]
-pub(crate) fn send_signal(job: &std::sync::Arc<windows_process::Job>, _signal: Signal) {
-    if let Err(error) = job.terminate() {
-        tracing::warn!(%error, "could not terminate Windows agent job");
     }
 }
 

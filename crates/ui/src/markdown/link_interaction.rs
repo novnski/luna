@@ -117,7 +117,7 @@ impl Element for LinkRanges {
             state.focused = focused;
             state.bounds = bounds;
             state.tooltip_bounds.set(None);
-            #[cfg(all(test, any(target_os = "linux", windows)))]
+            #[cfg(all(test, target_os = "linux"))]
             rendered_tests::TOOLTIP_BOUNDS.with(|bounds| {
                 *bounds.borrow_mut() = Some(state.tooltip_bounds.clone());
             });
@@ -534,11 +534,9 @@ mod tests {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, target_os = "linux"))]
 mod rendered_tests {
     use super::*;
-    #[cfg(windows)]
-    use crate::test_platform::application as test_application;
     #[cfg(target_os = "linux")]
     use crate::test_platform::headless as test_application;
     use gpui::{Context, Render};

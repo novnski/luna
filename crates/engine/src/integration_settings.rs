@@ -1297,14 +1297,7 @@ fn rename_directory_noreplace(source: &Path, destination: &Path) -> Result<(), E
     Ok(())
 }
 
-#[cfg(windows)]
-fn rename_directory_noreplace(source: &Path, destination: &Path) -> Result<(), EngineError> {
-    // Windows RenameFile does not replace an existing directory.
-    std::fs::rename(source, destination)?;
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn rename_directory_noreplace(_source: &Path, _destination: &Path) -> Result<(), EngineError> {
     Err(EngineError::Other(
         "Atomic no-replace skill install is unavailable on this platform".into(),

@@ -42,29 +42,6 @@ fn main() {
         eprint!("captured stderr");
         return;
     }
-    #[cfg(windows)]
-    if args.get(1).is_some_and(|arg| arg == "--job-owner") {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _guard = runtime.enter();
-        let path = std::env::current_dir()
-            .unwrap()
-            .join("descendant-pids.json");
-        let mut command = luna_harness::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .arg("--tree-child")
-            .arg(&path)
-            .stdin(luna_harness::process::Stdio::null())
-            .stdout(luna_harness::process::Stdio::null())
-            .stderr(luna_harness::process::Stdio::null());
-        let _owned = command.spawn().unwrap();
-        let pids = await_tree(&path);
-        println!("{}", serde_json::to_string(&pids).unwrap());
-        std::io::stdout().flush().unwrap();
-        let mut release = String::new();
-        std::io::stdin().read_line(&mut release).unwrap();
-        // Bypass Rust destructors: emulate an application exiting abruptly.
-        std::process::exit(0);
-    }
     if args.get(1).is_some_and(|arg| arg == "--tree-leaf") {
         std::thread::sleep(std::time::Duration::from_secs(20));
         return;
@@ -153,11 +130,6 @@ fn main() {
 fn tree_command() -> std::process::Command {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command.stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
     command
 }
 

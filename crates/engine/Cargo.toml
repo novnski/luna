@@ -50,9 +50,6 @@ tempfile.workspace = true
 # RM-01 direct gateway (the host is Unix-only).
 luna-remote.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
-
 [dev-dependencies]
 luna-mobile = { path = "../mobile" }
 tokio-tungstenite.workspace = true

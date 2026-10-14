@@ -246,11 +246,9 @@ impl FilesSurface {
                         this.tree_focus.focus(window, cx);
                         this.activate_tree_path(path.clone(), cx);
                     }))
-                    .when(crate::click_activation_drag_enabled(), |element| {
-                        element.on_drag(drag_payload, |payload, _, _, cx| {
-                            cx.stop_propagation();
-                            workspace_path_drag_ghost(payload, cx)
-                        })
+                    .on_drag(drag_payload, |payload, _, _, cx| {
+                        cx.stop_propagation();
+                        workspace_path_drag_ghost(payload, cx)
                     })
                     // Opt-in measurement probe (slice 6): the row's painted
                     // bounds, so a native fixture can start a real drag here.

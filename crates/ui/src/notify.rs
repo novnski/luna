@@ -17,8 +17,6 @@
 //!   `osascript`, attributed to Script Editor (cosmetics only).
 //! - Linux: `notify-send` (libnotify's CLI, present on every mainstream
 //!   desktop).
-//! - Windows: no-op for now — toasts require a registered AppUserModelID
-//!   (an installer concern); the chime still covers it.
 //! - `LUNA_DISABLE_NOTIFICATIONS` env kill-switch + the
 //!   `notificationsEnabled` ui-setting (checked by the caller);
 //! - failures are logged and swallowed — a missing notifier must never

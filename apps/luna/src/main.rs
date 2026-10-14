@@ -2,8 +2,6 @@
 //! local-only without credentials. `luna login` and `luna logout` select the
 //! profile used by the next engine start without mutating a live runtime.
 
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
 mod auth_cli;
 mod daemon;
 mod inspect_cli;
@@ -29,9 +27,6 @@ struct Cli {
     /// Open a LUNA task URL.
     #[arg(value_name = "URL")]
     open_url: Option<String>,
-    #[cfg(windows)]
-    #[arg(long, hide = true)]
-    wait_for_exit: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -161,8 +156,6 @@ fn validate_owned_service_config() -> anyhow::Result<()> {
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> anyhow::Result<()> {
-    #[cfg(windows)]
-    attach_parent_console();
     let argv: Vec<_> = std::env::args_os().collect();
     let inspect_json = argv
         .get(1)
@@ -196,10 +189,6 @@ fn main() -> anyhow::Result<()> {
     }
     #[cfg(not(target_os = "macos"))]
     validate_owned_service_config()?;
-    #[cfg(windows)]
-    if let Some(pid) = cli.wait_for_exit {
-        luna_update::windows::wait_for_exit(pid)?;
-    }
     // Long-running modes log at info, one-shot CLI commands at warn (RUST_LOG
     // overrides either).
     // loro's internal block-encode diagnostics log at info and flood
@@ -465,31 +454,6 @@ fn parse_cli(argv: Vec<std::ffi::OsString>, inspect_json: bool) -> Cli {
                 std::process::exit(inspect_cli::print_parse_error(&error));
             }
             error.exit();
-        }
-    }
-}
-
-#[cfg(windows)]
-fn attach_parent_console() {
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::{
-        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
-        STD_OUTPUT_HANDLE, SetStdHandle,
-    };
-
-    // The GUI subsystem prevents Explorer from creating a console at startup.
-    // Reuse an existing parent's console for CLI output and cargo run, without
-    // allocating one. Attach before Clap so help and argument errors work too.
-    // Preserve redirected pipes/files: attaching may replace standard handles.
-    unsafe {
-        let saved = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
-            .map(|id| (id, GetStdHandle(id)));
-        if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
-            for (id, handle) in saved {
-                if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
-                    SetStdHandle(id, handle);
-                }
-            }
         }
     }
 }

@@ -3,7 +3,6 @@ name: release
 # Build release artifacts and publish them:
 #   - Linux headless tarballs (x86_64 + aarch64) via scripts/package-linux.sh
 #   - macOS dmg (Apple silicon) via scripts/package-macos.sh
-#   - Windows portable zip (x86_64) via scripts/package-windows.ps1
 # then create a GitHub Release in this repository with artifacts and a signed
 # updater manifest. The in-app updater trusts the pinned Ed25519 public key,
 # independently of GitHub and the optional Apple code-signing identity.
@@ -152,37 +151,9 @@ jobs:
             target/package/*.tar.gz
           if-no-files-found: error
 
-  windows:
-    needs: validate
-    runs-on: windows-2022
-    timeout-minutes: 90
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@v4
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-      - name: Locate Windows SDK shader compiler
-        run: |
-          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/fxc.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $fxc) { throw 'Windows SDK fxc.exe is required for GPUI release shaders' }
-          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
-      - uses: Swatinem/rust-cache@v2
-      - name: package portable app
-        run: ./scripts/package-windows.ps1 -ReleasesUrl "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-${{ runner.arch }}
-          path: |
-            target/package/*.zip
-            target/package/*.exe
-          if-no-files-found: error
-
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, linux, macos, windows]
+    needs: [validate, linux, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,8 +168,7 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           ls release-assets/
           for platform in linux-x86_64.tar.gz linux-aarch64.tar.gz \
-              macos-arm64.dmg macos-arm64-app.tar.gz \
-              windows-x86_64.zip windows-x86_64.exe; do
+              macos-arm64.dmg macos-arm64-app.tar.gz; do
             test -f "release-assets/luna-$ver-$platform" \
               || { echo "missing artifact for tag v$ver: $platform — check builds and Cargo.toml version"; exit 1; }
           done

@@ -812,11 +812,6 @@ impl ProcessRunner for SystemProcessRunner {
         if request.program == "gh" {
             luna_harness::compose_login_shell_path(&mut command);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.as_std_mut().creation_flags(0x08000000);
-        }
         command
             .args(&request.args)
             .current_dir(&request.cwd)
@@ -930,22 +925,6 @@ mod tests {
                 #[cfg(unix)]
                 {
                     request.program = self.executable.to_string_lossy().into_owned();
-                }
-                #[cfg(windows)]
-                {
-                    request.args.splice(
-                        ..0,
-                        [
-                            "-NoLogo".into(),
-                            "-NoProfile".into(),
-                            "-NonInteractive".into(),
-                            "-ExecutionPolicy".into(),
-                            "Bypass".into(),
-                            "-File".into(),
-                            self.executable.to_string_lossy().into_owned(),
-                        ],
-                    );
-                    request.program = "powershell.exe".into();
                 }
             }
             SystemProcessRunner.run(request).await
@@ -1111,8 +1090,6 @@ mod tests {
 
         #[cfg(unix)]
         let fake_gh = temp.path().join("gh");
-        #[cfg(windows)]
-        let fake_gh = temp.path().join("gh.ps1");
         #[cfg(unix)]
         let fake_gh_contents = r##"#!/bin/sh
 if [ "$GH_PROMPT_DISABLED" != "1" ]; then
@@ -1120,13 +1097,6 @@ if [ "$GH_PROMPT_DISABLED" != "1" ]; then
   exit 2
 fi
 printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https://github.com/acme/luna/pull/90","state":"OPEN","baseRefName":"main","headRefName":"feature/status","updatedAt":"2026-08-15T12:00:00Z","isCrossRepository":false,"headRepositoryOwner":{"login":"acme"}}]'
-"##;
-        #[cfg(windows)]
-        let fake_gh_contents = r##"if ($env:GH_PROMPT_DISABLED -ne '1') {
-  [Console]::Error.WriteLine('interactive auth was not disabled')
-  exit 2
-}
-[Console]::Out.WriteLine('[{"number":90,"title":"Host-resolved pull request","url":"https://github.com/acme/luna/pull/90","state":"OPEN","baseRefName":"main","headRefName":"feature/status","updatedAt":"2026-08-15T12:00:00Z","isCrossRepository":false,"headRepositoryOwner":{"login":"acme"}}]')
 "##;
         std::fs::write(&fake_gh, fake_gh_contents).expect("write fake gh");
         #[cfg(unix)]
@@ -1236,11 +1206,6 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
         let marker = temp.path().join("transport-ran");
         #[cfg(unix)]
         let transport_command = format!("sh -c 'touch {}; exit 1'", marker.display());
-        #[cfg(windows)]
-        let transport_command = format!(
-            "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType File -Force -LiteralPath '{}'; exit 1\"",
-            marker.to_string_lossy().replace('\'', "''")
-        );
         run_git(
             &checkout,
             &["config", "core.sshCommand", &transport_command],

@@ -1769,20 +1769,18 @@ impl TerminalPanel {
                                     this.close_tab(&chat_close, key, window, cx);
                                 }),
                             )
-                            .when(crate::click_activation_drag_enabled(), |el| {
-                                el.on_drag(
-                                    TabDragPayload {
-                                        chat: chat_drag,
-                                        from: ix,
-                                        title: ghost_title,
-                                    },
-                                    |payload, _point, _, cx| {
-                                        let title = payload.title.clone();
-                                        cx.stop_propagation();
-                                        cx.new(|_| TabGhost { title })
-                                    },
-                                )
-                            })
+                            .on_drag(
+                                TabDragPayload {
+                                    chat: chat_drag,
+                                    from: ix,
+                                    title: ghost_title,
+                                },
+                                |payload, _point, _, cx| {
+                                    let title = payload.title.clone();
+                                    cx.stop_propagation();
+                                    cx.new(|_| TabGhost { title })
+                                },
+                            )
                             .when(exited, |el| {
                                 el.opacity(if theme.appearance.is_light() {
                                     0.8

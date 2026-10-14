@@ -1941,10 +1941,6 @@ fn native_friendly_device_name() -> Option<String> {
 
 #[cfg(not(target_os = "macos"))]
 fn native_friendly_device_name() -> Option<String> {
-    #[cfg(target_os = "windows")]
-    return std::env::var("COMPUTERNAME").ok();
-
-    #[cfg(not(target_os = "windows"))]
     None
 }
 
@@ -2093,27 +2089,6 @@ impl DeviceIdentityLock {
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.share_mode(0);
-            let mut retries = 200;
-            let file = loop {
-                match options.open(&path) {
-                    Ok(file) => break file,
-                    Err(err)
-                        if err.kind() == std::io::ErrorKind::PermissionDenied && retries > 0 =>
-                    {
-                        retries -= 1;
-                        std::thread::sleep(std::time::Duration::from_millis(5));
-                    }
-                    Err(err) => return Err(err.into()),
-                }
-            };
-            return Ok(Self { _file: file });
-        }
-
-        #[cfg(not(windows))]
         let file = options.open(&path)?;
 
         #[cfg(unix)]
@@ -2130,7 +2105,6 @@ impl DeviceIdentityLock {
             }
         }
 
-        #[cfg(not(windows))]
         Ok(Self { _file: file })
     }
 }

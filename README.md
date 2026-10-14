@@ -19,7 +19,7 @@ Provider capabilities vary; LUNA exposes the controls supported by the selected 
 
 Download an available build for your platform from [GitHub Releases](https://github.com/novnski/luna/releases), or build from source below. Install and authenticate the coding agent you want to use, then open LUNA, add a project folder, and start a conversation with that provider.
 
-The repository contains desktop code for macOS, Linux, and Windows, plus an iOS companion. Packaging, system dependencies, and feature support differ by platform. The [iOS guide](apps/ios/README.md) describes its current capabilities and migration limits.
+The repository contains desktop code for macOS and Linux, plus an iOS companion. Packaging, system dependencies, and feature support differ by platform. The [iOS guide](apps/ios/README.md) describes its current capabilities and migration limits.
 
 ## Build from source
 
@@ -60,11 +60,7 @@ scripts/cargo.sh build --locked -p luna -p luna-extension-host -p luna-engine
 ./target/debug/luna
 ```
 
-### Windows
-
-Follow [Windows development](docs/reference/windows-development.md) for the MSVC toolchain, Windows SDK, native dependencies, build commands, and portable release layout.
-
-On macOS and Linux, use `scripts/cargo.sh` for Rust commands. It applies the repository's build guard and uses the optional Mr Boxington cache when installed. See [build cache and disk limits](docs/reference/build-cache.md).
+Use `scripts/cargo.sh` for Rust commands. It applies the repository's build guard and uses the optional Mr Boxington cache when installed. See [build cache and disk limits](docs/reference/build-cache.md).
 
 ## Local engine and data
 
@@ -79,7 +75,7 @@ Run a foreground engine without the UI, or inspect a running instance:
 
 `luna daemon install` installs a background service on supported macOS/Linux systems; `luna daemon start`, `stop`, and `status` manage an installed service. Do not run two engines against the same data directory.
 
-Default application data lives in `~/.luna` on macOS/Linux and `%LOCALAPPDATA%\LUNA` on Windows. `LUNA_DATA_DIR` selects a different root. Provider credentials remain in their provider-owned locations. The development app's separate data directory is intentional: a CLI command aimed at it must use that same `LUNA_DATA_DIR` and `LUNA_IPC_PORT=59777`.
+Default application data lives in `~/.luna`. `LUNA_DATA_DIR` selects a different root. Provider credentials remain in their provider-owned locations. The development app's separate data directory is intentional: a CLI command aimed at it must use that same `LUNA_DATA_DIR` and `LUNA_IPC_PORT=59777`.
 
 ## Optional sync and remote access
 

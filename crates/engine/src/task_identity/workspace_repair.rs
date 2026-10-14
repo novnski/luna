@@ -1112,11 +1112,6 @@ async fn git_metadata(root: &Path, args: &[&str]) -> Result<Vec<u8>, EngineError
         .stderr(std::process::Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0")
         .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.as_std_mut().creation_flags(0x08000000);
-    }
     let mut child = command.spawn()?;
     let stdout = child
         .stdout

@@ -627,13 +627,6 @@ mod tests {
         let stale = std::time::SystemTime::now() - (STAGING_TTL + Duration::from_secs(60));
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            // A directory handle needs backup semantics; setting its timestamp
-            // needs FILE_WRITE_ATTRIBUTES rather than write access to its data.
-            options.custom_flags(0x02000000).access_mode(0x100);
-        }
         options.open(&racing).unwrap().set_modified(stale).unwrap();
         uploads.append("upload-other", "aGk=", Some(0)).unwrap();
         assert!(
@@ -886,66 +879,12 @@ fn open_generated_file(
     Ok((file, Vec::new()))
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn open_generated_file(
     root: &Path,
     relative: &Path,
 ) -> std::io::Result<(std::fs::File, Vec<std::fs::File>)> {
     Ok((std::fs::File::open(root.join(relative))?, Vec::new()))
-}
-
-// Windows has no openat equivalent in std. Hold every traversed directory
-// without delete sharing, reject reparse points, and deny write/delete sharing
-// on the source until publication. This prevents path replacement and writes
-// even when NTFS timestamps and file lengths would compare equal.
-#[cfg(windows)]
-fn open_generated_file(
-    root: &Path,
-    relative: &Path,
-) -> std::io::Result<(std::fs::File, Vec<std::fs::File>)> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    const FILE_SHARE_READ: u32 = 1;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let invalid = || std::io::Error::other("Invalid generated image path");
-    let open_directory = |path: &Path| -> std::io::Result<std::fs::File> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(invalid());
-        }
-        Ok(file)
-    };
-    let mut parents = vec![open_directory(root)?];
-    let mut path = root.to_path_buf();
-    let components: Vec<_> = relative.components().collect();
-    if components.is_empty() {
-        return Err(invalid());
-    }
-    for (index, component) in components.iter().enumerate() {
-        let std::path::Component::Normal(name) = component else {
-            return Err(invalid());
-        };
-        path.push(name);
-        if index + 1 < components.len() {
-            parents.push(open_directory(&path)?);
-        }
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(&path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(invalid());
-    }
-    Ok((file, parents))
 }
 
 impl Uploads {
@@ -1119,30 +1058,5 @@ mod generated_image_tests {
             assert!(result.is_err());
             assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 0);
         }
-    }
-    #[cfg(windows)]
-    #[test]
-    fn generated_image_copy_locks_source_and_parent_against_mutation() {
-        let root = tempfile::tempdir().unwrap();
-        let store = tempfile::tempdir().unwrap();
-        let parent = root.path().join("nested");
-        std::fs::create_dir(&parent).unwrap();
-        let source = parent.join("source.png");
-        let replacement = root.path().join("replacement.png");
-        std::fs::write(&source, PNG).unwrap();
-        std::fs::write(&replacement, PNG).unwrap();
-        let uploads = Uploads::from_root(store.path());
-        let result = uploads
-            .import_generated_image_after_copy(&source, root.path(), "key", || {
-                assert!(std::fs::write(&source, b"changed").is_err());
-                assert!(std::fs::rename(&replacement, &source).is_err());
-                assert!(std::fs::rename(&parent, root.path().join("moved")).is_err());
-            })
-            .unwrap();
-        assert_eq!(std::fs::read(&result.path).unwrap(), PNG);
-        assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 1);
-        // All locks must be released after the operation.
-        std::fs::write(&source, b"changed").unwrap();
-        std::fs::rename(&parent, root.path().join("moved")).unwrap();
     }
 }

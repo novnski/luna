@@ -18,8 +18,7 @@ ignored. No message is sent automatically.
   retained AT-SPI object identity. Portal captures omit accessibility text because
   the selected native window cannot currently be verified.
 - iOS displays desktop Appshots received through the existing attachment
-  transport. It does not capture other iOS applications. Windows capture is not
-  implemented.
+  transport. It does not capture other iOS applications.
 
 Optional accessibility collection has a 900 ms budget. Linux races enrichment
 against the overall deadline; macOS applies the remaining timeout to each queried

@@ -178,15 +178,13 @@ pub struct ExtensionScope {
 pub fn default_managed_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
         PathBuf::from("/Library/Application Support/ClaudeCode")
-    } else if cfg!(windows) {
-        PathBuf::from(r"C:\Program Files\ClaudeCode")
     } else {
         PathBuf::from("/etc/claude-code")
     }
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }

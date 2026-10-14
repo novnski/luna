@@ -212,9 +212,8 @@ impl ClaudeHarness {
             HarnessError::NotInstalled(
                 "claude (searched PATH, the login shell's PATH, ~/.claude/local, \
                  ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, and \
-                 fnm/nvm/volta/pnpm/bun install dirs; Windows also checks USERPROFILE \
-                 and explicit NVM_SYMLINK/VOLTA_HOME/PNPM_HOME; set \
-                 CLAUDE_CODE_EXECUTABLE to override)"
+                 fnm/nvm/volta/pnpm/bun install dirs; set CLAUDE_CODE_EXECUTABLE to \
+                 override)"
                     .into(),
             )
         })

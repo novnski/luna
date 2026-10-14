@@ -21,9 +21,6 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
 
-#[cfg(windows)]
-pub mod windows;
-
 /// The version compiled into this binary (the workspace version).
 pub const fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -339,9 +336,6 @@ pub enum InstallKind {
     Managed { app_root: PathBuf },
     /// Running out of a macOS `.app` bundle.
     MacApp { bundle: PathBuf },
-    /// Portable Windows package marked as update-managed by its package file.
-    #[cfg(windows)]
-    WindowsPortable { directory: PathBuf },
     /// Source build or hand-copied binary — updates are report-only.
     Unmanaged,
 }
@@ -350,8 +344,6 @@ impl InstallKind {
     pub fn supports_desktop_update(&self) -> bool {
         match self {
             Self::MacApp { .. } => true,
-            #[cfg(windows)]
-            Self::WindowsPortable { .. } => true,
             _ => false,
         }
     }
@@ -364,10 +356,6 @@ impl InstallKind {
     ) -> anyhow::Result<PathBuf> {
         match self {
             Self::MacApp { .. } => stage_mac_app(edge_url, manifest, data_dir).await,
-            #[cfg(windows)]
-            Self::WindowsPortable { directory } => {
-                windows::stage(edge_url, manifest, directory).await
-            }
             _ => bail!("this installation does not support desktop updates"),
         }
     }
@@ -376,8 +364,6 @@ impl InstallKind {
     pub fn apply_desktop(&self, staged: &Path) -> anyhow::Result<()> {
         match self {
             Self::MacApp { bundle } => apply_and_relaunch_mac_app(staged, bundle),
-            #[cfg(windows)]
-            Self::WindowsPortable { directory } => windows::apply(staged, directory, true),
             _ => bail!("this installation does not support desktop updates"),
         }
     }
@@ -396,14 +382,7 @@ fn detect_install_from(exe: &Path, home: Option<&Path>) -> InstallKind {
 }
 
 fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> InstallKind {
-    #[cfg(windows)]
-    if os == "windows" && windows::is_managed(exe) {
-        return InstallKind::WindowsPortable {
-            directory: exe.parent().unwrap().to_owned(),
-        };
-    }
-    // Never interpret a coincidental Windows `%HOME%\.luna\app` layout as
-    // the Unix symlink-managed installation.
+    // Only Linux and macOS have the symlink-managed installation.
     if !managed_updates_supported(os) {
         return InstallKind::Unmanaged;
     }
@@ -1248,68 +1227,6 @@ mod tests {
             format!("luna-0.2.0-{os}-{arch}.tar.gz")
         );
         assert!(mac_app_artifact("0.2.0").ends_with("-app.tar.gz"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_is_not_misclassified_as_linux() {
-        assert_eq!(platform_key().0, "windows");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_install_is_always_unmanaged() {
-        assert_eq!(
-            detect_install_from(
-                Path::new(r"C:\Users\u\.luna\app\0.2.0\luna.exe"),
-                Some(Path::new(r"C:\Users\u")),
-            ),
-            InstallKind::Unmanaged
-        );
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn windows_rejects_platform_specific_updates_before_side_effects() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manifest = Manifest {
-            version: "9.9.9".into(),
-            files: BTreeMap::new(),
-            ..Default::default()
-        };
-        let app_root = tmp.path().join("app");
-        let data_dir = tmp.path().join("data");
-
-        let managed_err = stage_headless("http://127.0.0.1:1", &manifest, &app_root)
-            .await
-            .unwrap_err();
-        assert!(managed_err.to_string().contains("not supported on windows"));
-        assert!(!app_root.exists(), "managed staging must not touch disk");
-
-        let mac_err = stage_mac_app("http://127.0.0.1:1", &manifest, &data_dir)
-            .await
-            .unwrap_err();
-        assert!(mac_err.to_string().contains("not supported on windows"));
-        assert!(!data_dir.exists(), "macOS staging must not touch disk");
-
-        assert!(
-            apply_headless(&app_root, &manifest.version)
-                .unwrap_err()
-                .to_string()
-                .contains("not supported on windows")
-        );
-        assert!(
-            apply_mac_app(&data_dir.join("LUNA.app"), &data_dir.join("Installed.app"))
-                .unwrap_err()
-                .to_string()
-                .contains("not supported on windows")
-        );
-        assert!(
-            restart_service()
-                .unwrap_err()
-                .to_string()
-                .contains("not supported on windows")
-        );
     }
 
     #[test]

@@ -2058,7 +2058,7 @@ fn input_bindings(context: &'static str) -> Vec<KeyBinding> {
         bindings.push(KeyBinding::new(&format!("{prefix}-z"), Undo, ctx));
         bindings.push(KeyBinding::new(&format!("shift-{prefix}-z"), Redo, ctx));
     }
-    // Word-level editing: Option on macOS, Ctrl on Windows/Linux.
+    // Word-level editing: Option on macOS, Ctrl on Linux.
     let word_edit_prefix = if cfg!(target_os = "macos") {
         "alt"
     } else {

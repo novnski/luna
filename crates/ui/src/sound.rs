@@ -4,8 +4,7 @@
 //! - embedded completion, input-request, attention and Appshot chimes;
 //! - macOS Appshots use a preloaded native player; other cues write to a
 //!   temp file and use the system player on a
-//!   background thread: `afplay` (macOS), PowerShell `Media.SoundPlayer`
-//!   (Windows), first of `paplay`/`pw-play`/`aplay`/`ffplay`/`mpv` (Linux —
+//!   background thread: `afplay` (macOS), first of `paplay`/`pw-play`/`aplay`/`ffplay`/`mpv` (Linux —
 //!   WAV, so even bare ALSA `aplay` decodes it);
 //! - `LUNA_DISABLE_SOUND` env kill-switch + the `soundEnabled` ui-setting;
 //! - failures are logged and swallowed — a missing player must never bother
@@ -224,33 +223,7 @@ fn run_player(path: &Path) -> Result<(), String> {
     run_checked("afplay", &[], path)
 }
 
-#[cfg(windows)]
-fn run_player(path: &Path) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    // SoundPlayer handles WAV natively; PlaySync keeps the process alive for
-    // the chime's duration. Pass the path through the child environment rather
-    // than interpolating it into PowerShell source (paths may contain quotes).
-    let script = "(New-Object Media.SoundPlayer $env:LUNA_SOUND_PATH).PlaySync()";
-    let output = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ])
-        .env("LUNA_SOUND_PATH", path)
-        .creation_flags(0x08000000)
-        .output()
-        .map_err(|e| format!("powershell failed: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("powershell exited with {}", output.status))
-    }
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 fn run_player(path: &Path) -> Result<(), String> {
     // WAV everywhere, so even bare ALSA aplay decodes it (herdr must exclude
     // aplay because it ships mp3s).

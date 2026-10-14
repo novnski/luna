@@ -15,8 +15,6 @@ PLATFORMS = (
     "linux-aarch64.tar.gz",
     "macos-arm64.dmg",
     "macos-arm64-app.tar.gz",
-    "windows-x86_64.zip",
-    "windows-x86_64.exe",
 )
 
 
