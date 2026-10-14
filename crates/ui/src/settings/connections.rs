@@ -462,7 +462,7 @@ impl Render for ConnectionsPage {
                     ))
                     .child(widgets::row_description(
                         &theme,
-                        "Access: host information and task reads. No terminal or task changes.",
+                        "Access: host information, read and operate tasks (create, send, stop, archive). No terminal or file access.",
                     ))
                     .child(
                         div()
