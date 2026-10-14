@@ -241,6 +241,20 @@ jobs:
       # (IOS-00); a committed copy that differs was compiled against another core.
       - name: Committed Swift bindings match the mobile core
         run: git diff --exit-code -- apps/ios/Luna/Generated/luna_core.swift
+      - name: Compiler cache write diagnostics
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          log = Path(os.environ['RUNNER_TEMP']) / 'sccache-errors.log'
+          lines = log.read_text(errors='replace').lower().splitlines() if log.exists() else []
+          # Only counts leave the runner; cache service URLs/tokens stay private.
+          categories = ['alreadyexists', 'permissiondenied', 'ratelimited',
+                        'too many requests', '409', '403', '429', 'reserve', 'timeout']
+          print(json.dumps({'log_lines': len(lines), 'errors': {
+              key: sum(key in line for line in lines) for key in categories}}, indent=2))
+          PYTHON
       - name: Upload iOS test results
         if: always()
         uses: actions/upload-artifact@v4

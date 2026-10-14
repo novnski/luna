@@ -28,6 +28,8 @@ runs:
           echo 'CARGO_INCREMENTAL=0'
           echo 'RUSTC_WRAPPER=sccache'
           echo 'SCCACHE_GHA_ENABLED=true'
+          echo 'SCCACHE_LOG=warn'
+          echo "SCCACHE_ERROR_LOG=$RUNNER_TEMP/sccache-errors.log"
           # One namespace for all jobs; sccache hashes the compiler, target,
           # source and flags. Never add the job name or commit SHA here.
           echo 'SCCACHE_GHA_VERSION=luna-rust-v1'
