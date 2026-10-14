@@ -50,12 +50,26 @@ final class PairedMacsModel {
     var openTask: RemoteTaskProjection?
     var openTaskId: String?
     var showingTask = false
+    /// IOS-02: the selected Mac's runtime state (nil without a runtime), so
+    /// the shell tells connecting, interrupted and unreachable apart.
+    private(set) var liveState: RemoteSessionState?
+    /// IOS-02: the saved Mac whose runtime the projections above came from.
+    /// The shell shows them only under that Mac, never under another.
+    private(set) var projectedHostId: String?
+    /// IOS-02: moves whenever projections were re-read, so a view that reads
+    /// a task's detail by id observes one value.
+    private(set) var projectionStamp: UInt64 = 0
+    /// IOS-02: the tasks the shell's scenes show, followed again whenever the
+    /// selected Mac's runtime is rebuilt.
+    @ObservationIgnored private var shellFollows: (host: String, tasks: [String])?
     @ObservationIgnored private var live: RemoteHostSession?
     @ObservationIgnored private var liveHostId: String?
     @ObservationIgnored private var path: NetworkPathObserver?
     /// The access this connect authenticated with, for its live socket only.
     @ObservationIgnored private var access: SavedMac?
     private static let metadataKey = "luna.paired-macs.v1"
+    /// RM-02's success message; the shell never reads it as a failure.
+    static let connectedMessage = "Connected. This phone verified the Mac and its access."
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.metadataKey), data.count < 1_048_576,
@@ -172,6 +186,7 @@ final class PairedMacsModel {
             return
         }
         RemoteTaskCache.remove(account: host.id)
+        DraftBook.shared.forget(account: host.id)
         hosts.removeAll { $0.id == host.id }
         persistMetadata()
         message = "Removed from this phone. To end its grant, revoke access on the Mac."
@@ -184,6 +199,24 @@ final class PairedMacsModel {
         guard let live else { openTask = nil; return }
         try? live.follow(taskId: taskId)
         openTask = live.task(taskId)
+    }
+    /// IOS-02: one task of the selected Mac as last confirmed (followed or
+    /// cached), read from the runtime; nil without one.
+    func taskDetail(_ taskId: String) -> RemoteTaskProjection? {
+        _ = projectionStamp
+        return live?.task(taskId)
+    }
+    /// IOS-02: follow the task a shell scene shows, without the sheet's
+    /// navigation. The four most recent are kept (the core's own bound) and
+    /// followed again whenever this Mac's runtime is rebuilt.
+    func follow(_ taskId: String) {
+        guard let host = selectedId else { return }
+        var tasks = shellFollows?.host == host ? shellFollows?.tasks ?? [] : []
+        tasks.removeAll { $0 == taskId }
+        tasks.append(taskId)
+        if tasks.count > 4 { tasks.removeFirst(tasks.count - 4) }
+        shellFollows = (host: host, tasks: tasks)
+        if liveHostId == host { try? live?.follow(taskId: taskId) }
     }
     private func cancelEnrollmentTransport() {
         generation &+= 1
@@ -248,7 +281,7 @@ final class PairedMacsModel {
             }
             preview = nil
             incomingCode = nil
-            message = "Connected. This phone verified the Mac and its access."
+            message = Self.connectedMessage
             if let access, let selectedId { startLive(access, hostId: selectedId) }
         case .rePair(let reason):
             if let selectedId, preview == nil {
@@ -280,6 +313,8 @@ final class PairedMacsModel {
         }
         live = session
         liveHostId = hostId
+        projectedHostId = hostId
+        liveState = session.state
         liveStatus = Self.liveText(session.state)
         session.onChange = { [weak self, weak session] state in
             guard let self, let session, self.live === session else { return }
@@ -290,6 +325,9 @@ final class PairedMacsModel {
             self.readProjections(session)
         }
         readProjections(session)
+        if let follows = shellFollows, follows.host == hostId {
+            for taskId in follows.tasks { try? session.follow(taskId: taskId) }
+        }
         if path == nil {
             path = NetworkPathObserver { [weak self] available in self?.networkChanged(available: available) }
         }
@@ -303,6 +341,7 @@ final class PairedMacsModel {
         Task { _ = try? await live.connect() }
     }
     private func liveChanged(_ state: RemoteSessionState) {
+        liveState = state
         liveStatus = Self.liveText(state)
         // A revoked or expired grant never comes back: forget it like RM-02.
         if case .closed(.rePair, _) = state, let hostId = liveHostId {
@@ -317,12 +356,16 @@ final class PairedMacsModel {
         remoteTasks = session.tasks
         tasksIssue = session.projectionIssue
         if let openTaskId { openTask = session.task(openTaskId) }
+        projectionStamp &+= 1
     }
     private func closeLive(save: Bool = true) {
         if save, let live, let liveHostId { RemoteTaskCache.save(live.cacheBytes, account: liveHostId) }
         live?.close()
         live = nil
         liveHostId = nil
+        projectedHostId = nil
+        liveState = nil
+        projectionStamp &+= 1
         liveStatus = nil
         remoteTasks = nil
         tasksIssue = nil

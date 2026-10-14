@@ -70,28 +70,7 @@ struct RemoteTaskDetailView: View {
                         Text("This task is no longer on the Mac.").font(Theme.sans(14))
                             .accessibilityIdentifier("remote.task.removed")
                     }
-                    if task.totalEntries > UInt32(task.entries.count) {
-                        Text("Showing the latest \(task.entries.count) of \(task.totalEntries) messages")
-                            .font(Theme.sans(11)).foregroundStyle(Theme.textMuted)
-                    }
-                    ForEach(task.entries, id: \.entryId) { entry in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(role(entry)).font(Theme.sans(11, weight: .semibold))
-                                .foregroundStyle(Theme.textMuted)
-                            if !entry.text.isEmpty {
-                                Text(entry.text + (entry.textTruncated ? " …" : "")).font(Theme.sans(14))
-                                    .textSelection(.enabled)
-                            }
-                            if !entry.tools.isEmpty || entry.otherParts > 0 {
-                                Text(extras(entry)).font(Theme.mono(11)).foregroundStyle(Theme.textMuted)
-                            }
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("remote.entry.\(entry.entryId)")
-                    }
+                    RemoteEntriesList(task: task)
                 } else {
                     Text("Waiting for this task from the Mac…").font(Theme.sans(13))
                         .foregroundStyle(Theme.textMuted)
@@ -102,6 +81,42 @@ struct RemoteTaskDetailView: View {
         .background(Theme.bg)
         .navigationTitle(model.openTask?.task?.title ?? "Task")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A task's bounded recent history as the Mac sent it, oldest first, with
+/// how much is not shown. Shared by RM-03's sheet and the IOS-02 shell;
+/// the full native transcript is IOS-01's.
+struct RemoteEntriesList: View {
+    let task: RemoteTaskProjection
+
+    var body: some View {
+        if task.totalEntries > UInt32(task.entries.count) {
+            Text("Showing the latest \(task.entries.count) of \(task.totalEntries) messages")
+                .font(Theme.sans(11)).foregroundStyle(Theme.textMuted)
+        }
+        if task.entries.isEmpty && !task.removed {
+            Text("No messages yet.").font(Theme.sans(13)).foregroundStyle(Theme.textMuted)
+        }
+        ForEach(task.entries, id: \.entryId) { entry in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(role(entry)).font(Theme.sans(11, weight: .semibold))
+                    .foregroundStyle(Theme.textMuted)
+                if !entry.text.isEmpty {
+                    Text(entry.text + (entry.textTruncated ? " …" : "")).font(Theme.sans(14))
+                        .foregroundStyle(Theme.text)
+                        .textSelection(.enabled)
+                }
+                if !entry.tools.isEmpty || entry.otherParts > 0 || entry.error {
+                    Text(extras(entry)).font(Theme.mono(11)).foregroundStyle(Theme.textMuted)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("remote.entry.\(entry.entryId)")
+        }
     }
 
     private func role(_ entry: RemoteEntryRecord) -> String {

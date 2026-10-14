@@ -95,6 +95,23 @@ The workflow requires an App Store Connect app registered as
   explore the UI with no infrastructure. Launch args for screenshot rigs:
   `-demo [-route chat:<id>|space:<id>] [-stream]`.
 
+### Paired-Mac shell
+
+Once a Mac is paired (and no edge account is signed in), the app opens on
+that Mac's tasks ([IOS-02](../../docs/pending-tasks/ios-parity/ios-02/README.md)).
+On iPad the task list and the open task sit side by side, with a sidebar
+(Macs, projects) one toggle away; on iPhone the same columns form one stack. Everything shown is the
+Mac's own projection with its freshness (`Live`, `Stale`, `Cached`), or an
+explicit connecting, unreachable, removed or offline state with Retry; the
+shell never shows demo data. Filters (All, Needs you, Working, Unread,
+Archived), a project menu and search narrow the listed rows. Each window
+restores its Mac, project, filter, search and open task after rotation, a
+split change or relaunch. A per-task draft is kept on the phone (the Mac
+cannot receive messages from the phone yet). Settings offers System, Light or
+Dark and the row density; sign-in and the edge-backed screens stay dark.
+Hardware keyboard: Command-F search, Command-] / Command-[ next and previous
+task (with the task column showing), Command-R reconnect, Command-, Settings.
+
 ### Project sessions
 
 Home's **+** menu creates sessions in an existing project or opens **New

@@ -2336,6 +2336,254 @@ mod gateway {
         shutdown(core).await;
     }
 
+    const IOS02_ALPHA: &str = "ios02-alpha";
+    const IOS02_BETA: &str = "ios02-beta";
+    const IOS02_PINNED: &str = "ios02-task-pinned";
+    const IOS02_SELECT: &str = "ios02-task-select";
+    const IOS02_DELETE: &str = "ios02-task-delete";
+    const IOS02_ARCHIVED: &str = "ios02-task-archived";
+    const IOS02_OTHER: &str = "ios02-task-other";
+
+    /// IOS-02 P03, the host half of a native-only campaign. A disposable
+    /// engine with two projects and five tasks (one pinned, one archived,
+    /// one with unseen activity and two messages) is paired by the shipped
+    /// app through its own UI; on the UI test's cues it deletes the task the
+    /// phone has open, stops, and restarts with the same pin and grant, then
+    /// checks the public result and revokes the grant. It needs the iOS
+    /// Simulator and `LunaUITests/AdaptiveShellUITests`, so CI skips it:
+    /// `scripts/ios/qa-native-session-sim.py --campaign ios02` runs both.
+    /// Failure contract: docs/pending-tasks/ios-parity/ios-02/README.md.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "native IOS-02 campaign: scripts/ios/qa-native-session-sim.py --campaign ios02"]
+    async fn ios02_native_shell_serves_the_phone_and_deletes_stops_and_restarts_on_cue() {
+        use luna_proto::remote_control::{HostTicket, PairingTicket};
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = PathBuf::from(
+            std::env::var_os("LUNA_NATIVE_SHELL_FIXTURE")
+                .expect("LUNA_NATIVE_SHELL_FIXTURE names the UI test runner's fixture file"),
+        );
+        assert_eq!(fixture.file_name().unwrap(), "ios02-shell.json");
+        assert!(!fixture.exists(), "refuse a stale native fixture");
+        let directory = fixture.parent().unwrap().to_path_buf();
+        let root = tempfile::tempdir().unwrap();
+        let mut core = assemble(root.path());
+        let mut local = luna_rpc::memory_client(core.rpc_service());
+        let bind = free_bind();
+        let status = enable(&local, &bind).await;
+        assert!(
+            !firewalled(&bind).await,
+            "the native campaign needs this Mac's LAN address in LUNA_REMOTE_TEST_IP"
+        );
+        let pin = status["spkiSha256"].as_str().unwrap().to_owned();
+        let engine: luna_proto::EngineInfo = local
+            .call_as(methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        seed_ios02_tasks(&core, &local, root.path()).await;
+        let issued: IssuedPairing = local
+            .call_as(
+                methods::CREATE_REMOTE_PAIRING,
+                json!({"label": "IOS02 native", "scopes": ["environment-read", "tasks-read"],
+                    "pairingTtlSecs": 600, "sessionTtlSecs": 3600}),
+            )
+            .await
+            .unwrap();
+        let code = PairingTicket {
+            version: 1,
+            host_name: Some("IOS02 QA Mac".into()),
+            host: HostTicket {
+                version: 1,
+                target: issued.target.clone(),
+                endpoints: vec![format!("https://{bind}")],
+                spki_sha256: pin,
+            },
+            pairing_id: issued.pairing.id.clone(),
+            credential: issued.credential.clone(),
+            expires_at_ms: issued.pairing.expires_at_ms,
+            scopes: vec!["environment-read".into(), "tasks-read".into()],
+        }
+        .encode()
+        .unwrap();
+        let mut fields = json!({
+            "code": code, "name": "IOS02 QA Mac", "deviceId": engine.device_id,
+            "alphaProject": "IOS02 Alpha project", "betaProject": "IOS02 Beta project",
+            "selectEntryIds": ["ios02-select-1", "ios02-select-2"],
+            "selectEntries": ["First IOS02 prompt", "Second IOS02 prompt"]
+        });
+        for (key, value) in [
+            ("pinnedTaskId", IOS02_PINNED),
+            ("pinnedTitle", "IOS02 pinned plan"),
+            ("selectTaskId", IOS02_SELECT),
+            ("selectTitle", "IOS02 selected task"),
+            ("deleteTaskId", IOS02_DELETE),
+            ("deleteTitle", "IOS02 task to delete"),
+            ("archivedTaskId", IOS02_ARCHIVED),
+            ("archivedTitle", "IOS02 archived task"),
+            ("otherTaskId", IOS02_OTHER),
+            ("otherTitle", "IOS02 other task"),
+        ] {
+            fields[key] = value.into();
+        }
+        std::fs::write(&fixture, serde_json::to_vec(&fields).unwrap()).unwrap();
+        std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        // The task the phone has open is deleted on the Mac.
+        wait_native_file(&directory.join("ios02-native-delete.json")).await;
+        assert!(core.workspace.delete_chat(IOS02_DELETE).unwrap());
+        std::fs::write(directory.join("ios02-host-deleted.json"), b"{}").unwrap();
+
+        // The Mac goes away while the phone shows its tasks.
+        wait_native_file(&directory.join("ios02-native-stop.json")).await;
+        shutdown(core).await;
+        std::fs::write(directory.join("ios02-host-stopped.json"), b"{}").unwrap();
+
+        // It comes back on the same route with the same pin and grant.
+        wait_native_file(&directory.join("ios02-native-restart.json")).await;
+        core = assemble(root.path());
+        local = luna_rpc::memory_client(core.rpc_service());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let status = local.call("GetRemoteAccess", json!({})).await.unwrap();
+                if status["listening"] == true {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("enabled remote access resumes on start");
+        std::fs::write(directory.join("ios02-host-restarted.json"), b"{}").unwrap();
+
+        let result = directory.join("ios02-native-result.json");
+        wait_native_file(&result).await;
+        let result: Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+        for field in [
+            "pairedThroughTheApp",
+            "listedHostTasks",
+            "pinnedFirst",
+            "voiceOverLabels",
+            "filters",
+            "projectScope",
+            "keyboardSearch",
+            "liveDetail",
+            "unreadKept",
+            "selectionSurvivedRotation",
+            "draftSurvivedRotation",
+            "restoredSelectionAndDraft",
+            "keyboardNextTask",
+            "deletedWhileOpenTruthful",
+            "draftKeptAfterDelete",
+            "restoredDeletedRouteTruthful",
+            "staleWhenMacStopped",
+            "cachedWhenRelaunchedOffline",
+            "retryStaysTruthful",
+            "keyboardReconnect",
+            "liveAfterRestart",
+            "keyboardSettings",
+            "appearancePersisted",
+            "largeTextControlsReachable",
+            "accessibilityAudit",
+            "forgotten",
+        ] {
+            assert_eq!(result[field], true, "native observation missing: {field}");
+        }
+        assert_eq!(result["deviceId"], engine.device_id.as_str());
+        let sessions: Vec<SessionView> = local
+            .call_as(methods::LIST_REMOTE_SESSIONS, json!({}))
+            .await
+            .unwrap();
+        let native = sessions
+            .iter()
+            .find(|row| row.pairing_id.as_deref() == Some(issued.pairing.id.as_str()))
+            .expect("the app redeemed the code through its own UI");
+        // Forget on the phone is local; end the grant on the host too.
+        local
+            .call(methods::REVOKE_REMOTE_SESSION, json!({"id": native.id}))
+            .await
+            .unwrap();
+        shutdown(core).await;
+    }
+
+    /// Two projects and five tasks with distinct activity times, so the
+    /// Mac's own order is pinned first, then the newest: one pinned, one
+    /// archived, one with unseen activity and two messages, the rest seen.
+    async fn seed_ios02_tasks(core: &EngineCore, local: &luna_rpc::RpcClient, root: &Path) {
+        let folder = |name: &str| {
+            let path = root.join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            path.canonicalize().unwrap().to_string_lossy().to_string()
+        };
+        let alpha = folder("ios02-alpha");
+        let beta = folder("ios02-beta");
+        for (space, path, name) in [
+            (IOS02_ALPHA, &alpha, "IOS02 Alpha project"),
+            (IOS02_BETA, &beta, "IOS02 Beta project"),
+        ] {
+            core.workspace
+                .create_space(space, &core.device_id, path, Some(name.into()), false)
+                .unwrap();
+        }
+        let now = rm03_now();
+        for (task, space, path, title, minutes) in [
+            (IOS02_PINNED, IOS02_ALPHA, &alpha, "IOS02 pinned plan", 50),
+            (IOS02_SELECT, IOS02_ALPHA, &alpha, "IOS02 selected task", 1),
+            (IOS02_DELETE, IOS02_BETA, &beta, "IOS02 task to delete", 2),
+            (IOS02_ARCHIVED, IOS02_BETA, &beta, "IOS02 archived task", 3),
+            (IOS02_OTHER, IOS02_BETA, &beta, "IOS02 other task", 4),
+        ] {
+            local
+                .call(
+                    methods::MUTATE,
+                    json!({"op": "createChat", "chatId": task, "spaceId": space, "cwd": path}),
+                )
+                .await
+                .unwrap();
+            core.workspace.rename_chat(task, title).unwrap();
+            core.workspace
+                .set_chat_activity(task, Some(now - minutes * 60_000), None)
+                .unwrap();
+            if task != IOS02_SELECT {
+                core.workspace
+                    .mark_chat_seen(task, chrono::Utc::now())
+                    .unwrap();
+            }
+        }
+        assert!(
+            core.workspace
+                .set_chat_archived(IOS02_ARCHIVED, true)
+                .unwrap()
+        );
+        let read: luna_proto::TaskCommandRead = local
+            .call_as(
+                methods::GET_TASK_COMMAND_SNAPSHOT,
+                json!({"taskId": IOS02_PINNED}),
+            )
+            .await
+            .unwrap();
+        let mut envelope = json!({
+            "commandId": "ios02-seed-pin", "actorId": "ios02-seed", "clientId": "ios02-seed",
+            "clientSessionId": "ios02-seed", "taskId": IOS02_PINNED,
+            "intent": {"kind": "setPinned", "pinned": true},
+            "expectedTaskRevision": read.snapshot.task_revision,
+        });
+        if let Some(generation) = read.snapshot.binding_generation {
+            envelope["expectedBindingGeneration"] = generation.into();
+        }
+        let receipt = local
+            .call(methods::EXECUTE_TASK_COMMAND, envelope)
+            .await
+            .unwrap();
+        assert_eq!(receipt["status"], "applied", "{receipt}");
+        let handle = core.doc_host.open(IOS02_SELECT).unwrap();
+        handle
+            .write_user_message("ios02-select-1", "First IOS02 prompt", now)
+            .unwrap();
+        handle
+            .write_user_message("ios02-select-2", "Second IOS02 prompt", now + 1)
+            .unwrap();
+    }
+
     fn saved_mac(
         session: &IssuedSession,
         bind: &str,

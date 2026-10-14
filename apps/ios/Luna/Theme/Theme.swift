@@ -1,56 +1,64 @@
-// Always-dark monochrome theme — a direct port of crates/ui/src/theme.rs.
+// Monochrome theme — a port of crates/ui/src/theme.rs (dark) and of the
+// desktop's built-in `luna-light` variant (crates/theme/src/builtins.rs).
 //
-// Colors are computed from the same oklch definitions the desktop app uses
-// (Björn Ottosson's OKLab matrices, the ones CSS Color 4 specifies), so every
-// surface and accent lands on identical sRGB values. **Numbers drive layout,
+// Dark colors are computed from the same oklch definitions the desktop app
+// uses (Björn Ottosson's OKLab matrices, the ones CSS Color 4 specifies), so
+// every surface and accent lands on identical sRGB values. Light colors are
+// the `luna-light` seeds and the same derivation rules (black hairlines and
+// washes where dark uses white). Every color resolves from the trait
+// collection: a presentation that forces dark (the edge-backed screens)
+// paints exactly the shipped dark palette, and the paired-Mac shell follows
+// the user's System/Light/Dark preference (IOS-02). **Numbers drive layout,
 // colors are paint**: layout constants are plain numbers and never depend on
 // which color is painted.
 
 import SwiftUI
+import UIKit
 
 enum Theme {
     // ---- paint: neutral surfaces (oklch chroma 0) ----
-    /// Main panel background — sampled #060606.
-    static let bg = grey(6)
-    /// Shell / sidebar surface — sampled #0d0d0d.
-    static let surface = grey(13)
-    /// Raised surface: popovers, dialogs, cards.
-    static let surfaceRaised = neutral(0.235)
-    /// Hover/pressed wash for interactive rows (white, low alpha).
+    /// Main panel background — sampled #060606 (light: #fbfcfe).
+    static let bg = adaptive(dark: grey(6), light: hex(0xfbfcfe))
+    /// Shell / sidebar surface — sampled #0d0d0d (light: #f0f3f7).
+    static let surface = adaptive(dark: grey(13), light: hex(0xf0f3f7))
+    /// Raised surface: popovers, dialogs, cards (light: #e7ecf2).
+    static let surfaceRaised = adaptive(dark: neutral(0.235), light: hex(0xe7ecf2))
+    /// Hover/pressed wash for interactive rows (low alpha).
     static let elementHover = whiteAlpha(0.06)
     /// Active/selected wash.
-    static let elementActive = whiteAlpha(0.10)
-    /// Hairline border — white at low alpha so it reads on any surface.
-    static let border = whiteAlpha(0.08)
+    static let elementActive = adaptive(dark: Color.white.opacity(0.10), light: Color.black.opacity(0.08))
+    /// Hairline border — low alpha so it reads on any surface.
+    static let border = adaptive(dark: Color.white.opacity(0.08), light: Color.black.opacity(0.12))
     /// Stronger border for focused/raised edges.
-    static let borderStrong = whiteAlpha(0.14)
+    static let borderStrong = adaptive(dark: Color.white.opacity(0.14), light: Color.black.opacity(0.22))
 
     // ---- paint: text ----
-    static let text = neutral(0.922)       // ~neutral-200
-    static let textMuted = neutral(0.708)  // ~neutral-400
-    static let textFaint = neutral(0.556)  // ~neutral-500
+    static let text = adaptive(dark: neutral(0.922), light: hex(0x202631))       // ~neutral-200
+    static let textMuted = adaptive(dark: neutral(0.708), light: hex(0x445064))  // ~neutral-400
+    static let textFaint = adaptive(dark: neutral(0.556), light: hex(0x586579))  // ~neutral-500
 
     // ---- paint: accents ----
-    static let accent = oklch(0.673, 0.182, 276.935)        // indigo-400
-    static let accentStrong = oklch(0.585, 0.233, 277.117)  // indigo-500
-    static let danger = oklch(0.704, 0.191, 22.216)         // red-400
-    static let dangerSoft = oklch(0.808, 0.114, 19.571)     // red-300
-    static let warning = oklch(0.828, 0.189, 84.429)        // amber-400
+    static let accent = adaptive(dark: oklch(0.673, 0.182, 276.935), light: hex(0x5b43e8))        // indigo-400
+    static let accentStrong = adaptive(dark: oklch(0.585, 0.233, 277.117), light: hex(0x5b43e8))  // indigo-500
+    static let danger = adaptive(dark: oklch(0.704, 0.191, 22.216), light: hex(0xdc2626))         // red-400
+    static let dangerSoft = adaptive(dark: oklch(0.808, 0.114, 19.571), light: hex(0xb91c1c))     // red-300
+    static let warning = adaptive(dark: oklch(0.828, 0.189, 84.429), light: hex(0xa16207))        // amber-400
 
     // ---- paint: status dots (shell/spaces.rs status_dot_color) ----
-    static let statusWorking = oklch(0.718, 0.202, 349.761)   // pink-400
-    static let statusCompleted = oklch(0.765, 0.177, 163.223) // emerald-400
+    static let statusWorking = adaptive(dark: oklch(0.718, 0.202, 349.761), light: hex(0xbe185d))   // pink-400
+    static let statusCompleted = adaptive(dark: oklch(0.765, 0.177, 163.223), light: hex(0x15803d)) // emerald-400
     /// Claude brand orange — kept even on the mono surface.
     static let claudeBrand = Color(red: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0)
 
     // ---- paint: markdown inline code (violet family) ----
-    static let inlineCodeText = oklch(0.811, 0.111, 293.571)  // violet-300
-    static let inlineCodeWash = oklch(0.702, 0.183, 293.541).opacity(0.12) // violet-400 @ 0.12
+    static let inlineCodeText = adaptive(dark: oklch(0.811, 0.111, 293.571), light: hex(0x7e22ce))  // violet-300
+    static let inlineCodeWash = adaptive(dark: oklch(0.702, 0.183, 293.541).opacity(0.12),
+                                         light: hex(0x7e22ce).opacity(0.10)) // violet-400 @ 0.12
 
     // ---- paint: syntax tokens (soft, paint-only) ----
-    static let tokenKeyword = oklch(0.709, 0.129, 20.0)   // soft rose
-    static let tokenString = oklch(0.770, 0.110, 168.0)   // soft green
-    static let tokenNumber = oklch(0.780, 0.120, 80.0)    // soft amber
+    static let tokenKeyword = adaptive(dark: oklch(0.709, 0.129, 20.0), light: hex(0xbe185d))   // soft rose
+    static let tokenString = adaptive(dark: oklch(0.770, 0.110, 168.0), light: hex(0x15803d))   // soft green
+    static let tokenNumber = adaptive(dark: oklch(0.780, 0.120, 80.0), light: hex(0xa16207))    // soft amber
 
     // ---- numbers drive layout (pt) ----
     static let bubbleRadius: CGFloat = 22
@@ -111,9 +119,28 @@ func neutral(_ lightness: Double) -> Color {
     return Color(red: v, green: v, blue: v)
 }
 
-/// White at the given alpha — the hairline/wash primitive.
+/// The hairline/wash primitive: white at the given alpha on dark, black at
+/// the same alpha on light (the desktop's `border_tone` rule).
 func whiteAlpha(_ alpha: Double) -> Color {
-    Color.white.opacity(alpha)
+    adaptive(dark: Color.white.opacity(alpha), light: Color.black.opacity(alpha))
+}
+
+/// One color per appearance, resolved from the trait collection at paint
+/// time (SwiftUI environment or the UIKit view's traits). An unspecified
+/// style paints dark, the app's historical look.
+func adaptive(dark: Color, light: Color) -> Color {
+    let darkColor = UIColor(dark)
+    let lightColor = UIColor(light)
+    return Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .light ? lightColor : darkColor
+    })
+}
+
+/// An opaque sRGB color from `0xRRGGBB` (the desktop theme's hex seeds).
+func hex(_ value: UInt32) -> Color {
+    Color(red: Double((value >> 16) & 0xff) / 255.0,
+          green: Double((value >> 8) & 0xff) / 255.0,
+          blue: Double(value & 0xff) / 255.0)
 }
 
 /// An exact achromatic tone from an 8-bit channel value (`grey(13)` ≡ #0d0d0d).

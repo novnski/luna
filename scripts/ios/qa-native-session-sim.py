@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IOS-00 P01 / RM-03 P12: coordinate a native session test with the real engine gateway.
+"""IOS-00 P01 / RM-03 P12 / IOS-02 P03: coordinate a native test with the real engine gateway.
 
 Run this, then run the prepared native test it names on the same Simulator
 (test-without-building, -parallel-testing-enabled NO):
@@ -11,6 +11,13 @@ Run this, then run the prepared native test it names on the same Simulator
   `remote_access::gateway::mobile_runtime_follows_...` writes a `luna://pair`
   code minted by CreateRemotePairing, renames and restarts the Mac on cue and
   verifies the public result.
+- `--campaign ios02`: `LunaUITests/AdaptiveShellUITests` (IOS-02 P03). The
+  native-only engine campaign `remote_access::gateway::ios02_native_shell_...`
+  (ignored in CI) seeds two projects and five tasks, writes a `luna://pair`
+  code into the UI test runner's Documents, deletes the open task, stops and
+  restarts the Mac on cue and verifies the public result. The summary also
+  lists the app's `LunaRemote` files left after the run (Forget removes the
+  QA Mac's cache and drafts).
 
 No UI automation happens here. The bearer in the fixture never reaches stdout
 or the summary; the fixture and cue files are removed afterwards. The app's
@@ -26,6 +33,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = "com.novnski.luna.ios"
+RUNNER = "com.novnski.luna.ios.uitests.xctrunner"
 # Per campaign: fixture first, public result last; every file is private and removed afterwards.
 CAMPAIGNS = {
     "ios00": {
@@ -42,6 +50,17 @@ CAMPAIGNS = {
         "test": "gateway::mobile_runtime_follows_mac_tasks_across_suspend_network_restart_and_cursor_repair",
         "fixture_env": "LUNA_NATIVE_RUNTIME_FIXTURE",
         "native": "LunaTests/RemoteTasksRuntimeTests",
+    },
+    "ios02": {
+        "files": ("ios02-shell.json", "ios02-native-delete.json", "ios02-host-deleted.json",
+                  "ios02-native-stop.json", "ios02-host-stopped.json", "ios02-native-restart.json",
+                  "ios02-host-restarted.json", "ios02-native-result.json"),
+        "test": "gateway::ios02_native_shell_serves_the_phone_and_deletes_stops_and_restarts_on_cue",
+        "fixture_env": "LUNA_NATIVE_SHELL_FIXTURE",
+        "native": "LunaUITests/AdaptiveShellUITests",
+        # UI tests read their fixture from the runner's own Documents.
+        "container": RUNNER,
+        "ignored": True,
     },
 }
 SECRET_KEYS = {"sessionToken", "session_token", "credential", "authorization", "bearer", "ticket"}
@@ -93,11 +112,14 @@ def main():
     args = parser.parse_args()
     campaign = CAMPAIGNS[args.campaign]
     FILES, TEST = campaign["files"], campaign["test"]
+    bundle = campaign.get("container", APP)
     run = args.run_dir.resolve()
     run.mkdir(parents=True, mode=0o700)
-    data = container(args.simulator, APP)
-    if data is None:
+    if container(args.simulator, APP) is None:
         raise RuntimeError("Install the prepared Luna app on this Simulator before starting")
+    data = container(args.simulator, bundle)
+    if data is None:
+        raise RuntimeError("Install the prepared XCTest runner on this Simulator before starting")
     documents = data / "Documents"
     documents.mkdir(exist_ok=True)
     for name in FILES:
@@ -109,15 +131,19 @@ def main():
                    campaign["fixture_env"]: str(link / FILES[0])}
     command = [str(ROOT / "scripts/cargo.sh"), "test", "--locked", "-p", "luna-engine",
                "--test", "remote_access", TEST, "--", "--exact"]
+    if campaign.get("ignored"):
+        command.append("--include-ignored")
     ready = False
     secrets = set()
     started = time.monotonic()
     with log.open("w") as output:
         process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT)
         while process.poll() is None:
-            current = container(args.simulator, APP)
+            app = container(args.simulator, APP)
+            if app is not None:
+                secrets |= preference_keys(app) & SECRET_KEYS
+            current = container(args.simulator, bundle)
             if current is not None:
-                secrets |= preference_keys(current) & SECRET_KEYS
                 if current / "Documents" != documents:
                     documents = current / "Documents"
                     replacement = run / "app-documents-next"
@@ -135,6 +161,10 @@ def main():
                "hostTest": TEST,
                "hostExitCode": code, "durationSeconds": round(time.monotonic() - started, 2),
                "nativeObservations": result, "secretKeysInPreferences": sorted(secrets)}
+    if args.campaign == "ios02":
+        app = container(args.simulator, APP)
+        remote = app / "Library/Application Support/LunaRemote" if app else None
+        summary["lunaRemoteFiles"] = sorted(p.name for p in remote.iterdir()) if remote and remote.is_dir() else []
     (run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     for name in FILES:
         (link / name).unlink(missing_ok=True)
