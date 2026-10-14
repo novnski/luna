@@ -49,10 +49,12 @@ the last required result; a timeout is a failure, not successful verification.
 
 The `ci` Cargo profile keeps development assertions and overflow checks, with
 no optimization, debug information or incremental output. It leaves local dev
-and release profiles unchanged. The macOS job compiles the app test target,
-full UI library suite and any changed fixture examples in one Cargo invocation
-and one feature configuration. Linux checks the application platform contract without
-repeating the entire UI runtime suite. Core contracts, provider fixtures,
+and release profiles unchanged. The full UI library suite compiles once in its
+own job. Separate macOS/Linux compile checks validate the application platform
+contracts without serializing a second ordinary UI library build ahead of the
+UI test executable. Changed fixture examples run with their required features
+in the macOS compile job; unchanged screenshots and fixture executables stay
+out of the merge path. Core contracts, provider fixtures,
 engine lifecycle E2Es, preview networking and edge runtime checks have separate
 owners. iOS changes compile the Swift app and tests against freshly generated
 Rust bindings without booting a simulator; the opt-in `LUNA_IOS_CARGO_PROFILE=ci`

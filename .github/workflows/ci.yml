@@ -49,20 +49,15 @@ jobs:
               - 'crates/{engine,harness,proto,doc,sync,rpc,sdk,mobile,remote,preview,update}/**'
               - 'apps/{luna-headless,luna-relay}/**'
               - 'sdk/**'
-            ui:
+            ui: &desktop
               - *shared
               - *ci
               - 'crates/**'
               - 'apps/luna/**'
               - 'vendor/**'
               - 'sdk/**'
-            linux:
-              - *shared
-              - *ci
-              - 'crates/**'
-              - 'apps/luna/**'
-              - 'vendor/**'
-              - 'sdk/**'
+            macos: *desktop
+            linux: *desktop
             preview:
               - *shared
               - *ci
@@ -94,7 +89,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          suites = (['contracts', 'providers', 'engine', 'ui', 'linux', 'preview', 'extensions', 'edge', 'ios']
+          suites = (['contracts', 'providers', 'engine', 'ui', 'macos', 'linux', 'preview', 'extensions', 'edge', 'ios']
                     if os.environ['RUN_ALL'] == 'true' else json.loads(os.environ['CHANGED']))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('suites=' + json.dumps(suites) + '\n')
@@ -110,7 +105,7 @@ jobs:
       matrix:
         suite: ${{ fromJSON(needs.changes.outputs.suites) }}
     name: ${{ matrix.suite }}
-    runs-on: ${{ (matrix.suite == 'ui' || matrix.suite == 'ios') && 'macos-latest' || 'ubuntu-24.04' }}
+    runs-on: ${{ contains(fromJSON('["ui","macos","ios"]'), matrix.suite) && 'macos-latest' || 'ubuntu-24.04' }}
     # One minute for routing + eight for checks + one for the final gate.
     timeout-minutes: 8
     steps:
@@ -118,7 +113,7 @@ jobs:
       - uses: ./.github/actions/rust-ci
         if: matrix.suite != 'edge'
         with:
-          cache-group: ${{ (matrix.suite == 'ui' || matrix.suite == 'linux') && 'desktop-ci' || matrix.suite == 'ios' && 'ios-ci' || matrix.suite == 'extensions' && 'extensions-ci' || 'core-ci' }}
+          cache-group: ${{ contains(fromJSON('["ui","macos","linux"]'), matrix.suite) && 'desktop-ci' || matrix.suite == 'ios' && 'ios-ci' || matrix.suite == 'extensions' && 'extensions-ci' || 'core-ci' }}
           # The engine owns the largest core graph. Smaller jobs restore it,
           # rather than winning the immutable save with only their subset.
           save-cache: ${{ contains(fromJSON('["engine","ui","linux","ios","extensions"]'), matrix.suite) }}
@@ -187,14 +182,18 @@ jobs:
               command += ['--test', test]
           subprocess.run(command, check=True)
           PYTHON
-      - name: Desktop application, UI and changed fixture regressions
+      - name: Complete UI library regression suite
         if: matrix.suite == 'ui'
+        # Do not also select the app binary: that compiles this large crate a
+        # second time as an ordinary library before the test binary can finish.
+        run: cargo test --profile ci --locked -p luna-ui --features appshots-fixture --lib -- --test-threads=1
+      - name: macOS application and changed fixture compile contracts
+        if: matrix.suite == 'macos'
         env:
           CHANGED_UI_FILES: ${{ needs.changes.outputs.ui-files }}
         run: |
           python3 - <<'PYTHON'
           import json, os, subprocess
-          from pathlib import PurePosixPath
           changed = set(json.loads(os.environ['CHANGED_UI_FILES'] or '[]'))
           metadata = json.loads(subprocess.check_output(
               ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], text=True))
@@ -206,9 +205,12 @@ jobs:
               if 'example' in target['kind'] and relative in changed:
                   examples += ['--example', target['name']]
                   features.update('luna-ui/' + feature for feature in target.get('required-features', []))
-          command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna', '-p', 'luna-ui',
-                     '--features', ','.join(sorted(features)), '--lib', '--bin', 'luna']
-          subprocess.run(command + examples + ['--', '--test-threads=1'], check=True)
+          if examples:
+              command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna', '-p', 'luna-ui',
+                         '--features', ','.join(sorted(features)), '--bin', 'luna']
+              subprocess.run(command + examples + ['--', '--test-threads=1'], check=True)
+          else:
+              subprocess.run(['cargo', 'check', '--profile', 'ci', '--locked', '-p', 'luna'], check=True)
           PYTHON
       - name: Linux application compile contract
         if: matrix.suite == 'linux'

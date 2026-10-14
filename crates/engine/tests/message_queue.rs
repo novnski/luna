@@ -964,20 +964,15 @@ async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
     )
     .await;
 
-    for text in ["second", "third"] {
-        core.doc_host
-            .queue_message(CHAT, text, Vec::new())
-            .expect("queue follow-up");
-    }
+    // The opening row can still be claimed after its provider starts. Use
+    // the enqueue receipt, not the current head's position, to select second.
     let second_id = core
         .doc_host
-        .open(CHAT)
-        .unwrap()
-        .doc()
-        .read_queue()
-        .unwrap()[0]
-        .id
-        .clone();
+        .queue_message(CHAT, "second", Vec::new())
+        .expect("queue second");
+    core.doc_host
+        .queue_message(CHAT, "third", Vec::new())
+        .expect("queue third");
 
     core.doc_host
         .queue_command(CHAT, SessionCommandPayload::Interrupt {})
@@ -988,9 +983,11 @@ async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
     )
     .await;
 
-    core.doc_host
-        .update_queued_message(CHAT, &second_id, "second edited")
-        .expect("edit frozen row");
+    assert!(
+        core.doc_host
+            .update_queued_message(CHAT, &second_id, "second edited")
+            .expect("edit frozen row")
+    );
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(queue_texts(&core), vec!["second edited", "third"]);
     assert!(
@@ -1005,6 +1002,11 @@ async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
     wait_for(
         || prompts.lock().unwrap().iter().any(|p| p == "second edited"),
         "the explicitly selected row to start",
+    )
+    .await;
+    wait_for(
+        || core.doc_host.queued_message(CHAT, &second_id).unwrap().is_none(),
+        "the explicitly sent row's durable correlation to settle",
     )
     .await;
     assert_eq!(queue_texts(&core), vec!["third"]);
