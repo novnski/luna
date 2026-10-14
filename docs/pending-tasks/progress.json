@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "catalog_hash": "8a5f7405acbc4cf1d223e4ef8ed348063f89a1e21bf803969d83b28e58851b73",
-  "created_at": 1791947661.077122,
+  "created_at": 1791957921.778038,
   "summary": {
     "counts": {
-      "blocked": 2,
+      "blocked": 1,
       "cancelled": 0,
       "deferred": 23,
-      "done": 44,
+      "done": 45,
       "in_progress": 0,
       "paused": 1,
       "ready": 37,
@@ -215,11 +215,11 @@
         },
         "title": "One direct paired-Mac product",
         "tasks": 11,
-        "done": 4,
-        "remaining": 7,
-        "accepted_units": 17,
+        "done": 5,
+        "remaining": 6,
+        "accepted_units": 19,
         "total_units": 40,
-        "acceptance_percent": 42.5,
+        "acceptance_percent": 47.5,
         "milestone_status": {
           "M0": {
             "done": true,
@@ -373,15 +373,16 @@
     "expired_claims": [],
     "active_scope": {
       "tasks": 79,
-      "done": 39,
-      "remaining": 40,
-      "accepted_units": 157,
+      "done": 40,
+      "remaining": 39,
+      "accepted_units": 159,
       "total_units": 309,
-      "acceptance_percent": 50.8
+      "acceptance_percent": 51.5
     },
     "percentage_basis": "weighted accepted criteria; excludes deferred, cancelled and shipped reference tickets; not time or effort",
     "next": [
       "IOS-02",
+      "RM-05",
       "CORE-13",
       "CORE-14",
       "IOS-01",
@@ -4415,49 +4416,6 @@
     },
     {
       "attempts": 2,
-      "blocker": "macOS application firewall: the rebuilt remote_access test binary and the rebuilt QA app need an 'Allow incoming connections' approval (a security-setting change the user must make); until then every LAN gateway test times out and the phone cannot reach a QA host.",
-      "checks": {
-        "admission": {
-          "at": 1791947578.419803,
-          "evidence": [
-            {
-              "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
-              "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
-            }
-          ],
-          "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
-        },
-        "outbox": {
-          "at": 1791947578.526766,
-          "evidence": [
-            {
-              "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
-              "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
-            }
-          ],
-          "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
-        }
-      },
-      "id": "RM-04",
-      "last_worker": {
-        "checkout": "/Users/iulian/workspace/code/personal/luna",
-        "claimed_at": 1791947546.890219,
-        "expires_at": 1791961946.890219,
-        "heartbeat_at": 1791947546.890219,
-        "owner": "claude-team/RM-04 (orchestrator d19437b2)",
-        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
-      },
-      "note": "Code is on main (b2a7763f); admission and outbox checks recorded. Remaining for verification: (1) approve the firewall prompt for target/debug/deps/remote_access-* (and the QA app), then run: CARGO_INCREMENTAL=0 LUNA_REMOTE_TEST_IP=<Wi-Fi IP> scripts/cargo.sh test --locked -p luna-engine --test remote_access gateway:: -- --test-threads=1 (7 tests incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; without the IP they silently SKIP); (2) native QA per docs/pending-tasks/control-this-mac/rm-04/README.md (RemoteTaskCommandsTests on a simulator paired to a QA LUNA app, real Codex/Claude Code); (3) handoff (LUNA Dev refresh is already at b2a7763f).",
-      "recovery_evidence": [
-        {
-          "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
-        }
-      ],
-      "status": "blocked",
-      "updated_at": 1791947600.929291
-    },
-    {
-      "attempts": 2,
       "blocker": null,
       "checks": {},
       "id": "IOS-02",
@@ -4684,6 +4642,81 @@
       ],
       "status": "done",
       "updated_at": 1791947649.153313
+    },
+    {
+      "attempts": 3,
+      "blocker": null,
+      "checks": {
+        "admission": {
+          "at": 1791947578.419803,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+              "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+            }
+          ],
+          "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+        },
+        "handoff": {
+          "at": 1791957914.78515,
+          "evidence": [
+            {
+              "ref": "target/qa/rm-04/20261014T055709Z/manifest.sha256",
+              "sha256": "14c4646bce21def3a85f5e11ab44e024948b91ce9e1e6e76db72906d26901119"
+            }
+          ],
+          "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up)."
+        },
+        "outbox": {
+          "at": 1791947578.526766,
+          "evidence": [
+            {
+              "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+              "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+            }
+          ],
+          "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+        },
+        "verification": {
+          "at": 1791957914.672482,
+          "evidence": [
+            {
+              "ref": "target/qa/rm-04/20261014T055709Z/results.md",
+              "sha256": "af393fdb92ec5703d203b91845177674e37b566b22512c9d0a15e03e30a367b2"
+            }
+          ],
+          "note": "RP campaigns on real Wi-Fi after the firewall approval: remote_access gateway:: 7/7 incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; remote_task_commands 3/3 (races, conflicts, setup hold); outbox 10/10. Native: RemoteTaskCommandsTests 1/1 against LUNA QA Batch3 with real Codex and Claude Code — draft before create, stop refused offline, outbox restored, first message once, never resent, one message per provider task, all commands applied once. IOS-03 still owns the composer UX."
+        }
+      },
+      "completion_evidence": [
+        {
+          "ref": "target/qa/rm-04/20261014T055709Z/manifest.sha256",
+          "sha256": "14c4646bce21def3a85f5e11ab44e024948b91ce9e1e6e76db72906d26901119"
+        }
+      ],
+      "id": "RM-04",
+      "last_worker": {
+        "checkout": "/Users/iulian/workspace/code/personal/luna",
+        "claimed_at": 1791957634.963029,
+        "expires_at": 1791972034.963029,
+        "heartbeat_at": 1791957634.963029,
+        "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+        "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+      },
+      "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up).",
+      "recovery_evidence": [
+        {
+          "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
+        }
+      ],
+      "status": "done",
+      "unblock_evidence": [
+        {
+          "ref": "/Users/iulian/workspace/code/personal/luna/target/qa/rm-04/20261014T055709Z/gateway.log",
+          "sha256": "b8f02c95f7443a3e7635e9e33c7fac0e0bb35cf03eb8f1c23ed4b84c44fd5adb"
+        }
+      ],
+      "updated_at": 1791957914.897843
     }
   ],
   "events": [
@@ -26946,6 +26979,295 @@
           "heartbeat_at": 1791947534.1519392,
           "owner": "claude-team/SW-13 (orchestrator d19437b2)",
           "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#SW-13"
+        }
+      }
+    },
+    {
+      "seq": 548,
+      "task": "RM-04",
+      "at": 1791957634.8514218,
+      "action": "unblock",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "admission": {
+            "at": 1791947578.419803,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+          },
+          "outbox": {
+            "at": 1791947578.526766,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
+          }
+        ],
+        "note": "The user approved the macOS firewall prompts for target/debug/deps/remote_access-1e2554660b2c8c40 and LUNA QA Batch3.app (both listed Allow incoming connections). All 7 gateway:: tests pass over the real Wi-Fi address; the QA app serves its remote descriptor on 192.168.18.2:59880.",
+        "status": "paused",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791947546.890219,
+          "expires_at": 1791961946.890219,
+          "heartbeat_at": 1791947546.890219,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+        }
+      }
+    },
+    {
+      "seq": 549,
+      "task": "RM-04",
+      "at": 1791957634.963159,
+      "action": "claim",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "admission": {
+            "at": 1791947578.419803,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+          },
+          "outbox": {
+            "at": 1791947578.526766,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
+          }
+        ],
+        "note": "The user approved the macOS firewall prompts for target/debug/deps/remote_access-1e2554660b2c8c40 and LUNA QA Batch3.app (both listed Allow incoming connections). All 7 gateway:: tests pass over the real Wi-Fi address; the QA app serves its remote descriptor on 192.168.18.2:59880.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791957634.963029,
+          "expired": false,
+          "expires_at": 1791972034.963029,
+          "heartbeat_at": 1791957634.963029,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+        }
+      }
+    },
+    {
+      "seq": 550,
+      "task": "RM-04",
+      "at": 1791957914.672747,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "admission": {
+            "at": 1791947578.419803,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+          },
+          "outbox": {
+            "at": 1791947578.526766,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+          },
+          "verification": {
+            "at": 1791957914.672482,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-04/20261014T055709Z/results.md",
+                "sha256": "af393fdb92ec5703d203b91845177674e37b566b22512c9d0a15e03e30a367b2"
+              }
+            ],
+            "note": "RP campaigns on real Wi-Fi after the firewall approval: remote_access gateway:: 7/7 incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; remote_task_commands 3/3 (races, conflicts, setup hold); outbox 10/10. Native: RemoteTaskCommandsTests 1/1 against LUNA QA Batch3 with real Codex and Claude Code — draft before create, stop refused offline, outbox restored, first message once, never resent, one message per provider task, all commands applied once. IOS-03 still owns the composer UX."
+          }
+        },
+        "criterion": "verification",
+        "evidence": [
+          {
+            "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
+          }
+        ],
+        "note": "RP campaigns on real Wi-Fi after the firewall approval: remote_access gateway:: 7/7 incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; remote_task_commands 3/3 (races, conflicts, setup hold); outbox 10/10. Native: RemoteTaskCommandsTests 1/1 against LUNA QA Batch3 with real Codex and Claude Code — draft before create, stop refused offline, outbox restored, first message once, never resent, one message per provider task, all commands applied once. IOS-03 still owns the composer UX.",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791957634.963029,
+          "expired": false,
+          "expires_at": 1791972034.963029,
+          "heartbeat_at": 1791957634.963029,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+        }
+      }
+    },
+    {
+      "seq": 551,
+      "task": "RM-04",
+      "at": 1791957914.785447,
+      "action": "check",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "admission": {
+            "at": 1791947578.419803,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+          },
+          "handoff": {
+            "at": 1791957914.78515,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-04/20261014T055709Z/manifest.sha256",
+                "sha256": "14c4646bce21def3a85f5e11ab44e024948b91ce9e1e6e76db72906d26901119"
+              }
+            ],
+            "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up)."
+          },
+          "outbox": {
+            "at": 1791947578.526766,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+          },
+          "verification": {
+            "at": 1791957914.672482,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-04/20261014T055709Z/results.md",
+                "sha256": "af393fdb92ec5703d203b91845177674e37b566b22512c9d0a15e03e30a367b2"
+              }
+            ],
+            "note": "RP campaigns on real Wi-Fi after the firewall approval: remote_access gateway:: 7/7 incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; remote_task_commands 3/3 (races, conflicts, setup hold); outbox 10/10. Native: RemoteTaskCommandsTests 1/1 against LUNA QA Batch3 with real Codex and Claude Code — draft before create, stop refused offline, outbox restored, first message once, never resent, one message per provider task, all commands applied once. IOS-03 still owns the composer UX."
+          }
+        },
+        "criterion": "handoff",
+        "evidence": [
+          {
+            "ref": "commit:b2a7763f126b95fa6d6342a035b903fb4048f3ba"
+          }
+        ],
+        "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up).",
+        "status": "in_progress",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791957634.963029,
+          "expired": false,
+          "expires_at": 1791972034.963029,
+          "heartbeat_at": 1791957634.963029,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
+        }
+      }
+    },
+    {
+      "seq": 552,
+      "task": "RM-04",
+      "at": 1791957914.897968,
+      "action": "finish",
+      "detail": {
+        "blocker": null,
+        "checks": {
+          "admission": {
+            "at": 1791947578.419803,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "ExecuteRemoteTaskCommand with a typed RemotePrincipal from the validated session, tasks-operate scope, closed intent set, per-command-id lock, recorded-receipt replay, commandIdConflict, cross-session refusal and target checks before provider work; phone creates default to Auto or permissionModeRequired (never Ask). remote_task_commands 3/3. b2a7763f."
+          },
+          "handoff": {
+            "at": 1791957914.78515,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-04/20261014T055709Z/manifest.sha256",
+                "sha256": "14c4646bce21def3a85f5e11ab44e024948b91ce9e1e6e76db72906d26901119"
+              }
+            ],
+            "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up)."
+          },
+          "outbox": {
+            "at": 1791947578.526766,
+            "evidence": [
+              {
+                "ref": "docs/pending-tasks/control-this-mac/rm-04/README.md",
+                "sha256": "826589baf79153545532f6b650e9c963c2f207d64e40411c640cbe24afd4d855"
+              }
+            ],
+            "note": "luna_sdk::outbox (drafts behind an unapplied create, per-task order, hold behind a refusal, lost-reply read-back, frozen fences, restart persistence) + mobile runtime reconciler; queue gate behind a pending local Run and a running setup; outbox 10/10, full luna-engine suite green, regenerated Swift bindings match the build. b2a7763f."
+          },
+          "verification": {
+            "at": 1791957914.672482,
+            "evidence": [
+              {
+                "ref": "target/qa/rm-04/20261014T055709Z/results.md",
+                "sha256": "af393fdb92ec5703d203b91845177674e37b566b22512c9d0a15e03e30a367b2"
+              }
+            ],
+            "note": "RP campaigns on real Wi-Fi after the firewall approval: remote_access gateway:: 7/7 incl. mobile_outbox_delivers_commands_across_lost_replies_suspension_restart_and_revocation; remote_task_commands 3/3 (races, conflicts, setup hold); outbox 10/10. Native: RemoteTaskCommandsTests 1/1 against LUNA QA Batch3 with real Codex and Claude Code — draft before create, stop refused offline, outbox restored, first message once, never resent, one message per provider task, all commands applied once. IOS-03 still owns the composer UX."
+          }
+        },
+        "criterion": null,
+        "evidence": [
+          {
+            "ref": "target/qa/rm-04/20261014T055709Z/manifest.sha256",
+            "sha256": "14c4646bce21def3a85f5e11ab44e024948b91ce9e1e6e76db72906d26901119"
+          }
+        ],
+        "note": "Delivered in b2a7763f. Evidence target/qa/rm-04/20261014T055709Z/manifest.sha256 (gateway log, native result, Mac-side readback). LUNA Dev refreshed from main b2a7763f (process, IPC 59777, codesign strict ok; target/qa/handoff-20261014/luna-dev-refresh-b2a7763f.txt); origin/main 8944ea6a (docs only after). Limitations: queue edit/reorder are not remote intents; phone-created tasks use the host's provider for new tasks (pickers are RM-05); the pairing sheet copy still says no task changes (follow-up).",
+        "status": "done",
+        "worker": {
+          "checkout": "/Users/iulian/workspace/code/personal/luna",
+          "claimed_at": 1791957634.963029,
+          "expires_at": 1791972034.963029,
+          "heartbeat_at": 1791957634.963029,
+          "owner": "claude-team/RM-04 (orchestrator d19437b2)",
+          "session": "claude-code:d19437b2-c18e-4d6a-993a-fc34d52f20c0#RM-04"
         }
       }
     }
