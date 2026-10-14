@@ -9,6 +9,7 @@ on:
       - 'crates/ui/examples/core-contribution-probe.rs'
       - 'crates/ui/examples/macos-resource-profile.rs'
       - '.github/workflows/core-baseline.yml'
+      - '.github/actions/rust-ci/**'
   push:
     branches: [main]
     paths:
@@ -17,9 +18,14 @@ on:
       - 'crates/ui/examples/core-contribution-probe.rs'
       - 'crates/ui/examples/macos-resource-profile.rs'
       - '.github/workflows/core-baseline.yml'
+      - '.github/actions/rust-ci/**'
 
 permissions:
   contents: read
+
+concurrency:
+  group: core-baseline-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   worker-and-wasm:
@@ -30,9 +36,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: tools/core-baseline
+      - uses: ./.github/actions/rust-ci
       - name: Compile and exercise real worker and Wasm boundaries
         run: |
           mkdir -p evidence
@@ -53,7 +57,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       - name: Build native probes and current app
         run: |
           cargo build --locked -p luna

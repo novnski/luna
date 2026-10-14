@@ -29,10 +29,49 @@ uses plain Cargo. The wrapper does not retry failed builds. Non-compilation
 commands, including `fmt`, `metadata` and `clean`, go directly to Cargo;
 `clean` still requires the scoped procedure in `AGENTS.md`.
 
-The integration is local and project-scoped. It installs no Cargo shim and
-does not configure a remote cache. Existing CI jobs retain their current
-`Swatinem/rust-cache` configuration. Do not run `mbx setup` or add global mise
-wrapping as a prerequisite for this project.
+The mbx integration is local and project-scoped. It installs no Cargo shim and
+does not configure a remote cache on this Mac. CI uses the separate compiler
+cache described below. Do not run `mbx setup` or add global mise wrapping as a
+prerequisite for this project.
+
+## GitHub Actions
+
+Rust jobs use [the shared setup action](../../.github/actions/rust-ci/action.yml).
+It updates the repository's stable toolchain instead of accepting whichever
+version a runner image happens to contain, restores Cargo downloads, and uses
+[sccache](https://github.com/mozilla/sccache) with GitHub's cache backend.
+
+Compiler entries share the `luna-rust-v1` namespace across jobs and workflows.
+There is no job name or commit SHA in that namespace. sccache's content keys
+include compiler identity, target, source and flags, so matching compilations
+can be reused while Linux, macOS, iOS, feature sets and build profiles remain
+compatible. Each compilation contributes its own entry; parallel jobs do not
+race to replace one immutable `target/` archive. Cargo downloads use a separate
+small archive per runner OS and lockfile set, with an older-lockfile fallback.
+The existing local mbx cache is independent.
+
+The `UI tests` workflow overrides only its release test profile: optimization
+level 1, LTO off, 16 codegen units, and no debug information. All existing test
+targets, feature variants, assertions, fixture runs and evidence uploads remain.
+Release and TestFlight packaging retain their original profiles and thin LTO.
+This is CI tooling only; it does not require a product version bump or a local
+app refresh.
+
+This is reusable storage, not permanent storage. GitHub's branch access rules
+apply: branches can read main's entries, but main cannot read a branch's entries.
+GitHub also evicts unused entries after seven days and old entries when the
+repository's storage limit is reached (10 GB by default). Do not encode a run
+number in the namespace, increase paid storage, or delete other jobs' caches to
+make a benchmark look faster. Change `SCCACHE_GHA_VERSION` only for a deliberate
+cache reset. See [GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+
+For repeatable verification, dispatch `UI tests` twice at the same revision,
+retain the run/job JSON and logs, and compare job durations and sccache's automatic
+post-job hit/miss summaries. The first run seeds compiler entries; the second
+must show actual hits. Passing tests alone do not demonstrate cache reuse.
+sccache does not cache final linking, proc-macro compilation or `cargo check`;
+those steps still run. Preserve the native browser captures and iOS result
+bundle as the behavior evidence.
 
 ## Policy and disk usage
 

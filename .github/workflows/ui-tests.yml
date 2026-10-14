@@ -13,6 +13,7 @@ on:
       - 'dist/macos/Info.plist'
       - 'apps/ios/**'
       - '.github/workflows/ui-tests.yml'
+      - '.github/actions/rust-ci/**'
   push:
     branches: [main]
     paths:
@@ -26,10 +27,19 @@ on:
       - 'dist/macos/Info.plist'
       - 'apps/ios/**'
       - '.github/workflows/ui-tests.yml'
+      - '.github/actions/rust-ci/**'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Optimized test executables without distribution-time whole-program linking.
+# Keep this scoped to CI: release packaging still uses Cargo.toml's thin LTO.
+env:
+  CARGO_PROFILE_RELEASE_LTO: 'off'
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+  CARGO_PROFILE_RELEASE_DEBUG: '0'
 
 concurrency:
   group: ui-tests-${{ github.ref }}
@@ -41,9 +51,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       # The fake Claude/Codex/OpenCode CLI suites own the provider protocol
       # contracts; the 2026-10-09 test audit retired their inline duplicates.
       - name: Provider protocol and permission regressions
@@ -125,9 +133,7 @@ jobs:
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       - name: UI and headless layout regressions
         run: cargo test --release --locked -p luna-ui --lib -- --test-threads=1
       # Fixture examples default to `test = false` and their feature is off in
@@ -145,19 +151,10 @@ jobs:
 
   macos-frame-recovery:
     runs-on: macos-latest
-    # The browser step passing again means the preview and frame-recovery
-    # steps run too; the steps before them alone took 44 minutes.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          workspaces: |
-            .
-            vendor/zui
+      - uses: ./.github/actions/rust-ci
       - name: Check macOS application
         run: cargo check --release --locked -p luna
       - name: Native diff font geometry regression
@@ -207,11 +204,14 @@ jobs:
   ios-tests:
     runs-on: macos-latest
     timeout-minutes: 30
+    env:
+      # Simulator CI needs backtraces, not full Rust debugger type information.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-ci
       - name: Rust targets for the owned native client
         run: |
-          rustup show active-toolchain || rustup toolchain install
           case "$(uname -m)" in
             arm64) rustup target add aarch64-apple-ios-sim ;;
             x86_64) rustup target add x86_64-apple-ios ;;
@@ -262,9 +262,7 @@ jobs:
             libfreetype-dev libasound2-dev libvulkan-dev pkg-config cmake \
             libwebkit2gtk-4.1-dev libjson-glib-dev xvfb xdotool openbox \
             weston ffmpeg imagemagick fonts-noto-cjk
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       - name: Build browser fixture
         run: cargo build --release --locked -p luna-ui --example browser-fixture --features browser-fixture
       - name: X11 and Wayland browser regressions
