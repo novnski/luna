@@ -42,10 +42,11 @@ and exposes one `Required checks` result. Documentation-only changes skip the
 Rust graph. Shared manifests, toolchains and CI setup changes exercise all Rust
 suites. A failed, cancelled or timed-out selected suite fails the final result.
 
-The execution budget is one minute for routing, eight minutes per parallel
-check, and one minute for the final result. GitHub runner queue time is external
-to these execution limits. Measure the elapsed time from run creation through
-the last required result; a timeout is a failure, not successful verification.
+Parallel jobs have a nine-minute execution ceiling. The final gate independently
+enforces **600 seconds for the whole run**, using GitHub's run timestamp and
+including queue time (reruns use their attempt start). A timeout, failed suite,
+or elapsed time over the budget fails the gate; none count as successful
+verification. The measured time is retained in the job summary.
 
 The `ci` Cargo profile keeps development assertions and overflow checks, with
 no optimization, debug information or incremental output. It leaves local dev

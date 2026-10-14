@@ -14,6 +14,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -27,6 +28,7 @@ jobs:
       suites: ${{ steps.plan.outputs.suites }}
       engine-files: ${{ steps.paths.outputs.engine_files }}
       ui-files: ${{ steps.paths.outputs.ui_files }}
+      started-at: ${{ steps.plan.outputs.started-at }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate every workflow without running its platform matrix
@@ -94,13 +96,19 @@ jobs:
         env:
           CHANGED: ${{ steps.paths.outputs.changes }}
           RUN_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.all }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PYTHON'
-          import json, os
+          import json, os, subprocess
+          run = json.loads(subprocess.check_output(['gh', 'api',
+              f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'], text=True))
+          # Include initial queue time; reruns get their own attempt start.
+          started = run['created_at'] if run['run_attempt'] == 1 else run['run_started_at']
           suites = (['contracts', 'providers', 'engine', 'ui', 'macos', 'linux', 'preview', 'extensions', 'edge', 'ios']
                     if os.environ['RUN_ALL'] == 'true' else json.loads(os.environ['CHANGED']))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('suites=' + json.dumps(suites) + '\n')
+              output.write('started-at=' + started + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('Selected suites: ' + (', '.join(suites) or 'none (no affected code)') + '\n')
           PYTHON
@@ -114,8 +122,9 @@ jobs:
         suite: ${{ fromJSON(needs.changes.outputs.suites) }}
     name: ${{ matrix.suite }}
     runs-on: ${{ contains(fromJSON('["macos","ios"]'), matrix.suite) && 'macos-latest' || 'ubuntu-24.04' }}
-    # One minute for routing + eight for checks + one for the final gate.
-    timeout-minutes: 8
+    # Leave routing/cleanup room; the final gate enforces the whole-run 600s
+    # budget instead of cancelling a passing suite at an arbitrary 8 minutes.
+    timeout-minutes: 9
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-ci
@@ -265,10 +274,21 @@ jobs:
           PLAN_RESULT: ${{ needs.changes.result }}
           CHECK_RESULT: ${{ needs.check.result }}
           SUITES: ${{ needs.changes.outputs.suites }}
+          STARTED_AT: ${{ needs.changes.outputs.started-at }}
         run: |
-          test "$PLAN_RESULT" = success
-          if [ "$SUITES" = '[]' ]; then
-            test "$CHECK_RESULT" = skipped
-          else
-            test "$CHECK_RESULT" = success
-          fi
+          python3 - <<'PYTHON'
+          import json, os, sys
+          from datetime import datetime, timezone
+          if os.environ['PLAN_RESULT'] != 'success':
+              sys.exit('Suite selection failed; required checks cannot pass.')
+          suites = json.loads(os.environ['SUITES'])
+          expected = 'success' if suites else 'skipped'
+          elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(os.environ['STARTED_AT'])).total_seconds()
+          passed = os.environ['CHECK_RESULT'] == expected and 0 <= elapsed <= 600
+          result = {'suites': suites, 'checks': os.environ['CHECK_RESULT'],
+                    'elapsed_seconds': round(elapsed, 1), 'budget_seconds': 600, 'passed': passed}
+          print(json.dumps(result, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'CI elapsed: {elapsed:.1f}s / 600s. Required checks: {"passed" if passed else "failed"}.\n')
+          sys.exit(0 if passed else 1)
+          PYTHON
