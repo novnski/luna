@@ -493,11 +493,19 @@ async fn queue_holds_during_a_turn_and_flushes_in_order_at_its_end() {
         "the held queue id to become the next-turn message id",
     )
     .await;
+    // The dispatched head stays claimed until its command's provider
+    // correlation settles it, a moment after its user message lands.
+    wait_for(
+        || !queue_texts(&core).iter().any(|text| text == "second"),
+        "the dispatched head to settle out of the queue",
+    )
+    .await;
     assert_eq!(
         queue_texts(&core),
         vec!["third"],
         "only the head goes: the next turn is now running"
     );
+    assert!(!prompts.lock().unwrap().iter().any(|p| p == "third"));
 
     let _ = harness.finish.send(());
     wait_for(
