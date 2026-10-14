@@ -556,6 +556,19 @@ async fn resolve_identity(
     }
 }
 
+/// Drop the memo for every cwd an unbound task of this device sits in.
+fn forget_unbound_identities(inner: &DiffSyncInner, chats: &[Chat]) {
+    let mut identities = lock(&inner.identities);
+    for chat in chats {
+        if chat.device_id == inner.device_id
+            && chat.checkout_id.is_none()
+            && let Some(cwd) = &chat.cwd
+        {
+            identities.remove(cwd);
+        }
+    }
+}
+
 pub(crate) fn has_checkout_marker(root: &Path) -> bool {
     std::fs::symlink_metadata(root.join(".git")).is_ok_and(|metadata| {
         !metadata.file_type().is_symlink() && (metadata.is_file() || metadata.is_dir())
@@ -982,10 +995,12 @@ async fn diff_sync_task(
                 // appears (a `git init` in a running task's terminal). Chat
                 // rows do not change then, so without this pass a task begun
                 // in the plain folder kept "Preparing diff…" until the repair
-                // tick or its next turn. Its cwd never resolved, so it has no
-                // memo and this pass resolves it afresh; bound chats stay
-                // memoized, and space rows are only written on change.
+                // tick or its next turn. An unbound task's memo can only name
+                // an enclosing repository the root guard refused, so it
+                // resolves afresh; bound chats stay memoized, and space rows
+                // are only written on change.
                 let chats = chats_rx.borrow().clone();
+                forget_unbound_identities(&inner, &chats);
                 reconcile(&inner, chats, false).await;
             }
             _ = repair.tick() => {

@@ -844,8 +844,25 @@ async fn diff_sync_publishes_without_rewriting_chat_branch() {
 /// until the next turn).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn diff_sync_discovers_a_repository_initialized_mid_task() {
+    repository_initialized_mid_task(false).await;
+}
+
+/// A project folder inside another repository (a home-directory dotfiles
+/// repo, say) first resolves to that enclosing checkout, which an unbound
+/// task never binds to. Its own `git init` must still be picked up at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diff_sync_discovers_a_repository_initialized_inside_another() {
+    repository_initialized_mid_task(true).await;
+}
+
+async fn repository_initialized_mid_task(inside_another: bool) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let folder = tmp.path().join("plain-project");
+    let parent = tmp.path().join("home");
+    std::fs::create_dir_all(&parent).expect("parent");
+    if inside_another {
+        git(&parent, &["init", "-b", "main"]).await;
+    }
+    let folder = parent.join("plain-project");
     std::fs::create_dir_all(&folder).expect("folder");
     std::fs::write(folder.join("app.js"), "console.log('habits');\n").expect("source file");
 
@@ -877,7 +894,7 @@ async fn diff_sync_discovers_a_repository_initialized_mid_task() {
     core.diff_sync.reconcile_now().await;
     assert!(
         core.diff_sync.watch_diffs().borrow().is_empty(),
-        "a plain folder has no checkout diff"
+        "a plain folder has no checkout diff of its own"
     );
 
     // The terminal's `git init`; the explicit recheck stands in for the
