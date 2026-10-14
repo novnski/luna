@@ -98,6 +98,12 @@ impl BrowserData {
                 return Ok(worker);
             }
         }
+        // The helper is a GTK process that needs the same display GPUI uses.
+        // Without one it only crashes ("Could not connect WebKitGTK to the
+        // display") and its frame thread reports the stop asynchronously.
+        if gpui::guess_compositor() == "Headless" {
+            return Err("No Wayland or X11 display is available for the browser".into());
+        }
         let mut child = Command::new(helper_path()?).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()
             .map_err(|e| format!("Could not start WebKitGTK: {e}. Install the WebKitGTK 4.1 runtime for your distribution."))?;
         let stdin = child.stdin.take().unwrap();
