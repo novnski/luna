@@ -4,8 +4,7 @@ User-visible changes follow [Semantic Versioning](https://semver.org/) and the [
 
 ## 0.0.2 — 2026-10-14
 
-- Git History finishes loading in a repository with no commits yet: it shows "No commits yet" instead of staying on "Loading history…", and the first commit appears on its own once it lands.
-- Changes picks up a repository created with `git init` during a task right away, instead of staying on "Preparing diff…" until the task's next turn.
+- Keep a long working-line warning, such as "No activity for 3m 39s · may be stuck", clear of the elapsed time in narrow chat panes at large Interface sizes. The warning now wraps beside the timer instead of painting over it.
 
 ## 0.0.1 — 2026-10-14
 
