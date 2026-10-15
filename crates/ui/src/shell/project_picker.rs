@@ -8,7 +8,8 @@
 //! Child module of `shell` for the project tile and activity helpers.
 
 use super::sidebar_projects::{
-    ProjectActivity, all_projects_tile, display_project_path, project_tile, project_tint,
+    ProjectActivity, all_projects_tile, display_project_path, open_tasks, project_tile,
+    project_tint,
 };
 use super::*;
 use gpui::{EventEmitter, FocusHandle, MouseMoveEvent, ScrollHandle, Window};
@@ -328,7 +329,8 @@ impl ProjectPicker {
                         row: ProjectPickerRow::All,
                         label: SharedString::from("All projects"),
                         subtitle: format!(
-                            "{active} active across {projects} project{}",
+                            "{} across {projects} project{}",
+                            open_tasks(active),
                             if projects == 1 { "" } else { "s" }
                         )
                         .into(),

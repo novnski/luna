@@ -23,6 +23,10 @@
 //!   typed, machine-scoped approval. Full answers it once; Auto declines
 //!   whatever Codex's reviewer handed back to a person and shows why, and
 //!   surfaces the reviewer's own denials (`docs/pending-tasks/permission-modes`).
+//!   On macOS a sandboxed run also tells the agent to escalate browser
+//!   launches, which abort inside Codex's Seatbelt profile: in a fresh
+//!   thread's instructions, or injected into a resumed thread's history
+//!   (`MACOS_SANDBOX_BROWSER_GUIDANCE`).
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
 //!   A registered child's notifications route through an EXPLICIT table
@@ -35,11 +39,15 @@
 //!   `turn/start` on the same thread. The session is persistent across turns
 //!   while the steering mailbox lives. Explicit steer never starts a new turn.
 //!   RPC acceptance is pending; native userMessage.clientId/readback records it.
+//! - Background terminals: a command still running when its turn ends (a
+//!   preview server) is reported as a native Shell task until the exit Codex
+//!   reports later ([`background`]); it lives only as long as this process.
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends `turn/interrupt`,
 //!   escalating to SIGTERM → SIGKILL if the child is unresponsive; the stream
 //!   always ends with `Done { status: Interrupted }`.
 
 mod approvals;
+mod background;
 pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
 pub(crate) mod elicitation;
@@ -1391,6 +1399,10 @@ async fn run_session(session: Session) {
         .get(LUNA_ATTACH_EXISTING_GOAL_OPTION)
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let browser_guidance = (!title_only
+        && cfg!(target_os = "macos")
+        && request.sandbox != luna_proto::SandboxLevel::DangerFullAccess)
+        .then_some(MACOS_SANDBOX_BROWSER_GUIDANCE);
     let start_params = {
         let mut p = serde_json::Map::new();
         if title_only {
@@ -1426,10 +1438,11 @@ async fn run_session(session: Session) {
             if let Some(contract) = runtime_contract.as_ref()
                 && !contract.instructions.is_empty()
             {
-                p.insert(
-                    "developerInstructions".into(),
-                    render_luna_instructions(contract).into(),
-                );
+                let mut instructions = render_luna_instructions(contract);
+                if let Some(guidance) = browser_guidance {
+                    instructions.push_str(guidance);
+                }
+                p.insert("developerInstructions".into(), instructions.into());
             }
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
@@ -1564,6 +1577,43 @@ async fn run_session(session: Session) {
             return Err(HarnessError::Protocol(
                 "Codex returned no thread identity for the goal".into(),
             ));
+        }
+        // thread/resume cannot replace a thread's developer instructions
+        // (openai/codex#19045, still so in 0.162.1), so a thread started
+        // before the guidance, or under Full access, would never see it.
+        // Injected items join the thread's model-visible history before any
+        // turn, including goal turns Codex starts itself. Fail open: an
+        // older Codex without the method keeps the run going. A fresh thread
+        // already has it in its LUNA instructions.
+        //
+        // Keep this the first request after thread/resume. A re-attached
+        // Active goal's continuation starts inside thread/resume, and Codex
+        // rejects injection into a thread it has not loaded, so nothing
+        // orders this before that turn's first model request. It is
+        // best-effort: the turn usually takes longer to build that request
+        // than this round trip (the injection finished 37-76 ms ahead in all
+        // 26 probes on 0.154.0 and 0.162.1), but load or a faster Codex can
+        // lose the race. That first request then lacks the guidance; later
+        // ones have it. Pausing the goal around the resume would be exact,
+        // but a failure between the steps would leave the user's goal Paused.
+        if let Some(guidance) = browser_guidance
+            && resumed
+            && !thread_id.is_empty()
+            && let Err(error) = client
+                .request(
+                    "thread/inject_items",
+                    json!({
+                        "threadId": thread_id,
+                        "items": [{
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": guidance}],
+                        }],
+                    }),
+                )
+                .await
+        {
+            tracing::warn!(target: "luna_harness::codex", %thread_id, %error, "macOS browser guidance was not injected");
         }
         // Native thread/start and thread/resume report this policy beside `thread`.
         // thread/read does not expose it; keep the provider-reported loaded state.
@@ -1920,6 +1970,7 @@ async fn run_session(session: Session) {
     );
     let mut computer_use_turn_cancel = CancellationToken::new();
     let mut pending_approvals = approvals::PendingApprovals::new();
+    let mut background_terminals = background::BackgroundTerminals::default();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
@@ -2078,6 +2129,15 @@ async fn run_session(session: Session) {
                         }
                         // Item notifications carry the root `turnId`, not `turn.id`.
                         let item_turn = item_turn_id(&params);
+                        // A command still running when its turn ends is a background
+                        // terminal; its exit arrives here later, under that turn.
+                        if phase == Phase::Started {
+                            background_terminals.started(&item_turn, item);
+                        } else if let Some(event) = background_terminals.completed(&thread_id, item)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
                         if let Some(message_id) = native_steers.record(item, &item_turn) {
                             if !emit_recorded_steer(&event_tx, &mut assistant_message_id, message_id,
                                 router.active_id() != Some(item_turn.as_str())).await {
@@ -2227,6 +2287,9 @@ async fn run_session(session: Session) {
                         if !reconcile_native_steers(&client, &thread_id, legacy, &mut native_steers,
                             &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
+                        for event in background_terminals.turn_completed(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
                         streamed_text.clear();
@@ -2852,6 +2915,20 @@ fn render_luna_instructions(contract: &luna_proto::LunaAgentRuntimeContract) -> 
     }
     text
 }
+
+/// On macOS, Codex runs every sandboxed command (read-only and workspace-write
+/// alike) under `sandbox-exec` with a deny-by-default Seatbelt profile. That
+/// profile permits no Mach service registration and only a few lookups, and
+/// Codex has no setting to widen it. A browser cannot start there: Chrome
+/// aborts with SIGABRT, and macOS shows the user a "quit unexpectedly" dialog
+/// for each attempt (novnski/luna#21). Escalation is the one route out, and it
+/// keeps the run's review: Ask asks the user, Auto asks Codex's reviewer.
+/// A fresh thread carries this in its developer instructions; a resumed one
+/// gets it once per process as an injected developer item. Codex's native
+/// review runs in an isolated sub-agent that sees neither. Either copy stays
+/// in the thread after a switch to Full access, so the text is conditional on
+/// the `sandbox_mode` Codex reports to the model on every turn.
+const MACOS_SANDBOX_BROWSER_GUIDANCE: &str = "[LUNA Harness: browsers and the macOS sandbox | Codex Seatbelt profile]\nWhile your `sandbox_mode` is `read-only` or `workspace-write`, commands run in Codex's macOS sandbox, which cannot start a web browser. The sandbox blocks the system services browsers need, so Chrome, Chromium, Edge, Firefox and WebKit fail at launch, and macOS shows the user a \"quit unexpectedly\" dialog for each attempt. In those modes, before you run anything that launches a browser (Playwright, Puppeteer, Selenium or WebDriver, Cypress, Lighthouse, Karma, or a headless screenshot or PDF), request escalated permissions on the first attempt (sandbox_permissions: require_escalated) with a one-line justification. Never launch or retry a browser inside the sandbox. If escalation is declined, do not run the browser command; say that browser verification did not run and why. When `sandbox_mode` is `danger-full-access`, none of this applies: there is no sandbox, so launch browsers normally without requesting escalation.\n\n";
 
 /// Immutable authority and routing context for one provider request.
 struct ServerRequestContext<'a> {

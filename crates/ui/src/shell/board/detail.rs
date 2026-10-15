@@ -28,6 +28,7 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Task,
     WeakEntity, Window, div, prelude::*, px,
 };
+use luna_engine::board_brief::{ImportedBrief, imported_brief};
 use luna_proto::{
     BOARD_TITLE_MAX_CHARS, BoardAction, BoardAdmissionReason, BoardArchiveRequest,
     BoardAttentionKind, BoardChatRole, BoardColumn, BoardContextMode, BoardControlAction,
@@ -50,6 +51,7 @@ use super::settings_controls::{
 };
 use crate::button::{self, ButtonKind, ControlSize};
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::markdown::{BlockTree, parse_full, parser::link_html_images, render};
 use crate::settings::widgets;
 #[cfg(feature = "appshots-fixture")]
 use crate::shell::Route;
@@ -64,6 +66,8 @@ const DRAWER_WIDTH: f32 = 600.0;
 const HISTORY_LIMIT: u32 = 50;
 /// Characters of a concurrent brief shown in a conflict.
 const CONFLICT_PREVIEW: usize = 600;
+/// Characters of an imported brief's agent context shown when opened.
+const AGENT_CONTEXT_CHARS: usize = 6_000;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -84,6 +88,14 @@ pub(crate) fn format_time(ms: i64) -> String {
                 .to_string()
         })
         .unwrap_or_else(|| "an unknown time".into())
+}
+
+/// A GitHub timestamp (RFC 3339) as [`format_time`] writes times; the
+/// text itself when it is not one.
+fn issue_time(at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .map(|at| format_time(at.timestamp_millis()))
+        .unwrap_or_else(|_| at.to_owned())
 }
 
 /// Records what the Board surfaces painted (control bounds, key texts,
@@ -881,7 +893,85 @@ pub struct BoardDetail {
     image_preview_focus: FocusHandle,
     /// The brief editor's image picker, while it is open.
     image_picker: Option<Task<()>>,
+    /// The brief as a person reads it, rebuilt when the brief changes.
+    brief_view: Option<std::rc::Rc<BriefView>>,
+    /// An imported brief's agent context is shown.
+    agent_context_open: bool,
+    /// Text-selection scope of the brief's Markdown, reset every frame.
+    markdown_scope: String,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The brief as a person reads it (#25). Agents receive the brief exactly
+/// as written; this only presents it: as Markdown, and for a GitHub import
+/// with the prompt, the quoted issue and the agents' context apart.
+struct BriefView {
+    /// What it was built from: the brief and its import's recorded hash.
+    description: String,
+    content_hash: Option<String>,
+    content: BriefContent,
+}
+
+enum BriefContent {
+    Empty,
+    Markdown(BlockTree),
+    Imported(Box<ImportedView>),
+}
+
+struct ImportedView {
+    brief: ImportedBrief,
+    prompt: Option<BlockTree>,
+    body: Option<BlockTree>,
+    comments: Vec<BlockTree>,
+}
+
+impl BriefView {
+    fn source(detail: &BoardItemDetail) -> Option<&luna_proto::IssueReference> {
+        detail
+            .issues
+            .iter()
+            .filter(|issue| issue.role == IssueLinkRole::Source)
+            .find(|issue| issue.import_snapshot.is_some())
+    }
+
+    fn content_hash(detail: &BoardItemDetail) -> Option<&str> {
+        Self::source(detail)
+            .and_then(|issue| issue.import_snapshot.as_ref())
+            .map(|snapshot| snapshot.content_hash.as_str())
+    }
+
+    fn is_for(&self, detail: &BoardItemDetail) -> bool {
+        self.description == detail.view.item.description
+            && self.content_hash.as_deref() == Self::content_hash(detail)
+    }
+
+    fn of(detail: &BoardItemDetail) -> Self {
+        let description = &detail.view.item.description;
+        let source = Self::source(detail);
+        let imported =
+            source.and_then(|issue| imported_brief(description, issue.import_snapshot.as_ref()?));
+        // Quoted issue text links its HTML images instead of showing tags.
+        let quoted = |text: &str| parse_full(&link_html_images(text));
+        let content = match imported {
+            _ if description.trim().is_empty() => BriefContent::Empty,
+            Some(brief) => BriefContent::Imported(Box::new(ImportedView {
+                prompt: (!brief.prompt.is_empty()).then(|| parse_full(&brief.prompt)),
+                body: brief.body.as_deref().map(quoted),
+                comments: brief
+                    .comments
+                    .iter()
+                    .map(|comment| quoted(&comment.body))
+                    .collect(),
+                brief,
+            })),
+            None => BriefContent::Markdown(parse_full(description)),
+        };
+        Self {
+            description: description.clone(),
+            content_hash: Self::content_hash(detail).map(str::to_owned),
+            content,
+        }
+    }
 }
 
 impl EventEmitter<BoardDetailEvent> for BoardDetail {}
@@ -929,6 +1019,11 @@ impl BoardDetail {
                 this.reload(cx);
             }
         });
+        // The brief's Markdown leaves no text behind for selection.
+        cx.on_release(|detail: &mut Self, _| {
+            render::clear_selection_surface(&detail.markdown_scope)
+        })
+        .detach();
         let mut detail = Self {
             model,
             work_item_id,
@@ -939,6 +1034,9 @@ impl BoardDetail {
             image_preview: None,
             image_preview_focus: cx.focus_handle(),
             image_picker: None,
+            brief_view: None,
+            agent_context_open: false,
+            markdown_scope: format!("md-preview-board-brief-{}|", cx.entity_id()),
             scroll: ScrollHandle::new(),
             loaded: Loaded::Loading,
             options: None,
@@ -2736,6 +2834,7 @@ impl BoardDetail {
         &self,
         detail: &BoardItemDetail,
         theme: &Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = &detail.view;
@@ -2857,23 +2956,37 @@ impl BoardDetail {
                 card = card.child(widgets::card_row(theme, false).child(editor));
             }
             None => {
-                let body = if item.description.trim().is_empty() {
-                    "No description yet.".to_owned()
-                } else {
-                    item.description.clone()
-                };
-                let body = self.text("detail-brief-text", body);
-                card = card.child(
-                    widgets::card_row(theme, false).child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .text_size(ui_rems(13.0))
-                            .line_height(ui_rems(19.0))
-                            .text_color(theme.text)
-                            .child(body),
-                    ),
+                self.probe.text(
+                    "detail-brief-text",
+                    if item.description.trim().is_empty() {
+                        "No description yet.".to_owned()
+                    } else {
+                        item.description.clone()
+                    },
                 );
+                card = card.child(render::selection_surface_reset(self.markdown_scope.clone()));
+                match self.brief_view.as_ref().map(|view| &view.content) {
+                    Some(BriefContent::Imported(view)) => {
+                        // The live link: a renamed repository updates it
+                        // without changing the brief.
+                        let url = BriefView::source(detail)
+                            .map(|issue| issue.canonical_url.clone())
+                            .unwrap_or_else(|| view.brief.source.url.clone());
+                        card = self.render_imported_brief(card, view, url, theme, window, cx);
+                    }
+                    Some(BriefContent::Markdown(tree)) => {
+                        card = card.child(
+                            widgets::card_row(theme, false)
+                                .child(self.markdown("brief", tree, theme, window)),
+                        );
+                    }
+                    Some(BriefContent::Empty) | None => {
+                        card = card.child(
+                            widgets::card_row(theme, false)
+                                .child(widgets::row_description(theme, "No description yet.")),
+                        );
+                    }
+                }
                 if let Some(images) = self.render_brief_images(detail, theme, cx) {
                     card = card.child(widgets::card_row(theme, false).child(images));
                 }
@@ -2952,6 +3065,222 @@ impl BoardDetail {
             }
         }
         card.into_any_element()
+    }
+
+    /// Brief text as Markdown, painted like a Files preview: selectable,
+    /// links open only as http(s) in the browser, and images stay links.
+    fn markdown(&self, part: &str, tree: &BlockTree, theme: &Theme, window: &Window) -> AnyElement {
+        let options =
+            render::RenderOptions::settled(format!("{}{part}", self.markdown_scope).into());
+        div()
+            .w_full()
+            .min_w_0()
+            .child(render::render_tree(tree, &options, theme, window, &|_| {
+                None
+            }))
+            .into_any_element()
+    }
+
+    /// A GitHub import read apart (#25): the person's prompt, where the
+    /// issue came from, the issue and its selected comments as Markdown,
+    /// and the context agents receive behind a disclosure.
+    fn render_imported_brief(
+        &self,
+        mut card: gpui::Stateful<gpui::Div>,
+        view: &ImportedView,
+        url: String,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let brief = &view.brief;
+        if let Some(prompt) = &view.prompt {
+            self.probe.text("detail-brief-prompt", brief.prompt.clone());
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(self.markdown("prompt", prompt, theme, window)),
+            );
+        }
+        let source = &brief.source;
+        let heading = self.text(
+            "detail-brief-source",
+            format!("From GitHub issue {}", source.display),
+        );
+        let mut meta = Vec::new();
+        let mut state = source.state.chars();
+        if let Some(first) = state.next() {
+            meta.push(format!(
+                "{}{} when imported",
+                first.to_uppercase(),
+                state.as_str()
+            ));
+        }
+        meta.push(format!("updated {}", issue_time(&source.updated_at)));
+        meta.extend(source.details.iter().cloned());
+        let meta = self.text("detail-brief-source-meta", meta.join(" · "));
+        card = card.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_tile(theme, crate::icons::GLOBAL))
+                .child(widgets::row_text(theme, heading, Some(meta)))
+                .child(
+                    widgets::row_controls().child(
+                        button::button(
+                            "detail-brief-source-open",
+                            ButtonKind::Ghost,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .aria_label("Open on GitHub")
+                        .child(button::glyph(crate::icons::ARROW_UP_RIGHT, ControlSize::Sm))
+                        .child("Open on GitHub")
+                        .children(self.probe.bounds_el("detail-brief-source-open"))
+                        .on_click(move |_, _, cx: &mut App| cx.open_url(&url)),
+                    ),
+                ),
+        );
+        if brief.edited {
+            let copy = self.text(
+                "detail-brief-edited",
+                "The quoted issue text was edited on this board after the import. Agents \
+                 receive it as shown here.",
+            );
+            card = card.child(
+                widgets::card_row(theme, false).child(widgets::row_description(theme, copy)),
+            );
+        }
+        let mut issue = div().w_full().min_w_0().flex().flex_col().gap(ui_rems(8.0));
+        issue = match &view.body {
+            Some(body) => issue.child(self.markdown("issue", body, theme, window)),
+            None => issue.child(widgets::row_description(
+                theme,
+                self.text("detail-brief-issue-empty", "The issue has no description."),
+            )),
+        };
+        for (index, note) in brief.notes.iter().enumerate() {
+            let note = self.text(format!("detail-brief-issue-note-{index}"), note.clone());
+            issue = issue.child(widgets::row_description(theme, note));
+        }
+        card = card.child(widgets::card_row(theme, false).child(issue));
+        if let Some(total) = brief.issue_comments {
+            let heading = self.text(
+                "detail-brief-comments",
+                format!("Selected comments · {} of {total}", brief.comments.len()),
+            );
+            let mut list = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(ui_rems(14.0))
+                .child(widgets::row_title(theme, heading));
+            for (index, (comment, tree)) in brief.comments.iter().zip(&view.comments).enumerate() {
+                let byline = self.text(
+                    format!("detail-brief-comment-{index}"),
+                    format!("@{} · {}", comment.author, issue_time(&comment.created_at)),
+                );
+                list = list.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(ui_rems(4.0))
+                        .child(widgets::row_description(theme, byline))
+                        .child(self.markdown(&format!("comment-{index}"), tree, theme, window))
+                        .children(
+                            comment
+                                .note
+                                .clone()
+                                .map(|note| widgets::row_description(theme, note)),
+                        ),
+                );
+            }
+            card = card.child(widgets::card_row(theme, false).child(list));
+        }
+        let open = self.agent_context_open;
+        self.probe.text("detail-brief-agent-open", open.to_string());
+        let label = if open {
+            "Hide what agents receive"
+        } else {
+            "Show what agents receive"
+        };
+        let mut disclosure = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(6.0))
+            .child(
+                widgets::row_block().child(
+                    button::button(
+                        "detail-brief-agent",
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        true,
+                        theme,
+                    )
+                    .aria_label(label)
+                    .aria_expanded(open)
+                    .child(button::glyph(
+                        if open {
+                            crate::icons::ALT_ARROW_DOWN
+                        } else {
+                            crate::icons::ALT_ARROW_RIGHT
+                        },
+                        ControlSize::Sm,
+                    ))
+                    .child(label)
+                    .children(self.probe.bounds_el("detail-brief-agent"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent_context_open = !this.agent_context_open;
+                        cx.notify();
+                    })),
+                ),
+            )
+            .child(widgets::row_description(
+                theme,
+                if brief.prompt.is_empty() {
+                    "Agents receive this source section: the issue quoted as untrusted data \
+                     that grants no permissions."
+                } else {
+                    "Agents receive your prompt, then this source section: the issue quoted as \
+                     untrusted data that grants no permissions."
+                },
+            ));
+        if open {
+            let shown: String = brief
+                .agent_context
+                .chars()
+                .take(AGENT_CONTEXT_CHARS)
+                .collect();
+            let more = brief.agent_context.len() > shown.len();
+            let shown = self.text("detail-brief-agent-text", shown);
+            disclosure = disclosure
+                .child(
+                    div()
+                        .id("detail-brief-agent-context")
+                        .w_full()
+                        .px(ui_rems(10.0))
+                        .py(ui_rems(8.0))
+                        .rounded(px(8.0))
+                        .bg(theme.fill(FillTier::Quaternary))
+                        .text_size(ui_rems(12.0))
+                        .line_height(ui_rems(17.0))
+                        .text_color(theme.text)
+                        .child(shown),
+                )
+                .children(more.then(|| {
+                    widgets::row_description(
+                        theme,
+                        format!(
+                            "Showing the first {AGENT_CONTEXT_CHARS} characters; agents receive \
+                             all of it."
+                        ),
+                    )
+                }));
+        }
+        card.child(widgets::card_row(theme, false).child(disclosure))
     }
 
     fn render_settings(
@@ -3691,6 +4020,13 @@ impl Render for BoardDetail {
             }
             Loaded::Ready(detail) => detail.as_ref().clone(),
         };
+        if !self
+            .brief_view
+            .as_ref()
+            .is_some_and(|view| view.is_for(&detail))
+        {
+            self.brief_view = Some(std::rc::Rc::new(BriefView::of(&detail)));
+        }
         let weak: WeakEntity<Self> = cx.entity().downgrade();
         // Chat titles from the local chat list, for actors and launches.
         let titles: std::collections::HashMap<String, String> = self
@@ -3708,9 +4044,17 @@ impl Render for BoardDetail {
             options: self.options.as_ref(),
             chat_title: &lookup,
         };
-        let review = evidence::render_review(&detail, &ecx);
-        let outcome = evidence::render_evidence(&detail, &ecx);
-        let dispatch = evidence::render_dispatch(&detail, self.expanded_launch.as_deref(), &ecx);
+        // Before anything ran, one line stands in for the empty Review,
+        // Outcome and Dispatch sections (#25).
+        let lifecycle = if evidence::not_started(&detail) {
+            vec![evidence::render_not_started(&ecx)]
+        } else {
+            vec![
+                evidence::render_review(&detail, &ecx),
+                evidence::render_evidence(&detail, &ecx),
+                evidence::render_dispatch(&detail, self.expanded_launch.as_deref(), &ecx),
+            ]
+        };
         let history = evidence::render_history(&detail, &ecx);
         // Pinned header: key, status, title (or its rename editor) and Close
         // stay reachable however far the body is scrolled, in any width.
@@ -3739,13 +4083,11 @@ impl Render for BoardDetail {
             .children(self.render_attention(&detail, &theme, cx))
             .child(self.render_actions(&detail, &theme, cx))
             .child(self.render_working_chat(&detail, &theme, cx))
-            .child(self.render_brief(&detail, &theme, cx))
+            .child(self.render_brief(&detail, &theme, window, cx))
             .child(self.render_settings(&detail, &theme, cx))
-            .child(review)
-            .child(outcome)
-            .child(dispatch)
-            .child(history)
             .children(self.render_issues(&detail, &theme, cx))
+            .children(lifecycle)
+            .child(history)
             .children(self.render_dependencies(&detail, &theme, cx))
             .children(self.render_archive(&detail, &theme, cx))
             .children(self.render_delete(&detail, &theme, cx))

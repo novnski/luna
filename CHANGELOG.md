@@ -2,9 +2,39 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.3.2 — 2026-10-15
+## 0.5.1 — 2026-10-15
 
 - Show a new worktree chat's renamed branch everywhere as soon as the automatic title renames it. The sidebar, composer and Overview kept the original `luna/<name>` branch until the next message, while Changes → Git and the terminal already showed the new one.
+
+## 0.5.0 — 2026-10-15
+
+- Read a Board ticket imported from a GitHub issue without the agent protocol. Its Brief shows your prompt first, then where the issue came from (repository and number, its state when imported, labels and assignees) with **Open on GitHub**, then the issue description and the selected comments rendered as Markdown. Screenshots embedded as HTML become links to the image, which is not fetched. The exact text agents receive, with the issue quoted as untrusted data, is behind **Show what agents receive**; agents still receive the brief unchanged. If the quoted text was edited on the board after the import, the Brief says so. A brief written by hand also renders as Markdown.
+- A ticket that has not started shows one line in place of its empty Review, Outcome and Dispatch history sections, and its Source issue card now sits above them.
+
+## 0.4.5 — 2026-10-15
+
+- The project pill no longer makes finished work look busy. It said "3 active" when all three of a project's tasks had finished their turns, which read as three agents still working. It now counts open tasks, then what needs you and what is running, each only when there is some: "3 open tasks", or "9 open tasks · 3 need you · 1 running". The All projects picker row reads "14 open tasks across 3 projects", a folded project group shows "8 open", and the sidebar's empty list says "No open tasks". A project group header's accessible name now includes its needs-you and running counts. The counts themselves are unchanged.
+
+## 0.4.4 — 2026-10-15
+
+- Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt, in new chats and in chats started before this update. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.
+
+## 0.4.3 — 2026-10-15
+
+- Show a side chat you opened yourself (Side chat → Fresh, or `+`) with its real state in the main chat's **Background work**. Such a side chat stayed at "Starting" even after it had answered. It now reads Waiting until you send it something, Running while it works, then Completed, Failed or Stopped for its latest turn. It still never keeps the main chat busy and is stopped from its own chat.
+
+## 0.4.2 — 2026-10-15
+
+- A file open in a task's sidebar that is renamed on disk (for example, by an agent) while you look at another task now reopens under its new name after a restart, instead of showing that the old file couldn't open. Restored file tabs also start following such renames right away, before you show them again.
+
+## 0.4.1 — 2026-10-15
+
+- A server a Codex agent leaves running, such as `npm run preview`, now keeps running while LUNA is open. Previously, LUNA ended the agent's Codex process after a chat sat idle for 30 minutes, and that also stopped every command the agent had left running, so a preview link the agent reported as running stopped loading with no explanation. The command now appears in the chat's **Background work** as a running background shell, and the chat stays connected while it runs. When the command stops, its shell and its command show the exit code (for example "Exited with code 143"). Quitting LUNA or stopping the chat still ends it, and it is then shown as stopped.
+
+## 0.4.0 — 2026-10-15
+
+- Reopen each task's right sidebar where you left it after quitting and relaunching LUNA. The sidebar comes back open or closed as it was, on the same place (Overview, Files, Changes, …), and Files reopens its open file and its file tabs in the same order, read fresh from the task's checkout. Terminals, diffs and web pages are not restarted on their own; those places reopen on their own page. The last 64 tasks you changed are remembered, on this device only.
+- When a file in Files can't be opened — for example, it was deleted while LUNA was closed — the editor now names the file, shows why, and offers **Retry** and **Show files** instead of only an error message.
 
 ## 0.3.1 — 2026-10-14
 

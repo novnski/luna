@@ -1,6 +1,6 @@
 //! Project identity and live counts for the sidebar: the coloured project
 //! tile shared by the project pill, the picker and the All projects groups,
-//! and each project's active / needs-you / working tallies.
+//! and each project's open / needs-you / running tallies.
 //!
 //! Child module of `shell` so it reads straight off `Shell`'s private state.
 
@@ -12,7 +12,8 @@ use luna_proto::ChatIndicator;
 /// not counted as active).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ProjectActivity {
-    /// Tasks still in the active list (pins included).
+    /// Tasks still in the active list (pins included), running or not; the
+    /// sidebar calls them open.
     pub active: usize,
     /// Tasks waiting on the user: an approval, a question, an unseen failure
     /// or an unresolved Activity item.
@@ -25,18 +26,44 @@ pub(super) struct ProjectActivity {
 }
 
 impl ProjectActivity {
-    /// The pill's second line and the picker's summary: what needs the user
-    /// first, then the size of the active list.
+    /// The pill's second line: how many tasks are open, then what needs the
+    /// user and what is running, each only when there is some. An open task
+    /// is not work in progress: a finished turn leaves its task open (user
+    /// report: "3 active" over three finished turns read as three agents
+    /// still working). Needs-you leads the counts so a narrow sidebar fades
+    /// the running count first.
     pub(super) fn summary(&self) -> String {
-        match (self.active, self.need) {
-            (0, _) => "No active tasks".into(),
-            (active, 0) => format!("{active} active"),
-            (active, need) => format!(
-                "{active} active · {need} need{} you",
-                if need == 1 { "s" } else { "" }
-            ),
-        }
+        self.parts().join(" · ")
     }
+
+    /// [`Self::summary`] for a screen reader, without the visual separators.
+    pub(super) fn spoken(&self) -> String {
+        self.parts().join(", ")
+    }
+
+    fn parts(&self) -> Vec<String> {
+        if self.active == 0 {
+            return vec!["No open tasks".into()];
+        }
+        let mut parts = vec![open_tasks(self.active)];
+        if self.need > 0 {
+            parts.push(format!(
+                "{} need{} you",
+                self.need,
+                if self.need == 1 { "s" } else { "" }
+            ));
+        }
+        if self.working > 0 {
+            parts.push(format!("{} running", self.working));
+        }
+        parts
+    }
+}
+
+/// "1 open task", "3 open tasks": the size of the active list, worded so it
+/// never reads as tasks still running.
+pub(super) fn open_tasks(count: usize) -> String {
+    format!("{count} open task{}", if count == 1 { "" } else { "s" })
 }
 
 /// Six hues spread around the wheel (violet, green, amber, blue, pink,
@@ -187,7 +214,7 @@ impl Shell {
     }
 
     /// An All projects group's header: the disclosure chevron, the project's
-    /// tile and name, what needs the user and what is running, the active
+    /// tile and name, what needs the user and what is running, the open
     /// count while folded, and (under the pointer) a New task button for
     /// that project. Same height as every sidebar section header, so the
     /// list's height bookkeeping is unchanged.
@@ -234,10 +261,7 @@ impl Shell {
             .id(id.clone())
             .group("sidebar-project-header")
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!(
-                "{name}, {} active",
-                activity.active
-            )))
+            .aria_label(SharedString::from(format!("{name}, {}", activity.spoken())))
             .aria_expanded(!collapsed)
             .flex()
             .flex_row()
@@ -295,7 +319,7 @@ impl Shell {
                         .flex_none()
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_faint(0.9))
-                        .child(SharedString::from(format!("{} active", activity.active))),
+                        .child(SharedString::from(format!("{} open", activity.active))),
                 )
             })
             .child(
