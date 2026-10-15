@@ -10030,10 +10030,16 @@ async fn drive_run(
                     tracing::warn!(chat = %chat_id, %error, "provider checkpoint persistence failed");
                 }
                 inner.note_message(&chat_id, &folded_text(&folded));
-            } else if turn_was_active && let Some(message) = turn_message.as_deref() {
-                // An active turn ended before streaming anything, so no row
+            } else if turn_was_active
+                && !self_continued_turn
+                && let Some(message) = turn_message.as_deref()
+            {
+                // A prompted turn ended before streaming anything, so no row
                 // carries its status. A parked runtime's teardown is not a
-                // turn (the parked gate above already cleared `idle_since`).
+                // turn (the parked gate above already cleared `idle_since`),
+                // and a provider-started turn has no owning message: its
+                // fallback to the run's original one would overwrite that
+                // turn's own end.
                 let end = crate::recovery::UnwrittenTurnEnd {
                     message_id: message.into(),
                     status: *status,
