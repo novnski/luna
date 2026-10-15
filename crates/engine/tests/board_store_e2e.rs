@@ -988,6 +988,14 @@ async fn restart_and_backup_restore_preserve_tickets_keys_order_and_journal() {
     let backed_up = list(&c, project("project-luna"), json!({})).await;
     let journal_backed_up = ok(&c, "BoardEvents", json!({"limit":500})).await;
     stop(core, c).await;
+    // The root's lock goes with the engine's last reference, which a winding
+    // down task can hold a moment after `stop`; backup refuses a live engine.
+    for _ in 0..200 {
+        if luna_engine::InstanceLock::holder(&f.root).is_none() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let service = BackupService::new(
         IsolatedRoot::open(&f.root).unwrap(),
