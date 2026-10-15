@@ -208,11 +208,10 @@ impl FilesSurface {
                     WorkspaceEntryKind::File => FileIconIdentity::file(&node.entry.name),
                     WorkspaceEntryKind::Symlink => FileIconIdentity::symlink(&node.entry.name),
                 };
+                let row_id = gpui::SharedString::from(format!("files-tree-entry:{}", row.path));
                 div()
-                    .id(gpui::SharedString::from(format!(
-                        "files-tree-entry:{}",
-                        row.path
-                    )))
+                    .id(row_id.clone())
+                    .debug_selector(|| row_id.to_string())
                     .role(gpui::Role::TreeItem)
                     .aria_label(node.entry.name.clone())
                     .aria_selected(selected)

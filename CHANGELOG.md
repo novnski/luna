@@ -2,9 +2,14 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.3.2 — 2026-10-15
+## 0.4.1 — 2026-10-15
 
 - Show a side chat you opened yourself (Side chat → Fresh, or `+`) with its real state in the main chat's **Background work**. Such a side chat stayed at "Starting" even after it had answered. It now reads Waiting until you send it something, Running while it works, then Completed, Failed or Stopped for its latest turn. It still never keeps the main chat busy and is stopped from its own chat.
+
+## 0.4.0 — 2026-10-15
+
+- Reopen each task's right sidebar where you left it after quitting and relaunching LUNA. The sidebar comes back open or closed as it was, on the same place (Overview, Files, Changes, …), and Files reopens its open file and its file tabs in the same order, read fresh from the task's checkout. Terminals, diffs and web pages are not restarted on their own; those places reopen on their own page. The last 64 tasks you changed are remembered, on this device only.
+- When a file in Files can't be opened — for example, it was deleted while LUNA was closed — the editor now names the file, shows why, and offers **Retry** and **Show files** instead of only an error message.
 
 ## 0.3.1 — 2026-10-14
 
