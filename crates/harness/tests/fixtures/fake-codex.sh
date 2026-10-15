@@ -801,6 +801,12 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   ;;
 
+*scenario:thread-request*)
+  # Keep the exact thread/start request for the test to inspect.
+  printf '%s\n' "$thread_line" > "$CODEX_HOME/thread-request"
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  ;;
 
 *scenario:reasoning*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"

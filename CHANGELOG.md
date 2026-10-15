@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.3.2 — 2026-10-15
+
+- Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.
+
 ## 0.3.1 — 2026-10-14
 
 - Make the warnings in **Board → From GitHub issue** readable. A message such as "This project's checkout has no GitHub remote." was printed in near-white text on a bright yellow bar in dark appearance, and in dark text on dark amber in light appearance. It now shows amber text on a faint amber background that stays at least 4.5:1 in every built-in theme. The issue-update dialog's warnings use the same style.

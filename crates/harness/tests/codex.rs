@@ -347,6 +347,62 @@ async fn declared_luna_tools_without_engine_handler_fail_before_provider_start()
     );
 }
 
+/// novnski/luna#21: on macOS every sandboxed Codex command runs under Seatbelt,
+/// where Chrome aborts at launch and macOS shows the user a crash dialog. The
+/// thread's instructions must send browser launches through Codex's escalation
+/// there, and only there: no full-access thread or non-macOS host gets them.
+#[tokio::test]
+async fn sandboxed_macos_threads_send_browser_launches_through_escalation() {
+    for (sandbox, guided) in [
+        (SandboxLevel::WorkspaceWrite, cfg!(target_os = "macos")),
+        (SandboxLevel::ReadOnly, cfg!(target_os = "macos")),
+        (SandboxLevel::DangerFullAccess, false),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let mut contract = synthetic_runtime_contract();
+        contract.tools.clear();
+        let mut req = request("scenario:thread-request");
+        req.sandbox = sandbox;
+        req.model_options.insert(
+            luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+            home.path().to_str().unwrap().into(),
+        );
+        req.model_options.insert(
+            luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+            serde_json::to_value(contract).unwrap(),
+        );
+        let (run_controls, _steer, _token) = controls("Yes");
+        let events = run_to_end(&harness(), req, run_controls).await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{sandbox:?}: {events:?}"
+        );
+        let sent: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join("thread-request")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sent["method"], "thread/start", "{sent}");
+        let instructions = sent["params"]["developerInstructions"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{sandbox:?}: no developer instructions in {sent}"));
+        assert!(
+            instructions.contains("Run inside LUNA."),
+            "{sandbox:?}: {instructions}"
+        );
+        assert_eq!(
+            instructions.contains("sandbox_permissions: require_escalated"),
+            guided,
+            "{sandbox:?}: {instructions}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn ordinary_threads_are_native_visible_and_strict_resume_never_rebinds() {
     let (run_controls, _steer, _token) = controls("Yes");

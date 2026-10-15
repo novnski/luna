@@ -23,6 +23,9 @@
 //!   typed, machine-scoped approval. Full answers it once; Auto declines
 //!   whatever Codex's reviewer handed back to a person and shows why, and
 //!   surfaces the reviewer's own denials (`docs/pending-tasks/permission-modes`).
+//!   On macOS a sandboxed thread's instructions also tell the agent to
+//!   escalate browser launches, which abort inside Codex's Seatbelt profile
+//!   (`MACOS_SANDBOX_BROWSER_GUIDANCE`).
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
 //!   A registered child's notifications route through an EXPLICIT table
@@ -1426,10 +1429,13 @@ async fn run_session(session: Session) {
             if let Some(contract) = runtime_contract.as_ref()
                 && !contract.instructions.is_empty()
             {
-                p.insert(
-                    "developerInstructions".into(),
-                    render_luna_instructions(contract).into(),
-                );
+                let mut instructions = render_luna_instructions(contract);
+                if cfg!(target_os = "macos")
+                    && request.sandbox != luna_proto::SandboxLevel::DangerFullAccess
+                {
+                    instructions.push_str(MACOS_SANDBOX_BROWSER_GUIDANCE);
+                }
+                p.insert("developerInstructions".into(), instructions.into());
             }
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
@@ -2852,6 +2858,15 @@ fn render_luna_instructions(contract: &luna_proto::LunaAgentRuntimeContract) -> 
     }
     text
 }
+
+/// On macOS, Codex runs every sandboxed command (read-only and workspace-write
+/// alike) under `sandbox-exec` with a deny-by-default Seatbelt profile. That
+/// profile permits no Mach service registration and only a few lookups, and
+/// Codex has no setting to widen it. A browser cannot start there: Chrome
+/// aborts with SIGABRT, and macOS shows the user a "quit unexpectedly" dialog
+/// for each attempt (novnski/luna#21). Escalation is the one route out, and it
+/// keeps the run's review: Ask asks the user, Auto asks Codex's reviewer.
+const MACOS_SANDBOX_BROWSER_GUIDANCE: &str = "[LUNA Harness: browsers and the macOS sandbox | Codex Seatbelt profile]\nA command that runs in Codex's macOS sandbox cannot start a web browser. The sandbox blocks the system services browsers need, so Chrome, Chromium, Edge, Firefox and WebKit fail at launch, and macOS shows the user a \"quit unexpectedly\" dialog for each attempt. Before you run anything that launches a browser (Playwright, Puppeteer, Selenium or WebDriver, Cypress, Lighthouse, Karma, or a headless screenshot or PDF), request escalated permissions on the first attempt (sandbox_permissions: require_escalated) with a one-line justification. Never launch or retry a browser inside the sandbox. If escalation is declined, do not run the browser command; say that browser verification did not run and why.\n\n";
 
 /// Immutable authority and routing context for one provider request.
 struct ServerRequestContext<'a> {
