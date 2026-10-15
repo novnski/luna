@@ -119,6 +119,12 @@ pub mod auth;
 pub mod automation;
 pub mod backup;
 pub mod backup_control;
+/// Board briefs as people read them (pure; the desktop drawer renders it).
+pub mod board_brief {
+    pub use crate::rpc::board_engine::github::{
+        ImportedBrief, ImportedComment, ImportedSource, imported_brief,
+    };
+}
 pub mod change_requests;
 pub mod chat2_host;
 mod chat_workbench;

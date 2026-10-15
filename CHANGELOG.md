@@ -2,6 +2,11 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.5.0 — 2026-10-15
+
+- Read a Board ticket imported from a GitHub issue without the agent protocol. Its Brief shows your prompt first, then where the issue came from (repository and number, its state when imported, labels and assignees) with **Open on GitHub**, then the issue description and the selected comments rendered as Markdown. Screenshots embedded as HTML become links to the image, which is not fetched. The exact text agents receive, with the issue quoted as untrusted data, is behind **Show what agents receive**; agents still receive the brief unchanged. If the quoted text was edited on the board after the import, the Brief says so. A brief written by hand also renders as Markdown.
+- A ticket that has not started shows one line in place of its empty Review, Outcome and Dispatch history sections, and its Source issue card now sits above them.
+
 ## 0.4.5 — 2026-10-15
 
 - The project pill no longer makes finished work look busy. It said "3 active" when all three of a project's tasks had finished their turns, which read as three agents still working. It now counts open tasks, then what needs you and what is running, each only when there is some: "3 open tasks", or "9 open tasks · 3 need you · 1 running". The All projects picker row reads "14 open tasks across 3 projects", a folded project group shows "8 open", and the sidebar's empty list says "No open tasks". A project group header's accessible name now includes its needs-you and running counts. The counts themselves are unchanged.
