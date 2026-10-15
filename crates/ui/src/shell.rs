@@ -10629,7 +10629,7 @@ impl Shell {
                 )
             } else if shelves.is_some() {
                 // Settled or archived tasks wait on the shelves below.
-                ("No active tasks", format!("Start one with {new_task}."))
+                ("No open tasks", format!("Start one with {new_task}."))
             } else {
                 ("No tasks yet", format!("Start one with {new_task}."))
             };

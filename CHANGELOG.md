@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.3.2 — 2026-10-15
+
+- The project pill no longer makes finished work look busy. It said "3 active" when all three of a project's tasks had finished their turns, which read as three agents still working. It now counts open tasks, then what needs you and what is running, each only when there is some: "3 open tasks", or "9 open tasks · 3 need you · 1 running". The All projects picker row reads "14 open tasks across 3 projects", a folded project group shows "8 open", and the sidebar's empty list says "No open tasks". A project group header's accessible name now includes its needs-you and running counts. The counts themselves are unchanged.
+
 ## 0.3.1 — 2026-10-14
 
 - Make the warnings in **Board → From GitHub issue** readable. A message such as "This project's checkout has no GitHub remote." was printed in near-white text on a bright yellow bar in dark appearance, and in dark text on dark amber in light appearance. It now shows amber text on a faint amber background that stays at least 4.5:1 in every built-in theme. The issue-update dialog's warnings use the same style.
