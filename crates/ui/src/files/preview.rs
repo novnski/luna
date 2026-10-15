@@ -2830,6 +2830,75 @@ impl FilesSurface {
         view.update(cx, |view, cx| view.set_comments(owner, comments, draft, cx));
     }
 
+    /// A file that could not be read, with the ways on: read it again (a
+    /// checkout or host that was briefly away), or browse beside it for one
+    /// that moved or was deleted — what a restart restoring a gone file
+    /// lands on.
+    fn render_document_error(
+        &self,
+        path: &str,
+        error: SharedString,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::button::{ButtonKind, ControlSize, button};
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let retry_path = path.to_owned();
+        let actions = div()
+            .flex()
+            .gap(crate::typography::ui_rems(6.0))
+            .child(
+                button(
+                    "files-document-retry",
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .debug_selector(|| "files-document-retry".into())
+                .aria_label(format!("Try opening {name} again"))
+                .child("Retry")
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.retry_document(retry_path.clone(), cx)),
+                ),
+            )
+            .when(!self.preview.tree_sidebar_visible(), |actions| {
+                actions.child(
+                    button(
+                        "files-document-browse",
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        true,
+                        theme,
+                    )
+                    .aria_label("Show workspace files")
+                    .child("Show files")
+                    .on_click(cx.listener(|this, _, _, cx| this.show_tree_sidebar(cx))),
+                )
+            });
+        crate::surface_chrome::surface_state(
+            crate::surface_chrome::state_glyph(icons::FILE, theme),
+            format!("{name} couldn't open"),
+            Some(error),
+            Some(actions.into_any_element()),
+            theme,
+        )
+        .debug_selector(|| "files-document-error".into())
+        .into_any_element()
+    }
+
+    /// Read a file that failed to open again, from the current checkout.
+    fn retry_document(&mut self, path: String, cx: &mut Context<Self>) {
+        if self
+            .preview
+            .documents
+            .get(&path)
+            .is_some_and(|document| matches!(document.phase, DocumentPhase::Error(_)))
+        {
+            self.read_file(path, cx);
+        }
+    }
+
     fn render_document_body(
         &mut self,
         path: &str,
@@ -2870,7 +2939,7 @@ impl FilesSurface {
             return centered_state("Loading file…", theme.text_faint);
         }
         if let DocumentPhase::Error(error) = &document.phase {
-            return centered_state(error.clone(), theme.danger_muted);
+            return self.render_document_error(path, error.clone(), theme, cx);
         }
         if let Some(editor) = editor {
             editor.update(cx, |state, _| {
