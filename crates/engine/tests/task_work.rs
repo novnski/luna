@@ -407,6 +407,152 @@ async fn user_side_chat_without_a_brief_shows_its_own_latest_turn() {
     e.shutdown().await;
 }
 
+/// A steerable provider whose turn completes without streaming anything,
+/// then stays parked until interrupted.
+struct EmptyTurnPeer;
+#[async_trait]
+impl Harness for EmptyTurnPeer {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Empty turn peer"
+    }
+    fn supports_steering(&self) -> bool {
+        true
+    }
+    fn steering_mode(&self) -> luna_proto::SteeringMode {
+        luna_proto::SteeringMode::TurnBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        r: RunRequest,
+        c: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let session = r
+            .resume
+            .unwrap_or_else(|| format!("empty-{}", uuid::Uuid::new_v4()));
+        Ok(futures::stream::iter(vec![
+            Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "fixture".into(),
+                tools: vec![],
+                cwd: r.cwd,
+                session_id: session.clone(),
+                assistant_message_id: uuid::Uuid::new_v4().to_string(),
+            }),
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some(session),
+            }),
+        ])
+        .chain(futures::stream::unfold(c, |c| async move {
+            c.interrupt.cancelled().await;
+            None::<(Result<AgentEvent, HarnessError>, RunControls)>
+        }))
+        .boxed())
+    }
+}
+fn empty_turn_engine(root: &std::path::Path) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(EmptyTurnPeer));
+    EngineCore::assemble_with_profile(
+        EngineProfile::development(&root.join("data"), "work-empty", "work-empty"),
+        Arc::new(registry),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap()
+}
+
+/// A completed turn that streamed nothing parks its steerable runtime.
+/// Shutdown later tears that runtime down with an interrupt; the side chat
+/// must still read Completed after restart, not Stopped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_completed_side_chat_turn_survives_parked_runtime_teardown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = empty_turn_engine(tmp.path());
+    let c = luna_rpc::memory_client(e.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    e.workspace
+        .create_space(
+            "work-space",
+            &e.device_id,
+            tmp.path().to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(command(&c, &parent, json!({"kind":"createChat","spaceId":"work-space","cwd":tmp.path(),"config":{"harness":"mock","model":"fixture","sandbox":"workspace-write","permissionMode":"ask"}})).await["status"], "applied");
+    let side = call(
+        &c,
+        "CreateChildTab",
+        json!({"parentTaskId":parent,"idempotencyKey":"empty-side-chat"}),
+    )
+    .await["taskId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let state = |view: &Value| {
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["kind"] == "childChat" && item["taskId"] == side)
+            .map(|item| item["state"].clone())
+            .unwrap_or_else(|| panic!("no side chat row: {view}"))
+    };
+    call(
+        &c,
+        "QueueMessage",
+        json!({"chatId":side,"messageId":"side-empty-answer","text":"answer with nothing","holdForTurnEnd":true}),
+    )
+    .await;
+    let mut parked = Value::Null;
+    for _ in 0..200 {
+        parked = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+        if state(&parked) == "completed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(state(&parked), "completed", "{parked}");
+    let entries = e
+        .doc_host
+        .open(&side)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.role != luna_doc::MessageRole::Assistant),
+        "the empty turn left a transcript row: {entries:?}"
+    );
+    e.shutdown().await;
+    drop(c);
+    drop(e);
+
+    let reopened = empty_turn_engine(tmp.path());
+    let c = luna_rpc::memory_client(reopened.rpc_service());
+    let restarted = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    assert_eq!(state(&restarted), "completed", "{restarted}");
+    artifact(
+        "empty-side-chat-teardown",
+        &json!({"parked":parked,"restarted":restarted}),
+    );
+    reopened.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nested_ownership_stop_receipts_and_independent_child_survival() {
     let tmp = tempfile::tempdir().unwrap();
