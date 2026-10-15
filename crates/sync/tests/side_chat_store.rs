@@ -14,7 +14,8 @@ fn v13_profile() -> tempfile::TempDir {
     // Undo v14 through the current schema physically before resetting the
     // migration marker (v17 only added a column to task_execution_lineage).
     db.execute_batch(
-        "DROP TABLE project_command_trust;
+        "DROP TABLE task_unwritten_turn_ends;
+        DROP TABLE project_command_trust;
         DROP TABLE board_dependencies;
         DROP TABLE board_authoring_entries;
         DROP TABLE board_authoring_sessions;

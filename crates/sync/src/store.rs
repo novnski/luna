@@ -28,6 +28,7 @@ pub use board::{
     BoardRankPlacement, BoardRowWrite,
 };
 mod project_commands;
+mod turn_ends;
 mod workspace_repair;
 pub use workspace_repair::{
     LocalExecutableAuthority, WorkspaceMaterializationFence, WorkspaceRepairFence,
@@ -366,6 +367,15 @@ const MIGRATIONS: &[&str] = &[
         project_id TEXT NOT NULL, device_id TEXT NOT NULL, action_id TEXT NOT NULL,
         digest TEXT NOT NULL, accepted_at INTEGER NOT NULL,
         PRIMARY KEY(project_id,device_id,action_id)
+     ) STRICT;",
+    // v22 — how a task's latest turn ended when it streamed nothing, so left
+    // no transcript row to carry its status. One row per task, replaced by
+    // the next such turn; kept out of the document snapshot keyspace.
+    "CREATE TABLE task_unwritten_turn_ends (
+        task_id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
      ) STRICT;",
 ];
 
@@ -2563,6 +2573,10 @@ impl DocsStore {
         )?;
         tx.execute(
             "DELETE FROM task_execution_lineage WHERE task_id=?1",
+            params![task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM task_unwritten_turn_ends WHERE task_id=?1",
             params![task_id],
         )?;
         tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![task_id])?;
