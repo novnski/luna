@@ -86,7 +86,9 @@ impl Harness for Peer {
                     model: "fixture".into(),
                     tools: vec![],
                     cwd: r.cwd,
-                    session_id: format!("native-{}", uuid::Uuid::new_v4()),
+                    session_id: r
+                        .resume
+                        .unwrap_or_else(|| format!("native-{}", uuid::Uuid::new_v4())),
                     assistant_message_id: uuid::Uuid::new_v4().to_string(),
                 }),
                 Ok(AgentEvent::TextDelta {
@@ -404,6 +406,119 @@ async fn user_side_chat_without_a_brief_shows_its_own_latest_turn() {
         "user-side-chat",
         &json!({"empty":empty,"completed":completed,"running":running,"stopped":stopped}),
     );
+    e.shutdown().await;
+}
+
+/// A delegated child's initial turn stopped before any output stays Stopped,
+/// and stops blocking its parent, after a later turn in that child also ends
+/// before any output. The delegated row reads only its initial message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegated_child_keeps_its_silent_stop_after_a_later_silent_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = engine(tmp.path());
+    let c = luna_rpc::memory_client(e.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    e.workspace
+        .create_space(
+            "work-space",
+            &e.device_id,
+            tmp.path().to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(command(&c, &parent, json!({"kind":"createChat","spaceId":"work-space","cwd":tmp.path(),"config":{"harness":"mock","model":"fixture","sandbox":"workspace-write","permissionMode":"ask"}})).await["status"], "applied");
+    queue(&c, &parent, "parent-delegates").await;
+    active(&e, &parent).await;
+    let child = e
+        .rpc_service()
+        .seed_child_for_qa(
+            parent.clone(),
+            serde_json::from_value(json!({
+                "prompt":"HOLD_SILENT_SIDE_CHAT_TURN",
+                "idempotencyKey":"silent-delegation",
+                "reportResults":false
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .task_id;
+    let row = |view: &Value| {
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["kind"] == "childChat" && item["taskId"] == child)
+            .cloned()
+            .unwrap_or_else(|| panic!("no delegated row: {view}"))
+    };
+    active(&e, &child).await;
+    e.sessions.interrupt(&child).await.unwrap();
+    let mut first = Value::Null;
+    for _ in 0..200 {
+        first = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+        if row(&first)["state"] == "stopped" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(row(&first)["state"], "stopped", "{first}");
+
+    // A later turn of its own, also stopped before any output. A stop holds
+    // queued messages, so each next one is sent explicitly, as Send now does.
+    call(
+        &c,
+        "QueueMessage",
+        json!({"chatId":child,"messageId":"child-later","text":"HOLD_SILENT_SIDE_CHAT_TURN","holdForTurnEnd":true}),
+    )
+    .await;
+    let _ = e.doc_host.send_queued_now(&child, "child-later").await;
+    active(&e, &child).await;
+    e.sessions.interrupt(&child).await.unwrap();
+    // This turn starts only once the stopped one is finalized.
+    call(
+        &c,
+        "QueueMessage",
+        json!({"chatId":child,"messageId":"child-barrier","text":"COMPLETE_SIDE_CHAT_TURN","holdForTurnEnd":true}),
+    )
+    .await;
+    let _ = e.doc_host.send_queued_now(&child, "child-barrier").await;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let entries = e
+                .doc_host
+                .open(&child)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap();
+            let barrier = entries.iter().position(|entry| entry.id == "child-barrier");
+            if e.sessions.active_turn_id(&child).is_none()
+                && barrier.is_some_and(|at| {
+                    entries[at..].iter().any(|entry| {
+                        entry.role == luna_doc::MessageRole::Assistant
+                            && entry.status == Some(luna_doc::MessageStatus::Complete)
+                    })
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("barrier turn completes after the later silent turn");
+    let after = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    let item = row(&after);
+    assert_eq!(item["state"], "stopped", "{after}");
+    assert_eq!(item["blocksCompletion"], false);
+    assert_eq!(after["unknownCount"], 0);
+    artifact(
+        "delegated-silent-stop",
+        &json!({"first":first,"after":after}),
+    );
+    e.sessions.interrupt(&parent).await.unwrap();
     e.shutdown().await;
 }
 

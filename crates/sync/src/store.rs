@@ -368,14 +368,15 @@ const MIGRATIONS: &[&str] = &[
         digest TEXT NOT NULL, accepted_at INTEGER NOT NULL,
         PRIMARY KEY(project_id,device_id,action_id)
      ) STRICT;",
-    // v22 — how a task's latest turn ended when it streamed nothing, so left
-    // no transcript row to carry its status. One row per task, replaced by
-    // the next such turn; kept out of the document snapshot keyspace.
+    // v22 — how a turn ended when it streamed nothing, so left no transcript
+    // row to carry its status. One row per (task, owning message); kept out
+    // of the document snapshot keyspace.
     "CREATE TABLE task_unwritten_turn_ends (
-        task_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
         status TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(task_id,message_id)
      ) STRICT;",
 ];
 
