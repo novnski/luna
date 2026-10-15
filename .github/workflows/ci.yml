@@ -225,6 +225,10 @@ jobs:
           else:
               subprocess.run(['cargo', 'check', '--profile', 'ci', '--locked', '-p', 'luna'], check=True)
           PYTHON
+      - name: macOS-only provider guidance
+        # Ubuntu runs the providers suite, where this test's macOS branch is off.
+        if: matrix.suite == 'macos' && contains(fromJSON(needs.changes.outputs.suites), 'providers')
+        run: cargo test --profile ci --locked -p luna-harness --test codex sandboxed_macos_runs
       - name: Linux application compile contract
         if: matrix.suite == 'linux'
         run: cargo check --profile ci --locked -p luna

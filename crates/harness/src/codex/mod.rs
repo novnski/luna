@@ -25,7 +25,7 @@
 //!   surfaces the reviewer's own denials (`docs/pending-tasks/permission-modes`).
 //!   On macOS a sandboxed run also tells the agent to escalate browser
 //!   launches, which abort inside Codex's Seatbelt profile: in a fresh
-//!   thread's instructions, or as turn context on a resumed thread
+//!   thread's instructions, or injected into a resumed thread's history
 //!   (`MACOS_SANDBOX_BROWSER_GUIDANCE`).
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
@@ -1579,6 +1579,31 @@ async fn run_session(session: Session) {
                 "Codex returned no thread identity for the goal".into(),
             ));
         }
+        // thread/resume cannot replace a thread's developer instructions
+        // (openai/codex#19045, still so in 0.162.1), so a thread started
+        // before the guidance, or under Full access, would never see it.
+        // Injected items join the thread's model-visible history before any
+        // turn, including goal turns Codex starts itself. Fail open: an
+        // older Codex without the method keeps the run going.
+        if let Some(guidance) = browser_guidance
+            && (resumed || !guidance_in_instructions)
+            && !thread_id.is_empty()
+            && let Err(error) = client
+                .request(
+                    "thread/inject_items",
+                    json!({
+                        "threadId": thread_id,
+                        "items": [{
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": guidance}],
+                        }],
+                    }),
+                )
+                .await
+        {
+            tracing::warn!(target: "luna_harness::codex", %thread_id, %error, "macOS browser guidance was not injected");
+        }
         // Native thread/start and thread/resume report this policy beside `thread`.
         // thread/read does not expose it; keep the provider-reported loaded state.
         client.set_composer_policy(
@@ -1629,9 +1654,9 @@ async fn run_session(session: Session) {
                 ),
             }
         }
-        Ok::<_, HarnessError>((thread_id, children, legacy_history(&thread), resumed))
+        Ok::<_, HarnessError>((thread_id, children, legacy_history(&thread)))
     };
-    let (thread_id, mut children, legacy, resumed) = tokio::select! {
+    let (thread_id, mut children, legacy) = tokio::select! {
         res = setup => match res {
             Ok(thread_id) => thread_id,
             Err(e) => {
@@ -1728,21 +1753,6 @@ async fn run_session(session: Session) {
         }
         if let Some(tier) = &service_tier {
             p.insert("serviceTier".into(), Value::String(tier.clone()));
-        }
-        // thread/resume cannot replace a thread's developer instructions
-        // (openai/codex#19045, still so in 0.162.1): a thread started before
-        // the guidance, or under Full access, would never see it. Application
-        // context reaches the next model request as a developer message. Codex
-        // sends an unchanged value once per process, so repeating it is free.
-        if let Some(guidance) = browser_guidance
-            && (resumed || !guidance_in_instructions)
-        {
-            let mut context = serde_json::Map::new();
-            context.insert(
-                MACOS_SANDBOX_BROWSER_CONTEXT_KEY.into(),
-                json!({"value": guidance, "kind": "application"}),
-            );
-            p.insert("additionalContext".into(), Value::Object(context));
         }
         Value::Object(p)
     };
@@ -2890,11 +2900,9 @@ fn render_luna_instructions(contract: &luna_proto::LunaAgentRuntimeContract) -> 
 /// for each attempt (novnski/luna#21). Escalation is the one route out, and it
 /// keeps the run's review: Ask asks the user, Auto asks Codex's reviewer.
 /// A fresh thread carries this in its developer instructions; a resumed one
-/// gets it as `turn/start` additional context under
-/// [`MACOS_SANDBOX_BROWSER_CONTEXT_KEY`].
+/// gets it once per process as an injected developer item. Codex's native
+/// review runs in an isolated sub-agent that sees neither.
 const MACOS_SANDBOX_BROWSER_GUIDANCE: &str = "[LUNA Harness: browsers and the macOS sandbox | Codex Seatbelt profile]\nA command that runs in Codex's macOS sandbox cannot start a web browser. The sandbox blocks the system services browsers need, so Chrome, Chromium, Edge, Firefox and WebKit fail at launch, and macOS shows the user a \"quit unexpectedly\" dialog for each attempt. Before you run anything that launches a browser (Playwright, Puppeteer, Selenium or WebDriver, Cypress, Lighthouse, Karma, or a headless screenshot or PDF), request escalated permissions on the first attempt (sandbox_permissions: require_escalated) with a one-line justification. Never launch or retry a browser inside the sandbox. If escalation is declined, do not run the browser command; say that browser verification did not run and why.\n\n";
-/// Codex keeps one value per key and resends it only when it changes.
-const MACOS_SANDBOX_BROWSER_CONTEXT_KEY: &str = "luna.macos-sandbox-browsers";
 
 /// Immutable authority and routing context for one provider request.
 struct ServerRequestContext<'a> {
