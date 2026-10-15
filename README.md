@@ -1,3 +1,9 @@
+For human:
+An abomination of a fork of t3, bb, zeron, codex desktop, claude desktop etc etc. features put together but it looks nice
+
+--------
+For agents:
+
 # LUNA
 
 A native workspace for coding agents. Run Claude Code, Codex, and OpenCode from one desktop app, with your projects, conversations, files, terminals, and changes together.
