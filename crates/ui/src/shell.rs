@@ -4693,7 +4693,10 @@ impl Shell {
                         this.open_local_document(document.clone(), window, cx)
                     }
                     FilesEvent::TitleChanged => cx.notify(),
-                    FilesEvent::FileRenamed { .. } => cx.notify(),
+                    FilesEvent::FileRenamed { old_path, new_path } => {
+                        this.follow_saved_rename(&event_key, None, old_path, new_path, cx);
+                        cx.notify()
+                    }
                     FilesEvent::WordWrapChanged(word_wrap) => {
                         this.set_files_word_wrap(*word_wrap, window, cx)
                     }
@@ -4919,6 +4922,7 @@ impl Shell {
                 new_path.to_string(),
             ))
             .or_insert(id);
+        self.follow_saved_rename(panel_key, Some(owner), old_path, new_path, cx);
         cx.notify();
     }
 

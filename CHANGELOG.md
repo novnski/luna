@@ -2,9 +2,13 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.4.2 — 2026-10-15
+## 0.4.3 — 2026-10-15
 
 - Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt, in new chats and in chats started before this update. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.
+
+## 0.4.2 — 2026-10-15
+
+- A file open in a task's sidebar that is renamed on disk (for example, by an agent) while you look at another task now reopens under its new name after a restart, instead of showing that the old file couldn't open. Restored file tabs also start following such renames right away, before you show them again.
 
 ## 0.4.1 — 2026-10-15
 
