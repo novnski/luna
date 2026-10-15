@@ -1588,12 +1588,14 @@ async fn run_session(session: Session) {
         //
         // Keep this the first request after thread/resume. A re-attached
         // Active goal's continuation starts inside thread/resume, and Codex
-        // rejects injection into a thread it has not loaded. The guidance
-        // still reaches that continuation's first model request because the
-        // turn takes longer to build it than this round trip: the injection
-        // finished 37-76 ms ahead in every probe (26 runs, 0.154.0 and
-        // 0.162.1). Pausing the goal around the resume would be exact, but a
-        // failure between the steps would leave the user's goal Paused.
+        // rejects injection into a thread it has not loaded, so nothing
+        // orders this before that turn's first model request. It is
+        // best-effort: the turn usually takes longer to build that request
+        // than this round trip (the injection finished 37-76 ms ahead in all
+        // 26 probes on 0.154.0 and 0.162.1), but load or a faster Codex can
+        // lose the race. That first request then lacks the guidance; later
+        // ones have it. Pausing the goal around the resume would be exact,
+        // but a failure between the steps would leave the user's goal Paused.
         if let Some(guidance) = browser_guidance
             && resumed
             && !thread_id.is_empty()
