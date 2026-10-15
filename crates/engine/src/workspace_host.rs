@@ -1984,6 +1984,26 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_config(chat_id, config))?)
     }
 
+    /// Read, change and write one chat's config under the registry lock, so
+    /// a selection made meanwhile (model, reasoning, account) is never
+    /// overwritten with the copy read before it. `update` returns whether
+    /// it changed anything; a chat without a config is left alone.
+    pub fn update_chat_config(
+        &self,
+        chat_id: &str,
+        update: impl FnOnce(&mut ChatConfig) -> bool,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| {
+            let Some(mut config) = doc.chat(chat_id)?.and_then(|chat| chat.config) else {
+                return Ok(false);
+            };
+            if !update(&mut config) {
+                return Ok(false);
+            }
+            doc.set_chat_config(chat_id, &config)
+        })?)
+    }
+
     /// Tombstone: removes the chats (and session-status) row; the per-chat session
     /// doc remains untouched.
     pub fn delete_chat(&self, chat_id: &str) -> Result<bool, EngineError> {
