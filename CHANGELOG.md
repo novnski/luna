@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.5.3 — 2026-10-15
+
+- A message sent to a chat just after LUNA stopped its turn on your behalf (Stop owned work in Background work, or an agent stopping a helper chat) is sent normally. It could instead stay queued until you pressed Send now, because the stop was occasionally mistaken for the provider cancelling the turn, which holds queued messages. A turn the provider cancels itself still holds them, as does your own Stop.
+
 ## 0.5.2 — 2026-10-15
 
 - A side chat you stop before it has replied now shows **Stopped** in the main chat's Background work, instead of Unknown with a request for attention. The same applies to a side chat an agent started that you stop from its own chat before it says anything; it also no longer keeps the main chat busy.
