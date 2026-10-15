@@ -322,7 +322,46 @@ pub(crate) struct RecoveryStore {
     store: Arc<DocsStore>,
 }
 
+/// How a task's latest turn ended when it streamed nothing. Such a turn
+/// leaves no transcript row (`drive_run` skips the empty stub), so this is
+/// its only terminal evidence. One per task; the next one replaces it.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct UnwrittenTurnEnd {
+    pub message_id: String,
+    pub status: luna_proto::DoneStatus,
+}
+
+fn unwritten_turn_end_key(task: &str) -> String {
+    format!("luna-turn-ended-unwritten:{task}")
+}
+
 impl RecoveryStore {
+    pub(crate) fn record_unwritten_turn_end(
+        &self,
+        task: &str,
+        end: &UnwrittenTurnEnd,
+        permit: Option<&luna_sync::write_epoch::WritePermit>,
+    ) -> Result<(), EngineError> {
+        let key = unwritten_turn_end_key(task);
+        let bytes = serde_json::to_vec(end)?;
+        match (self.store.save_snapshot(&key, &bytes), permit) {
+            (Err(luna_sync::StoreError::AdmissionRequired), Some(permit)) => {
+                self.store.save_snapshot_admitted(permit, &key, &bytes)
+            }
+            (result, _) => result,
+        }?;
+        Ok(())
+    }
+    pub(crate) fn unwritten_turn_end(
+        &self,
+        task: &str,
+    ) -> Result<Option<UnwrittenTurnEnd>, EngineError> {
+        Ok(self
+            .store
+            .load_snapshot(&unwritten_turn_end_key(task))?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?)
+    }
     pub(crate) fn finish_automation_message(
         &self,
         task: &str,

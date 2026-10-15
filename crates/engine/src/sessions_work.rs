@@ -9,6 +9,19 @@ pub(crate) struct WorkRuntime {
     pub binding_generation: Option<u32>,
 }
 impl SessionsEngine {
+    /// How the turn `message` started ended, when it streamed nothing and so
+    /// left no transcript row. Unreadable evidence is none.
+    pub(crate) fn unwritten_turn_end(&self, chat: &str, message: &str) -> Option<DoneStatus> {
+        match self.inner.recovery.unwritten_turn_end(chat) {
+            Ok(end) => end
+                .filter(|end| end.message_id == message)
+                .map(|end| end.status),
+            Err(error) => {
+                tracing::warn!(chat, %error, "unwritten turn end is unreadable");
+                None
+            }
+        }
+    }
     pub(crate) fn work_observed(&self, chat: &str, kind: &str, id: &str) -> bool {
         self.inner
             .runs

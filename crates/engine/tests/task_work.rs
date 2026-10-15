@@ -57,6 +57,28 @@ impl Harness for Peer {
             ])
             .boxed());
         }
+        if r.prompt.contains("HOLD_SILENT_SIDE_CHAT_TURN") {
+            return Ok(futures::stream::iter(vec![Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "fixture".into(),
+                tools: vec![],
+                cwd: r.cwd,
+                session_id: r
+                    .resume
+                    .unwrap_or_else(|| format!("native-{}", uuid::Uuid::new_v4())),
+                assistant_message_id: uuid::Uuid::new_v4().to_string(),
+            })])
+            .chain(futures::stream::once(async move {
+                c.interrupt.cancelled().await;
+                Ok(AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                })
+            }))
+            .boxed());
+        }
         if r.prompt.contains("COMPLETE_SIDE_CHAT_TURN") {
             return Ok(futures::stream::iter(vec![
                 Ok(AgentEvent::SessionStarted {
@@ -332,7 +354,12 @@ async fn user_side_chat_without_a_brief_shows_its_own_latest_turn() {
     assert_eq!(completed["unknownCount"], 0);
 
     // A later turn in the same side chat is followed, not its first answer.
-    queue(&c, &side, "side-follow-up").await;
+    call(
+        &c,
+        "QueueMessage",
+        json!({"chatId":side,"messageId":"side-follow-up","text":"HOLD_SILENT_SIDE_CHAT_TURN","holdForTurnEnd":true}),
+    )
+    .await;
     active(&e, &side).await;
     let running = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
     let item = row(&running);
@@ -340,11 +367,43 @@ async fn user_side_chat_without_a_brief_shows_its_own_latest_turn() {
     assert_eq!(item["owned"], false);
     assert_eq!(item["canStop"], false);
     assert_eq!(running["blockingCount"], 0);
+
+    // Stopped before it streamed anything: no transcript row records the
+    // stop, yet the row ends Stopped rather than Unknown.
+    e.sessions.interrupt(&side).await.unwrap();
+    let mut stopped = Value::Null;
+    for _ in 0..200 {
+        stopped = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+        if !matches!(row(&stopped)["state"].as_str(), Some("running" | "unknown")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let entries = e
+        .doc_host
+        .open(&side)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    let follow_up = entries
+        .iter()
+        .position(|entry| entry.id == "side-follow-up")
+        .expect("follow-up reached the transcript");
+    assert!(
+        entries[follow_up..]
+            .iter()
+            .all(|entry| entry.role != luna_doc::MessageRole::Assistant),
+        "the stopped turn left a transcript row: {entries:?}"
+    );
+    let item = row(&stopped);
+    assert_eq!(item["state"], "stopped", "{stopped}");
+    assert_eq!(item["needsAttention"], false);
+    assert_eq!(stopped["unknownCount"], 0);
     artifact(
         "user-side-chat",
-        &json!({"empty":empty,"completed":completed,"running":running}),
+        &json!({"empty":empty,"completed":completed,"running":running,"stopped":stopped}),
     );
-    e.sessions.interrupt(&side).await.unwrap();
     e.shutdown().await;
 }
 

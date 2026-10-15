@@ -10030,6 +10030,22 @@ async fn drive_run(
                     tracing::warn!(chat = %chat_id, %error, "provider checkpoint persistence failed");
                 }
                 inner.note_message(&chat_id, &folded_text(&folded));
+            } else if idle_since.is_none()
+                && let Some(message) = turn_message.as_deref()
+            {
+                // An active turn (not a parked runtime's teardown) ended
+                // before streaming anything, so no row carries its status.
+                let end = crate::recovery::UnwrittenTurnEnd {
+                    message_id: message.into(),
+                    status: *status,
+                };
+                if let Err(error) = inner.recovery.record_unwritten_turn_end(
+                    &chat_id,
+                    &end,
+                    run_permit.as_ref().map(|p| p.ticket()),
+                ) {
+                    tracing::warn!(chat = %chat_id, %error, "unwritten turn end persistence failed; the turn may read unknown");
+                }
             }
             if *status == DoneStatus::Completed {
                 if let Some(host) = inner.doc_host()
