@@ -136,9 +136,17 @@ async fn queue(c: &RpcClient, t: &str, id: &str) {
     )
     .await;
 }
+/// The turn is active and its provider session accepted. SessionStarted
+/// publishes the applied permission policy into the chat's config before it
+/// records the binding; creating a child before then races that write and is
+/// refused as a parent configuration change.
 async fn active(e: &EngineCore, t: &str) {
     for _ in 0..300 {
-        if e.sessions.active_turn_id(t).is_some() {
+        if e.sessions.active_turn_id(t).is_some()
+            && e.task_identity
+                .view(t)
+                .is_some_and(|view| view.current_binding.is_some())
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await
