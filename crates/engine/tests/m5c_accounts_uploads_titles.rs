@@ -566,31 +566,20 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         .set_chat_branch(chat_id, &worktree.branch)
         .expect("set branch");
 
-    let request = luna_proto::RunRequest {
-        review: None,
-        goal: None,
-        input_items: Vec::new(),
-        prompt: "please fix the login flow".into(),
-        harness: None,
-        provider_account_id: None,
-        model: None,
-        reasoning: None,
-        model_options: serde_json::Map::new(),
-        cwd: worktree.path.clone(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
-        permission_mode: luna_proto::PermissionMode::Ask,
-        parent_permission_ceiling: None,
-        environment_permission_ceiling: None,
-        permission_policy: None,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    };
-    core.sessions
-        .dispatch(chat_id, HarnessId::Mock, request, None)
+    // Send as the composer does: the dispatch stamps the conversation's
+    // source context with the original luna/<name> branch before titling.
+    luna_rpc::memory_client(core.rpc_service())
+        .call(
+            methods::QUEUE_MESSAGE,
+            serde_json::json!({
+                "chatId": chat_id,
+                "messageId": "title-first",
+                "text": "please fix the login flow",
+                "holdForTurnEnd": true,
+            }),
+        )
         .await
-        .expect("dispatch");
+        .expect("QueueMessage");
 
     // The mock's scripted reply doubles as the titling model's output.
     let chat = wait_for("chat title", || {
@@ -602,8 +591,15 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
     })
     .await;
     assert_eq!(chat.title.as_deref(), Some("Fix Login Flow"));
-    // Branch renamed from the title, chat row updated to match.
+    // Branch renamed from the title. The row's branch and the source context
+    // that sidebar, composer and Overview render both name the new branch.
     assert_eq!(chat.branch.as_deref(), Some("luna/fix-login-flow"));
+    let source = chat
+        .source_context
+        .as_ref()
+        .expect("dispatch stamped source");
+    assert_eq!(source.cwd, worktree.path);
+    assert_eq!(source.branch, "luna/fix-login-flow");
     let head = tokio::process::Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(&worktree.path)

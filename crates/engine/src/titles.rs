@@ -275,7 +275,13 @@ impl TitleGenerator {
                 .await
             {
                 Ok(renamed) if &renamed != branch => {
-                    if let Err(err) = self.inner.workspace.set_chat_branch(chat_id, &renamed) {
+                    // Sidebar, composer and Overview read the stamped source
+                    // context, so it must follow the rename too.
+                    if let Err(err) = self
+                        .inner
+                        .workspace
+                        .rename_chat_branch(chat_id, chat_cwd, branch, &renamed)
+                    {
                         tracing::warn!(chat = %chat_id, error = %err, "chat branch update failed");
                     }
                 }
