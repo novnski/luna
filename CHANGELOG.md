@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.3.2 — 2026-10-15
+
+- Show a side chat you opened yourself (Side chat → Fresh, or `+`) with its real state in the main chat's **Background work**. Such a side chat stayed at "Starting" even after it had answered. It now reads Waiting until you send it something, Running while it works, then Completed, Failed or Stopped for its latest turn. It still never keeps the main chat busy and is stopped from its own chat.
+
 ## 0.3.1 — 2026-10-14
 
 - Make the warnings in **Board → From GitHub issue** readable. A message such as "This project's checkout has no GitHub remote." was printed in near-white text on a bright yellow bar in dark appearance, and in dark text on dark amber in light appearance. It now shows amber text on a faint amber background that stays at least 4.5:1 in every built-in theme. The issue-update dialog's warnings use the same style.
