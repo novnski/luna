@@ -2,9 +2,13 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.4.1 — 2026-10-15
+## 0.4.2 — 2026-10-15
 
 - Show a side chat you opened yourself (Side chat → Fresh, or `+`) with its real state in the main chat's **Background work**. Such a side chat stayed at "Starting" even after it had answered. It now reads Waiting until you send it something, Running while it works, then Completed, Failed or Stopped for its latest turn. It still never keeps the main chat busy and is stopped from its own chat.
+
+## 0.4.1 — 2026-10-15
+
+- A server a Codex agent leaves running, such as `npm run preview`, now keeps running while LUNA is open. Previously, LUNA ended the agent's Codex process after a chat sat idle for 30 minutes, and that also stopped every command the agent had left running, so a preview link the agent reported as running stopped loading with no explanation. The command now appears in the chat's **Background work** as a running background shell, and the chat stays connected while it runs. When the command stops, its shell and its command show the exit code (for example "Exited with code 143"). Quitting LUNA or stopping the chat still ends it, and it is then shown as stopped.
 
 ## 0.4.0 — 2026-10-15
 
