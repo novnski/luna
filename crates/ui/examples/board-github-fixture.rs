@@ -18,7 +18,13 @@
 //! 5. Add to board does not create exactly one card in the Board page's
 //!    model, or a second click can import again.
 //! 6. After adding, the row and the preview do not show "On board" / Open
-//!    card, or Add to board stays enabled.
+//!    card, or Add to board stays enabled. Open card's drawer then shows the
+//!    brief's literal source section (heading, fences, trust-boundary
+//!    framing) instead of the prompt, the attribution with its link, the
+//!    issue and the selected comment apart; the agents' context is not
+//!    behind a closed disclosure or does not open to the exact source
+//!    section; the empty Review, Outcome and Dispatch sections each still
+//!    fill the drawer (#25).
 //! 7. Any GitHub write happens during the flow (the fake records none).
 //! 8. Close issue (PB-3, after the ticket is Done) asks for a free-text
 //!    reason instead of GitHub's two choices, does not default to
@@ -255,6 +261,93 @@ async fn until(
         settle(cx, 100).await;
     }
     anyhow::bail!("{what} never happened: {last}")
+}
+
+/// The Board drawer's readback: surface state plus painted probes and texts.
+fn surfaces(window: Win, cx: &mut AsyncApp) -> anyhow::Result<serde_json::Value> {
+    draw(window, cx)?;
+    window.update(cx, |shell, window, cx| {
+        let page = shell
+            .fixture_board_page()
+            .ok_or_else(|| anyhow::anyhow!("the Board page is not mounted"))?;
+        let surfaces = page.read(cx).surfaces().clone();
+        Ok(surfaces.read(cx).fixture_readback(window, cx))
+    })?
+}
+
+fn surface_text<'a>(readback: &'a serde_json::Value, key: &str) -> &'a str {
+    readback["probe"]["texts"][key].as_str().unwrap_or("")
+}
+
+fn surface_rect(readback: &serde_json::Value, name: &str) -> Option<[f32; 4]> {
+    let value = readback["probe"]["bounds"].get(name)?.as_array()?;
+    Some([
+        value.first()?.as_f64()? as f32,
+        value.get(1)?.as_f64()? as f32,
+        value.get(2)?.as_f64()? as f32,
+        value.get(3)?.as_f64()? as f32,
+    ])
+}
+
+async fn until_surfaces(
+    window: Win,
+    cx: &mut AsyncApp,
+    what: &str,
+    done: impl Fn(&serde_json::Value) -> bool,
+) -> anyhow::Result<serde_json::Value> {
+    let mut last = serde_json::Value::Null;
+    for _ in 0..150 {
+        last = surfaces(window, cx)?;
+        if done(&last) {
+            return Ok(last);
+        }
+        settle(cx, 100).await;
+    }
+    anyhow::bail!("{what} never happened: {last}")
+}
+
+/// Wheel the drawer body until a probe is fully visible, then click it.
+async fn click_in_drawer(window: Win, cx: &mut AsyncApp, name: &str) -> anyhow::Result<()> {
+    let mut step = -120.0_f32;
+    let mut last_distance = f32::MAX;
+    for _ in 0..40 {
+        let rb = surfaces(window, cx)?;
+        let target =
+            surface_rect(&rb, name).ok_or_else(|| anyhow::anyhow!("{name} not painted"))?;
+        let body =
+            surface_rect(&rb, "detail-scroll").ok_or_else(|| anyhow::anyhow!("no drawer body"))?;
+        let (top, bottom) = (body[1] + 8.0, body[1] + body[3] - 8.0);
+        if target[1] >= top && target[1] + target[3] <= bottom {
+            return click_at(
+                window,
+                cx,
+                (target[0] + target[2] / 2.0, target[1] + target[3] / 2.0),
+            )
+            .await;
+        }
+        let distance = if target[1] < top {
+            top - target[1]
+        } else {
+            target[1] + target[3] - bottom
+        };
+        if distance > last_distance {
+            step = -step;
+        }
+        last_distance = distance;
+        input(
+            window,
+            cx,
+            PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                position: point(px(body[0] + body[2] / 2.0), px(body[1] + body[3] / 2.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(step))),
+                modifiers: Default::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            }),
+        )?;
+        draw(window, cx)?;
+        settle(cx, 80).await;
+    }
+    anyhow::bail!("{name} never scrolled into the drawer")
 }
 
 fn row_numbers(readback: &serde_json::Value) -> Vec<u64> {
@@ -527,6 +620,34 @@ fn main() -> anyhow::Result<()> {
                 // 7. No GitHub write during the whole picker flow.
                 anyhow::ensure!(lines(&writes_log) == 0, "GitHub writes recorded: {}", std::fs::read_to_string(&writes_log).unwrap_or_default());
 
+                // 6b. Open card: the drawer reads the imported brief apart.
+                click_probe(window, cx, "open-card").await?;
+                let drawer = until_surfaces(window, cx, "imported brief", |rb| !surface_text(rb, "detail-brief-source").is_empty()).await?;
+                anyhow::ensure!(surface_text(&drawer, "detail-brief-prompt") == "Respect the Include archived toggle.", "the prompt reads on its own: {drawer}");
+                anyhow::ensure!(surface_text(&drawer, "detail-brief-source") == "From GitHub issue acme/widgets#1", "attribution: {drawer}");
+                let meta = surface_text(&drawer, "detail-brief-source-meta");
+                anyhow::ensure!(meta.starts_with("Open when imported · updated ") && meta.contains("Labels: bug, search · Assignees: @alice") && meta.ends_with("Read by @octo-a on this project's host."), "attribution details: {meta}");
+                anyhow::ensure!(surface_rect(&drawer, "detail-brief-source-open").is_some(), "the source link is painted: {drawer}");
+                anyhow::ensure!(surface_text(&drawer, "detail-brief-issue-note-0").contains("image/attachment") && surface_text(&drawer, "detail-brief-comments") == "Selected comments · 1 of 3" && surface_text(&drawer, "detail-brief-comment-0").starts_with("@alice · "), "notes and the selected comment: {drawer}");
+                anyhow::ensure!(surface_text(&drawer, "detail-brief-agent-open") == "false" && drawer["probe"]["texts"].get("detail-brief-agent-text").is_none(), "the agents' context starts closed: {drawer}");
+                let shown: Vec<&str> = drawer["probe"]["texts"].as_object().map(|texts| {
+                    texts.iter().filter(|(key, _)| key.as_str() != "detail-brief-text").filter_map(|(_, text)| text.as_str()).collect()
+                }).unwrap_or_default();
+                anyhow::ensure!(!shown.iter().any(|text| text.contains("## Source issue") || text.contains("```") || text.contains("untrusted source material")), "no protocol text painted outside the disclosure: {shown:?}");
+                anyhow::ensure!(!surface_text(&drawer, "detail-lifecycle-none").is_empty() && drawer["probe"]["texts"].get("detail-review-repairs").is_none() && drawer["probe"]["texts"].get("detail-dispatch-summary").is_none(), "one line for the empty lifecycle sections: {drawer}");
+                captures.insert("03b-imported-brief".into(), capture(window, cx, output.join("03b-imported-brief.png"))?.into());
+                click_in_drawer(window, cx, "detail-brief-agent").await?;
+                let opened = until_surfaces(window, cx, "agents' context", |rb| surface_text(rb, "detail-brief-agent-open") == "true").await?;
+                let brief = surface_text(&opened, "detail-brief-text");
+                let context = surface_text(&opened, "detail-brief-agent-text");
+                anyhow::ensure!(context.starts_with("## Source issue\nGitHub issue acme/widgets#1 ") && context.contains("untrusted source material") && brief == format!("Respect the Include archived toggle.\n\n{context}"), "the disclosure shows exactly the source section after the prompt: {context}");
+                captures.insert("03c-agent-context".into(), capture(window, cx, output.join("03c-agent-context.png"))?.into());
+                record.insert("drawer".into(), serde_json::json!({"closed": drawer["probe"]["texts"], "opened": opened["probe"]["texts"]}));
+                // Close sits in the drawer's pinned header, never scrolled.
+                let close = surface_rect(&surfaces(window, cx)?, "detail-close").ok_or_else(|| anyhow::anyhow!("no Close painted"))?;
+                click_at(window, cx, (close[0] + close[2] / 2.0, close[1] + close[3] / 2.0)).await?;
+                until_surfaces(window, cx, "drawer closed", |rb| rb["surface"].is_null()).await?;
+
                 // 8. Close issue: the ticket's outcome is accepted (the
                 // engine-owned Done commit), then the explicit close dialog.
                 let card_id = card.as_str().unwrap_or_default().to_owned();
@@ -637,7 +758,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| std::fs::write(qa.join("fixture-manifest.json"), serde_json::to_vec_pretty(&manifest).unwrap_or_default()))
                         .and_then(|_| std::fs::write(
                             output.join("board-github.pass"),
-                            "PASS: production Shell over the Board page; fork + upstream remotes require an explicit repository; issues listed with fields and PRs excluded; the latest search wins; preview shows the canonical link, body, attachment notice, selectable comments and the editable prompt; Add to board creates exactly one card; the row and preview then show On board / Open card; no GitHub writes until the explicit close; Close issue offers Completed (default) / Not planned, reviews an empty note as the close alone and a closing comment as comment then close with exact payloads, and ends verified on GitHub\n",
+                            "PASS: production Shell over the Board page; fork + upstream remotes require an explicit repository; issues listed with fields and PRs excluded; the latest search wins; preview shows the canonical link, body, attachment notice, selectable comments and the editable prompt; Add to board creates exactly one card; the row and preview then show On board / Open card; the card's drawer reads the prompt, attribution, issue and selected comment apart with the agents' exact context behind a disclosure and one line for the empty lifecycle sections; no GitHub writes until the explicit close; Close issue offers Completed (default) / Not planned, reviews an empty note as the close alone and a closing comment as comment then close with exact payloads, and ends verified on GitHub\n",
                         ));
                     if let Err(error) = written {
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error}\n"));

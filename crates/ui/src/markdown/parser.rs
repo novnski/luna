@@ -129,6 +129,100 @@ fn options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
 }
 
+/// GitHub issue text embeds screenshots as HTML `<img>` tags, which this
+/// renderer would show as raw markup. Rewrite each tag outside code into a
+/// link to the image, named by its `alt` text; the image is never fetched.
+pub fn link_html_images(source: &str) -> std::borrow::Cow<'_, str> {
+    let mut out = String::new();
+    let mut copied = 0;
+    for (event, range) in Parser::new_ext(source, options()).into_offset_iter() {
+        if !matches!(event, Event::Html(_) | Event::InlineHtml(_)) {
+            continue;
+        }
+        let html = &source[range.clone()];
+        let mut at = 0;
+        while let Some(found) = html[at..].to_ascii_lowercase().find("<img") {
+            let start = at + found;
+            let Some(length) = html[start..].find('>') else {
+                break;
+            };
+            let end = start + length + 1;
+            at = end;
+            if range.start + start < copied {
+                continue;
+            }
+            if let Some(link) = html_image_link(&html[start..end]) {
+                out.push_str(&source[copied..range.start + start]);
+                out.push_str(&link);
+                copied = range.start + end;
+            }
+        }
+    }
+    if copied == 0 {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    out.push_str(&source[copied..]);
+    std::borrow::Cow::Owned(out)
+}
+
+/// `[Image: alt](<src>)` for one `<img …>` tag with an http(s) `src`.
+fn html_image_link(tag: &str) -> Option<String> {
+    let mut rest = tag.get(4..)?;
+    if !rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>') {
+        return None;
+    }
+    let (mut src, mut alt) = (None, None);
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+        let name_end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))?;
+        if name_end == 0 {
+            break;
+        }
+        let name = rest[..name_end].to_ascii_lowercase();
+        rest = rest[name_end..].trim_start();
+        let Some(value) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim_start();
+        let (text, after) = match value.chars().next()? {
+            quote @ ('"' | '\'') => {
+                let close = value[1..].find(quote)? + 1;
+                (&value[1..close], &value[close + 1..])
+            }
+            _ => {
+                let end = value.find(|c: char| c.is_ascii_whitespace() || c == '>')?;
+                (&value[..end], &value[end..])
+            }
+        };
+        match name.as_str() {
+            "src" => src = Some(text),
+            "alt" => alt = Some(text),
+            _ => {}
+        }
+        rest = after;
+    }
+    let src = src?;
+    let lower = src.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://"))
+        || src.contains(|c: char| c.is_whitespace() || c == '<' || c == '>')
+    {
+        return None;
+    }
+    let alt: String = alt
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !matches!(c, '[' | ']' | '\\'))
+        .collect();
+    let alt = alt.trim();
+    let label = if alt.is_empty() || alt.eq_ignore_ascii_case("image") {
+        "Image".to_owned()
+    } else {
+        format!("Image: {alt}")
+    };
+    Some(format!("[{label}](<{src}>)"))
+}
+
 /// Parse a whole source into a [`BlockTree`].
 pub fn parse_full(source: &str) -> BlockTree {
     parse_at(source, 0)
@@ -788,6 +882,40 @@ fn has_link_defs(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Imported GitHub issue text: an `<img>` tag would show as raw markup.
+    /// Regressions: a tag in code is rewritten (the code changes), a
+    /// non-http(s) source becomes a link, `]` in alt text breaks the link,
+    /// a second tag or one inside a sentence is missed, or text without a
+    /// tag is copied.
+    #[test]
+    fn html_images_become_links_outside_code_only() {
+        let cases = [
+            (
+                "Shot:\n\n<img width=\"3342\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/a\" />\n",
+                "Shot:\n\n[Image](<https://github.com/user-attachments/assets/a>)\n",
+            ),
+            (
+                "See <IMG SRC='https://x.dev/a.png' ALT='before [1]'> and <img src=https://x.dev/b.png>.",
+                "See [Image: before 1](<https://x.dev/a.png>) and [Image](<https://x.dev/b.png>).",
+            ),
+            (
+                "`<img src=\"https://x.dev/a.png\">`\n\n```html\n<img src=\"https://x.dev/b.png\">\n```\n",
+                "`<img src=\"https://x.dev/a.png\">`\n\n```html\n<img src=\"https://x.dev/b.png\">\n```\n",
+            ),
+            (
+                "<img src=\"javascript:alert(1)\"> <img src=\"data:image/png;base64,AA\"> <imgx src=\"https://x.dev\">",
+                "<img src=\"javascript:alert(1)\"> <img src=\"data:image/png;base64,AA\"> <imgx src=\"https://x.dev\">",
+            ),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(link_html_images(source), expected, "{source}");
+        }
+        assert!(matches!(
+            link_html_images("No images here."),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn task_ranges_survive_nested_lists_unicode_crlf_and_streaming() {

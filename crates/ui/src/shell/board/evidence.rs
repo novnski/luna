@@ -312,6 +312,40 @@ fn open_url_button(id: String, label: &'static str, url: String, theme: &Theme) 
 }
 
 // ---------------------------------------------------------------------------
+// Not started
+// ---------------------------------------------------------------------------
+
+/// Nothing was dispatched, reviewed or recorded yet: Review, Outcome and
+/// Dispatch would each only say so.
+pub(crate) fn not_started(detail: &BoardItemDetail) -> bool {
+    detail.launches.is_empty()
+        && detail.review_runs.is_empty()
+        && detail.outcomes.is_empty()
+        && detail.view.item.column != BoardColumn::Done
+        && detail
+            .intent
+            .as_ref()
+            .is_none_or(|intent| intent.review_passes == 0 && intent.repair_rounds == 0)
+}
+
+/// One line in place of the three empty lifecycle sections.
+pub(crate) fn render_not_started(ecx: &EvidenceContext) -> AnyElement {
+    let copy = ecx.text(
+        "detail-lifecycle-none",
+        "Not started: no instruction sent, no review and no results yet. The brief is sent once, \
+         on the first start; dispatches, review rounds and results then appear here.",
+    );
+    section(
+        ecx.theme,
+        "detail-lifecycle",
+        "Review, results and dispatch",
+        None,
+    )
+    .child(line(ecx.theme, copy))
+    .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
 // Review
 // ---------------------------------------------------------------------------
 
