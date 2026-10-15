@@ -1337,25 +1337,30 @@ impl Repos {
     /// - a title-slug collision gets a stable 6-hex suffix (hash of the worktree
     ///   path); a collision on THAT too fails.
     ///
-    /// Returns the branch the worktree ends up on (re-read after the rename so a
-    /// concurrent external checkout always wins the metadata race).
+    /// Reports the branch the worktree ends up on and, separately, the new name
+    /// of `expected_branch` when this call renamed it; a guard that declines
+    /// renames nothing, even when the worktree is now on another branch.
     pub async fn rename_worktree_branch(
         &self,
         worktree_path: &Path,
         expected_branch: &str,
         title: &str,
-    ) -> Result<String, EngineError> {
+    ) -> Result<WorktreeBranchRename, EngineError> {
         let current = self.current_branch(worktree_path).await?;
+        let unchanged = |current: String| WorktreeBranchRename {
+            current,
+            renamed_to: None,
+        };
         let folder = worktree_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         if current != expected_branch || expected_branch != format!("luna/{folder}") {
-            return Ok(current);
+            return Ok(unchanged(current));
         }
         let preferred = worktree_branch_from_title(title);
         if preferred == current {
-            return Ok(current);
+            return Ok(unchanged(current));
         }
         let mut hasher = Sha256::new();
         hasher.update(worktree_path.to_string_lossy().as_bytes());
@@ -1375,7 +1380,10 @@ impl Repos {
             Some(worktree_path),
         )
         .await?;
-        self.current_branch(worktree_path).await
+        Ok(WorktreeBranchRename {
+            current: self.current_branch(worktree_path).await?,
+            renamed_to: Some(target),
+        })
     }
 
     /// Git-verified worktree removal (if it still exists), then prune stale refs.
@@ -2125,6 +2133,16 @@ fn rank_file_matches(
         .into_iter()
         .map(|(_, _, path, is_dir)| FileSearchMatch { path, is_dir })
         .collect()
+}
+
+/// Outcome of [`Repos::rename_worktree_branch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeBranchRename {
+    /// The branch the worktree is on afterwards, re-read after a rename so a
+    /// concurrent external checkout always wins the metadata race.
+    pub current: String,
+    /// The expected branch's new name when this call renamed it in place.
+    pub renamed_to: Option<String>,
 }
 
 /// Turn a generated chat title into the semantic portion of a Luna branch

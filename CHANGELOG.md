@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.5.1 — 2026-10-15
+
+- Show a new worktree chat's renamed branch everywhere as soon as the automatic title renames it. The sidebar, composer and Overview kept the original `luna/<name>` branch until the next message, while Changes → Git and the terminal already showed the new one.
+
 ## 0.5.0 — 2026-10-15
 
 - Read a Board ticket imported from a GitHub issue without the agent protocol. Its Brief shows your prompt first, then where the issue came from (repository and number, its state when imported, labels and assignees) with **Open on GitHub**, then the issue description and the selected comments rendered as Markdown. Screenshots embedded as HTML become links to the image, which is not fetched. The exact text agents receive, with the issue quoted as untrusted data, is behind **Show what agents receive**; agents still receive the brief unchanged. If the quoted text was edited on the board after the import, the Brief says so. A brief written by hand also renders as Markdown.

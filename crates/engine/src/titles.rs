@@ -274,12 +274,24 @@ impl TitleGenerator {
                 .rename_worktree_branch(std::path::Path::new(chat_cwd), branch, &title)
                 .await
             {
-                Ok(renamed) if &renamed != branch => {
-                    if let Err(err) = self.inner.workspace.set_chat_branch(chat_id, &renamed) {
+                Ok(rename) => {
+                    let workspace = &self.inner.workspace;
+                    // Only an in-place rename of the chat's own ref carries the
+                    // stamped source context that sidebar, composer and
+                    // Overview read. An external checkout moves the row's
+                    // branch alone; the next dispatch restamps the source.
+                    let mut update = Ok(true);
+                    if let Some(renamed) = &rename.renamed_to {
+                        update = workspace.rename_chat_branch(chat_id, chat_cwd, branch, renamed);
+                    }
+                    let recorded = rename.renamed_to.as_deref().unwrap_or(branch);
+                    if update.is_ok() && rename.current != recorded {
+                        update = workspace.set_chat_branch(chat_id, &rename.current);
+                    }
+                    if let Err(err) = update {
                         tracing::warn!(chat = %chat_id, error = %err, "chat branch update failed");
                     }
                 }
-                Ok(_) => {}
                 Err(err) => {
                     tracing::warn!(chat = %chat_id, error = %err, "automatic worktree branch rename failed");
                 }

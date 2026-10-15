@@ -1462,6 +1462,33 @@ impl RegistryDoc {
         Ok(true)
     }
 
+    /// Rename the branch checked out at `cwd` in place (the automatic title
+    /// rename). The ref keeps its commits and checkout, so a source context
+    /// stamped on that folder under the old name still describes this
+    /// conversation and takes the new name in the same write. A context
+    /// observed on another folder or branch is left for the next dispatch.
+    pub fn rename_chat_branch(
+        &mut self,
+        chat_id: &str,
+        cwd: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<bool, DocError> {
+        let Some(chat) = self.chat(chat_id)? else {
+            return Ok(false);
+        };
+        let mut set = fields([("branch", json!(to))]);
+        if let Some(mut source) = chat.source_context
+            && source.cwd == cwd
+            && source.branch == from
+        {
+            source.branch = to.to_string();
+            set.insert("sourceContext".into(), serde_json::to_value(&source)?);
+        }
+        self.write(KIND_CHATS, chat_id, OpKind::Update, set);
+        Ok(true)
+    }
+
     pub fn set_chat_source_context(
         &mut self,
         chat_id: &str,

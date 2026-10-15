@@ -2001,6 +2001,18 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_branch(chat_id, branch))?)
     }
 
+    /// Automatic title rename of the branch checked out at `cwd`: the scalar
+    /// branch and a source context stamped on that checkout move together.
+    pub fn rename_chat_branch(
+        &self,
+        chat_id: &str,
+        cwd: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| doc.rename_chat_branch(chat_id, cwd, from, to))?)
+    }
+
     pub fn set_chat_source_context(
         &self,
         chat_id: &str,
