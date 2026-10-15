@@ -2,9 +2,14 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.4.6 — 2026-10-15
+## 0.5.1 — 2026-10-15
 
 - A side chat you stop before it has replied now shows **Stopped** in the main chat's Background work, instead of Unknown with a request for attention. The same applies to a side chat an agent started that you stop from its own chat before it says anything; it also no longer keeps the main chat busy.
+
+## 0.5.0 — 2026-10-15
+
+- Read a Board ticket imported from a GitHub issue without the agent protocol. Its Brief shows your prompt first, then where the issue came from (repository and number, its state when imported, labels and assignees) with **Open on GitHub**, then the issue description and the selected comments rendered as Markdown. Screenshots embedded as HTML become links to the image, which is not fetched. The exact text agents receive, with the issue quoted as untrusted data, is behind **Show what agents receive**; agents still receive the brief unchanged. If the quoted text was edited on the board after the import, the Brief says so. A brief written by hand also renders as Markdown.
+- A ticket that has not started shows one line in place of its empty Review, Outcome and Dispatch history sections, and its Source issue card now sits above them.
 
 ## 0.4.5 — 2026-10-15
 

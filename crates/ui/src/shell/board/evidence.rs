@@ -11,8 +11,8 @@ use gpui::{
 };
 use luna_proto::{
     BOARD_MAX_REPAIR_ROUNDS, BoardActor, BoardColumn, BoardExecutionOptions, BoardInstructionKind,
-    BoardItemDetail, LaunchSnapshot, OutcomeKind, OutcomeReference, ReviewCleanupState, ReviewRun,
-    ReviewRunState, ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole,
+    BoardItemDetail, BoardPhase, LaunchSnapshot, OutcomeKind, OutcomeReference, ReviewCleanupState,
+    ReviewRun, ReviewRunState, ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole,
 };
 
 use super::detail::{BoardDetail, BoardProbe, format_time};
@@ -309,6 +309,37 @@ fn open_url_button(id: String, label: &'static str, url: String, theme: &Theme) 
         .child(label)
         .on_click(move |_, _, cx: &mut App| cx.open_url(&url))
         .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Not started
+// ---------------------------------------------------------------------------
+
+/// The engine has nothing running for the ticket (no working chat, so not
+/// a converted chat either) and nothing was dispatched, reviewed or
+/// recorded: Review, Outcome and Dispatch would each only say so.
+pub(crate) fn not_started(detail: &BoardItemDetail) -> bool {
+    detail.view.phase == BoardPhase::NotStarted
+        && detail.launches.is_empty()
+        && detail.review_runs.is_empty()
+        && detail.outcomes.is_empty()
+}
+
+/// One line in place of the three empty lifecycle sections.
+pub(crate) fn render_not_started(ecx: &EvidenceContext) -> AnyElement {
+    let copy = ecx.text(
+        "detail-lifecycle-none",
+        "Not started: no instruction sent, no review and no results yet. The brief is sent once, \
+         on the first start; dispatches, review rounds and results then appear here.",
+    );
+    section(
+        ecx.theme,
+        "detail-lifecycle",
+        "Review, results and dispatch",
+        None,
+    )
+    .child(line(ecx.theme, copy))
+    .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
