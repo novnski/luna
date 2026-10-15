@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.4.5 — 2026-10-15
+
+- The project pill no longer makes finished work look busy. It said "3 active" when all three of a project's tasks had finished their turns, which read as three agents still working. It now counts open tasks, then what needs you and what is running, each only when there is some: "3 open tasks", or "9 open tasks · 3 need you · 1 running". The All projects picker row reads "14 open tasks across 3 projects", a folded project group shows "8 open", and the sidebar's empty list says "No open tasks". A project group header's accessible name now includes its needs-you and running counts. The counts themselves are unchanged.
+
 ## 0.4.4 — 2026-10-15
 
 - Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt, in new chats and in chats started before this update. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.

@@ -10,8 +10,8 @@
 //!
 //! Failure cases this run must catch (written before the implementation):
 //! 1. The project pill loses its identity: no project tile, the wrong name, or
-//!    a summary that disagrees with the rows (active count, needs-you count),
-//!    in a single project or in All projects.
+//!    a summary that disagrees with the rows (open, needs-you and running
+//!    counts), in a single project or in All projects.
 //! 2. The picker hides what changed: a project row without its tile, path or
 //!    live counts (needs you, working), the current project not marked, the
 //!    All projects row missing its total, or "New project…" / "Manage
@@ -57,6 +57,10 @@
 //!     or Activity no longer opens and closes from it.
 //! 16. A pin is painted in the status spot (user report: it hid the status),
 //!     or hovering a row paints more than one pin.
+//! 17. The pill reads open tasks as work in progress (novnski/luna#24: "3
+//!     active" over three finished turns): once a project's last running turn
+//!     finishes, its pill must still count the open tasks and stop naming a
+//!     running one, and while a turn runs it is named apart from the count.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example sidebar-redesign-fixture
@@ -539,7 +543,7 @@ fn check_project(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_jso
     let scale = num(&rb["uiScale"]);
     let trigger = strings(&rb["texts"]["spaces-trigger"]);
     anyhow::ensure!(
-        trigger == ["luna", "9 active · 3 need you"],
+        trigger == ["luna", "9 open tasks · 3 need you · 1 running"],
         "{step}: item 1, the pill must name the project and its live counts: {trigger:?}"
     );
     let order = strings(&rb["order"]);
@@ -666,7 +670,7 @@ fn check_picker(rb: &serde_json::Value, step: &str, current: Option<&str>) -> an
     };
     let all = row("All projects")?;
     anyhow::ensure!(
-        all.contains("14 active across 3 projects"),
+        all.contains("14 open tasks across 3 projects"),
         "{step}: item 2, the All projects row lost its total: {all}"
     );
     for (name, path, counts) in [
@@ -705,7 +709,7 @@ fn check_all(rb: &serde_json::Value, step: &str) -> anyhow::Result<serde_json::V
     let scale = num(&rb["uiScale"]);
     let trigger = strings(&rb["texts"]["spaces-trigger"]);
     anyhow::ensure!(
-        trigger == ["All projects", "14 active · 4 need you"],
+        trigger == ["All projects", "14 open tasks · 4 need you · 2 running"],
         "{step}: item 1, the All projects pill must sum every project: {trigger:?}"
     );
     let keys: Vec<String> = keyed(rb).into_iter().map(|(key, _)| key).collect();
@@ -1007,6 +1011,49 @@ async fn behaviour_pass(
     }))
 }
 
+/// Item 17: workspace's one running turn finishes, as in the reported QA
+/// project whose three turns had all completed.
+async fn finished_turns_pass(
+    window: Window,
+    state: &gpui::Entity<state::AppState>,
+    cx: &mut AsyncApp,
+    output: &Path,
+) -> anyhow::Result<serde_json::Value> {
+    window.update(cx, |shell, _, cx| {
+        shell.fixture_set_space_filter(Some(P_WS.into()), cx)
+    })?;
+    frames(window, cx, 400).await?;
+    let running = strings(&readback(window, cx)?["texts"]["spaces-trigger"]);
+    anyhow::ensure!(
+        running == ["workspace", "3 open tasks · 1 running"],
+        "item 17: the running turn must be named apart from the open tasks: {running:?}"
+    );
+    cx.update(|cx| {
+        state.update(cx, |state, cx| {
+            for session in state.sessions.iter_mut() {
+                if session.chat_id == "w-work" {
+                    session.status = SessionStatus::Idle;
+                }
+            }
+            cx.notify();
+        })
+    });
+    frames(window, cx, 400).await?;
+    let rb = readback(window, cx)?;
+    let finished = strings(&rb["texts"]["spaces-trigger"]);
+    anyhow::ensure!(
+        finished == ["workspace", "3 open tasks"],
+        "item 17: three finished turns must read as open tasks with none running: {finished:?}"
+    );
+    let order = strings(&rb["order"]);
+    anyhow::ensure!(
+        order == ["w-work", "w-idle-1", "w-idle-2"],
+        "item 17: a finished turn must leave its task listed: {order:?}"
+    );
+    capture(window, cx, output.join("f-finished-turns.png"))?;
+    Ok(serde_json::json!({ "running": running, "finished": finished }))
+}
+
 fn center(bounds: &serde_json::Value) -> (f32, f32) {
     (
         num(&bounds["x"]) + num(&bounds["w"]) / 2.0,
@@ -1251,6 +1298,7 @@ fn main() -> anyhow::Result<()> {
                 state.spaces_synced = true;
                 state
             });
+            let fixture_state = state.clone();
             let boot = EngineBootConfig {
                 data_dir: data,
                 ipc_port: 0,
@@ -1296,6 +1344,8 @@ fn main() -> anyhow::Result<()> {
                     record.insert("behaviour".into(), behaviour);
                     let navigation = navigation_pass(window, cx, &output).await?;
                     record.insert("navigation".into(), navigation);
+                    let finished = finished_turns_pass(window, &fixture_state, cx, &output).await?;
+                    record.insert("finishedTurns".into(), finished);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -1308,7 +1358,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("sidebar-redesign.pass"),
-                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and live counts and two-line rows whose titles and provider icons share one left edge, with the status at the right edge (square loader, done dot, Approve/Reply/Failed pills) and none at all on idle rows; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows on one title edge whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable; the project pill owns the top row, New thread and Automations sit between it and the Threads header (which carries the view options and Activity), Automations opens as its own page beside the thread list (Back returns, Settings no longer lists it), New thread opens the canvas, and a row paints a pin only as its one hover control\n",
+                                "PASS: headless production Shell with real pointer and keyboard input at Interface sizes 12, 16 and 20 (dark): a single project shows a pill with its tile, name and open, needs-you and running counts and two-line rows whose titles and provider icons share one left edge, with the status at the right edge (square loader, done dot, Approve/Reply/Failed pills) and none at all on idle rows; the picker lists every project with its path and need/working counts, marks the current one and reaches New project… and Manage projects… by keyboard; All projects groups tasks under alphabetical project headers with their own counts, compact one-line rows on one title edge whose reserved and painted heights agree, a five-row cap per project, folding that keeps the summary and jump order, and Settled/Archived still reachable; the project pill owns the top row, New thread and Automations sit between it and the Threads header (which carries the view options and Activity), Automations opens as its own page beside the thread list (Back returns, Settings no longer lists it), New thread opens the canvas, a row paints a pin only as its one hover control, and once a project's last running turn finishes its pill still counts its open tasks and no longer names one running\n",
                             )
                         });
                         if let Err(error) = written {
