@@ -4734,11 +4734,14 @@ impl SessionsEngine {
         for resolver in parked {
             let _ = resolver.send(Vec::new());
         }
-        // Harness-level interrupt (protocol + child teardown) …
-        token.cancel();
-        // … plus the engine-side grace deadline in the run task, so a harness that
-        // ignores its token still settles with a synthesized Done{interrupted}.
+        // Engine-side cancel first: it arms the run task's grace deadline (a
+        // harness that ignores its token still settles with a synthesized
+        // Done{interrupted}) and marks the stop as LUNA's own, so a harness
+        // that answers its token at once cannot pass for a provider-side
+        // interruption, which would freeze the queue.
         let _ = cancel.send(true);
+        // … then the harness-level interrupt (protocol + child teardown).
+        token.cancel();
         // Bounded settle wait (the run task appends Done + stamps `aborted`).
         for _ in 0..500 {
             if !self.is_live(chat_id, &run_id) {
@@ -9567,6 +9570,9 @@ async fn drive_run(
         // the run as interrupted so unconfirmed mailbox steers are not
         // re-dispatched as fresh turns at run exit. Local Stop already set
         // `interrupted` through the cancel channel and keeps its own path.
+        // A harness can answer LUNA's own interrupt before this loop reads
+        // that channel; the signal is already set then, and that stop must
+        // not freeze the queue.
         if turn_was_active
             && !interrupted
             && matches!(
@@ -9578,7 +9584,8 @@ async fn drive_run(
             )
         {
             interrupted = true;
-            if let Some(host) = inner.doc_host()
+            if !*cancel_rx.borrow()
+                && let Some(host) = inner.doc_host()
                 && let Err(error) = host.fence_queue_for_stop(&chat_id).await
             {
                 tracing::warn!(chat = %chat_id, run = %run_id, %error,

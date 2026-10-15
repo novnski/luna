@@ -465,15 +465,13 @@ async fn delegated_child_keeps_its_silent_stop_after_a_later_silent_turn() {
     }
     assert_eq!(row(&first)["state"], "stopped", "{first}");
 
-    // A later turn of its own, also stopped before any output. A stop holds
-    // queued messages, so each next one is sent explicitly, as Send now does.
+    // A later turn of its own, also stopped before any output.
     call(
         &c,
         "QueueMessage",
         json!({"chatId":child,"messageId":"child-later","text":"HOLD_SILENT_SIDE_CHAT_TURN","holdForTurnEnd":true}),
     )
     .await;
-    let _ = e.doc_host.send_queued_now(&child, "child-later").await;
     active(&e, &child).await;
     e.sessions.interrupt(&child).await.unwrap();
     // This turn starts only once the stopped one is finalized.
@@ -483,7 +481,6 @@ async fn delegated_child_keeps_its_silent_stop_after_a_later_silent_turn() {
         json!({"chatId":child,"messageId":"child-barrier","text":"COMPLETE_SIDE_CHAT_TURN","holdForTurnEnd":true}),
     )
     .await;
-    let _ = e.doc_host.send_queued_now(&child, "child-barrier").await;
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let entries = e
