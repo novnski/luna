@@ -90,6 +90,10 @@ mod contributions_tests;
 mod findings;
 mod native_file_rewind;
 mod native_review;
+mod right_pane_restore;
+/// Issue #23: a chat's right sidebar and its files across a restart.
+#[cfg(all(test, unix))]
+mod right_pane_restore_e2e;
 mod right_rail;
 pub use right_rail::RAIL_WIDTH as RIGHT_RAIL_WIDTH;
 mod pane_chat;
@@ -837,6 +841,12 @@ impl RightPlace {
         }
     }
 
+    /// The host place a saved [`Self::key`] names. A contributed panel's key
+    /// is not an identity, so it never round-trips.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|place| place.key() == key)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -929,13 +939,14 @@ fn workspace_file_title(path: &str) -> SharedString {
 }
 
 /// Per-chat panel open flags (luna parity: `sessionPanels` — the terminal and
-/// changes panels open *per session*, in memory only; heights and every other
-/// persisted setting stay global).
+/// changes panels open *per session*; heights and every other persisted
+/// setting stay global).
 ///
 /// Everything defaults CLOSED — the right pane included (user request,
 /// revising the earlier default-open: it popped open on every session you
-/// visited). Opening is an explicit act, remembered per chat for the rest of
-/// the app run; a fresh open lands on the Overview place.
+/// visited). Opening is an explicit act, remembered per chat; the right
+/// pane's flag, place and Files tabs also survive a restart
+/// ([`UiSettings::right_panes`]). A fresh open lands on the Overview place.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ChatPanels {
     pub terminal_open: bool,
@@ -948,7 +959,8 @@ pub struct ChatPanels {
 }
 
 /// The session-scoped panel map. Keys are chat ids; the new-chat canvas uses
-/// the empty key. Not persisted — a fresh app starts with everything closed.
+/// the empty key. Only the right pane persists, through
+/// [`UiSettings::right_panes`]; the terminal starts closed in a fresh app.
 #[derive(Debug, Default)]
 pub struct SessionPanels {
     map: std::collections::HashMap<String, ChatPanels>,
@@ -2768,6 +2780,11 @@ pub struct Shell {
     /// Session-scoped panel open flags (terminal / changes per chat; §1.10-1.11
     /// parity — heights stay in [`UiSettings`]).
     panels: SessionPanels,
+    /// Chats whose saved right pane ([`UiSettings::right_panes`]) this run
+    /// has applied or found absent. Until then a chat's live pane is not
+    /// written back, so a frame drawn before the restore cannot overwrite
+    /// what the last run saved.
+    right_pane_restored: std::collections::HashSet<String>,
     /// The panel key of the chat currently shown ("" = new-chat canvas).
     active_chat: String,
     /// Last selected session survives opening the blank Appshot destination.
@@ -3314,6 +3331,7 @@ impl Shell {
             data_dir,
             settings,
             panels: SessionPanels::default(),
+            right_pane_restored: std::collections::HashSet::new(),
             active_chat: String::new(),
             last_appshot_chat: None,
             sidebar_prev_order: Vec::new(),
@@ -4605,25 +4623,53 @@ impl Shell {
             return;
         }
         let key = self.panel_key(cx);
-        if !self.files.contains_key(&key) {
+        self.ensure_files_place(&key, None, window, cx);
+        self.set_right_active(RightSurface::Files, cx);
+        self.focus_right_file_editor(RightSurface::Files, window, cx);
+    }
+
+    /// `key`'s workspace browser, created on first use and listed in its
+    /// tabs. A restored browser that had opened a file in place comes back
+    /// as that file's editor (`editor_path`), exactly as it was promoted.
+    fn ensure_files_place(
+        &mut self,
+        key: &str,
+        editor_path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.files.contains_key(key) {
             let autosave_enabled = self.settings.files_autosave_enabled;
             let delay = self.settings.files_autosave_delay_ms;
             let editor_font_size = crate::typography::code_font_size(cx);
             let word_wrap = self.settings.files_word_wrap;
             let show_all_files = self.settings.files_show_all;
-            let files = cx.new(|cx| {
-                FilesSurface::new(
-                    self.state.clone(),
-                    self.active_chat.clone(),
+            let state = self.state.clone();
+            let chat_id = self.active_chat.clone();
+            let files = cx.new(|cx| match editor_path {
+                Some(path) => FilesSurface::new_editor(
+                    state,
+                    chat_id,
+                    path,
                     autosave_enabled,
                     delay,
                     editor_font_size,
                     word_wrap,
                     show_all_files,
                     cx,
-                )
+                ),
+                None => FilesSurface::new(
+                    state,
+                    chat_id,
+                    autosave_enabled,
+                    delay,
+                    editor_font_size,
+                    word_wrap,
+                    show_all_files,
+                    cx,
+                ),
             });
-            let event_key = key.clone();
+            let event_key = key.to_string();
             let sub = cx.subscribe_in(
                 &files,
                 window,
@@ -4660,12 +4706,10 @@ impl Shell {
                     FilesEvent::CloseCancelled => this.cancel_file_close(RightSurface::Files, cx),
                 },
             );
-            self.files.insert(key.clone(), files);
-            self.files_subs.insert(key.clone(), sub);
+            self.files.insert(key.to_string(), files);
+            self.files_subs.insert(key.to_string(), sub);
         }
-        self.push_right_tab(&key, RightSurface::Files);
-        self.set_right_active(RightSurface::Files, cx);
-        self.focus_right_file_editor(RightSurface::Files, window, cx);
+        self.push_right_tab(key, RightSurface::Files);
     }
 
     /// Open a workspace file as a first-class right-pane tab. Every editor is
@@ -4694,7 +4738,24 @@ impl Shell {
             self.focus_right_file_editor(surface, window, cx);
             return;
         }
+        let id = self.register_file_surface(panel_key, owner, path, window, cx);
+        self.set_right_active(RightSurface::File(id), cx);
+    }
 
+    /// `owner`'s editor of `path` as a tab of `panel_key`: the open one, or
+    /// a new one listed at the end of the tabs.
+    fn register_file_surface(
+        &mut self,
+        panel_key: String,
+        owner: String,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        let lookup = (panel_key.clone(), owner.clone(), path.clone());
+        if let Some(id) = self.file_surface_keys.get(&lookup).copied() {
+            return id;
+        }
         self.file_surface_seq += 1;
         let id = self.file_surface_seq;
         let file = cx.new(|cx| {
@@ -4764,7 +4825,7 @@ impl Shell {
         self.file_surface_keys.insert(lookup, id);
         self.file_surface_subs.insert(id, sub);
         self.push_right_tab(&panel_key, RightSurface::File(id));
-        self.set_right_active(RightSurface::File(id), cx);
+        id
     }
 
     /// Open (or focus) the owner's file tab, then select a workspace text
@@ -15914,6 +15975,8 @@ impl Render for Shell {
         self.reconcile_contribution_routes(cx);
         self.sync_route_sidebar();
         self.sync_restored_page(cx);
+        self.restore_right_pane(window, cx);
+        self.save_right_pane(cx);
         if !matches!(self.route, Route::Settings(SettingsSection::Connections)) {
             if let Some(page) = &self.connections_page {
                 page.update(cx, |page, cx| page.cancel_pairing(cx));
