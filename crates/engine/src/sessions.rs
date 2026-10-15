@@ -9618,19 +9618,20 @@ async fn drive_run(
                 }
                 if let Some(policy) = permission_policy.as_ref()
                     && let Some(workspace) = inner.workspace()
-                    && let Ok(Some(chat)) = workspace.chat(&chat_id)
-                    && let Some(mut config) = chat.config
-                    && config.harness == harness_id
                 {
                     // SessionStarted is the first authoritative proof that the
                     // replacement provider accepted this runtime policy. Keep
                     // any newer requested mode, but publish what is active.
-                    apply_permission_policy(
-                        &mut config,
-                        policy,
-                        format!("engine:{}", inner.device_id),
-                    );
-                    if let Err(error) = workspace.set_chat_config(&chat_id, &config) {
+                    // One locked read-modify-write: a model or other
+                    // selection changed since the turn started must survive.
+                    let actor = format!("engine:{}", inner.device_id);
+                    if let Err(error) = workspace.update_chat_config(&chat_id, |config| {
+                        if config.harness != harness_id {
+                            return false;
+                        }
+                        apply_permission_policy(config, policy, actor);
+                        true
+                    }) {
                         tracing::warn!(chat = %chat_id, %error, "applied permission policy persistence failed");
                     }
                 }
