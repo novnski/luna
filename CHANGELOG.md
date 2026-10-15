@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.4.1 — 2026-10-15
+
+- A server a Codex agent leaves running, such as `npm run preview`, now keeps running while LUNA is open. Previously, LUNA ended the agent's Codex process after a chat sat idle for 30 minutes, and that also stopped every command the agent had left running, so a preview link the agent reported as running stopped loading with no explanation. The command now appears in the chat's **Background work** as a running background shell, and the chat stays connected while it runs. When the command stops, its shell and its command show the exit code (for example "Exited with code 143"). Quitting LUNA or stopping the chat still ends it, and it is then shown as stopped.
+
 ## 0.4.0 — 2026-10-15
 
 - Reopen each task's right sidebar where you left it after quitting and relaunching LUNA. The sidebar comes back open or closed as it was, on the same place (Overview, Files, Changes, …), and Files reopens its open file and its file tabs in the same order, read fresh from the task's checkout. Terminals, diffs and web pages are not restarted on their own; those places reopen on their own page. The last 64 tasks you changed are remembered, on this device only.
