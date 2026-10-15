@@ -233,9 +233,16 @@ impl WorkProjection {
             if chat.id != owner
                 && let Some(child) = &chat.child_thread
             {
-                let independent = runtime
-                    .as_ref()
-                    .is_some_and(|r| r.message_id != child.initial_message_id);
+                // A side chat opened without a brief (desktop `+`, Board's
+                // Fresh side chat) queues no delegated message: its
+                // `initial_message_id` never reaches the transcript and every
+                // turn is the chat's own. Its row follows that chat's latest
+                // turn; it is never owned here.
+                let delegated = !child.initial_prompt.is_empty();
+                let independent = delegated
+                    && runtime
+                        .as_ref()
+                        .is_some_and(|r| r.message_id != child.initial_message_id);
                 let owned = child
                     .work_origin
                     .as_ref()
@@ -245,10 +252,19 @@ impl WorkProjection {
                     r.message_id == child.initial_message_id
                         && self.sessions.active_turn_id(&chat.id).is_some()
                 });
-                let initial = entries
-                    .iter()
-                    .position(|e| e.id == child.initial_message_id);
-                let reply = initial.and_then(|i| {
+                let turn = if delegated {
+                    entries
+                        .iter()
+                        .position(|e| e.id == child.initial_message_id)
+                } else {
+                    entries.iter().rposition(|e| e.role == MessageRole::User)
+                };
+                let running = if delegated {
+                    live.is_some()
+                } else {
+                    self.sessions.active_turn_id(&chat.id).is_some()
+                };
+                let reply = turn.and_then(|i| {
                     entries
                         .iter()
                         .skip(i + 1)
@@ -257,7 +273,7 @@ impl WorkProjection {
                         .last()
                 });
                 let work_id = id(&("child", &chat.id, &child.initial_message_id))?;
-                let mut state = if live.is_some() {
+                let mut state = if running {
                     State::Running
                 } else if let Some(reply) = reply {
                     match reply.status {
@@ -273,10 +289,12 @@ impl WorkProjection {
                         Some(MessageStatus::Aborted) => State::Stopped,
                         _ => State::Unknown,
                     }
-                } else if initial.is_some() {
+                } else if turn.is_some() {
                     State::Unknown
-                } else {
+                } else if delegated {
                     State::Starting
+                } else {
+                    State::Waiting
                 };
                 // The transcript has no terminal row, but this host stopped
                 // exactly this delegation and saw its launching turn end.
@@ -302,7 +320,11 @@ impl WorkProjection {
                         blocks_completion: owned && !state.terminal(),
                         needs_attention: matches!(state, State::Unknown | State::Failed),
                         can_stop: control.is_some(),
-                        detail: if independent {
+                        detail: if !delegated && turn.is_none() {
+                            "Ancestry only; nothing has been sent in this chat yet"
+                        } else if !delegated {
+                            "Ancestry only; this chat's own latest turn"
+                        } else if independent {
                             "Initial delegated turn ended; the current turn is independently owned"
                         } else if child.work_origin.is_none() {
                             "Ancestry only; no recorded lifecycle ownership"

@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.4.3 — 2026-10-15
+
+- Show a side chat you opened yourself (Side chat → Fresh, or `+`) with its real state in the main chat's **Background work**. Such a side chat stayed at "Starting" even after it had answered. It now reads Waiting until you send it something, Running while it works, then Completed, Failed or Stopped for its latest turn. It still never keeps the main chat busy and is stopped from its own chat.
+
 ## 0.4.2 — 2026-10-15
 
 - A file open in a task's sidebar that is renamed on disk (for example, by an agent) while you look at another task now reopens under its new name after a restart, instead of showing that the old file couldn't open. Restored file tabs also start following such renames right away, before you show them again.
