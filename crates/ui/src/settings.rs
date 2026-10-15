@@ -579,6 +579,48 @@ impl ChatPlacements {
     }
 }
 
+/// How many chats' right sidebars [`UiSettings::right_panes`] remembers.
+pub const RIGHT_PANES_CAP: usize = 64;
+
+/// One chat's right sidebar as this device last showed it, so a restart
+/// reopens it where the user left off. Only what a path rebuilds persists:
+/// the Files place's browser and file tabs. Other places reopen on their own
+/// page — a terminal, diff or web page is never started unasked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SavedRightPane {
+    pub chat_id: String,
+    /// The sidebar was showing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
+    /// The rail place it showed (`RightPlace::key`); `None` is the Overview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    /// The Files place's tabs in strip order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<SavedFileTab>,
+}
+
+/// One tab of the Files place in a [`SavedRightPane`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SavedFileTab {
+    /// The place's own workspace browser rather than a file tab. It shows
+    /// `path` once a file has opened in it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub browser: bool,
+    /// Checkout-relative path; `None` only for a browser still on its tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The chat whose checkout owns `path`, when it is not the pane's own
+    /// chat (a workbench tab's file).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The tab the Files place last showed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub active: bool,
+}
+
 /// How one side chat is filed in its parent's Side chats list. Side chats are
 /// leased engine records rather than tasks, so this is a device-local view
 /// preference: it never unloads, deletes or archives the record itself.
@@ -841,10 +883,17 @@ pub struct UiSettings {
     /// while one selected task has an active run in this viewport.
     pub keep_awake_task_ids: std::collections::HashSet<String>,
     pub right_pane_width: f32,
-    /// Legacy: panel *open* flags are session-scoped in-memory state now
-    /// (`shell::SessionPanels`, luna `sessionPanels` parity). Kept for file
-    /// compatibility; no longer read or written by the shell.
+    /// Legacy: one global open flag, from before panels were per chat. Kept
+    /// for file compatibility; no longer read or written by the shell (see
+    /// [`Self::right_panes`]).
     pub right_pane_open: bool,
+    /// Recently shown chats' right sidebars, most recently changed first and
+    /// capped at [`RIGHT_PANES_CAP`]: a restart reopens each chat's pane,
+    /// place and workspace files. Chat ids are unique across profiles, so
+    /// entries for chats that no longer exist age out rather than being
+    /// pruned against one profile's list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub right_panes: Vec<SavedRightPane>,
     pub terminal_height: f32,
     /// Legacy — see [`Self::right_pane_open`].
     pub terminal_open: bool,
@@ -969,6 +1018,7 @@ impl Default for UiSettings {
             keep_awake_task_ids: std::collections::HashSet::new(),
             right_pane_width: RIGHT_PANE_DEFAULT,
             right_pane_open: false,
+            right_panes: Vec::new(),
             terminal_height: TERMINAL_DEFAULT_HEIGHT,
             terminal_open: false,
             keymap: KeymapConfig::default(),
@@ -1893,6 +1943,10 @@ impl UiSettings {
         // The right pane has no persisted upper bound: its live drag clamps
         // against the current window, which is unavailable while loading.
         self.right_pane_width = min_or(self.right_pane_width, RIGHT_PANE_MIN, RIGHT_PANE_DEFAULT);
+        let mut seen = std::collections::HashSet::new();
+        self.right_panes
+            .retain(|pane| !pane.chat_id.is_empty() && seen.insert(pane.chat_id.clone()));
+        self.right_panes.truncate(RIGHT_PANES_CAP);
         self.terminal_height = clamp_or(
             self.terminal_height,
             TERMINAL_MIN_HEIGHT,
@@ -2616,6 +2670,24 @@ mod tests {
             keep_awake_task_ids: std::collections::HashSet::from(["b".to_string()]),
             right_pane_width: 700.0,
             right_pane_open: true,
+            right_panes: vec![SavedRightPane {
+                chat_id: "b".into(),
+                open: true,
+                place: Some("files".into()),
+                files: vec![
+                    SavedFileTab {
+                        browser: true,
+                        path: Some("src/ThemeSwitch.tsx".into()),
+                        active: true,
+                        ..SavedFileTab::default()
+                    },
+                    SavedFileTab {
+                        path: Some("README.md".into()),
+                        owner: Some("a".into()),
+                        ..SavedFileTab::default()
+                    },
+                ],
+            }],
             terminal_height: 320.0,
             terminal_open: true,
             keymap: KeymapConfig {
