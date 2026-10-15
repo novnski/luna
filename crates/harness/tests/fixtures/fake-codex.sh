@@ -802,10 +802,13 @@ case "$turnline" in
   ;;
 
 *scenario:thread-request*)
-  # Keep the exact thread/start request for the test to inspect.
+  # Keep the exact thread and first turn requests for the test to inspect.
   printf '%s\n' "$thread_line" > "$CODEX_HOME/thread-request"
+  printf '%s\n' "$turnline" > "$CODEX_HOME/turn-request"
+  thread=th-1
+  has "$thread_line" '"method":"thread/resume"' && thread=th-resumed
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
-  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"t-1\",\"status\":\"completed\"}}}"
   ;;
 
 *scenario:reasoning*)

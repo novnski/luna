@@ -349,20 +349,28 @@ async fn declared_luna_tools_without_engine_handler_fail_before_provider_start()
 
 /// novnski/luna#21: on macOS every sandboxed Codex command runs under Seatbelt,
 /// where Chrome aborts at launch and macOS shows the user a crash dialog. The
-/// thread's instructions must send browser launches through Codex's escalation
-/// there, and only there: no full-access thread or non-macOS host gets them.
+/// run must send browser launches through Codex's escalation there, and only
+/// there: no full-access run or non-macOS host gets the guidance. A fresh
+/// thread carries it in its instructions. A resumed thread keeps the
+/// instructions it started with (installed Codex 0.154.0 and 0.162.1 drop a
+/// thread/resume override), so it must arrive as turn context instead.
 #[tokio::test]
-async fn sandboxed_macos_threads_send_browser_launches_through_escalation() {
-    for (sandbox, guided) in [
-        (SandboxLevel::WorkspaceWrite, cfg!(target_os = "macos")),
-        (SandboxLevel::ReadOnly, cfg!(target_os = "macos")),
-        (SandboxLevel::DangerFullAccess, false),
+async fn sandboxed_macos_runs_send_browser_launches_through_escalation() {
+    let macos = cfg!(target_os = "macos");
+    for (sandbox, resume, guided) in [
+        (SandboxLevel::WorkspaceWrite, false, macos),
+        (SandboxLevel::ReadOnly, false, macos),
+        (SandboxLevel::DangerFullAccess, false, false),
+        (SandboxLevel::WorkspaceWrite, true, macos),
+        (SandboxLevel::DangerFullAccess, true, false),
     ] {
+        let case = format!("{sandbox:?}, resumed: {resume}");
         let home = tempfile::tempdir().unwrap();
         let mut contract = synthetic_runtime_contract();
         contract.tools.clear();
         let mut req = request("scenario:thread-request");
         req.sandbox = sandbox;
+        req.resume = resume.then(|| "guidance-resume".into());
         req.model_options.insert(
             luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
             home.path().to_str().unwrap().into(),
@@ -381,25 +389,39 @@ async fn sandboxed_macos_threads_send_browser_launches_through_escalation() {
                     ..
                 }
             )),
-            "{sandbox:?}: {events:?}"
+            "{case}: {events:?}"
         );
-        let sent: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(home.path().join("thread-request")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(sent["method"], "thread/start", "{sent}");
-        let instructions = sent["params"]["developerInstructions"]
+        let sent = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(home.path().join(name)).unwrap()).unwrap()
+        };
+        let (thread, turn) = (sent("thread-request"), sent("turn-request"));
+        let instructions = thread["params"]["developerInstructions"]
             .as_str()
-            .unwrap_or_else(|| panic!("{sandbox:?}: no developer instructions in {sent}"));
+            .unwrap_or_else(|| panic!("{case}: no developer instructions in {thread}"));
         assert!(
             instructions.contains("Run inside LUNA."),
-            "{sandbox:?}: {instructions}"
+            "{case}: {thread}"
         );
-        assert_eq!(
-            instructions.contains("sandbox_permissions: require_escalated"),
-            guided,
-            "{sandbox:?}: {instructions}"
-        );
+        let guidance = "sandbox_permissions: require_escalated";
+        let context = &turn["params"]["additionalContext"]["luna.macos-sandbox-browsers"];
+        if resume {
+            assert_eq!(thread["method"], "thread/resume", "{case}: {thread}");
+            assert_eq!(
+                context["value"]
+                    .as_str()
+                    .is_some_and(|value| value.contains(guidance)),
+                guided,
+                "{case}: {turn}"
+            );
+            if guided {
+                assert_eq!(context["kind"], "application", "{case}: {turn}");
+            }
+        } else {
+            assert_eq!(thread["method"], "thread/start", "{case}: {thread}");
+            assert_eq!(instructions.contains(guidance), guided, "{case}: {thread}");
+            // Already in the thread's instructions: no second copy.
+            assert!(context.is_null(), "{case}: {turn}");
+        }
     }
 }
 
