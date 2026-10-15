@@ -57,6 +57,28 @@ impl Harness for Peer {
             ])
             .boxed());
         }
+        if r.prompt.contains("COMPLETE_SIDE_CHAT_TURN") {
+            return Ok(futures::stream::iter(vec![
+                Ok(AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: "fixture".into(),
+                    tools: vec![],
+                    cwd: r.cwd,
+                    session_id: format!("native-{}", uuid::Uuid::new_v4()),
+                    assistant_message_id: uuid::Uuid::new_v4().to_string(),
+                }),
+                Ok(AgentEvent::TextDelta {
+                    text: "Side chat answer".into(),
+                }),
+                Ok(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                }),
+            ])
+            .boxed());
+        }
         Ok(futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -114,9 +136,17 @@ async fn queue(c: &RpcClient, t: &str, id: &str) {
     )
     .await;
 }
+/// The turn is active and its provider session accepted. SessionStarted
+/// publishes the applied permission policy into the chat's config before it
+/// records the binding; creating a child before then races that write and is
+/// refused as a parent configuration change.
 async fn active(e: &EngineCore, t: &str) {
     for _ in 0..300 {
-        if e.sessions.active_turn_id(t).is_some() {
+        if e.sessions.active_turn_id(t).is_some()
+            && e.task_identity
+                .view(t)
+                .is_some_and(|view| view.current_binding.is_some())
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await
@@ -217,6 +247,104 @@ async fn failed_child_work_remains_failed_and_needs_attention() {
     assert!(e.sessions.active_turn_id(&parent).is_some());
     artifact("failed-child-work", &view);
     e.sessions.interrupt(&parent).await.unwrap();
+    e.shutdown().await;
+}
+
+/// A side chat the user opens without a brief (the desktop's Side chat →
+/// Fresh) never queues a delegated first message. Its parent's row follows
+/// that chat's own latest turn instead of reading Starting forever (#19).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn user_side_chat_without_a_brief_shows_its_own_latest_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = engine(tmp.path());
+    let c = luna_rpc::memory_client(e.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    e.workspace
+        .create_space(
+            "work-space",
+            &e.device_id,
+            tmp.path().to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(command(&c, &parent, json!({"kind":"createChat","spaceId":"work-space","cwd":tmp.path(),"config":{"harness":"mock","model":"fixture","sandbox":"workspace-write","permissionMode":"ask"}})).await["status"], "applied");
+    let side = call(
+        &c,
+        "CreateChildTab",
+        json!({"parentTaskId":parent,"idempotencyKey":"user-side-chat"}),
+    )
+    .await["taskId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let row = |view: &Value| {
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["kind"] == "childChat" && item["taskId"] == side)
+            .cloned()
+            .unwrap_or_else(|| panic!("no side chat row: {view}"))
+    };
+
+    let empty = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    let item = row(&empty);
+    assert_eq!(item["state"], "waiting", "{empty}");
+    assert_eq!(item["owned"], false);
+    assert_eq!(item["blocksCompletion"], false);
+    assert_eq!(item["needsAttention"], false);
+    assert_eq!(item["canStop"], false);
+
+    call(
+        &c,
+        "QueueMessage",
+        json!({"chatId":side,"messageId":"side-question","text":"COMPLETE_SIDE_CHAT_TURN","holdForTurnEnd":true}),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let entries = e
+                .doc_host
+                .open(&side)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap();
+            if e.sessions.active_turn_id(&side).is_none()
+                && entries.iter().any(|entry| {
+                    entry.role == luna_doc::MessageRole::Assistant
+                        && entry.status == Some(luna_doc::MessageStatus::Complete)
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("side chat answer completes");
+    let completed = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    let item = row(&completed);
+    assert_eq!(item["state"], "completed", "{completed}");
+    assert_eq!(item["needsAttention"], false);
+    assert_eq!(completed["blockingCount"], 0);
+    assert_eq!(completed["unknownCount"], 0);
+
+    // A later turn in the same side chat is followed, not its first answer.
+    queue(&c, &side, "side-follow-up").await;
+    active(&e, &side).await;
+    let running = call(&c, "GetTaskWork", json!({"taskId":parent})).await;
+    let item = row(&running);
+    assert_eq!(item["state"], "running", "{running}");
+    assert_eq!(item["owned"], false);
+    assert_eq!(item["canStop"], false);
+    assert_eq!(running["blockingCount"], 0);
+    artifact(
+        "user-side-chat",
+        &json!({"empty":empty,"completed":completed,"running":running}),
+    );
+    e.sessions.interrupt(&side).await.unwrap();
     e.shutdown().await;
 }
 
