@@ -30,8 +30,13 @@ width), the navigation section, a hairline, then the Threads section.
 ## Project pill and picker (both views)
 
 - The project trigger is a bordered pill: the project's tile (its monogram on
-  its tint), its name, and a live summary (`9 active · 3 need you`). All
-  projects shows a neutral folder tile and the totals of every project.
+  its tint), its name, and a live summary (`9 open tasks · 3 need you ·
+  1 running`). "Open" counts the tasks in the active list whether or not a
+  turn is running; what needs the user and what is running follow, each only
+  when there is some, so a project whose turns have all finished reads
+  `3 open tasks` (novnski/luna#24: "3 active" read as three agents still
+  working). All projects shows a neutral folder tile and the totals of every
+  project.
 - Project tints come from six well-separated hues, taken in the order the
   projects were added, so the first six never share one and a new project
   never recolours the others (`shell/sidebar_projects.rs`).
@@ -62,7 +67,8 @@ width), the navigation section, a hairline, then the Threads section.
   alphabetical order so a busy project never pushes the others around.
 - A project header shows the chevron, tile, name, needs-you and working
   counts for that group (pins excluded, rows behind Show more included), the
-  active count while folded, and a New task button under the pointer.
+  open count while folded (`8 open`), and a New task button under the
+  pointer. Its accessible name spells out the same counts as the pill.
 - Rows are compact (one line, 32 pt at the default Interface size): the
   title on the project tile's left edge, then at the right the status (the
   needs-you glyph and word without a pill's cloth), the host machine when it
