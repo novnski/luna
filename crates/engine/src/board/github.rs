@@ -590,7 +590,9 @@ fn take_quote(text: &str) -> Option<(&str, &str)> {
     let close = format!("\n{fence}");
     let end = rest.find(&close)?;
     let (quote, after) = (&rest[..end], &rest[end + close.len()..]);
-    (fence_for(quote) == fence && (after.is_empty() || after.starts_with('\n')))
+    // At least the fence [`quoted`] would write: an edit that removed a
+    // backtick run inside keeps the longer fence, which is still safe.
+    (fence_for(quote).len() <= fence.len() && (after.is_empty() || after.starts_with('\n')))
         .then_some((quote, after))
 }
 

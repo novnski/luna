@@ -1348,12 +1348,22 @@ async fn snapshot_start_and_source_changes() {
         &forged_snapshot,
     )
     .expect("the forged import reads back");
+    // Removing the quoted text's backtick runs keeps the longer fence.
+    let unticked = forged_body.replace('`', "");
+    let retyped = imported_brief(
+        &forged["mutation"]["item"]["description"]
+            .as_str()
+            .unwrap()
+            .replacen(forged_body, &unticked, 1),
+        &forged_snapshot,
+    );
     ev.step(
         "quoted text or a prompt imitating the source section is not taken for structure",
-        json!({"prompt": forged_prompt, "body": forged_body, "comments": 0, "notes": 0, "edited": false, "prompts": sent}),
+        json!({"prompt": forged_prompt, "body": forged_body, "comments": 0, "notes": 0, "edited": false, "prompts": sent, "retyped": [unticked, true]}),
         json!({
             "prompt": forged_brief.prompt, "body": forged_brief.body, "comments": forged_brief.comments.len(),
             "notes": forged_brief.notes.len(), "edited": forged_brief.edited, "prompts": w.prompt_count(),
+            "retyped": retyped.map(|brief| json!([brief.body, brief.edited])),
         }),
         None,
     );

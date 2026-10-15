@@ -143,7 +143,17 @@ pub fn link_html_images(source: &str) -> std::borrow::Cow<'_, str> {
         let mut at = 0;
         while let Some(found) = html[at..].to_ascii_lowercase().find("<img") {
             let start = at + found;
-            let Some(length) = html[start..].find('>') else {
+            // The tag ends at the first `>` outside a quoted attribute value.
+            let mut quote = None;
+            let Some(length) = html[start..].char_indices().find_map(|(index, c)| {
+                match (quote, c) {
+                    (Some(open), c) if c == open => quote = None,
+                    (None, '"' | '\'') => quote = Some(c),
+                    (None, '>') => return Some(index),
+                    _ => {}
+                }
+                None
+            }) else {
                 break;
             };
             let end = start + length + 1;
@@ -886,8 +896,8 @@ mod tests {
     /// Imported GitHub issue text: an `<img>` tag would show as raw markup.
     /// Regressions: a tag in code is rewritten (the code changes), a
     /// non-http(s) source becomes a link, `]` in alt text breaks the link,
-    /// a second tag or one inside a sentence is missed, or text without a
-    /// tag is copied.
+    /// a quoted `>` ends the tag early, a second tag or one inside a
+    /// sentence is missed, or text without a tag is copied.
     #[test]
     fn html_images_become_links_outside_code_only() {
         let cases = [
@@ -898,6 +908,10 @@ mod tests {
             (
                 "See <IMG SRC='https://x.dev/a.png' ALT='before [1]'> and <img src=https://x.dev/b.png>.",
                 "See [Image: before 1](<https://x.dev/a.png>) and [Image](<https://x.dev/b.png>).",
+            ),
+            (
+                "<img alt=\"before > after\" src=\"https://x.dev/c.png\">",
+                "[Image: before > after](<https://x.dev/c.png>)",
             ),
             (
                 "`<img src=\"https://x.dev/a.png\">`\n\n```html\n<img src=\"https://x.dev/b.png\">\n```\n",
