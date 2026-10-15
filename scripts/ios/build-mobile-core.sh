@@ -51,6 +51,18 @@ case "$BUILD_CONFIGURATION" in
   *) echo "error: no core profile for configuration $BUILD_CONFIGURATION" >&2; exit 64 ;;
 esac
 
+# CI compiles the Swift app/tests without paying for distribution optimization.
+# This opt-in must never change an archive/release build's profile.
+HOST_PROFILE=debug
+if [[ -n "${LUNA_IOS_CARGO_PROFILE:-}" ]]; then
+  if [[ "$BUILD_CONFIGURATION" != Debug || "$LUNA_IOS_CARGO_PROFILE" != ci ]]; then
+    echo "error: LUNA_IOS_CARGO_PROFILE=ci is only supported for Debug verification" >&2
+    exit 64
+  fi
+  PROFILE=ci
+  HOST_PROFILE=ci
+fi
+
 if [[ -n "${ARCHS:-}" ]]; then
   BUILD_ARCHS="$ARCHS"
 elif [[ -n "${LUNA_IOS_ARCHS:-}" ]]; then
@@ -92,7 +104,11 @@ LIBS=()
 COUNT=0
 for arch in $BUILD_ARCHS; do
   target="$(rust_target "$arch")"
-  scripts/cargo.sh build --locked -p luna-mobile --lib --target "$target" ${PROFILE_FLAG:+"$PROFILE_FLAG"}
+  if [[ "$PROFILE" == ci ]]; then
+    scripts/cargo.sh build --locked --profile ci -p luna-mobile --lib --target "$target"
+  else
+    scripts/cargo.sh build --locked -p luna-mobile --lib --target "$target" ${PROFILE_FLAG:+"$PROFILE_FLAG"}
+  fi
   TARGETS[COUNT]="$target"
   LIBS[COUNT]="$ROOT/target/$target/$PROFILE/libluna_mobile.a"
   COUNT=$((COUNT + 1))
@@ -104,8 +120,13 @@ fi
 # The bindgen tool is a host binary whose dependencies compile C (SQLite).
 # cc-rs adds no sysroot for macOS, and Xcode puts its bare toolchain clang
 # ahead of the /usr/bin shims, so name the macOS SDK for this build only.
-SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
-  scripts/cargo.sh build --locked -p luna-mobile --bin uniffi-bindgen --features bindgen
+if [[ "$HOST_PROFILE" == ci ]]; then
+  SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+    scripts/cargo.sh build --locked --profile ci -p luna-mobile --bin uniffi-bindgen --features bindgen
+else
+  SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+    scripts/cargo.sh build --locked -p luna-mobile --bin uniffi-bindgen --features bindgen
+fi
 
 STAGED="$OUT/libluna_mobile.a.partial"
 if (( COUNT == 1 )); then
@@ -119,7 +140,7 @@ GEN="$OUT/gen"
 rm -rf "$GEN"
 # Every architecture carries the same metadata; bindings come from the first
 # library actually linked, never from another build.
-"$ROOT/target/debug/uniffi-bindgen" generate --library "${LIBS[0]}" --language swift \
+"$ROOT/target/$HOST_PROFILE/uniffi-bindgen" generate --library "${LIBS[0]}" --language swift \
   --out-dir "$GEN" >/dev/null
 # UniFFI templates contain whitespace-only lines; keep committed output clean
 # and stable across repeated Xcode builds without changing generated APIs.

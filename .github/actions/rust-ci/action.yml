@@ -1,0 +1,23 @@
+name: Shared Rust CI cache
+description: Use consistent Rust and share compatible dependency builds across jobs
+
+inputs:
+  cache-group:
+    description: Compatible workload/profile group, never a job name or commit SHA
+    default: core
+  save-cache:
+    description: Let the largest main-branch job save its dependency graph
+    default: 'true'
+  workspaces:
+    description: Cargo workspace roots and target directories
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache-group }}
+        save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}
+        workspaces: ${{ inputs.workspaces }}

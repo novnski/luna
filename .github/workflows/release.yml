@@ -78,9 +78,9 @@ jobs:
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: release
       - name: package
         run: scripts/package-linux.sh
       - uses: actions/upload-artifact@v4
@@ -109,9 +109,9 @@ jobs:
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: release
       - name: import Developer ID certificate
         if: env.MACOS_CERT_P12 != ''
         run: |

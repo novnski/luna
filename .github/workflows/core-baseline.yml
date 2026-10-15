@@ -2,24 +2,13 @@ name: Core baseline probes
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'tools/core-baseline/**'
-      - 'scripts/qa-core-*.mjs'
-      - 'crates/ui/examples/core-contribution-probe.rs'
-      - 'crates/ui/examples/macos-resource-profile.rs'
-      - '.github/workflows/core-baseline.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'tools/core-baseline/**'
-      - 'scripts/qa-core-*.mjs'
-      - 'crates/ui/examples/core-contribution-probe.rs'
-      - 'crates/ui/examples/macos-resource-profile.rs'
-      - '.github/workflows/core-baseline.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: core-baseline-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   worker-and-wasm:
@@ -30,8 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
         with:
+          cache-group: baseline
           workspaces: tools/core-baseline
       - name: Compile and exercise real worker and Wasm boundaries
         run: |
@@ -53,7 +43,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       - name: Build native probes and current app
         run: |
           cargo build --locked -p luna

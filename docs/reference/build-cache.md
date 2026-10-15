@@ -29,10 +29,67 @@ uses plain Cargo. The wrapper does not retry failed builds. Non-compilation
 commands, including `fmt`, `metadata` and `clean`, go directly to Cargo;
 `clean` still requires the scoped procedure in `AGENTS.md`.
 
-The integration is local and project-scoped. It installs no Cargo shim and
-does not configure a remote cache. Existing CI jobs retain their current
-`Swatinem/rust-cache` configuration. Do not run `mbx setup` or add global mise
-wrapping as a prerequisite for this project.
+The mbx integration is local and project-scoped. It installs no Cargo shim and
+does not configure a remote cache on this Mac. CI uses the separate compiler
+cache described below. Do not run `mbx setup` or add global mise wrapping as a
+prerequisite for this project.
+
+## GitHub Actions
+
+[CI](../../.github/workflows/ci.yml) is the automatic pull-request and main-push
+workflow. It selects affected suites from changed paths, runs them in parallel,
+and exposes one `Required checks` result. Documentation-only changes skip the
+Rust graph. Shared manifests, toolchains and CI setup changes exercise all Rust
+suites. A failed, cancelled or timed-out selected suite fails the final result.
+
+The target is **ten minutes**, with a **fifteen-minute ceiling**. Parallel jobs
+have a thirteen-minute execution limit, leaving room for routing and cleanup.
+The final gate independently enforces **900 seconds for the whole run**, using GitHub's run timestamp and
+including queue time (reruns use their attempt start). A timeout, failed suite,
+or elapsed time over the budget fails the gate; none count as successful
+verification. The measured time is retained in the job summary.
+
+The `ci` Cargo profile keeps development assertions and overflow checks, with
+no optimization, debug information or incremental output. It leaves local dev
+and release profiles unchanged. The full headless UI library suite compiles once
+in its original Linux test environment, keeping the existing serial runner for
+GUI/IPC isolation. Separate macOS/Linux compile checks validate the application platform
+contracts without serializing a second ordinary UI library build ahead of the
+UI test executable. Changed fixture examples run with their required features
+in the macOS compile job; unchanged screenshots and fixture executables stay
+out of the merge path. Core contracts, provider fixtures,
+engine lifecycle E2Es, preview networking and edge runtime checks have separate
+owners. iOS changes compile the Swift app and tests against freshly generated
+Rust bindings without booting a simulator; the opt-in `LUNA_IOS_CARGO_PROFILE=ci`
+is rejected for Release builds.
+
+The extended engine matrix, native browser screenshots, simulator runtime
+suite and performance probes remain available through the manual **Full
+platform verification**, **Full preview networking**, and **Core baseline
+probes** workflows. They no longer run on every pull request or main push.
+Release and TestFlight workflows retain their distribution profiles.
+
+Rust jobs use [the shared setup action](../../.github/actions/rust-ci/action.yml).
+It updates stable Rust consistently, then restores a `Swatinem/rust-cache`
+dependency archive. Compatible core jobs share `core-ci`; desktop and iOS use
+`desktop-ci` and `ios-ci`. The action also keys by OS, architecture, compiler,
+environment and dependency manifests. Do not add a commit SHA or individual
+job name to a shared group. The engine job saves the largest core graph;
+smaller core jobs only restore it so they cannot win the immutable archive save
+with a partial dependency set. Only successful main-branch jobs save caches:
+PRs read main's cache without duplicate archives or uploads extending the merge
+path. Failed/timed-out jobs do not spend cleanup time exporting build output.
+Manual/distribution profiles use separate groups.
+
+GitHub caches are reusable, not permanent: branch access restrictions, the
+repository storage limit and seven-day idle eviction still apply. Do not raise
+paid storage limits as part of ordinary CI work. See [GitHub's cache rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+
+For repeatable verification, run every fast suite through `workflow_dispatch`
+(or a CI/configuration PR), retain run/job JSON and logs, and measure both cold
+and warm runs. Also verify that a documentation-only change skips the matrix
+and a failed selected suite cannot produce a green final gate. This is CI
+infrastructure only and requires no product version bump or local app refresh.
 
 ## Policy and disk usage
 

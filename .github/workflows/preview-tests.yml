@@ -1,10 +1,8 @@
-name: Preview networking
+name: Full preview networking
+
 on:
-  pull_request:
-    paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml']
-  push:
-    branches: [main]
-    paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml']
+  workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:
@@ -19,8 +17,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
       - run: cargo test --locked -p luna-preview
   coordinator:
     runs-on: ubuntu-latest

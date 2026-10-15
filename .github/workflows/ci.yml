@@ -1,0 +1,292 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      all:
+        description: Run every fast suite, including unchanged areas
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      suites: ${{ steps.plan.outputs.suites }}
+      engine-files: ${{ steps.paths.outputs.engine_files }}
+      ui-files: ${{ steps.paths.outputs.ui_files }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate every workflow without running its platform matrix
+        run: |
+          curl --fail --location --silent --show-error --max-time 20 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=
+      - uses: dorny/paths-filter@v3
+        id: paths
+        with:
+          list-files: json
+          filters: |
+            contracts:
+              - &shared '{Cargo.toml,Cargo.lock,rust-toolchain.toml}'
+              - &ci '.github/{actions/rust-ci/**,workflows/ci.yml}'
+              - 'crates/{proto,doc,sync,rpc,sdk,mobile,remote}/**'
+              - 'sdk/**'
+            providers:
+              - *shared
+              - *ci
+              - 'crates/{harness,proto}/**'
+            engine:
+              - *shared
+              - *ci
+              - 'crates/{engine,harness,proto,doc,sync,rpc,sdk,mobile,remote,preview,update}/**'
+              - 'apps/{luna-headless,luna-relay}/**'
+              - 'sdk/**'
+            ui: &desktop
+              - *shared
+              - *ci
+              - 'crates/**'
+              - 'apps/luna/**'
+              - 'vendor/**'
+              - 'sdk/**'
+            macos: *desktop
+            linux: *desktop
+            preview:
+              - *shared
+              - *ci
+              - 'crates/{preview,proto}/**'
+            extensions:
+              - *shared
+              - *ci
+              - 'crates/extension-host/**'
+              - 'crates/engine/src/extensions{.rs,/**}'
+              - 'crates/engine/src/rpc/extension*.rs'
+              - 'crates/engine/tests/{extension*,opencode_package*,board_tools_opencode_package*}'
+              - 'crates/{proto,rpc}/**'
+            edge:
+              - *ci
+              - 'edge/**'
+              - 'crates/proto/**'
+            ios:
+              - *shared
+              - *ci
+              - 'apps/ios/**'
+              - 'scripts/ios/**'
+              - 'scripts/{cargo.sh,build-budget.py}'
+              - 'crates/{mobile,proto,rpc,sdk,doc,sync}/**'
+      - name: Select affected suites
+        id: plan
+        env:
+          CHANGED: ${{ steps.paths.outputs.changes }}
+          RUN_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.all }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          suites = (['contracts', 'providers', 'engine', 'ui', 'macos', 'linux', 'preview', 'extensions', 'edge', 'ios']
+                    if os.environ['RUN_ALL'] == 'true' else json.loads(os.environ['CHANGED']))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('suites=' + json.dumps(suites) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Selected suites: ' + (', '.join(suites) or 'none (no affected code)') + '\n')
+          PYTHON
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.suites != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.changes.outputs.suites) }}
+    name: ${{ matrix.suite }}
+    runs-on: ${{ contains(fromJSON('["macos","ios"]'), matrix.suite) && 'macos-latest' || 'ubuntu-24.04' }}
+    # Leave routing/cleanup room inside the whole-run 15-minute ceiling.
+    # The target remains ten minutes; the final gate checks the actual elapsed time.
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-ci
+        if: matrix.suite != 'edge'
+        with:
+          cache-group: ${{ contains(fromJSON('["ui","macos","linux"]'), matrix.suite) && 'desktop-ci' || matrix.suite == 'ios' && 'ios-ci' || matrix.suite == 'extensions' && 'extensions-ci' || 'core-ci' }}
+          # The engine owns the largest core graph. Smaller jobs restore it,
+          # rather than winning the immutable save with only their subset.
+          save-cache: ${{ contains(fromJSON('["engine","ui","macos","ios","extensions"]'), matrix.suite) }}
+      - name: Linux platform headers
+        if: matrix.suite == 'linux' || matrix.suite == 'ui'
+        run: |
+          sudo apt-get update -qq -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
+          sudo apt-get install -y -qq \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libxcb1-dev libx11-xcb-dev \
+            libfontconfig1-dev libfreetype-dev libasound2-dev \
+            libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
+      - name: Public data, sync and generated SDK contracts
+        if: matrix.suite == 'contracts'
+        run: |
+          cargo test --profile ci --locked -p luna-proto -p luna-doc -p luna-sync \
+            -p luna-rpc -p luna-sdk --all-features
+          cargo test --profile ci --locked -p luna-mobile -p luna-remote --lib
+      - name: Real provider protocol fixtures
+        if: matrix.suite == 'providers'
+        run: cargo test --profile ci --locked -p luna-harness --tests
+      - name: Engine lifecycle E2E and host executables
+        if: matrix.suite == 'engine'
+        env:
+          CHANGED_ENGINE_FILES: ${{ needs.changes.outputs.engine-files }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import PurePosixPath
+          tests = {'message_queue', 'session_publication', 'restart_resume', 'task_identity',
+                   'workspace_sync', 'host_capacity', 'diagnostics_storage'}
+          for changed in json.loads(os.environ['CHANGED_ENGINE_FILES'] or '[]'):
+              path = PurePosixPath(changed)
+              if path.parent == PurePosixPath('crates/engine/tests') and path.suffix == '.rs':
+                  if path.stem.startswith(('extension_', 'opencode_package_', 'board_tools_opencode_package_')):
+                      continue  # The extensions lane owns these and builds their portable host.
+                  # Deleted targets cannot run; renamed/new regressions still must.
+                  if os.path.isfile(changed):
+                      tests.add(path.stem)
+          command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna-engine']
+          for test in sorted(tests):
+              command += ['--test', test]
+          subprocess.run(command, check=True)
+          PYTHON
+          cargo build --profile ci --locked -p luna-headless -p luna-relay
+      - name: Installed extension and portable host E2E
+        if: matrix.suite == 'extensions'
+        env:
+          CHANGED_ENGINE_FILES: ${{ needs.changes.outputs.engine-files }}
+        run: |
+          cargo build --profile ci --locked -p luna-extension-host
+          export LUNA_EXTENSION_HOST="$PWD/target/ci/luna-extension-host"
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import PurePosixPath
+          tests = {'extension_portable', 'extension_providers', 'extension_ui',
+                   'opencode_package_parity', 'opencode_package_lifecycle', 'board_tools_opencode_package_e2e'}
+          for changed in json.loads(os.environ['CHANGED_ENGINE_FILES'] or '[]'):
+              path = PurePosixPath(changed)
+              if (path.parent == PurePosixPath('crates/engine/tests') and path.suffix == '.rs'
+                      and path.stem.startswith(('extension_', 'opencode_package_', 'board_tools_opencode_package_'))
+                      and os.path.isfile(changed)):
+                  tests.add(path.stem)
+          command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna-engine']
+          for test in sorted(tests):
+              command += ['--test', test]
+          subprocess.run(command, check=True)
+          PYTHON
+      - name: Complete UI library regression suite
+        if: matrix.suite == 'ui'
+        # Do not also select the app binary: that compiles this large crate a
+        # second time as an ordinary library before the test binary can finish.
+        run: cargo test --profile ci --locked -p luna-ui --features appshots-fixture --lib -- --test-threads=1
+      - name: macOS application and changed fixture compile contracts
+        if: matrix.suite == 'macos'
+        env:
+          CHANGED_UI_FILES: ${{ needs.changes.outputs.ui-files }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          changed = set(json.loads(os.environ['CHANGED_UI_FILES'] or '[]'))
+          metadata = json.loads(subprocess.check_output(
+              ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], text=True))
+          package = next(package for package in metadata['packages'] if package['name'] == 'luna-ui')
+          features = {'luna-ui/appshots-fixture'}
+          examples = []
+          for target in package['targets']:
+              relative = os.path.relpath(target['src_path'], os.getcwd())
+              if 'example' in target['kind'] and relative in changed:
+                  examples += ['--example', target['name']]
+                  features.update('luna-ui/' + feature for feature in target.get('required-features', []))
+          if examples:
+              command = ['cargo', 'test', '--profile', 'ci', '--locked', '-p', 'luna', '-p', 'luna-ui',
+                         '--features', ','.join(sorted(features)), '--bin', 'luna']
+              subprocess.run(command + examples + ['--', '--test-threads=1'], check=True)
+          else:
+              subprocess.run(['cargo', 'check', '--profile', 'ci', '--locked', '-p', 'luna'], check=True)
+          PYTHON
+      - name: Linux application compile contract
+        if: matrix.suite == 'linux'
+        run: cargo check --profile ci --locked -p luna
+      - name: Preview networking E2E
+        if: matrix.suite == 'preview'
+        run: cargo test --profile ci --locked -p luna-preview
+      - uses: actions/setup-node@v4
+        if: matrix.suite == 'edge'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: edge/package-lock.json
+      - name: Edge typecheck and runtime contracts
+        if: matrix.suite == 'edge'
+        run: |
+          npm ci --prefix edge
+          npm run typecheck --prefix edge
+          npm test --prefix edge
+      - name: iOS compile contract
+        if: matrix.suite == 'ios'
+        env:
+          LUNA_IOS_CARGO_PROFILE: ci
+        run: |
+          case "$(uname -m)" in
+            arm64) rustup target add aarch64-apple-ios-sim ;;
+            x86_64) rustup target add x86_64-apple-ios ;;
+          esac
+          xcodebuild -project apps/ios/Luna.xcodeproj -scheme Luna \
+            -destination 'generic/platform=iOS Simulator' \
+            -only-testing:LunaTests \
+            ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build-for-testing
+          git diff --exit-code -- apps/ios/Luna/Generated/luna_core.swift
+
+  result:
+    name: Required checks
+    if: always()
+    needs: [changes, check]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require every selected suite to pass
+        env:
+          PLAN_RESULT: ${{ needs.changes.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          SUITES: ${{ needs.changes.outputs.suites }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess, sys
+          from datetime import datetime, timezone
+          if os.environ['PLAN_RESULT'] != 'success':
+              sys.exit('Suite selection failed; required checks cannot pass.')
+          suites = json.loads(os.environ['SUITES'])
+          expected = 'success' if suites else 'skipped'
+          run = json.loads(subprocess.check_output(['gh', 'api',
+              f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'], text=True))
+          # Fetch here: rerunning only a failed job can reuse old plan outputs.
+          started = run['created_at'] if run['run_attempt'] == 1 else run['run_started_at']
+          elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds()
+          passed = os.environ['CHECK_RESULT'] == expected and 0 <= elapsed <= 900
+          result = {'suites': suites, 'checks': os.environ['CHECK_RESULT'],
+                    'attempt': run['run_attempt'], 'elapsed_seconds': round(elapsed, 1),
+                    'target_seconds': 600, 'budget_seconds': 900, 'passed': passed}
+          print(json.dumps(result, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'CI elapsed: {elapsed:.1f}s; target 600s, ceiling 900s. Required checks: {"passed" if passed else "failed"}.\n')
+          sys.exit(0 if passed else 1)
+          PYTHON

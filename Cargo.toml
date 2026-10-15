@@ -161,3 +161,15 @@ opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Merge-request checks optimize for compiler latency, not distributable binaries.
+# Retain dev's assertions/overflow checks. Release and local dev are unchanged.
+[profile.ci]
+inherits = "dev"
+debug = 0
+opt-level = 0
+incremental = false
+codegen-units = 256
+
+[profile.ci.package."*"]
+opt-level = 0

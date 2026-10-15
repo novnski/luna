@@ -1,31 +1,6 @@
-name: UI tests
+name: Full platform verification
 
 on:
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - 'sdk/**'
-      - 'scripts/test-linux-browser.sh'
-      - 'scripts/run-macos-browser-fixture.sh'
-      - 'dist/macos/Info.plist'
-      - 'apps/ios/**'
-      - '.github/workflows/ui-tests.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - 'sdk/**'
-      - 'scripts/test-linux-browser.sh'
-      - 'scripts/run-macos-browser-fixture.sh'
-      - 'dist/macos/Info.plist'
-      - 'apps/ios/**'
-      - '.github/workflows/ui-tests.yml'
   workflow_dispatch:
 
 permissions:
@@ -41,9 +16,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       # The fake Claude/Codex/OpenCode CLI suites own the provider protocol
       # contracts; the 2026-10-09 test audit retired their inline duplicates.
       - name: Provider protocol and permission regressions
@@ -125,9 +100,9 @@ jobs:
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: UI and headless layout regressions
         run: cargo test --release --locked -p luna-ui --lib -- --test-threads=1
       # Fixture examples default to `test = false` and their feature is off in
@@ -145,21 +120,16 @@ jobs:
 
   macos-frame-recovery:
     runs-on: macos-latest
-    # The browser step passing again means the preview and frame-recovery
-    # steps run too; the steps before them alone took 44 minutes.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
         with:
-          cache-on-failure: true
-          workspaces: |
-            .
-            vendor/zui
-      - name: Check macOS application
-        run: cargo check --release --locked -p luna
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
+      # A real app build checks linking too and seeds reusable library objects.
+      # `cargo check` emits metadata only, which sccache cannot reuse here.
+      - name: Build macOS application
+        run: cargo build --release --locked -p luna
       - name: Native diff font geometry regression
         run: cargo test --release --locked -p luna-ui --lib native_diff_font_geometry -- --test-threads=1
       - name: Native notification click regressions
@@ -209,9 +179,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: Rust targets for the owned native client
         run: |
-          rustup show active-toolchain || rustup toolchain install
           case "$(uname -m)" in
             arm64) rustup target add aarch64-apple-ios-sim ;;
             x86_64) rustup target add x86_64-apple-ios ;;
@@ -262,9 +234,9 @@ jobs:
             libfreetype-dev libasound2-dev libvulkan-dev pkg-config cmake \
             libwebkit2gtk-4.1-dev libjson-glib-dev xvfb xdotool openbox \
             weston ffmpeg imagemagick fonts-noto-cjk
-      - name: Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ${{ github.job == 'session-sync-regressions' && 'core' || github.job == 'ios-tests' && 'ios' || 'desktop-release' }}
       - name: Build browser fixture
         run: cargo build --release --locked -p luna-ui --example browser-fixture --features browser-fixture
       - name: X11 and Wayland browser regressions

@@ -95,9 +95,11 @@ jobs:
           echo "BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "Preparing $AUDIENCE TestFlight build $build_number from $GITHUB_SHA."
 
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: ios-release
       - name: Rust targets for the owned native client
         run: |
-          rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios
           case "$(uname -m)" in
             arm64) rustup target add aarch64-apple-ios-sim ;;
