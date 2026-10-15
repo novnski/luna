@@ -322,7 +322,55 @@ pub(crate) struct RecoveryStore {
     store: Arc<DocsStore>,
 }
 
+/// How a turn ended when it streamed nothing. Such a turn leaves no
+/// transcript row (`drive_run` skips the empty stub), so this is its only
+/// terminal evidence, kept per owning message.
+pub(crate) struct UnwrittenTurnEnd {
+    pub message_id: String,
+    pub status: luna_proto::DoneStatus,
+}
+
+fn done_status_name(status: luna_proto::DoneStatus) -> &'static str {
+    match status {
+        luna_proto::DoneStatus::Completed => "completed",
+        luna_proto::DoneStatus::Interrupted => "interrupted",
+        luna_proto::DoneStatus::Errored => "errored",
+    }
+}
+
 impl RecoveryStore {
+    pub(crate) fn record_unwritten_turn_end(
+        &self,
+        task: &str,
+        end: &UnwrittenTurnEnd,
+        permit: Option<&luna_sync::write_epoch::WritePermit>,
+    ) -> Result<(), EngineError> {
+        Ok(self.store.record_unwritten_turn_end(
+            task,
+            &end.message_id,
+            done_status_name(end.status),
+            crate::now_ms(),
+            permit,
+        )?)
+    }
+    pub(crate) fn unwritten_turn_end(
+        &self,
+        task: &str,
+        message: &str,
+    ) -> Result<Option<luna_proto::DoneStatus>, EngineError> {
+        let Some(status) = self.store.unwritten_turn_end(task, message)? else {
+            return Ok(None);
+        };
+        [
+            luna_proto::DoneStatus::Completed,
+            luna_proto::DoneStatus::Interrupted,
+            luna_proto::DoneStatus::Errored,
+        ]
+        .into_iter()
+        .find(|known| done_status_name(*known) == status)
+        .map(Some)
+        .ok_or_else(|| EngineError::Other(format!("unknown turn end status {status}")))
+    }
     pub(crate) fn finish_automation_message(
         &self,
         task: &str,

@@ -5291,7 +5291,7 @@ dependencies = [
 
 [[package]]
 name = "luna"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5318,7 +5318,7 @@ dependencies = [
 
 [[package]]
 name = "luna-doc"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "loro",
@@ -5332,7 +5332,7 @@ dependencies = [
 
 [[package]]
 name = "luna-engine"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5384,7 +5384,7 @@ dependencies = [
 
 [[package]]
 name = "luna-extension-host"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5395,7 +5395,7 @@ dependencies = [
 
 [[package]]
 name = "luna-harness"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5422,7 +5422,7 @@ dependencies = [
 
 [[package]]
 name = "luna-headless"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -5436,7 +5436,7 @@ dependencies = [
 
 [[package]]
 name = "luna-mobile"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "luna-proto",
  "luna-rpc",
@@ -5451,7 +5451,7 @@ dependencies = [
 
 [[package]]
 name = "luna-preview"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5479,7 +5479,7 @@ dependencies = [
 
 [[package]]
 name = "luna-proto"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5492,7 +5492,7 @@ dependencies = [
 
 [[package]]
 name = "luna-relay"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5514,7 +5514,7 @@ dependencies = [
 
 [[package]]
 name = "luna-remote"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5541,7 +5541,7 @@ dependencies = [
 
 [[package]]
 name = "luna-rpc"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5579,7 +5579,7 @@ dependencies = [
 
 [[package]]
 name = "luna-sync"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "block2 0.6.2",
  "chrono",
@@ -5602,7 +5602,7 @@ dependencies = [
 
 [[package]]
 name = "luna-syntax"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
@@ -5636,7 +5636,7 @@ dependencies = [
 
 [[package]]
 name = "luna-theme"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -5651,7 +5651,7 @@ dependencies = [
 
 [[package]]
 name = "luna-ui"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -5719,7 +5719,7 @@ dependencies = [
 
 [[package]]
 name = "luna-update"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "flate2",

@@ -10030,6 +10030,27 @@ async fn drive_run(
                     tracing::warn!(chat = %chat_id, %error, "provider checkpoint persistence failed");
                 }
                 inner.note_message(&chat_id, &folded_text(&folded));
+            } else if turn_was_active
+                && !self_continued_turn
+                && let Some(message) = turn_message.as_deref()
+            {
+                // A prompted turn ended before streaming anything, so no row
+                // carries its status. A parked runtime's teardown is not a
+                // turn (the parked gate above already cleared `idle_since`),
+                // and a provider-started turn has no owning message: its
+                // fallback to the run's original one would overwrite that
+                // turn's own end.
+                let end = crate::recovery::UnwrittenTurnEnd {
+                    message_id: message.into(),
+                    status: *status,
+                };
+                if let Err(error) = inner.recovery.record_unwritten_turn_end(
+                    &chat_id,
+                    &end,
+                    run_permit.as_ref().map(|p| p.ticket()),
+                ) {
+                    tracing::warn!(chat = %chat_id, %error, "unwritten turn end persistence failed; the turn may read unknown");
+                }
             }
             if *status == DoneStatus::Completed {
                 if let Some(host) = inner.doc_host()

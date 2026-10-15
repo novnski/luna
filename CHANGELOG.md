@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.5.2 — 2026-10-15
+
+- A side chat you stop before it has replied now shows **Stopped** in the main chat's Background work, instead of Unknown with a request for attention. The same applies to a side chat an agent started that you stop from its own chat before it says anything; it also no longer keeps the main chat busy.
+
 ## 0.5.1 — 2026-10-15
 
 - Show a new worktree chat's renamed branch everywhere as soon as the automatic title renames it. The sidebar, composer and Overview kept the original `luna/<name>` branch until the next message, while Changes → Git and the terminal already showed the new one.

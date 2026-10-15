@@ -654,6 +654,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
          DROP TABLE project_command_configs;
          DROP TABLE project_command_runs;
          DROP TABLE project_command_trust;
+         DROP TABLE task_unwritten_turn_ends;
          DROP TABLE side_chat_entries;
          DROP TABLE side_chat_sends;
          DROP TABLE side_chats;

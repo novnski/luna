@@ -3,7 +3,7 @@ use super::*;
 use crate::sessions::WorkRuntime;
 use luna_doc::{QueueMessageStatus, SubagentStatus};
 use luna_proto::{
-    TaskWorkItem, TaskWorkKind as Kind, TaskWorkSnapshot, TaskWorkState as State,
+    DoneStatus, TaskWorkItem, TaskWorkKind as Kind, TaskWorkSnapshot, TaskWorkState as State,
     TaskWorkStopPreview, TaskWorkStopReceipt, TaskWorkStopResult, TaskWorkStopStatus as StopStatus,
 };
 
@@ -289,8 +289,14 @@ impl WorkProjection {
                         Some(MessageStatus::Aborted) => State::Stopped,
                         _ => State::Unknown,
                     }
-                } else if turn.is_some() {
-                    State::Unknown
+                } else if let Some(i) = turn {
+                    // A turn that streamed nothing has no reply row to read.
+                    match self.sessions.unwritten_turn_end(&chat.id, &entries[i].id) {
+                        Some(DoneStatus::Completed) => State::Completed,
+                        Some(DoneStatus::Errored) => State::Failed,
+                        Some(DoneStatus::Interrupted) => State::Stopped,
+                        None => State::Unknown,
+                    }
                 } else if delegated {
                     State::Starting
                 } else {
