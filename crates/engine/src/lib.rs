@@ -202,7 +202,7 @@ pub use recovery::{RecoveryDecision, classify_failure, recovery_decision};
 pub use registry::{
     HarnessDescriptor, HarnessRegistry, default_registry, local_adoption_mock_registry,
 };
-pub use repos::{CheckoutIdentity, Repos, worktree_branch_from_title};
+pub use repos::{CheckoutIdentity, Repos, WorktreeBranchRename, worktree_branch_from_title};
 pub use rpc::EngineRpc;
 pub use run_journal::{JournalError, RunJournal};
 pub use sessions::{JournaledEvent, SecretInputOutcome, SessionsEngine, SteerOutcome};

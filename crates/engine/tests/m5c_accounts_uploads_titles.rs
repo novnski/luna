@@ -667,14 +667,16 @@ async fn rename_worktree_branch_guards_and_collisions() {
         .rename_worktree_branch(wt_path, "luna/not-this-one", "Some Title")
         .await
         .expect("guarded");
-    assert_eq!(unchanged, wt.branch);
+    assert_eq!(unchanged.current, wt.branch);
+    assert_eq!(unchanged.renamed_to, None);
 
     // Happy path: renamed to the title slug.
     let renamed = repos
         .rename_worktree_branch(wt_path, &wt.branch, "Add Dark Mode!")
         .await
         .expect("renamed");
-    assert_eq!(renamed, "luna/add-dark-mode");
+    assert_eq!(renamed.current, "luna/add-dark-mode");
+    assert_eq!(renamed.renamed_to.as_deref(), Some("luna/add-dark-mode"));
 
     // Already renamed → the guard (branch no longer luna/<folder>) makes any
     // further title rename a no-op.
@@ -682,7 +684,8 @@ async fn rename_worktree_branch_guards_and_collisions() {
         .rename_worktree_branch(wt_path, "luna/add-dark-mode", "Different Title")
         .await
         .expect("second rename");
-    assert_eq!(again, "luna/add-dark-mode");
+    assert_eq!(again.current, "luna/add-dark-mode");
+    assert_eq!(again.renamed_to, None);
 
     // Collision: a second worktree whose title slug already exists gets the
     // stable hash suffix.
@@ -693,7 +696,8 @@ async fn rename_worktree_branch_guards_and_collisions() {
     let renamed2 = repos
         .rename_worktree_branch(Path::new(&wt2.path), &wt2.branch, "Add Dark Mode!")
         .await
-        .expect("suffixed rename");
+        .expect("suffixed rename")
+        .current;
     assert!(
         renamed2.starts_with("luna/add-dark-mode-")
             && renamed2.len() == "luna/add-dark-mode-".len() + 6,
