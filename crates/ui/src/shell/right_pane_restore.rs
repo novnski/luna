@@ -134,6 +134,46 @@ impl Shell {
         self.schedule_save(cx);
     }
 
+    /// A file of `panel_key`'s Files place was renamed on disk: the browser's
+    /// open file (`owner` `None`) or `owner`'s file tab. A chat's live pane is
+    /// written back only while it shows, so a chat in the background has its
+    /// saved tab follow the rename here; otherwise a restart would reopen the
+    /// old path.
+    pub(super) fn follow_saved_rename(
+        &mut self,
+        panel_key: &str,
+        owner: Option<&str>,
+        old_path: &str,
+        new_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if panel_key == self.active_chat {
+            return;
+        }
+        let Some(pane) = self
+            .settings
+            .right_panes
+            .iter_mut()
+            .find(|pane| pane.chat_id == panel_key)
+        else {
+            return;
+        };
+        let mut followed = false;
+        for tab in &mut pane.files {
+            let same_tab = match owner {
+                None => tab.browser,
+                Some(owner) => !tab.browser && tab.owner.as_deref().unwrap_or(panel_key) == owner,
+            };
+            if same_tab && tab.path.as_deref() == Some(old_path) {
+                tab.path = Some(new_path.to_owned());
+                followed = true;
+            }
+        }
+        if followed {
+            self.schedule_save(cx);
+        }
+    }
+
     /// `chat_id`'s right sidebar as it shows now. `chat_id` is the shown
     /// chat, whose panel key it is.
     fn right_pane_snapshot(&self, chat_id: &str, cx: &App) -> SavedRightPane {

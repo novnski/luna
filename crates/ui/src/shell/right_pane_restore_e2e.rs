@@ -5,7 +5,8 @@
 //! flush as on app quit, the window goes, and a new shell boots from the
 //! saved file. The restored editor reads the file from the chat's checkout
 //! again. A file deleted between runs lands on the editor's recovery state,
-//! whose Retry reads it once it is back.
+//! whose Retry reads it once it is back. Files renamed on disk while another
+//! chat shows reopen under their new paths.
 //!
 //! Owners: what the tree, tabs and editors do once open belongs to the Files
 //! suites (`files::tool_file_open_e2e` and others); this file owns what a
@@ -23,11 +24,14 @@ use sha2::{Digest as _, Sha256};
 use super::*;
 
 const CHAT: &str = "issue23-chat";
+const OTHER_CHAT: &str = "issue23-other-chat";
 const SPACE: &str = "issue23-space";
 const THEME: &str = "src/ThemeSwitch.tsx";
 const THEME_BYTES: &str = "export function ThemeSwitch() {}\n";
 const OTHER: &str = "src/palette.ts";
 const OTHER_BYTES: &str = "export const palette = [];\n";
+const THEME_RENAMED: &str = "src/ThemeToggle.tsx";
+const OTHER_RENAMED: &str = "src/colors.ts";
 
 fn sha256(bytes: &str) -> String {
     Sha256::digest(bytes.as_bytes())
@@ -111,9 +115,11 @@ impl Fixture {
                     false,
                 )
                 .unwrap();
-            core.workspace
-                .create_chat(CHAT, Some(SPACE), None, None, None)
-                .unwrap();
+            for chat in [CHAT, OTHER_CHAT] {
+                core.workspace
+                    .create_chat(chat, Some(SPACE), None, None, None)
+                    .unwrap();
+            }
             core
         };
         let recorder = Arc::new(Recorder {
@@ -152,10 +158,12 @@ impl Fixture {
             let _entered = self.runtime.enter();
             let client = luna_rpc::memory_client(self.recorder.clone() as Arc<dyn RpcService>);
             let device = self.core.device_id.clone();
-            let row = json!({
-                "id": CHAT, "deviceId": device, "spaceId": SPACE,
-                "cwd": self.checkout.to_string_lossy(),
-                "title": "Issue 23", "archived": false, "createdAt": "2026-10-15T00:00:00Z",
+            let rows = [CHAT, OTHER_CHAT].map(|id| {
+                json!({
+                    "id": id, "deviceId": device, "spaceId": SPACE,
+                    "cwd": self.checkout.to_string_lossy(),
+                    "title": id, "archived": false, "createdAt": "2026-10-15T00:00:00Z",
+                })
             });
             let boot = EngineBootConfig {
                 data_dir: self.ui.clone(),
@@ -171,7 +179,10 @@ impl Fixture {
                     let mut state = AppState::new();
                     state.set_test_engine(crate::state::EngineHandle::from_test_client(client));
                     state.local_device_id = Some(device);
-                    state.chats = vec![serde_json::from_value(row).unwrap()];
+                    state.chats = rows
+                        .into_iter()
+                        .map(|row| serde_json::from_value(row).unwrap())
+                        .collect();
                     state.selected_chat = Some(CHAT.into());
                     state
                 });
@@ -297,14 +308,14 @@ fn files_place(
     })
 }
 
-/// The pane shows, on the Files browser, which shows `THEME`, beside the
-/// `OTHER` tab.
-fn restored(shell: &Entity<Shell>, cx: &mut TestAppContext) -> bool {
+/// The pane shows, on the Files browser, which shows `browser`, beside the
+/// `tab` tab.
+fn restored(shell: &Entity<Shell>, cx: &mut TestAppContext, browser: &str, tab: &str) -> bool {
     let shown = cx.update(|cx| {
         let shell = shell.read(cx);
         shell.right_pane_open(cx) && shell.resolved_right_active(cx) == RightSurface::Files
     });
-    shown && files_place(shell, cx) == (Some(THEME.to_owned()), vec![None, Some(OTHER.to_owned())])
+    shown && files_place(shell, cx) == (Some(browser.to_owned()), vec![None, Some(tab.to_owned())])
 }
 
 #[gpui::test]
@@ -342,7 +353,7 @@ fn graceful_restart_reopens_the_files_pane_and_its_document(cx: &mut TestAppCont
     });
     press(cx, any, "right-surface-tab-0");
     fixture.pump(cx, any, "the browser's tab shown", |cx| {
-        restored(&shell, cx)
+        restored(&shell, cx, THEME, OTHER)
     });
     fixture.quit(cx, window, shell);
 
@@ -351,7 +362,9 @@ fn graceful_restart_reopens_the_files_pane_and_its_document(cx: &mut TestAppCont
     let before = fixture.reads(THEME).len();
     let (window, shell) = fixture.launch(cx);
     let any: AnyWindowHandle = window.into();
-    fixture.pump(cx, any, "the pane restored", |cx| restored(&shell, cx));
+    fixture.pump(cx, any, "the pane restored", |cx| {
+        restored(&shell, cx, THEME, OTHER)
+    });
     fixture.pump(cx, any, "ThemeSwitch.tsx read again", |_| {
         fixture.reads(THEME)[before..].contains(&Ok(sha256(THEME_BYTES)))
     });
@@ -365,7 +378,7 @@ fn graceful_restart_reopens_the_files_pane_and_its_document(cx: &mut TestAppCont
     let (window, shell) = fixture.launch(cx);
     let any: AnyWindowHandle = window.into();
     fixture.pump(cx, any, "the recovery state", |cx| {
-        restored(&shell, cx) && painted(cx, any, "files-document-error")
+        restored(&shell, cx, THEME, OTHER) && painted(cx, any, "files-document-error")
     });
     let failed = fixture.reads(THEME)[before..].to_vec();
     assert!(
@@ -382,6 +395,50 @@ fn graceful_restart_reopens_the_files_pane_and_its_document(cx: &mut TestAppCont
         fixture.reads(THEME)[before..].contains(&Ok(sha256(THEME_BYTES)))
             && !painted(cx, any, "files-document-error")
     });
+
+    // Still in the third run, another chat shows while both files are
+    // renamed on disk: the background chat's browser and tab follow, and so
+    // does what the next run reopens. (A restored tab loads, and starts
+    // following its checkout, once it first shows.)
+    let before = fixture.reads(OTHER).len();
+    press(cx, any, "right-surface-tab-1");
+    fixture.pump(cx, any, "palette.ts loaded", |_| {
+        fixture.reads(OTHER)[before..].contains(&Ok(sha256(OTHER_BYTES)))
+    });
+    press(cx, any, "right-surface-tab-0");
+    fixture.pump(cx, any, "the browser's tab shown again", |cx| {
+        restored(&shell, cx, THEME, OTHER)
+    });
+    window
+        .update(cx, |shell, _, cx| shell.open_chat(OTHER_CHAT.into(), cx))
+        .unwrap();
+    fixture.pump(cx, any, "the other chat shown", |cx| {
+        cx.update(|cx| shell.read(cx).active_chat == OTHER_CHAT)
+    });
+    for (from, to) in [(THEME, THEME_RENAMED), (OTHER, OTHER_RENAMED)] {
+        std::fs::rename(fixture.checkout.join(from), fixture.checkout.join(to)).unwrap();
+    }
+    fixture.pump(cx, any, "the background tabs renamed", |cx| {
+        files_place(&shell, cx)
+            == (
+                Some(THEME_RENAMED.to_owned()),
+                vec![None, Some(OTHER_RENAMED.to_owned())],
+            )
+    });
+    fixture.quit(cx, window, shell);
+
+    // Fourth run: the renamed files reopen and read.
+    let (window, shell) = fixture.launch(cx);
+    let any: AnyWindowHandle = window.into();
+    fixture.pump(cx, any, "the renamed files restored", |cx| {
+        restored(&shell, cx, THEME_RENAMED, OTHER_RENAMED)
+    });
+    fixture.pump(cx, any, "ThemeToggle.tsx read", |_| {
+        fixture
+            .reads(THEME_RENAMED)
+            .contains(&Ok(sha256(THEME_BYTES)))
+    });
+    assert!(!painted(cx, any, "files-document-error"));
     fixture.quit(cx, window, shell);
     fixture.shutdown();
 }
