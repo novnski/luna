@@ -2,6 +2,10 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
+## 0.4.5 — 2026-10-15
+
+- A side chat you stop before it has replied now shows **Stopped** in the main chat's Background work, instead of Unknown with a request for attention. The same applies to a side chat an agent started that you stop from its own chat before it says anything; it also no longer keeps the main chat busy.
+
 ## 0.4.4 — 2026-10-15
 
 - Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt, in new chats and in chats started before this update. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.
