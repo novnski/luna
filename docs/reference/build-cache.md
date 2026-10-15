@@ -42,8 +42,9 @@ and exposes one `Required checks` result. Documentation-only changes skip the
 Rust graph. Shared manifests, toolchains and CI setup changes exercise all Rust
 suites. A failed, cancelled or timed-out selected suite fails the final result.
 
-Parallel jobs have a nine-minute execution ceiling. The final gate independently
-enforces **600 seconds for the whole run**, using GitHub's run timestamp and
+The target is **ten minutes**, with a **fifteen-minute ceiling**. Parallel jobs
+have a thirteen-minute execution limit, leaving room for routing and cleanup.
+The final gate independently enforces **900 seconds for the whole run**, using GitHub's run timestamp and
 including queue time (reruns use their attempt start). A timeout, failed suite,
 or elapsed time over the budget fails the gate; none count as successful
 verification. The measured time is retained in the job summary.
