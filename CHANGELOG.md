@@ -2,9 +2,13 @@
 
 User-visible changes follow [Semantic Versioning](https://semver.org/) and the [LUNA release workflow](docs/reference/local-release-workflow.md). Product version bumps do not publish releases or update the installed Alpha app.
 
-## 0.4.1 — 2026-10-15
+## 0.4.2 — 2026-10-15
 
 - Codex chats on macOS no longer start browsers inside Codex's sandbox, where they cannot run. Chrome launched there by Playwright or a similar tool aborted, and each attempt showed a "Google Chrome quit unexpectedly" dialog. In Ask and Auto, LUNA now tells Codex to request permission to run any browser-launching command outside the sandbox on its first attempt, in new chats and in chats started before this update. Ask shows you the request and its reason to approve; in Auto, Codex's reviewer decides. If the request is declined, the agent reports that browser checks did not run instead of retrying inside the sandbox. Full access already runs without the sandbox and is unchanged.
+
+## 0.4.1 — 2026-10-15
+
+- A server a Codex agent leaves running, such as `npm run preview`, now keeps running while LUNA is open. Previously, LUNA ended the agent's Codex process after a chat sat idle for 30 minutes, and that also stopped every command the agent had left running, so a preview link the agent reported as running stopped loading with no explanation. The command now appears in the chat's **Background work** as a running background shell, and the chat stays connected while it runs. When the command stops, its shell and its command show the exit code (for example "Exited with code 143"). Quitting LUNA or stopping the chat still ends it, and it is then shown as stopped.
 
 ## 0.4.0 — 2026-10-15
 

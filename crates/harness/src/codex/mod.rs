@@ -39,11 +39,15 @@
 //!   `turn/start` on the same thread. The session is persistent across turns
 //!   while the steering mailbox lives. Explicit steer never starts a new turn.
 //!   RPC acceptance is pending; native userMessage.clientId/readback records it.
+//! - Background terminals: a command still running when its turn ends (a
+//!   preview server) is reported as a native Shell task until the exit Codex
+//!   reports later ([`background`]); it lives only as long as this process.
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends `turn/interrupt`,
 //!   escalating to SIGTERM → SIGKILL if the child is unresponsive; the stream
 //!   always ends with `Done { status: Interrupted }`.
 
 mod approvals;
+mod background;
 pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
 pub(crate) mod elicitation;
@@ -1399,11 +1403,6 @@ async fn run_session(session: Session) {
         && cfg!(target_os = "macos")
         && request.sandbox != luna_proto::SandboxLevel::DangerFullAccess)
         .then_some(MACOS_SANDBOX_BROWSER_GUIDANCE);
-    // Only a fresh thread/start can carry it in the thread's instructions.
-    let guidance_in_instructions = browser_guidance.is_some()
-        && runtime_contract
-            .as_ref()
-            .is_some_and(|contract| !contract.instructions.is_empty());
     let start_params = {
         let mut p = serde_json::Map::new();
         if title_only {
@@ -1584,9 +1583,10 @@ async fn run_session(session: Session) {
         // before the guidance, or under Full access, would never see it.
         // Injected items join the thread's model-visible history before any
         // turn, including goal turns Codex starts itself. Fail open: an
-        // older Codex without the method keeps the run going.
+        // older Codex without the method keeps the run going. A fresh thread
+        // already has it in its LUNA instructions.
         if let Some(guidance) = browser_guidance
-            && (resumed || !guidance_in_instructions)
+            && resumed
             && !thread_id.is_empty()
             && let Err(error) = client
                 .request(
@@ -1959,6 +1959,7 @@ async fn run_session(session: Session) {
     );
     let mut computer_use_turn_cancel = CancellationToken::new();
     let mut pending_approvals = approvals::PendingApprovals::new();
+    let mut background_terminals = background::BackgroundTerminals::default();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
@@ -2117,6 +2118,15 @@ async fn run_session(session: Session) {
                         }
                         // Item notifications carry the root `turnId`, not `turn.id`.
                         let item_turn = item_turn_id(&params);
+                        // A command still running when its turn ends is a background
+                        // terminal; its exit arrives here later, under that turn.
+                        if phase == Phase::Started {
+                            background_terminals.started(&item_turn, item);
+                        } else if let Some(event) = background_terminals.completed(&thread_id, item)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
                         if let Some(message_id) = native_steers.record(item, &item_turn) {
                             if !emit_recorded_steer(&event_tx, &mut assistant_message_id, message_id,
                                 router.active_id() != Some(item_turn.as_str())).await {
@@ -2266,6 +2276,9 @@ async fn run_session(session: Session) {
                         if !reconcile_native_steers(&client, &thread_id, legacy, &mut native_steers,
                             &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
+                        for event in background_terminals.turn_completed(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
                         streamed_text.clear();
