@@ -30,7 +30,7 @@ commands, including `fmt`, `metadata` and `clean`, go directly to Cargo;
 `clean` still requires the scoped procedure in `AGENTS.md`.
 
 The mbx integration is local and project-scoped. It installs no Cargo shim and
-does not configure a remote cache on this Mac. CI uses the separate compiler
+does not configure a remote cache on this Mac. CI uses the separate dependency
 cache described below. Do not run `mbx setup` or add global mise wrapping as a
 prerequisite for this project.
 
@@ -90,6 +90,26 @@ For repeatable verification, run every fast suite through `workflow_dispatch`
 and warm runs. Also verify that a documentation-only change skips the matrix
 and a failed selected suite cannot produce a green final gate. This is CI
 infrastructure only and requires no product version bump or local app refresh.
+
+### Measured feedback time
+
+Measurements below include routing, runner queueing, all selected jobs and the
+final gate. They describe these runs, not a guarantee about GitHub runner queues.
+
+| Run | Result | End-to-end time |
+| --- | --- | --- |
+| [Previous automatic UI/platform workflow](https://github.com/novnski/luna/actions/runs/38635916677) | Passed | 58m35s |
+| [All ten fast suites on PR #28](https://github.com/novnski/luna/actions/runs/38660556650/attempts/1) | Passed, including all 1,165 UI tests | 7m22s |
+| [First main run with empty shared caches](https://github.com/novnski/luna/actions/runs/38661458360) | Passed, including cache uploads | 9m14s |
+| [Warm main run of all ten fast suites](https://github.com/novnski/luna/actions/runs/38663504310) | Passed, including runner queueing | 7m15s |
+
+The PR run had no main-branch archives for the new cache groups. A separate
+[gate-only retry](https://github.com/novnski/luna/actions/runs/38660556650/attempts/2)
+passed with a fresh 6.5-second timer; that retry is not the full-suite measurement.
+Manual all-suite launches use the canonical fast targets: without a push's
+before-SHA, treating every tracked file as changed would accidentally run the
+extended engine and UI fixture matrices. PRs and pushes still add changed test
+targets to their selected suites.
 
 ## Policy and disk usage
 
