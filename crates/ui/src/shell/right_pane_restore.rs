@@ -72,6 +72,17 @@ impl Shell {
                     cx,
                 ))
             };
+            // Load it now, as every open tab had in the last run: a loaded
+            // tab watches its checkout, so it follows a rename even before
+            // it shows again.
+            let files = match surface {
+                RightSurface::Files => self.files.get(&chat_id),
+                RightSurface::File(id) => self.file_surfaces.get(&id),
+                _ => None,
+            };
+            if let Some(files) = files.cloned() {
+                files.update(cx, |files, cx| files.ensure_loaded(cx));
+            }
             first_files_tab.get_or_insert(surface);
             if tab.active {
                 files_shown = Some(surface);
@@ -132,6 +143,46 @@ impl Shell {
             self.settings.right_panes.truncate(RIGHT_PANES_CAP);
         }
         self.schedule_save(cx);
+    }
+
+    /// A file of `panel_key`'s Files place was renamed on disk: the browser's
+    /// open file (`owner` `None`) or `owner`'s file tab. A chat's live pane is
+    /// written back only while it shows, so a chat in the background has its
+    /// saved tab follow the rename here; otherwise a restart would reopen the
+    /// old path.
+    pub(super) fn follow_saved_rename(
+        &mut self,
+        panel_key: &str,
+        owner: Option<&str>,
+        old_path: &str,
+        new_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if panel_key == self.active_chat {
+            return;
+        }
+        let Some(pane) = self
+            .settings
+            .right_panes
+            .iter_mut()
+            .find(|pane| pane.chat_id == panel_key)
+        else {
+            return;
+        };
+        let mut followed = false;
+        for tab in &mut pane.files {
+            let same_tab = match owner {
+                None => tab.browser,
+                Some(owner) => !tab.browser && tab.owner.as_deref().unwrap_or(panel_key) == owner,
+            };
+            if same_tab && tab.path.as_deref() == Some(old_path) {
+                tab.path = Some(new_path.to_owned());
+                followed = true;
+            }
+        }
+        if followed {
+            self.schedule_save(cx);
+        }
     }
 
     /// `chat_id`'s right sidebar as it shows now. `chat_id` is the shown
