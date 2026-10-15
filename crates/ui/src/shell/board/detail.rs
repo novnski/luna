@@ -920,8 +920,6 @@ enum BriefContent {
 
 struct ImportedView {
     brief: ImportedBrief,
-    /// The source issue's link as the engine verified it.
-    url: String,
     prompt: Option<BlockTree>,
     body: Option<BlockTree>,
     comments: Vec<BlockTree>,
@@ -950,16 +948,13 @@ impl BriefView {
     fn of(detail: &BoardItemDetail) -> Self {
         let description = &detail.view.item.description;
         let source = Self::source(detail);
-        let imported = source.and_then(|issue| {
-            imported_brief(description, issue.import_snapshot.as_ref()?)
-                .map(|brief| (issue.canonical_url.clone(), brief))
-        });
+        let imported =
+            source.and_then(|issue| imported_brief(description, issue.import_snapshot.as_ref()?));
         // Quoted issue text links its HTML images instead of showing tags.
         let quoted = |text: &str| parse_full(&link_html_images(text));
         let content = match imported {
             _ if description.trim().is_empty() => BriefContent::Empty,
-            Some((url, brief)) => BriefContent::Imported(Box::new(ImportedView {
-                url,
+            Some(brief) => BriefContent::Imported(Box::new(ImportedView {
                 prompt: (!brief.prompt.is_empty()).then(|| parse_full(&brief.prompt)),
                 body: brief.body.as_deref().map(quoted),
                 comments: brief
@@ -2972,7 +2967,12 @@ impl BoardDetail {
                 card = card.child(render::selection_surface_reset(self.markdown_scope.clone()));
                 match self.brief_view.as_ref().map(|view| &view.content) {
                     Some(BriefContent::Imported(view)) => {
-                        card = self.render_imported_brief(card, view, theme, window, cx);
+                        // The live link: a renamed repository updates it
+                        // without changing the brief.
+                        let url = BriefView::source(detail)
+                            .map(|issue| issue.canonical_url.clone())
+                            .unwrap_or_else(|| view.brief.source.url.clone());
+                        card = self.render_imported_brief(card, view, url, theme, window, cx);
                     }
                     Some(BriefContent::Markdown(tree)) => {
                         card = card.child(
@@ -3088,6 +3088,7 @@ impl BoardDetail {
         &self,
         mut card: gpui::Stateful<gpui::Div>,
         view: &ImportedView,
+        url: String,
         theme: &Theme,
         window: &Window,
         cx: &mut Context<Self>,
@@ -3117,7 +3118,6 @@ impl BoardDetail {
         meta.push(format!("updated {}", issue_time(&source.updated_at)));
         meta.extend(source.details.iter().cloned());
         let meta = self.text("detail-brief-source-meta", meta.join(" · "));
-        let url = view.url.clone();
         card = card.child(
             widgets::card_row(theme, false)
                 .child(widgets::row_tile(theme, crate::icons::GLOBAL))

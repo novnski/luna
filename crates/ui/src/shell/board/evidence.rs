@@ -11,8 +11,8 @@ use gpui::{
 };
 use luna_proto::{
     BOARD_MAX_REPAIR_ROUNDS, BoardActor, BoardColumn, BoardExecutionOptions, BoardInstructionKind,
-    BoardItemDetail, LaunchSnapshot, OutcomeKind, OutcomeReference, ReviewCleanupState, ReviewRun,
-    ReviewRunState, ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole,
+    BoardItemDetail, BoardPhase, LaunchSnapshot, OutcomeKind, OutcomeReference, ReviewCleanupState,
+    ReviewRun, ReviewRunState, ReviewSeverity, ReviewVerdict, ReviewerPlacement, TaskLinkRole,
 };
 
 use super::detail::{BoardDetail, BoardProbe, format_time};
@@ -315,17 +315,14 @@ fn open_url_button(id: String, label: &'static str, url: String, theme: &Theme) 
 // Not started
 // ---------------------------------------------------------------------------
 
-/// Nothing was dispatched, reviewed or recorded yet: Review, Outcome and
-/// Dispatch would each only say so.
+/// The engine has nothing running for the ticket (no working chat, so not
+/// a converted chat either) and nothing was dispatched, reviewed or
+/// recorded: Review, Outcome and Dispatch would each only say so.
 pub(crate) fn not_started(detail: &BoardItemDetail) -> bool {
-    detail.launches.is_empty()
+    detail.view.phase == BoardPhase::NotStarted
+        && detail.launches.is_empty()
         && detail.review_runs.is_empty()
         && detail.outcomes.is_empty()
-        && detail.view.item.column != BoardColumn::Done
-        && detail
-            .intent
-            .as_ref()
-            .is_none_or(|intent| intent.review_passes == 0 && intent.repair_rounds == 0)
 }
 
 /// One line in place of the three empty lifecycle sections.
