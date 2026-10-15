@@ -1462,6 +1462,17 @@ async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work
         "the explicitly authorized Steer row to start once",
     )
     .await;
+    // The sent row stays claimed until its command's provider correlation
+    // settles it, a moment after its prompt starts.
+    wait_for(
+        || {
+            !queue_texts(&core)
+                .iter()
+                .any(|text| text == "rejected steer remains held")
+        },
+        "the sent Steer row to settle out of the queue",
+    )
+    .await;
     assert_eq!(
         queue_texts(&core),
         vec!["ordinary queue after doc notification"],
