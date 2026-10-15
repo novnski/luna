@@ -26,8 +26,10 @@ jobs:
     timeout-minutes: 1
     outputs:
       suites: ${{ steps.plan.outputs.suites }}
-      engine-files: ${{ steps.paths.outputs.engine_files }}
-      ui-files: ${{ steps.paths.outputs.ui_files }}
+      # Manual dispatch has no before-SHA. paths-filter treats that as every
+      # tracked file changing; do not expand the fast suite into all E2E targets.
+      engine-files: ${{ github.event_name != 'workflow_dispatch' && steps.paths.outputs.engine_files || '[]' }}
+      ui-files: ${{ github.event_name != 'workflow_dispatch' && steps.paths.outputs.ui_files || '[]' }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate every workflow without running its platform matrix
@@ -40,6 +42,7 @@ jobs:
           "$RUNNER_TEMP/actionlint" -shellcheck=
       - uses: dorny/paths-filter@v3
         id: paths
+        if: github.event_name != 'workflow_dispatch'
         with:
           list-files: json
           filters: |
@@ -93,7 +96,7 @@ jobs:
       - name: Select affected suites
         id: plan
         env:
-          CHANGED: ${{ steps.paths.outputs.changes }}
+          CHANGED: ${{ steps.paths.outputs.changes || '[]' }}
           RUN_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.all }}
         run: |
           python3 - <<'PYTHON'
