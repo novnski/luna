@@ -192,20 +192,11 @@ jobs:
               command += ['--test', test]
           subprocess.run(command, check=True)
           PYTHON
-      - uses: taiki-e/install-action@v2
-        if: matrix.suite == 'ui'
-        with:
-          tool: cargo-nextest@0.9.148
-          fallback: none
       - name: Complete UI library regression suite
         if: matrix.suite == 'ui'
         # Do not also select the app binary: that compiles this large crate a
         # second time as an ordinary library before the test binary can finish.
-        # Each test gets a separate process, preserving GUI-global isolation
-        # while using the runner's cores instead of serializing the whole suite.
-        run: |
-          cargo nextest run --cargo-profile ci --locked -p luna-ui --features appshots-fixture \
-            --lib --test-threads=4 --no-fail-fast --status-level fail --final-status-level fail
+        run: cargo test --profile ci --locked -p luna-ui --features appshots-fixture --lib -- --test-threads=1
       - name: macOS application and changed fixture compile contracts
         if: matrix.suite == 'macos'
         env:
