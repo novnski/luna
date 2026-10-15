@@ -397,18 +397,9 @@ fn graceful_restart_reopens_the_files_pane_and_its_document(cx: &mut TestAppCont
     });
 
     // Still in the third run, another chat shows while both files are
-    // renamed on disk: the background chat's browser and tab follow, and so
-    // does what the next run reopens. (A restored tab loads, and starts
-    // following its checkout, once it first shows.)
-    let before = fixture.reads(OTHER).len();
-    press(cx, any, "right-surface-tab-1");
-    fixture.pump(cx, any, "palette.ts loaded", |_| {
-        fixture.reads(OTHER)[before..].contains(&Ok(sha256(OTHER_BYTES)))
-    });
-    press(cx, any, "right-surface-tab-0");
-    fixture.pump(cx, any, "the browser's tab shown again", |cx| {
-        restored(&shell, cx, THEME, OTHER)
-    });
+    // renamed on disk — the palette.ts tab restored but never shown in this
+    // run: the background chat's browser and tab follow, and so does what
+    // the next run reopens.
     window
         .update(cx, |shell, _, cx| shell.open_chat(OTHER_CHAT.into(), cx))
         .unwrap();

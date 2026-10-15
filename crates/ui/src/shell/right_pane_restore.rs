@@ -72,6 +72,17 @@ impl Shell {
                     cx,
                 ))
             };
+            // Load it now, as every open tab had in the last run: a loaded
+            // tab watches its checkout, so it follows a rename even before
+            // it shows again.
+            let files = match surface {
+                RightSurface::Files => self.files.get(&chat_id),
+                RightSurface::File(id) => self.file_surfaces.get(&id),
+                _ => None,
+            };
+            if let Some(files) = files.cloned() {
+                files.update(cx, |files, cx| files.ensure_loaded(cx));
+            }
             first_files_tab.get_or_insert(surface);
             if tab.active {
                 files_shown = Some(surface);
