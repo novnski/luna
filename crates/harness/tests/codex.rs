@@ -347,6 +347,90 @@ async fn declared_luna_tools_without_engine_handler_fail_before_provider_start()
     );
 }
 
+/// novnski/luna#21: on macOS every sandboxed Codex command runs under Seatbelt,
+/// where Chrome aborts at launch and macOS shows the user a crash dialog. The
+/// run must send browser launches through Codex's escalation there, and only
+/// there: no full-access run or non-macOS host gets the guidance. A fresh
+/// thread carries it in its instructions. A resumed thread keeps the
+/// instructions it started with (installed Codex 0.154.0 and 0.162.1 drop a
+/// thread/resume override), so it must be injected into the thread's history
+/// before the first turn, where Codex-started goal turns see it too.
+#[tokio::test]
+async fn sandboxed_macos_runs_send_browser_launches_through_escalation() {
+    let macos = cfg!(target_os = "macos");
+    for (sandbox, resume, guided) in [
+        (SandboxLevel::WorkspaceWrite, false, macos),
+        (SandboxLevel::ReadOnly, false, macos),
+        (SandboxLevel::DangerFullAccess, false, false),
+        (SandboxLevel::WorkspaceWrite, true, macos),
+        (SandboxLevel::DangerFullAccess, true, false),
+    ] {
+        let case = format!("{sandbox:?}, resumed: {resume}");
+        let home = tempfile::tempdir().unwrap();
+        let mut contract = synthetic_runtime_contract();
+        contract.tools.clear();
+        let mut req = request("scenario:thread-request");
+        req.sandbox = sandbox;
+        req.resume = resume.then(|| "guidance-resume".into());
+        req.model_options.insert(
+            luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+            home.path().to_str().unwrap().into(),
+        );
+        req.model_options.insert(
+            luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+            serde_json::to_value(contract).unwrap(),
+        );
+        let (run_controls, _steer, _token) = controls("Yes");
+        let events = run_to_end(&harness(), req, run_controls).await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{case}: {events:?}"
+        );
+        let sent = |name: &str| -> Option<serde_json::Value> {
+            let text = std::fs::read_to_string(home.path().join(name)).ok()?;
+            Some(serde_json::from_str(&text).unwrap())
+        };
+        let thread = sent("thread-request").expect("thread request");
+        let turn = sent("turn-request").expect("turn request");
+        assert_eq!(turn["method"], "turn/start", "{case}: {turn}");
+        let instructions = thread["params"]["developerInstructions"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{case}: no developer instructions in {thread}"));
+        assert!(
+            instructions.contains("Run inside LUNA."),
+            "{case}: {thread}"
+        );
+        let guidance = "sandbox_permissions: require_escalated";
+        let injected = sent("inject-request");
+        if resume {
+            assert_eq!(thread["method"], "thread/resume", "{case}: {thread}");
+            assert_eq!(injected.is_some(), guided, "{case}: {injected:?}");
+            if let Some(injected) = injected {
+                let item = &injected["params"]["items"][0];
+                assert_eq!(injected["params"]["threadId"], "th-resumed", "{case}");
+                assert_eq!(item["role"], "developer", "{case}: {item}");
+                assert!(
+                    item["content"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains(guidance)),
+                    "{case}: {item}"
+                );
+            }
+        } else {
+            assert_eq!(thread["method"], "thread/start", "{case}: {thread}");
+            assert_eq!(instructions.contains(guidance), guided, "{case}: {thread}");
+            // Already in the thread's instructions: no second copy.
+            assert!(injected.is_none(), "{case}: {injected:?}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn ordinary_threads_are_native_visible_and_strict_resume_never_rebinds() {
     let (run_controls, _steer, _token) = controls("Yes");

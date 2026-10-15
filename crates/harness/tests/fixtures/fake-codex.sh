@@ -303,6 +303,13 @@ fi
 
 # ---- first turn ------------------------------------------------------------
 read -r turnline || exit 1
+# A sandboxed macOS run injects its browser guidance into a resumed thread.
+inject_line=''
+if has "$turnline" '"method":"thread/inject_items"'; then
+  inject_line="$turnline"
+  emit "{\"id\":$(rid "$turnline"),\"result\":{}}"
+  read -r turnline || exit 1
+fi
 native_name_line=''
 if has "$turnline" '"method":"thread/name/set"'; then
   native_name_line="$turnline"
@@ -801,6 +808,16 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   ;;
 
+*scenario:thread-request*)
+  # Keep the exact thread, injection and first turn requests for the test.
+  printf '%s\n' "$thread_line" > "$CODEX_HOME/thread-request"
+  [ -z "$inject_line" ] || printf '%s\n' "$inject_line" > "$CODEX_HOME/inject-request"
+  printf '%s\n' "$turnline" > "$CODEX_HOME/turn-request"
+  thread=th-1
+  has "$thread_line" '"method":"thread/resume"' && thread=th-resumed
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"t-1\",\"status\":\"completed\"}}}"
+  ;;
 
 *scenario:reasoning*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
