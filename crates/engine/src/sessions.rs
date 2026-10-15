@@ -7951,8 +7951,21 @@ async fn drive_run(
     // routes into a live run) starts the next turn with zero respawn/resume
     // latency. `Some(when)` = idle since then; the 30-min reaper below ends
     // a session nobody comes back to (luna SESSION_IDLE_MS).
-    const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+    // `LUNA_SESSION_IDLE_MS` overrides the window; 0 keeps the default.
+    let session_idle = std::env::var("LUNA_SESSION_IDLE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(std::time::Duration::from_secs(30 * 60));
     let mut idle_since: Option<tokio::time::Instant> = None;
+    // Provider background shells still running (a dev or preview server the
+    // agent left up). They live inside the provider process, so reaping a
+    // parked session would kill them: the reaper waits until they end.
+    let mut live_shells: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Launching chips of this run's background shells: a shell's exit may
+    // resolve its chip after the turn parked.
+    let mut shell_chips: std::collections::HashSet<String> = std::collections::HashSet::new();
     // The kind of the transient provider notice currently on the doc, if any.
     // A notice left by a run that died mid-retry is stale for this run.
     let mut provider_notice: Option<luna_proto::ProviderNoticeKind> = None;
@@ -8090,12 +8103,13 @@ async fn drive_run(
                 // Idle reaper (luna SESSION_IDLE_MS): a parked persistent session
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
-                // A late ask still waiting on the user is not idleness.
+                // A late ask still waiting on the user, or a background shell
+                // still serving, is not idleness.
                 _ = tokio::time::sleep_until(
                     idle_since
-                        .map(|at| at.max(native_activity_at.unwrap_or(at)) + SESSION_IDLE)
+                        .map(|at| at.max(native_activity_at.unwrap_or(at)) + session_idle)
                         .unwrap_or_else(tokio::time::Instant::now)
-                ), if idle_since.is_some() && parked_asks.is_empty() => {
+                ), if idle_since.is_some() && parked_asks.is_empty() && live_shells.is_empty() => {
                     tracing::info!(chat = %chat_id, "reaping idle persistent session");
                     if let Some(token) = inner.runs.lock()
                         .get(&chat_id)
@@ -8689,6 +8703,17 @@ async fn drive_run(
             if crate::native_tasks::persist(doc_ref, &chat_id, task) {
                 native_activity_at = Some(tokio::time::Instant::now());
             }
+            if task.kind == luna_proto::NativeTaskKind::Shell {
+                if !task.status.is_terminal() {
+                    if live_shells.len() < 256 {
+                        live_shells.insert(task.task_id.clone());
+                        shell_chips.extend(task.tool_use_id.clone());
+                    }
+                } else if live_shells.remove(&task.task_id) {
+                    // The idle window restarts from the last shell's exit.
+                    native_activity_at = Some(tokio::time::Instant::now());
+                }
+            }
             continue;
         }
         // Goal status is provider control state, including updates while warm
@@ -9158,6 +9183,34 @@ async fn drive_run(
                     // A stale answer settling after its turn already closed:
                     // nothing is running — stay parked.
                     AgentEvent::InputResolved { .. } => continue,
+                    // A background shell exited after its turn: its exit
+                    // resolves the launching chip in place. Stays parked.
+                    AgentEvent::ToolResult {
+                        id,
+                        is_error,
+                        output,
+                        diff,
+                    } if shell_chips.contains(id) => {
+                        shell_chips.remove(id);
+                        let Some(original_entry) = tool_entry_by_id.get(id) else {
+                            continue;
+                        };
+                        if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                            journal_failure = Some(error);
+                            break SessionStatus::Errored;
+                        }
+                        if let Err(error) = doc_ref.resolve_tool_in_entry(
+                            original_entry,
+                            id,
+                            *is_error,
+                            output.as_deref(),
+                            diff.as_ref(),
+                        ) {
+                            tracing::warn!(chat = %chat_id, tool = %id, %error,
+                                "background shell chip could not be resolved");
+                        }
+                        continue;
+                    }
                     _ => continue,
                 }
             }
