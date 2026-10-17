@@ -35,6 +35,11 @@ Run the relevant integration/E2E suite and the required build for the changed fe
 
 Read the [test-audit skill](.codex/skills/test-audit/SKILL.md) before writing or changing tests. Define the behavior and credible failure cases first. Prefer an existing end-to-end or integration owner, avoid test-only production seams, and do not add unit tests after writing the implementation. Retain repeatable evidence such as a command transcript, structured result, screenshot, or recording.
 
+Use [mutation testing](docs/reference/mutation-testing.md) to check whether those
+tests catch injected bugs: `scripts/cargo.sh mutants --install`, then
+`scripts/cargo.sh mutants`. Preview larger scopes with `--list`; the manual
+Mutation testing workflow retains reports without extending required PR checks.
+
 For meaningful macOS app code changes, switch to and refresh LUNA Dev with `python3 scripts/macos-app.py dev` after checks. Confirm the exact bundle process, IPC listener, and signature as described in `AGENTS.md`. Keep the daily Alpha snapshot unchanged unless its update is explicitly requested. Respect an explicit request to keep LUNA stopped.
 
 ## Pull requests

@@ -1,0 +1,57 @@
+name: Mutation testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Rust package to mutate
+        type: string
+        default: luna-proto
+      file:
+        description: Workspace-relative source glob
+        type: string
+        default: crates/proto/src/context_control.rs
+      test-package:
+        description: Optional package owning the integration tests
+        type: string
+      test-target:
+        description: Optional integration test target in that package
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutants:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-ci
+        with:
+          cache-group: mutants-ci
+      - name: Install pinned cargo-mutants
+        run: scripts/cargo.sh mutants --install
+      - name: Test mutations
+        env:
+          MUTATION_PACKAGE: ${{ inputs.package }}
+          MUTATION_FILE: ${{ inputs.file }}
+          TEST_PACKAGE: ${{ inputs.test-package }}
+          TEST_TARGET: ${{ inputs.test-target }}
+        run: |
+          args=(--package "$MUTATION_PACKAGE" --file "$MUTATION_FILE")
+          if [[ -n "$TEST_PACKAGE" ]]; then args+=(--test-package "$TEST_PACKAGE"); fi
+          if [[ -n "$TEST_TARGET" ]]; then args+=(--test-target "$TEST_TARGET"); fi
+          scripts/cargo.sh mutants "${args[@]}"
+      - name: Retain results, including failed campaigns
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/mutants/runs/
+          if-no-files-found: warn
+          retention-days: 14
