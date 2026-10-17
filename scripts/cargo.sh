@@ -17,6 +17,16 @@ cargo_command="${1:-}"
 if [[ "$cargo_command" == +* ]]; then
   cargo_command="${2:-}"
 fi
+# Mutation testing launches Cargo internally. Keep the whole campaign under
+# one build lock, with copied sources and output inside the accounted target/.
+if [[ "$cargo_command" == mutants ]]; then
+  if [[ "${1:-}" == +* ]]; then
+    export RUSTUP_TOOLCHAIN="${1#+}"
+    shift
+  fi
+  shift
+  exec python3 "$ROOT/scripts/mutants.py" "$@"
+fi
 case "$cargo_command" in
   build|b|check|c|test|t|run|r|bench|clippy|doc|rustdoc|rustc) ;;
   *) exec cargo "$@" ;;

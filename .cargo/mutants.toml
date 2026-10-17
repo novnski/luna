@@ -1,0 +1,9 @@
+# Run through scripts/cargo.sh mutants; see docs/reference/mutation-testing.md.
+additional_cargo_args = ["--locked"]
+profile = "ci"
+gitignore = true
+copy_vcs = false
+copy_target = false
+cap_lints = false
+exclude_globs = ["vendor/**", "**/tests/**", "**/examples/**"]
+output = "target/mutants"
